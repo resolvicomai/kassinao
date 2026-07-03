@@ -1,0 +1,42 @@
+import { ChildProcess, spawn } from 'node:child_process';
+import ffmpegStatic from 'ffmpeg-static';
+
+export function ffmpegPath(): string {
+  if (!ffmpegStatic) throw new Error('Binário do ffmpeg não encontrado (ffmpeg-static)');
+  return ffmpegStatic as unknown as string;
+}
+
+// Watchdog contra ffmpeg TRAVADO, não contra encode lento: uma faixa de 6h
+// num VPS de 1 vCPU pode legitimamente levar >10 min para virar MP3.
+const FFMPEG_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** Roda o ffmpeg até o fim; rejeita com o stderr em caso de erro. Watchdog de 30 min. */
+export function runFfmpeg(args: string[], loglevel = 'error'): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegPath(), ['-hide_banner', '-loglevel', loglevel, ...args], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    proc.stderr.on('data', (d) => (stderr = (stderr + d).slice(-8192)));
+    const timeout = setTimeout(() => {
+      proc.kill('SIGKILL');
+      reject(new Error('ffmpeg excedeu o tempo limite (30 min) e foi morto'));
+    }, FFMPEG_TIMEOUT_MS);
+    proc.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+    proc.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code === 0) resolve(stderr);
+      else reject(new Error(`ffmpeg saiu com código ${code}: ${stderr.slice(-800)}`));
+    });
+  });
+}
+
+/** Inicia um ffmpeg que consome PCM cru pelo stdin (para encoding contínuo durante a captura). */
+export function spawnFfmpegStdin(args: string[]): ChildProcess {
+  return spawn(ffmpegPath(), ['-hide_banner', '-loglevel', 'error', ...args], {
+    stdio: ['pipe', 'ignore', 'pipe'],
+  });
+}

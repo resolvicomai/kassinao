@@ -1,0 +1,32 @@
+services:
+  kassinao:
+    build:
+      context: .
+      # Para transcrição local (TRANSCRIBE_PROVIDER=command), descomente para
+      # instalar Python + faster-whisper na imagem:
+      # args:
+      #   LOCAL_TRANSCRIBE: "1"
+    container_name: kassinao
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file: .env
+    environment:
+      RECORDINGS_DIR: /app/recordings
+    # Sem publicar porta pra internet: o Cloudflare Tunnel abaixo alcança o bot
+    # pela rede interna do Docker. Nada exposto direto no IP do VPS.
+    expose:
+      - "8080"
+    volumes:
+      - ./recordings:/app/recordings
+
+  # Túnel da Cloudflare: entrega https://SEU_SUBDOMINIO.SEU_DOMINIO com cadeado,
+  # sem abrir portas no VPS. O TUNNEL_TOKEN vem do .env (criado no painel da Cloudflare).
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: kassinao-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    depends_on:
+      - kassinao
