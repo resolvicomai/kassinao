@@ -454,13 +454,31 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
   });
 }
 
+/**
+ * Uma pessoa só pode ver/listar uma gravação se: iniciou, participou (falou),
+ * é admin, ou enxerga o canal de voz de origem. Mesma regra do controle de
+ * acesso da página web — aqui aplicada para o /gravacoes não vazar metadados.
+ */
+function memberCanAccessRecording(member: GuildMember, meta: RecordingMeta, guild: Guild): boolean {
+  if (meta.startedBy?.id === member.id) return true;
+  if (meta.participants.some((p) => p.id === member.id)) return true;
+  if (member.permissions.has(PermissionFlagsBits.ManageGuild)) return true;
+  const channel = guild.channels.cache.get(meta.voiceChannelId);
+  if (channel && channel.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel)) return true;
+  return false;
+}
+
 async function handleGravacoes(interaction: ChatInputCommandInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
   if (!interaction.guild) {
     await interaction.reply({ content: t(l, 'err.guild-only'), ephemeral: true });
     return;
   }
-  const metas = listGuildMetas(interaction.guild.id, 5);
+  const member = interaction.member as GuildMember;
+  // Filtra para SÓ as gravações que esta pessoa pode acessar (não vaza as outras).
+  const metas = listGuildMetas(interaction.guild.id, 100)
+    .filter((m) => memberCanAccessRecording(member, m, interaction.guild!))
+    .slice(0, 5);
   if (metas.length === 0) {
     await interaction.reply({ content: t(l, 'recordings.none'), ephemeral: true });
     return;
