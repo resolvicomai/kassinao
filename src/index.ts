@@ -159,8 +159,19 @@ async function registerCommands(): Promise<void> {
     await rest.put(Routes.applicationGuildCommands(config.applicationId, config.guildId), { body });
     console.log(`Comandos registrados no servidor ${config.guildId}.`);
   } else {
-    await rest.put(Routes.applicationCommands(config.applicationId), { body });
-    console.log('Comandos registrados globalmente (podem levar até 1h para aparecer).');
+    // Sem GUILD_ID: registra em cada servidor onde o bot está (aparecem na hora,
+    // sem esperar a propagação global de até 1h). Fallback global se ainda não
+    // estiver em nenhum servidor.
+    const guildIds = [...client.guilds.cache.keys()];
+    if (guildIds.length > 0) {
+      await Promise.all(
+        guildIds.map((gid) => rest.put(Routes.applicationGuildCommands(config.applicationId, gid), { body })),
+      );
+      console.log(`Comandos registrados em ${guildIds.length} servidor(es) (aparecem na hora).`);
+    } else {
+      await rest.put(Routes.applicationCommands(config.applicationId), { body });
+      console.log('Comandos registrados globalmente (podem levar até 1h para aparecer).');
+    }
   }
 }
 
