@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import {
   ActionRowBuilder,
+  ButtonBuilder,
   ButtonInteraction,
+  ButtonStyle,
   ChannelType,
   ChatInputCommandInteraction,
   EmbedBuilder,
@@ -443,6 +445,14 @@ async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<voi
   await interaction.reply({ content: t(l, added ? 'note.added' : 'note.discarded', { offset: formatOffset(atMs) }), ephemeral: true });
 }
 
+const HELP_BUTTON_PREFIX = 'kassinao_help';
+const HELP_TOPICS: Record<string, { btn: string; topic: string }> = {
+  record: { btn: 'help.btn-record', topic: 'help.topic-record' },
+  downloads: { btn: 'help.btn-downloads', topic: 'help.topic-downloads' },
+  privacy: { btn: 'help.btn-privacy', topic: 'help.topic-privacy' },
+  auto: { btn: 'help.btn-auto', topic: 'help.topic-auto' },
+};
+
 function buildHelpEmbed(l: Locale): EmbedBuilder {
   return new EmbedBuilder()
     .setColor(0x5865f2)
@@ -451,14 +461,30 @@ function buildHelpEmbed(l: Locale): EmbedBuilder {
     .addFields(
       { name: t(l, 'help.commands'), value: t(l, 'help.cmd-list') },
       { name: t(l, 'help.flow'), value: t(l, 'help.flow-body') },
-      { name: t(l, 'help.privacy'), value: t(l, 'help.privacy-body') },
     )
     .setFooter({ text: t(l, 'help.footer') });
 }
 
+/** Payload do /ajuda com botões pra explorar cada tópico (onboarding interativo). */
+function buildHelpPayload(l: Locale) {
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    ...Object.entries(HELP_TOPICS).map(([key, v]) =>
+      new ButtonBuilder().setCustomId(`${HELP_BUTTON_PREFIX}:${key}`).setLabel(t(l, v.btn)).setStyle(ButtonStyle.Secondary),
+    ),
+  );
+  return { embeds: [buildHelpEmbed(l)], components: [row] };
+}
+
 async function handleAjuda(interaction: ChatInputCommandInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
-  await interaction.reply({ embeds: [buildHelpEmbed(l)], ephemeral: true });
+  await interaction.reply({ ...buildHelpPayload(l), ephemeral: true });
+}
+
+async function handleHelpButton(interaction: ButtonInteraction): Promise<void> {
+  const l = localeOf(interaction.locale);
+  const key = interaction.customId.split(':')[1];
+  const topic = HELP_TOPICS[key]?.topic;
+  await interaction.reply({ content: topic ? t(l, topic) : t(l, 'help.intro'), ephemeral: true });
 }
 
 async function handleStatus(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -679,6 +705,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await handleParar(interaction);
     } else if (interaction.isButton() && interaction.customId === NOTE_BUTTON_ID) {
       await handleNoteButton(interaction);
+    } else if (interaction.isButton() && interaction.customId.startsWith(`${HELP_BUTTON_PREFIX}:`)) {
+      await handleHelpButton(interaction);
     } else if (interaction.isModalSubmit() && interaction.customId.startsWith(`${NOTE_MODAL_ID}:`)) {
       await handleNoteModal(interaction);
     }
@@ -724,6 +752,17 @@ client.on(Events.GuildCreate, async (guild) => {
     if (channel && channel.isTextBased()) await channel.send({ embeds: [embed] });
   } catch {
     // sem canal onde eu possa postar — /ajuda continua disponível
+  }
+});
+
+// DM ao bot → responde o guia (onboarding). Não lê o conteúdo, só reage ao evento.
+client.on(Events.MessageCreate, async (message) => {
+  if (message.author.bot || message.guildId) return; // só DMs de pessoas
+  const l: Locale = 'pt'; // DM não expõe o locale do usuário; time é pt-BR
+  try {
+    await message.channel.send({ content: t(l, 'help.dm-hint'), ...buildHelpPayload(l) });
+  } catch {
+    // DM bloqueada ou sem permissão — ignora
   }
 });
 

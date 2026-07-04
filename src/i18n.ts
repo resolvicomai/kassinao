@@ -126,6 +126,31 @@ const STRINGS: Strings = {
     en: 'Only call participants, people who can see the channel, or admins can open recordings (login-protected). In **restricted** channels, grant me access (View Channel + Connect) so I can record.',
   },
   'help.footer': { pt: 'Kassinão 🎙️ • use /ajuda a qualquer momento', en: 'Kassinão 🎙️ • use /help anytime' },
+  // botões e tópicos do /ajuda (onboarding interativo)
+  'help.btn-record': { pt: '🎥 Como gravar', en: '🎥 How to record' },
+  'help.btn-downloads': { pt: '📥 Downloads e ata', en: '📥 Downloads & minutes' },
+  'help.btn-privacy': { pt: '🔒 Privacidade', en: '🔒 Privacy' },
+  'help.btn-auto': { pt: '🤖 Auto-record', en: '🤖 Auto-record' },
+  'help.topic-record': {
+    pt: '🎥 **Como gravar**\n1. Entre num canal de voz.\n2. Digite **/gravar** (eu entro e apareço como `[GRAVANDO]`).\n3. Conversem normalmente. No painel do canal dá pra clicar em **Adicionar nota** pra marcar um momento importante (ou use **/nota**).\n4. Digite **/parar** (ou o botão do painel).\n5. Em ~1 min chega o link com áudio, transcrição e ata.',
+    en: '🎥 **How to record**\n1. Join a voice channel.\n2. Type **/record** (I join and show as `[RECORDING]`).\n3. Talk normally. On the channel panel you can click **Add a note** to mark an important moment (or use **/note**).\n4. Type **/stop** (or the panel button).\n5. In ~1 min the link with audio, transcript and minutes arrives.',
+  },
+  'help.topic-downloads': {
+    pt: '📥 **Downloads e ata**\nNa página da gravação você tem:\n• **MP3 / FLAC** — uma faixa por pessoa\n• **Mix** — todo mundo num arquivo só\n• **Audacity** — projeto pronto pra editar\n• **📝 Transcrição** — com o nome de quem falou e horários clicáveis\n• **📋 Ata** — resumo, decisões, tarefas e o que cada um trouxe\n• **🔊 Player** — ouça ali mesmo e clique num horário pra pular',
+    en: '📥 **Downloads & minutes**\nOn the recording page you get:\n• **MP3 / FLAC** — one track per person\n• **Mix** — everyone in one file\n• **Audacity** — ready-to-edit project\n• **📝 Transcript** — with speaker names and clickable timestamps\n• **📋 Minutes** — summary, decisions, tasks and per-person points\n• **🔊 Player** — listen right there and click a timestamp to jump',
+  },
+  'help.topic-privacy': {
+    pt: '🔒 **Privacidade e acesso**\n• As gravações só abrem com login no Discord.\n• Só acessa quem **participou da call**, **enxerga o canal**, **iniciou** ou é **admin**.\n• Em canais **restritos**, me libere no canal (permissão **Ver Canal + Conectar**) pra eu poder entrar.\n• Cada gravação expira automaticamente e pode ser apagada pela página.',
+    en: '🔒 **Privacy & access**\n• Recordings only open with Discord login.\n• Access only for whoever **joined the call**, **can see the channel**, **started it** or is an **admin**.\n• In **restricted** channels, grant me access (**View Channel + Connect**) so I can join.\n• Each recording auto-expires and can be deleted from its page.',
+  },
+  'help.topic-auto': {
+    pt: '🤖 **Auto-record** (só admin)\n**/autorecord ligar canal:#daily minimo:2** — eu começo a gravar sozinho quando 2+ pessoas entram no canal, e paro quando esvazia.\n**/autorecord desligar canal:#daily** — desliga.\n**/autorecord ver** — mostra o que está configurado.',
+    en: '🤖 **Auto-record** (admin only)\n**/autorecord on channel:#daily minimum:2** — I start recording by myself when 2+ people join, and stop when it empties.\n**/autorecord off channel:#daily** — turns it off.\n**/autorecord view** — shows what is configured.',
+  },
+  'help.dm-hint': {
+    pt: 'Sou um bot de gravação — me use pelos **comandos dentro do servidor**. Aqui vai o guia rápido:',
+    en: "I'm a recording bot — use me via the **commands inside the server**. Here's the quick guide:",
+  },
   'welcome.title': { pt: '👋 Obrigado por me adicionar!', en: '👋 Thanks for adding me!' },
   'welcome.body': {
     pt: 'Eu sou o **Kassinão**, gravador de voz do Discord com transcrição e ata automáticas.\n\nPara começar: entre num canal de voz e use **/gravar**. Use **/ajuda** para ver tudo que eu faço.\n\n🔒 Em canais restritos, lembre de me dar acesso ao canal (Ver Canal + Conectar).',
