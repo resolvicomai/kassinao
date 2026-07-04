@@ -27,15 +27,24 @@ const P: Record<string, { pt: string; en: string }> = {
   audacitysub: { pt: 'FLAC + projeto alinhado + notas', en: 'FLAC + aligned project + notes' },
   transcript: { pt: 'Transcrição', en: 'Transcript' },
   transcriptPending: { pt: '⏳ Transcrição na fila…', en: '⏳ Transcript queued…' },
-  transcriptRunning: { pt: '⚙️ Transcrevendo… (esta página se atualiza sozinha)', en: '⚙️ Transcribing… (this page refreshes itself)' },
+  transcriptRunning: {
+    pt: '⚙️ Transcrevendo… (esta página se atualiza sozinha)',
+    en: '⚙️ Transcribing… (this page refreshes itself)',
+  },
   transcriptError: { pt: '⚠️ A transcrição falhou: ', en: '⚠️ Transcription failed: ' },
-  transcriptEmpty: { pt: 'A transcrição terminou sem texto (só silêncio?).', en: 'The transcript finished empty (only silence?).' },
+  transcriptEmpty: {
+    pt: 'A transcrição terminou sem texto (só silêncio?).',
+    en: 'The transcript finished empty (only silence?).',
+  },
   transcriptDownload: { pt: '⬇️ Baixar (.md)', en: '⬇️ Download (.md)' },
   transcriptDownloadTxt: { pt: '⬇️ Baixar (.txt)', en: '⬇️ Download (.txt)' },
   notes: { pt: 'Notas', en: 'Notes' },
   minutes: { pt: 'Ata da reunião', en: 'Meeting minutes' },
   minutesPending: { pt: '⏳ Gerando a ata…', en: '⏳ Generating minutes…' },
-  minutesRunning: { pt: '⚙️ Gerando a ata… (a página se atualiza sozinha)', en: '⚙️ Generating minutes… (page refreshes itself)' },
+  minutesRunning: {
+    pt: '⚙️ Gerando a ata… (a página se atualiza sozinha)',
+    en: '⚙️ Generating minutes… (page refreshes itself)',
+  },
   minutesError: { pt: '⚠️ Não consegui gerar a ata: ', en: '⚠️ Could not generate minutes: ' },
   mSummary: { pt: 'Resumo', en: 'Summary' },
   mDecisions: { pt: 'Decisões', en: 'Decisions' },
@@ -46,15 +55,24 @@ const P: Record<string, { pt: string; en: string }> = {
   mPerPerson: { pt: 'Por participante', en: 'By participant' },
   minutesDownload: { pt: '⬇️ Baixar ata (.md)', en: '⬇️ Download minutes (.md)' },
   listen: { pt: '🔊 Ouvir a gravação', en: '🔊 Listen to the recording' },
-  seekHint: { pt: 'Clique num horário para pular pra aquele momento.', en: 'Click a timestamp to jump to that moment.' },
-  cooking: { pt: 'O arquivo é processado na hora — gravações longas podem levar alguns segundos.', en: 'Files are processed on demand — long recordings may take a few seconds.' },
+  seekHint: {
+    pt: 'Clique num horário para pular pra aquele momento.',
+    en: 'Click a timestamp to jump to that moment.',
+  },
+  cooking: {
+    pt: 'O arquivo é processado na hora — gravações longas podem levar alguns segundos.',
+    en: 'Files are processed on demand — long recordings may take a few seconds.',
+  },
   livenote: {
     pt: '🔴 Gravação em andamento: os downloads trazem o áudio <strong>até este momento</strong>. Esta página se atualiza sozinha a cada 30 segundos.',
     en: '🔴 Recording in progress: downloads contain the audio <strong>up to this moment</strong>. This page refreshes itself every 30 seconds.',
   },
   timeline: { pt: 'Linha do tempo', en: 'Timeline' },
   del: { pt: '🗑️ Apagar gravação', en: '🗑️ Delete recording' },
-  delconfirm: { pt: 'Apagar esta gravação para sempre? Não tem volta.', en: 'Delete this recording forever? There is no undo.' },
+  delconfirm: {
+    pt: 'Apagar esta gravação para sempre? Não tem volta.',
+    en: 'Delete this recording forever? There is no undo.',
+  },
   expires: { pt: '⏳ Esta gravação expira em {date}.', en: '⏳ This recording expires on {date}.' },
 };
 
@@ -164,7 +182,11 @@ function tsLink(ms: number): string {
   return `<a class="ts" href="#" onclick="kseek(${v});return false">${msToClock(v)}</a>`;
 }
 
-function shell(title: string, body: string, opts: { user?: WebUser; lang?: Locale; refreshSeconds?: number } = {}): string {
+function shell(
+  title: string,
+  body: string,
+  opts: { user?: WebUser; lang?: Locale; refreshSeconds?: number } = {},
+): string {
   const userbar = opts.user
     ? `<div class="userbar">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</div>`
     : '';
@@ -204,7 +226,9 @@ export function recordingPage(
 ): string {
   const { live, lang: l } = opts;
   const endedAt = meta.endedAt ?? Date.now();
-  const badge = live ? `<span class="badge live">${p(l, 'live')}</span>` : `<span class="badge done">${p(l, 'done')}</span>`;
+  const badge = live
+    ? `<span class="badge live">${p(l, 'live')}</span>`
+    : `<span class="badge done">${p(l, 'done')}</span>`;
 
   const people =
     meta.participants.length > 0
@@ -266,9 +290,7 @@ export function recordingPage(
       : '';
 
   const expires =
-    meta.expiresAt && !live
-      ? `<footer>${p(l, 'expires', { date: datetime(meta.expiresAt, l) })}</footer>`
-      : '';
+    meta.expiresAt && !live ? `<footer>${p(l, 'expires', { date: datetime(meta.expiresAt, l) })}</footer>` : '';
 
   return shell(
     `${p(l, 'recording')} ${meta.id}`,
@@ -314,7 +336,8 @@ function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined,
   const title = `<h2>📋 ${p(l, 'minutes')}</h2>`;
   if (state.status === 'pending') return `${title}<p class="tstate">${p(l, 'minutesPending')}</p>`;
   if (state.status === 'running') return `${title}<p class="tstate">${p(l, 'minutesRunning')}</p>`;
-  if (state.status === 'error') return `${title}<p class="tstate">${p(l, 'minutesError')}${esc(state.error ?? '?')}</p>`;
+  if (state.status === 'error')
+    return `${title}<p class="tstate">${p(l, 'minutesError')}${esc(state.error ?? '?')}</p>`;
   if (!minutes) return '';
 
   const parts: string[] = [];
@@ -347,8 +370,7 @@ function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined,
     parts.push(
       `<h3>${p(l, 'mPerPerson')}</h3>${minutes.porParticipante
         .map(
-          (pp) =>
-            `<p class="who">${esc(pp.nome)}</p><ul>${pp.pontos.map((pt) => `<li>${esc(pt)}</li>`).join('')}</ul>`,
+          (pp) => `<p class="who">${esc(pp.nome)}</p><ul>${pp.pontos.map((pt) => `<li>${esc(pt)}</li>`).join('')}</ul>`,
         )
         .join('')}`,
     );
@@ -366,7 +388,8 @@ function renderTranscription(meta: RecordingMeta, transcript: TranscriptSegment[
   const title = `<h2>${p(l, 'transcript')}</h2>`;
   if (state.status === 'pending') return `${title}<p class="tstate">${p(l, 'transcriptPending')}</p>`;
   if (state.status === 'running') return `${title}<p class="tstate">${p(l, 'transcriptRunning')}</p>`;
-  if (state.status === 'error') return `${title}<p class="tstate">${p(l, 'transcriptError')}${esc(state.error ?? '?')}</p>`;
+  if (state.status === 'error')
+    return `${title}<p class="tstate">${p(l, 'transcriptError')}${esc(state.error ?? '?')}</p>`;
   if (!transcript || transcript.length === 0) return `${title}<p class="tstate">${p(l, 'transcriptEmpty')}</p>`;
 
   const body = transcript

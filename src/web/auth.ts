@@ -126,7 +126,12 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
     headers: { Authorization: `Bearer ${token.access_token}` },
   });
   if (!meResp.ok) return undefined;
-  const me = (await meResp.json()) as { id: string; username: string; global_name: string | null; avatar: string | null };
+  const me = (await meResp.json()) as {
+    id: string;
+    username: string;
+    global_name: string | null;
+    avatar: string | null;
+  };
 
   if (!me.id) return undefined;
   const user: WebUser = {

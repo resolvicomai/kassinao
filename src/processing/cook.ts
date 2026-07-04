@@ -103,13 +103,18 @@ async function doCook(meta: RecordingMeta, format: CookFormat, live: boolean): P
     }
     if (sources.length === 0) throw new Error('nenhuma faixa de áudio utilizável nesta gravação');
     if (missing.length > 0) {
-      console.warn(`Gravação ${meta.id}: ${missing.length} faixa(s) fora do export (${missing.map((p) => p.name).join(', ')}).`);
+      console.warn(
+        `Gravação ${meta.id}: ${missing.length} faixa(s) fora do export (${missing.map((p) => p.name).join(', ')}).`,
+      );
     }
 
     let outPath: string;
     if (format === 'mix') {
       outPath = path.join(work, fileName);
-      await cookMix(sources.map((s) => s.flac), outPath);
+      await cookMix(
+        sources.map((s) => s.flac),
+        outPath,
+      );
     } else {
       const entries: ZipEntry[] = [];
       for (const src of sources) {
@@ -205,9 +210,12 @@ async function cookMix(flacs: string[], outPath: string): Promise<void> {
       '-filter_complex',
       // level=false: sem ele o alimiter re-normaliza o sinal para 0 dBFS e anula o headroom
       `amix=inputs=${flacs.length}:duration=longest:normalize=0,alimiter=limit=0.9:level=false`,
-      '-codec:a', 'libmp3lame',
-      '-b:a', config.mp3Bitrate,
-      '-y', outPath,
+      '-codec:a',
+      'libmp3lame',
+      '-b:a',
+      config.mp3Bitrate,
+      '-y',
+      outPath,
     );
   }
   await runFfmpeg(args);
@@ -223,12 +231,15 @@ function buildInfoText(meta: RecordingMeta, live: boolean, missing: { index: num
     `Servidor:      ${meta.guildName}`,
     `Canal de voz:  ${meta.voiceChannelName}`,
     `Início:        ${new Date(meta.startedAt).toISOString()}`,
-    live ? 'Fim:           (gravação ainda em andamento — download parcial)' : `Fim:           ${new Date(endedAt).toISOString()}`,
+    live
+      ? 'Fim:           (gravação ainda em andamento — download parcial)'
+      : `Fim:           ${new Date(endedAt).toISOString()}`,
     `Duração:       ${formatDuration(endedAt - meta.startedAt)}`,
     '',
     'Participantes:',
     ...meta.participants.map(
-      (p) => `  ${p.index}. ${p.name}${missingIdx.has(p.index) ? '  (faixa indisponível — NÃO incluída neste arquivo)' : ''}`,
+      (p) =>
+        `  ${p.index}. ${p.name}${missingIdx.has(p.index) ? '  (faixa indisponível — NÃO incluída neste arquivo)' : ''}`,
     ),
     '',
     ...(meta.notes.length > 0

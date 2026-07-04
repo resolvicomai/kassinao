@@ -119,13 +119,19 @@ export function startWebServer(): void {
     try {
       const next = await finishLogin(req, res);
       if (!next) {
-        res.status(400).type('html').send(messagePage(MSG.loginFailTitle[l], MSG.loginFail[l], undefined, l));
+        res
+          .status(400)
+          .type('html')
+          .send(messagePage(MSG.loginFailTitle[l], MSG.loginFail[l], undefined, l));
         return;
       }
       res.redirect(next);
     } catch (err) {
       console.error('Erro no callback OAuth:', err);
-      res.status(500).type('html').send(messagePage(MSG.errorTitle[l], MSG.loginError[l], undefined, l));
+      res
+        .status(500)
+        .type('html')
+        .send(messagePage(MSG.errorTitle[l], MSG.loginError[l], undefined, l));
     }
   });
 
@@ -139,12 +145,18 @@ export function startWebServer(): void {
     }
     const meta = readMeta(req.params.id);
     if (!meta) {
-      res.status(404).type('html').send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      res
+        .status(404)
+        .type('html')
+        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
     const access = await checkAccess(user, meta);
     if (!access.view) {
-      res.status(403).type('html').send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      res
+        .status(403)
+        .type('html')
+        .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
       return;
     }
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
@@ -173,7 +185,10 @@ export function startWebServer(): void {
     }
     const access = await checkAccess(user, meta);
     if (!access.view) {
-      res.status(403).type('html').send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      res
+        .status(403)
+        .type('html')
+        .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
       return;
     }
     // marca ANTES do cook (que pode levar minutos): delete/cleanup não apagam no meio
@@ -202,12 +217,18 @@ export function startWebServer(): void {
     const meta = readMeta(req.params.id);
     const minutes = meta && meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
     if (!meta || !minutes) {
-      res.status(404).type('html').send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      res
+        .status(404)
+        .type('html')
+        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
     const access = await checkAccess(user, meta);
     if (!access.view) {
-      res.status(403).type('html').send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      res
+        .status(403)
+        .type('html')
+        .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
       return;
     }
     res
@@ -225,12 +246,18 @@ export function startWebServer(): void {
     }
     const meta = readMeta(req.params.id);
     if (!meta || meta.transcription?.status !== 'done') {
-      res.status(404).type('html').send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      res
+        .status(404)
+        .type('html')
+        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
     const access = await checkAccess(user, meta);
     if (!access.view) {
-      res.status(403).type('html').send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      res
+        .status(403)
+        .type('html')
+        .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
       return;
     }
     const markdown = transcriptToMarkdown(meta, readTranscript(meta.id) ?? []);
@@ -255,12 +282,18 @@ export function startWebServer(): void {
     }
     const meta = readMeta(req.params.id);
     if (!meta) {
-      res.status(404).type('html').send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      res
+        .status(404)
+        .type('html')
+        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
     const access = await checkAccess(user, meta);
     if (!access.view) {
-      res.status(403).type('html').send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      res
+        .status(403)
+        .type('html')
+        .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
       return;
     }
     // marca ANTES do cook: o processamento (minutos, em gravações longas) já
@@ -272,7 +305,10 @@ export function startWebServer(): void {
     } catch (err) {
       endDownload(meta.id);
       console.error(`Erro processando download ${meta.id}/${format}:`, err);
-      res.status(500).type('html').send(messagePage(MSG.cookErrorTitle[l], MSG.cookError[l], user, l));
+      res
+        .status(500)
+        .type('html')
+        .send(messagePage(MSG.cookErrorTitle[l], MSG.cookError[l], user, l));
     }
   });
 
@@ -285,20 +321,32 @@ export function startWebServer(): void {
     }
     const meta = readMeta(req.params.id);
     if (!meta) {
-      res.status(404).type('html').send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      res
+        .status(404)
+        .type('html')
+        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
     const access = await checkAccess(user, meta);
     if (!access.delete) {
-      res.status(403).type('html').send(messagePage(MSG.deleteDeniedTitle[l], MSG.deleteDenied[l], user, l));
+      res
+        .status(403)
+        .type('html')
+        .send(messagePage(MSG.deleteDeniedTitle[l], MSG.deleteDenied[l], user, l));
       return;
     }
     if (meta.status === 'recording') {
-      res.status(409).type('html').send(messagePage(MSG.deleteLiveTitle[l], MSG.deleteLive[l], user, l));
+      res
+        .status(409)
+        .type('html')
+        .send(messagePage(MSG.deleteLiveTitle[l], MSG.deleteLive[l], user, l));
       return;
     }
     if (hasActiveDownloads(meta.id) || isTranscribing(meta.id)) {
-      res.status(409).type('html').send(messagePage(MSG.deleteBusyTitle[l], MSG.deleteBusy[l], user, l));
+      res
+        .status(409)
+        .type('html')
+        .send(messagePage(MSG.deleteBusyTitle[l], MSG.deleteBusy[l], user, l));
       return;
     }
     deleteRecording(meta.id);

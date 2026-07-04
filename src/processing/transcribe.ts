@@ -79,10 +79,12 @@ export function validateTranscriptionConfig(): string | undefined {
   if (p === 'openai' && !config.openaiApiKey) return 'TRANSCRIBE_PROVIDER=openai exige OPENAI_API_KEY';
   if (p === 'groq' && !config.groqApiKey) return 'TRANSCRIBE_PROVIDER=groq exige GROQ_API_KEY';
   if (p === 'gemini' && !config.geminiApiKey) return 'TRANSCRIBE_PROVIDER=gemini exige GEMINI_API_KEY';
-  if (p === 'command' && (!config.transcribeCommand.includes('{input}') || !config.transcribeCommand.includes('{output}')))
+  if (
+    p === 'command' &&
+    (!config.transcribeCommand.includes('{input}') || !config.transcribeCommand.includes('{output}'))
+  )
     return 'TRANSCRIBE_PROVIDER=command exige TRANSCRIBE_COMMAND com os placeholders {input} e {output}';
-  if (!['none', 'openai', 'groq', 'gemini', 'command'].includes(p))
-    return `TRANSCRIBE_PROVIDER desconhecido: ${p}`;
+  if (!['none', 'openai', 'groq', 'gemini', 'command'].includes(p)) return `TRANSCRIBE_PROVIDER desconhecido: ${p}`;
   return undefined;
 }
 
@@ -107,7 +109,12 @@ export function enqueueTranscription(recordingId: string, onDone?: (meta: Record
   const attempts = (meta.transcription?.attempts ?? 0) + 1;
   if (attempts > MAX_TRANSCRIPTION_ATTEMPTS) {
     // ex.: áudio que derruba/pendura o motor — não trava a fila para sempre no mesmo item
-    meta.transcription = { status: 'error', provider: config.transcribeProvider, error: 'desisti após 2 tentativas', attempts };
+    meta.transcription = {
+      status: 'error',
+      provider: config.transcribeProvider,
+      error: 'desisti após 2 tentativas',
+      attempts,
+    };
     saveMeta(meta);
     onDone?.(meta); // avisa no Discord em vez de falhar em silêncio
     return;
@@ -196,7 +203,12 @@ async function transcribeRecording(recordingId: string): Promise<void> {
     // relê para não sobrescrever notas/eventos adicionados durante a transcrição
     const fresh = readMeta(meta.id);
     if (!fresh) return; // apagada no meio do caminho
-    fresh.transcription = { ...fresh.transcription, status: 'done', provider: config.transcribeProvider, finishedAt: Date.now() };
+    fresh.transcription = {
+      ...fresh.transcription,
+      status: 'done',
+      provider: config.transcribeProvider,
+      finishedAt: Date.now(),
+    };
     saveMeta(fresh);
 
     // Ata com IA (mesma fila serial) — falha aqui NÃO derruba a transcrição já entregue
@@ -265,13 +277,20 @@ async function transcribeTrack(
     const chunkFile = path.join(work, `chunk-${participant.index}-${i}.mp3`);
     // mono 16 kHz 48 kbps: ótimo para ASR e pequeno o bastante para qualquer API
     await runFfmpeg([
-      '-ss', String(offset),
-      '-t', String(CHUNK),
-      '-i', masterFlac,
-      '-ac', '1',
-      '-ar', '16000',
-      '-b:a', '48k',
-      '-y', chunkFile,
+      '-ss',
+      String(offset),
+      '-t',
+      String(CHUNK),
+      '-i',
+      masterFlac,
+      '-ac',
+      '1',
+      '-ar',
+      '16000',
+      '-b:a',
+      '48k',
+      '-y',
+      chunkFile,
     ]);
 
     // Guarda dupla contra chunk-fantasma: -ss perto/além do fim gera um MP3 só de
@@ -358,9 +377,19 @@ async function chunkHasAudio(file: string, size: number): Promise<boolean> {
 function transcribeChunk(file: string, work: string, chunkSec: number): Promise<RawSegment[]> {
   switch (config.transcribeProvider) {
     case 'openai':
-      return whisperApi('https://api.openai.com/v1/audio/transcriptions', config.openaiApiKey, config.transcribeModel || 'whisper-1', file);
+      return whisperApi(
+        'https://api.openai.com/v1/audio/transcriptions',
+        config.openaiApiKey,
+        config.transcribeModel || 'whisper-1',
+        file,
+      );
     case 'groq':
-      return whisperApi('https://api.groq.com/openai/v1/audio/transcriptions', config.groqApiKey, config.transcribeModel || 'whisper-large-v3-turbo', file);
+      return whisperApi(
+        'https://api.groq.com/openai/v1/audio/transcriptions',
+        config.groqApiKey,
+        config.transcribeModel || 'whisper-large-v3-turbo',
+        file,
+      );
     case 'gemini':
       return geminiTranscribe(file);
     case 'command':
@@ -379,7 +408,11 @@ async function whisperApi(url: string, apiKey: string, model: string, file: stri
   form.append('language', config.transcribeLanguage);
   form.append('response_format', 'verbose_json');
 
-  const resp = await fetchWithRetry(url, { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` }, body: form });
+  const resp = await fetchWithRetry(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+  });
   const data = (await resp.json()) as { segments?: { start: number; end: number; text: string }[]; text?: string };
   if (data.segments) return data.segments.map((s) => ({ start: s.start, end: s.end, text: s.text }));
   // modelos sem timestamps (ex.: gpt-4o-transcribe) devolvem só o texto
@@ -452,7 +485,11 @@ async function commandTranscribe(file: string, work: string, chunkSec: number): 
     proc.stderr.on('data', (d) => (stderr = (stderr + d).slice(-4096)));
     const timeout = setTimeout(() => {
       killGroup(proc);
-      reject(new Error(`TRANSCRIBE_COMMAND excedeu o tempo limite (~${Math.round(timeoutMs / 60000)} min) e foi morto — a fila segue`));
+      reject(
+        new Error(
+          `TRANSCRIBE_COMMAND excedeu o tempo limite (~${Math.round(timeoutMs / 60000)} min) e foi morto — a fila segue`,
+        ),
+      );
     }, timeoutMs);
     proc.on('error', (err) => {
       clearTimeout(timeout);
@@ -476,6 +513,7 @@ async function commandTranscribe(file: string, work: string, chunkSec: number): 
   } catch (err) {
     throw new Error(
       `TRANSCRIBE_COMMAND deve escrever em {output} um JSON [{"start":s,"end":s,"text":"..."}] — ${(err as Error).message}`,
+      { cause: err },
     );
   } finally {
     fs.rmSync(outFile, { force: true });

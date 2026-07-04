@@ -97,7 +97,9 @@ function buildCommands() {
   const status = new SlashCommandBuilder().setName('status').setDescription('ℹ️ Mostra o estado da gravação atual');
   localized(status, 'status', 'ℹ️ Show the current recording status');
 
-  const ajuda = new SlashCommandBuilder().setName('ajuda').setDescription('❓ Como usar o Kassinão (comandos e passo a passo)');
+  const ajuda = new SlashCommandBuilder()
+    .setName('ajuda')
+    .setDescription('❓ Como usar o Kassinão (comandos e passo a passo)');
   localized(ajuda, 'help', '❓ How to use Kassinão (commands and quick start)');
 
   const gravacoes = new SlashCommandBuilder()
@@ -134,7 +136,10 @@ function buildCommands() {
           return o;
         });
       sc.setNameLocalizations({ 'en-US': 'on', 'en-GB': 'on' });
-      sc.setDescriptionLocalizations({ 'en-US': 'Enable auto-record in a voice channel', 'en-GB': 'Enable auto-record in a voice channel' });
+      sc.setDescriptionLocalizations({
+        'en-US': 'Enable auto-record in a voice channel',
+        'en-GB': 'Enable auto-record in a voice channel',
+      });
       return sc;
     })
     .addSubcommand((sc) => {
@@ -150,13 +155,19 @@ function buildCommands() {
           return o;
         });
       sc.setNameLocalizations({ 'en-US': 'off', 'en-GB': 'off' });
-      sc.setDescriptionLocalizations({ 'en-US': 'Disable auto-record in a voice channel', 'en-GB': 'Disable auto-record in a voice channel' });
+      sc.setDescriptionLocalizations({
+        'en-US': 'Disable auto-record in a voice channel',
+        'en-GB': 'Disable auto-record in a voice channel',
+      });
       return sc;
     })
     .addSubcommand((sc) => {
       sc.setName('ver').setDescription('Mostra os auto-records configurados');
       sc.setNameLocalizations({ 'en-US': 'view', 'en-GB': 'view' });
-      sc.setDescriptionLocalizations({ 'en-US': 'Show configured auto-records', 'en-GB': 'Show configured auto-records' });
+      sc.setDescriptionLocalizations({
+        'en-US': 'Show configured auto-records',
+        'en-GB': 'Show configured auto-records',
+      });
       return sc;
     });
   localized(autorecord, 'autorecord', '🤖 Automatic recording when people join a voice channel');
@@ -209,7 +220,9 @@ async function startSession(opts: {
   auto: boolean;
 }): Promise<RecordingSession> {
   if (guildBusy(opts.guild.id)) {
-    throw new Error(opts.locale === 'pt' ? 'já existe uma gravação neste servidor' : 'a recording already exists in this server');
+    throw new Error(
+      opts.locale === 'pt' ? 'já existe uma gravação neste servidor' : 'a recording already exists in this server',
+    );
   }
   startingGuilds.add(opts.guild.id);
   try {
@@ -317,7 +330,10 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
     return;
   }
   if (!voiceChannel.joinable) {
-    await interaction.reply({ content: t(l, 'err.cannot-join', { channel: `#${voiceChannel.name}` }), ephemeral: true });
+    await interaction.reply({
+      content: t(l, 'err.cannot-join', { channel: `#${voiceChannel.name}` }),
+      ephemeral: true,
+    });
     return;
   }
 
@@ -390,7 +406,10 @@ async function handleNota(interaction: ChatInputCommandInteraction): Promise<voi
     return;
   }
   const offset = formatOffset(session.durationMs);
-  const added = session.addNote(member.displayName ?? interaction.user.username, interaction.options.getString('texto', true));
+  const added = session.addNote(
+    member.displayName ?? interaction.user.username,
+    interaction.options.getString('texto', true),
+  );
   await interaction.reply({ content: t(l, added ? 'note.added' : 'note.discarded', { offset }), ephemeral: true });
 }
 
@@ -435,14 +454,19 @@ async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<voi
     return;
   }
   const clickAt = Number(rawAt);
-  const atMs = Number.isFinite(clickAt) ? Math.min(Math.max(0, Math.trunc(clickAt)), session.durationMs) : session.durationMs;
+  const atMs = Number.isFinite(clickAt)
+    ? Math.min(Math.max(0, Math.trunc(clickAt)), session.durationMs)
+    : session.durationMs;
   const member = interaction.member as GuildMember | null;
   const added = session.addNote(
     (member && 'displayName' in member ? member.displayName : null) ?? interaction.user.username,
     interaction.fields.getTextInputValue(NOTE_INPUT_ID),
     atMs,
   );
-  await interaction.reply({ content: t(l, added ? 'note.added' : 'note.discarded', { offset: formatOffset(atMs) }), ephemeral: true });
+  await interaction.reply({
+    content: t(l, added ? 'note.added' : 'note.discarded', { offset: formatOffset(atMs) }),
+    ephemeral: true,
+  });
 }
 
 const HELP_BUTTON_PREFIX = 'kassinao_help';
@@ -469,7 +493,10 @@ function buildHelpEmbed(l: Locale): EmbedBuilder {
 function buildHelpPayload(l: Locale) {
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     ...Object.entries(HELP_TOPICS).map(([key, v]) =>
-      new ButtonBuilder().setCustomId(`${HELP_BUTTON_PREFIX}:${key}`).setLabel(t(l, v.btn)).setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`${HELP_BUTTON_PREFIX}:${key}`)
+        .setLabel(t(l, v.btn))
+        .setStyle(ButtonStyle.Secondary),
     ),
   );
   return { embeds: [buildHelpEmbed(l)], components: [row] };
@@ -738,11 +765,7 @@ client.on(Events.GuildCreate, async (guild) => {
     (ch.type === ChannelType.GuildText || ch.type === ChannelType.GuildAnnouncement) &&
     !!ch
       .permissionsFor(me)
-      ?.has([
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.EmbedLinks,
-      ]);
+      ?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks]);
 
   let channel: GuildBasedChannel | undefined = guild.systemChannel ?? undefined;
   if (!canPostEmbed(channel)) {
@@ -784,9 +807,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   killPendingTranscriptions();
   const actives = sessionManager.all();
   await Promise.all(
-    actives.map((s) =>
-      stopSession(s, 'desconectado').catch((err) => console.error(`Erro ao encerrar ${s.id}:`, err)),
-    ),
+    actives.map((s) => stopSession(s, 'desconectado').catch((err) => console.error(`Erro ao encerrar ${s.id}:`, err))),
   );
   try {
     client.destroy();

@@ -15,7 +15,7 @@ services:
     # Sem publicar porta pra internet: o Cloudflare Tunnel abaixo alcança o bot
     # pela rede interna do Docker. Nada exposto direto no IP do VPS.
     expose:
-      - "8080"
+      - '8080'
     volumes:
       - ./recordings:/app/recordings
 

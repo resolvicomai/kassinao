@@ -32,16 +32,26 @@ export class UserTrack {
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
 
-  constructor(userId: string, flacPath: string, private sessionStartMs: number) {
+  constructor(
+    userId: string,
+    flacPath: string,
+    private sessionStartMs: number,
+  ) {
     this.userId = userId;
     this.flacPath = flacPath;
     this.proc = spawnFfmpegStdin([
-      '-f', 's16le',
-      '-ar', String(SAMPLE_RATE),
-      '-ac', String(CHANNELS),
-      '-i', 'pipe:0',
-      '-c:a', 'flac',
-      '-y', flacPath,
+      '-f',
+      's16le',
+      '-ar',
+      String(SAMPLE_RATE),
+      '-ac',
+      String(CHANNELS),
+      '-i',
+      'pipe:0',
+      '-c:a',
+      'flac',
+      '-y',
+      flacPath,
     ]);
     let stderr = '';
     this.proc.stderr?.on('data', (d) => (stderr += d));

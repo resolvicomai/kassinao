@@ -1,12 +1,5 @@
 import { config } from '../config';
-import {
-  MeetingMinutes,
-  MinutesAction,
-  MinutesPerson,
-  MinutesTopic,
-  RecordingMeta,
-  TranscriptSegment,
-} from '../store';
+import { MeetingMinutes, MinutesAction, MinutesPerson, MinutesTopic, RecordingMeta, TranscriptSegment } from '../store';
 import { msToClock } from './transcribe';
 
 /** Teto de texto enviado ao LLM (~15k tokens). Calls muito longas são cortadas no meio. */

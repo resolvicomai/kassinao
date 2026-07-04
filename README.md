@@ -64,7 +64,9 @@ docker compose up -d --build
 
 Then run **`/record`** in a Discord voice channel. That's it. Full walkthrough below.
 
-> ☁️ One-click hosts: [Render blueprint](render.yaml) included. Avoid serverless (Vercel/Netlify) — the voice gateway needs a always-on WebSocket.
+> ☁️ One-click hosts: [Render blueprint](render.yaml) included.
+> [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/resolvicomai/kassinao)
+> Avoid serverless (Vercel/Netlify) — the voice gateway needs an always-on WebSocket.
 
 ### 1. Create the Discord app
 1. <https://discord.com/developers/applications> → **New Application**.
@@ -152,6 +154,25 @@ Recording voice is processing **personal data**. Kassinão is built accordingly:
 ## How it works
 
 Opus packets from each speaker are decoded to PCM and fed to **one ffmpeg per speaker** writing **continuous FLAC** (silence between speech compresses to almost nothing and keeps every track in sync). Downloads (MP3/FLAC/mix/Audacity) are cooked on demand and cached. Transcription and minutes run in a **serial queue** after the call; the web page refreshes itself until they're ready. The page authenticates with **Discord OAuth** (`identify`) and the backend re-checks with Discord who may open each recording.
+
+```mermaid
+flowchart LR
+    subgraph Discord
+      VC[Voice channel]
+    end
+    subgraph Kassinão
+      BOT[Bot<br/>discord.js / voice]
+      FF[ffmpeg per speaker<br/>→ FLAC master]
+      Q[Serial queue:<br/>transcription → AI minutes]
+      WEB[Web page<br/>Express + OAuth]
+    end
+    VC -- Opus per speaker --> BOT --> FF
+    FF -- on stop --> Q
+    Q -- Groq / OpenAI / local --> Q
+    FF & Q --> WEB
+    USER[Participant] -- Discord login --> WEB
+    WEB -. Cloudflare Tunnel / HTTPS .-> USER
+```
 
 **Stack:** Node.js · TypeScript · discord.js / @discordjs/voice · Express · ffmpeg · Docker · Cloudflare Tunnel.
 

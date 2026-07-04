@@ -123,7 +123,9 @@ export class RecordingSession {
     if (getVoiceConnection(this.guild.id)) {
       fs.rmSync(path.dirname(tracksDir(this.id)), { recursive: true, force: true });
       throw new Error(
-        this.locale === 'pt' ? 'já existe uma conexão de voz neste servidor' : 'there is already a voice connection in this server',
+        this.locale === 'pt'
+          ? 'já existe uma conexão de voz neste servidor'
+          : 'there is already a voice connection in this server',
       );
     }
 
@@ -163,10 +165,13 @@ export class RecordingSession {
       }
     });
 
-    this.maxDurationTimer = setTimeout(async () => {
-      await this.stop('tempo-maximo').catch(() => {});
-      this.onAutoStop?.(this, 'tempo-maximo');
-    }, config.maxRecordingHours * 60 * 60 * 1000);
+    this.maxDurationTimer = setTimeout(
+      async () => {
+        await this.stop('tempo-maximo').catch(() => {});
+        this.onAutoStop?.(this, 'tempo-maximo');
+      },
+      config.maxRecordingHours * 60 * 60 * 1000,
+    );
 
     this.silenceTimer = setInterval(() => this.checkSilence(), 30_000);
 
@@ -208,21 +213,21 @@ export class RecordingSession {
     const l = this.locale;
     this.guild.client.users
       .send(startedBy.id, {
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0xed4245)
-              .setTitle(t(l, 'dm.title-start'))
-              .setDescription(
-                t(l, 'dm.desc-start', {
-                  channel: `#${this.voiceChannel.name}`,
-                  guild: this.guild.name,
-                  url: this.pageUrl,
-                  hours: config.maxRecordingHours,
-                  expiresDays: config.retentionDays,
-                }),
-              )
-              .setFooter({ text: t(l, 'panel.footer') }),
-          ],
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0xed4245)
+            .setTitle(t(l, 'dm.title-start'))
+            .setDescription(
+              t(l, 'dm.desc-start', {
+                channel: `#${this.voiceChannel.name}`,
+                guild: this.guild.name,
+                url: this.pageUrl,
+                hours: config.maxRecordingHours,
+                expiresDays: config.retentionDays,
+              }),
+            )
+            .setFooter({ text: t(l, 'panel.footer') }),
+        ],
       })
       .catch(() => {
         // DMs fechadas — o painel e o /gravacoes cobrem
@@ -237,20 +242,20 @@ export class RecordingSession {
     // users.send funciona mesmo se a pessoa saiu do servidor (members.fetch não)
     this.guild.client.users
       .send(startedBy.id, {
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0x57f287)
-              .setTitle(t(l, 'dm.title-stop'))
-              .setDescription(
-                t(l, 'dm.desc-stop', {
-                  channel: `#${this.voiceChannel.name}`,
-                  duration: formatDuration(endedAt - this.startedAt),
-                  url: this.pageUrl,
-                  expires: `<t:${Math.floor((this.meta.expiresAt ?? endedAt) / 1000)}:D>`,
-                }),
-              )
-              .setFooter({ text: t(l, 'panel.footer') }),
-          ],
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x57f287)
+            .setTitle(t(l, 'dm.title-stop'))
+            .setDescription(
+              t(l, 'dm.desc-stop', {
+                channel: `#${this.voiceChannel.name}`,
+                duration: formatDuration(endedAt - this.startedAt),
+                url: this.pageUrl,
+                expires: `<t:${Math.floor((this.meta.expiresAt ?? endedAt) / 1000)}:D>`,
+              }),
+            )
+            .setFooter({ text: t(l, 'panel.footer') }),
+        ],
       })
       .catch(() => {});
   }
@@ -387,9 +392,7 @@ export class RecordingSession {
     const isDone = this.meta.status === 'done';
     const embed = new EmbedBuilder()
       .setColor(isDone ? 0x57f287 : 0xed4245)
-      .setTitle(
-        t(l, isDone ? 'panel.title-done' : 'panel.title-recording', { channel: `#${this.voiceChannel.name}` }),
-      )
+      .setTitle(t(l, isDone ? 'panel.title-done' : 'panel.title-recording', { channel: `#${this.voiceChannel.name}` }))
       .setFooter({ text: t(l, 'panel.footer') });
 
     if (isDone) {

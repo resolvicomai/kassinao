@@ -1,0 +1,6 @@
+dist
+node_modules
+recordings
+*.md
+.github
+scratchpad
