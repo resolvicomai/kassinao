@@ -41,6 +41,32 @@ export interface TranscriptionState {
   attempts?: number;
 }
 
+export interface MinutesAction {
+  tarefa: string;
+  responsavel?: string;
+  prazo?: string;
+}
+
+export interface MinutesTopic {
+  titulo: string;
+  inicioMs: number;
+}
+
+/** Ata gerada por IA a partir da transcrição. */
+export interface MeetingMinutes {
+  resumo: string;
+  decisoes: string[];
+  acoes: MinutesAction[];
+  topicos: MinutesTopic[];
+}
+
+export interface MinutesState {
+  status: 'pending' | 'running' | 'done' | 'error' | 'disabled';
+  model?: string;
+  error?: string;
+  finishedAt?: number;
+}
+
 export interface RecordingMeta {
   id: string;
   guildId: string;
@@ -56,6 +82,7 @@ export interface RecordingMeta {
   events: RecordingEvent[];
   notes: RecordingNote[];
   transcription?: TranscriptionState;
+  minutes?: MinutesState;
   expiresAt?: number;
 }
 
@@ -112,6 +139,25 @@ export function saveTranscript(id: string, segments: TranscriptSegment[]): void 
   const tmp = transcriptPath(id) + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(segments));
   fs.renameSync(tmp, transcriptPath(id));
+}
+
+export function minutesPath(id: string): string {
+  return path.join(recordingDir(id), 'minutes.json');
+}
+
+export function readMinutes(id: string): MeetingMinutes | undefined {
+  if (!VALID_ID.test(id)) return undefined;
+  try {
+    return JSON.parse(fs.readFileSync(minutesPath(id), 'utf8')) as MeetingMinutes;
+  } catch {
+    return undefined;
+  }
+}
+
+export function saveMinutes(id: string, minutes: MeetingMinutes): void {
+  const tmp = minutesPath(id) + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(minutes));
+  fs.renameSync(tmp, minutesPath(id));
 }
 
 export function deleteRecording(id: string): void {

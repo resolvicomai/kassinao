@@ -5,8 +5,9 @@ import { client } from '../discord/client';
 import { Locale } from '../i18n';
 import { cook, CookFormat, COOK_FORMATS } from '../processing/cook';
 import { isTranscribing, transcriptToMarkdown } from '../processing/transcribe';
+import { minutesToMarkdown } from '../processing/minutes';
 import { sessionManager } from '../recorder/manager';
-import { deleteRecording, readMeta, readTranscript, RecordingMeta } from '../store';
+import { deleteRecording, readMeta, readMinutes, readTranscript, RecordingMeta } from '../store';
 import { beginLogin, finishLogin, getWebUser, WebUser } from './auth';
 import { landingPage, messagePage, recordingPage } from './page';
 import { beginDownload, endDownload, hasActiveDownloads } from './tracker';
@@ -148,7 +149,32 @@ export function startWebServer(): void {
     }
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
     const transcript = meta.transcription?.status === 'done' ? readTranscript(meta.id) : undefined;
-    res.type('html').send(recordingPage(meta, { live, canDelete: access.delete, user, lang: l, transcript }));
+    const minutes = meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
+    res.type('html').send(recordingPage(meta, { live, canDelete: access.delete, user, lang: l, transcript, minutes }));
+  });
+
+  app.get('/rec/:id/ata.md', async (req, res) => {
+    const l = pageLang(req);
+    const user = getWebUser(req);
+    if (!user) {
+      beginLogin(res, `/rec/${req.params.id}`);
+      return;
+    }
+    const meta = readMeta(req.params.id);
+    const minutes = meta && meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
+    if (!meta || !minutes) {
+      res.status(404).type('html').send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      return;
+    }
+    const access = await checkAccess(user, meta);
+    if (!access.view) {
+      res.status(403).type('html').send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      return;
+    }
+    res
+      .type('text/markdown; charset=utf-8')
+      .attachment(`kassinao-${meta.id}-ata.md`)
+      .send(minutesToMarkdown(meta, minutes));
   });
 
   app.get('/rec/:id/transcricao.:ext(md|txt)', async (req, res) => {

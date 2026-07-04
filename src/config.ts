@@ -64,4 +64,14 @@ export const config = {
   openaiApiKey: process.env.OPENAI_API_KEY || '',
   groqApiKey: process.env.GROQ_API_KEY || '',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
+
+  /**
+   * Ata com IA (resumo + decisões + tarefas) gerada após a transcrição.
+   * 'auto' (padrão): liga sozinha quando há GROQ_API_KEY. 'false' desliga. 'true' força.
+   * Usa a API da Groq (mesma chave da transcrição) com um modelo de LLM.
+   */
+  minutesEnabled: (process.env.MINUTES_ENABLED || 'auto').toLowerCase(),
+  minutesModel: process.env.MINUTES_MODEL || 'llama-3.3-70b-versatile',
+  /** Teto de tokens de saída da ata. 8192 cobre reuniões longas; o modelo suporta até 32768. */
+  minutesMaxTokens: Number(process.env.MINUTES_MAX_TOKENS || 8192),
 };

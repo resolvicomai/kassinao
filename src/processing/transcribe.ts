@@ -7,13 +7,16 @@ import {
   cacheDir,
   Participant,
   readMeta,
+  readTranscript,
   RecordingMeta,
   saveMeta,
+  saveMinutes,
   saveTranscript,
   tracksDir,
   TranscriptSegment,
 } from '../store';
 import { runFfmpeg } from './ffmpeg';
+import { generateMinutes, minutesEnabled } from './minutes';
 
 /** Segmento cru devolvido por um provider (tempos em segundos, relativos ao chunk). */
 interface RawSegment {
@@ -123,6 +126,28 @@ export function enqueueTranscription(recordingId: string, onDone?: (meta: Record
     });
 }
 
+/**
+ * Retoma SÓ a ata (transcrição já pronta) — para recuperação após reinício entre
+ * a transcrição e a ata. Idempotente: não roda se a ata já está pronta.
+ */
+export function enqueueMinutesOnly(recordingId: string, onDone?: (meta: RecordingMeta) => void): void {
+  if (!minutesEnabled() || queued.has(recordingId)) return;
+  const meta = readMeta(recordingId);
+  if (!meta || meta.transcription?.status !== 'done' || meta.minutes?.status === 'done') return;
+  const segments = readTranscript(recordingId);
+  if (!segments || segments.length === 0) return;
+
+  queued.add(recordingId);
+  queue = queue
+    .then(() => generateMinutesStep(recordingId, segments))
+    .catch((err) => console.error(`Ata (retomada) de ${recordingId} falhou:`, err))
+    .then(() => {
+      queued.delete(recordingId);
+      const fresh = readMeta(recordingId);
+      if (fresh && onDone) onDone(fresh);
+    });
+}
+
 async function transcribeRecording(recordingId: string): Promise<void> {
   const meta = readMeta(recordingId);
   if (!meta || meta.status !== 'done' || meta.participants.length === 0) {
@@ -173,6 +198,11 @@ async function transcribeRecording(recordingId: string): Promise<void> {
     if (!fresh) return; // apagada no meio do caminho
     fresh.transcription = { ...fresh.transcription, status: 'done', provider: config.transcribeProvider, finishedAt: Date.now() };
     saveMeta(fresh);
+
+    // Ata com IA (mesma fila serial) — falha aqui NÃO derruba a transcrição já entregue
+    if (all.length > 0 && minutesEnabled()) {
+      await generateMinutesStep(meta.id, all);
+    }
   } catch (err) {
     const fresh = readMeta(meta.id);
     if (fresh) {
@@ -188,6 +218,34 @@ async function transcribeRecording(recordingId: string): Promise<void> {
     throw err;
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
+/** Gera a ata após a transcrição. NUNCA relança — a transcrição já foi entregue. */
+async function generateMinutesStep(recordingId: string, segments: TranscriptSegment[]): Promise<void> {
+  const meta = readMeta(recordingId);
+  if (!meta) return;
+  meta.minutes = { status: 'running', model: config.minutesModel };
+  saveMeta(meta);
+  try {
+    const minutes = await generateMinutes(meta, segments);
+    saveMinutes(recordingId, minutes);
+    const fresh = readMeta(recordingId);
+    if (!fresh) return;
+    fresh.minutes = { status: 'done', model: config.minutesModel, finishedAt: Date.now() };
+    saveMeta(fresh);
+  } catch (err) {
+    console.error(`Ata de ${recordingId} falhou:`, (err as Error).message);
+    const fresh = readMeta(recordingId);
+    if (fresh) {
+      fresh.minutes = {
+        status: 'error',
+        model: config.minutesModel,
+        error: String((err as Error).message).slice(0, 300),
+        finishedAt: Date.now(),
+      };
+      saveMeta(fresh);
+    }
   }
 }
 

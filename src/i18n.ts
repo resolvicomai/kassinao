@@ -102,6 +102,7 @@ const STRINGS: Strings = {
   // transcrição
   'transcript.ready': { pt: '📝 Transcrição pronta: {url}', en: '📝 Transcript ready: {url}' },
   'transcript.failed': { pt: '⚠️ A transcrição falhou: {error}', en: '⚠️ Transcription failed: {error}' },
+  'minutes.ready': { pt: '📋 Ata e transcrição prontas: {url}', en: '📋 Minutes and transcript ready: {url}' },
 
   // status
   'status.none': { pt: '💤 Nenhuma gravação em andamento.', en: '💤 No recording in progress.' },

@@ -2,7 +2,7 @@ import { config } from '../config';
 import { Locale } from '../i18n';
 import { msToClock } from '../processing/transcribe';
 import { formatDuration, formatOffset } from '../recorder/RecordingSession';
-import { RecordingMeta, TranscriptSegment } from '../store';
+import { MeetingMinutes, RecordingMeta, TranscriptSegment } from '../store';
 import type { WebUser } from './auth';
 
 function esc(s: string): string {
@@ -33,6 +33,17 @@ const P: Record<string, { pt: string; en: string }> = {
   transcriptDownload: { pt: '⬇️ Baixar (.md)', en: '⬇️ Download (.md)' },
   transcriptDownloadTxt: { pt: '⬇️ Baixar (.txt)', en: '⬇️ Download (.txt)' },
   notes: { pt: 'Notas', en: 'Notes' },
+  minutes: { pt: 'Ata da reunião', en: 'Meeting minutes' },
+  minutesPending: { pt: '⏳ Gerando a ata…', en: '⏳ Generating minutes…' },
+  minutesRunning: { pt: '⚙️ Gerando a ata… (a página se atualiza sozinha)', en: '⚙️ Generating minutes… (page refreshes itself)' },
+  minutesError: { pt: '⚠️ Não consegui gerar a ata: ', en: '⚠️ Could not generate minutes: ' },
+  mSummary: { pt: 'Resumo', en: 'Summary' },
+  mDecisions: { pt: 'Decisões', en: 'Decisions' },
+  mActions: { pt: 'Itens de ação', en: 'Action items' },
+  mTopics: { pt: 'Tópicos', en: 'Topics' },
+  mOwner: { pt: 'resp.', en: 'owner' },
+  mDue: { pt: 'prazo', en: 'due' },
+  minutesDownload: { pt: '⬇️ Baixar ata (.md)', en: '⬇️ Download minutes (.md)' },
   cooking: { pt: 'O arquivo é processado na hora — gravações longas podem levar alguns segundos.', en: 'Files are processed on demand — long recordings may take a few seconds.' },
   livenote: {
     pt: '🔴 Gravação em andamento: os downloads trazem o áudio <strong>até este momento</strong>. Esta página se atualiza sozinha a cada 30 segundos.',
@@ -89,6 +100,13 @@ const SHELL_CSS = `
   .tdl a:hover { text-decoration: underline; }
   .notes { list-style: none; font-size: 14px; display: flex; flex-direction: column; gap: 4px; }
   .notes time { color: #949ba4; font-family: ui-monospace, monospace; margin-right: 8px; }
+  .minutes { background: #232428; border-radius: 8px; padding: 16px 18px; font-size: 14.5px; line-height: 1.5; }
+  .minutes h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #949ba4; margin: 16px 0 8px; }
+  .minutes h3:first-child { margin-top: 0; }
+  .minutes ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 5px; }
+  .minutes .action { display: flex; gap: 8px; align-items: baseline; }
+  .minutes .meta2 { color: #949ba4; font-size: 12.5px; }
+  .minutes time { color: #949ba4; font-family: ui-monospace, monospace; margin-right: 6px; }
   form.delete { margin-top: 26px; border-top: 1px solid #3f4147; padding-top: 16px; }
   button.danger { background: none; border: 1px solid #da373c; color: #da373c; padding: 8px 14px;
                   border-radius: 8px; font-size: 14px; cursor: pointer; }
@@ -147,7 +165,14 @@ ${TZ_SCRIPT}
 
 export function recordingPage(
   meta: RecordingMeta,
-  opts: { live: boolean; canDelete: boolean; user: WebUser; lang: Locale; transcript?: TranscriptSegment[] },
+  opts: {
+    live: boolean;
+    canDelete: boolean;
+    user: WebUser;
+    lang: Locale;
+    transcript?: TranscriptSegment[];
+    minutes?: MeetingMinutes;
+  },
 ): string {
   const { live, lang: l } = opts;
   const endedAt = meta.endedAt ?? Date.now();
@@ -181,6 +206,7 @@ export function recordingPage(
           .join('')}</ul>`
       : '';
 
+  const minutes = renderMinutes(meta, opts.minutes, l);
   const transcription = renderTranscription(meta, opts.transcript, l);
 
   const liveNote = live ? `<div class="note">${p(l, 'livenote')}</div>` : '';
@@ -220,6 +246,7 @@ export function recordingPage(
      ${people}
      ${meta.participants.length > 0 ? `<h2>${p(l, 'downloads')}</h2>` : ''}
      ${downloads}
+     ${minutes}
      ${transcription}
      ${notes}
      ${events}
@@ -228,11 +255,59 @@ export function recordingPage(
     {
       user: opts.user,
       lang: l,
-      // ao vivo OU transcrição em andamento: a página se atualiza sozinha
+      // ao vivo OU transcrição/ata em andamento: a página se atualiza sozinha
       refreshSeconds:
-        live || meta.transcription?.status === 'pending' || meta.transcription?.status === 'running' ? 30 : undefined,
+        live ||
+        meta.transcription?.status === 'pending' ||
+        meta.transcription?.status === 'running' ||
+        meta.minutes?.status === 'pending' ||
+        meta.minutes?.status === 'running'
+          ? 30
+          : undefined,
     },
   );
+}
+
+function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined, l: Locale): string {
+  const state = meta.minutes;
+  if (!state || state.status === 'disabled') return '';
+  const title = `<h2>📋 ${p(l, 'minutes')}</h2>`;
+  if (state.status === 'pending') return `${title}<p class="tstate">${p(l, 'minutesPending')}</p>`;
+  if (state.status === 'running') return `${title}<p class="tstate">${p(l, 'minutesRunning')}</p>`;
+  if (state.status === 'error') return `${title}<p class="tstate">${p(l, 'minutesError')}${esc(state.error ?? '?')}</p>`;
+  if (!minutes) return '';
+
+  const parts: string[] = [];
+  if (minutes.resumo) parts.push(`<h3>${p(l, 'mSummary')}</h3><p>${esc(minutes.resumo)}</p>`);
+  if (minutes.decisoes.length) {
+    parts.push(`<h3>${p(l, 'mDecisions')}</h3><ul>${minutes.decisoes.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>`);
+  }
+  if (minutes.acoes.length) {
+    parts.push(
+      `<h3>${p(l, 'mActions')}</h3><ul>${minutes.acoes
+        .map((a) => {
+          const bits = [
+            a.responsavel ? `${p(l, 'mOwner')}: ${esc(a.responsavel)}` : '',
+            a.prazo ? `${p(l, 'mDue')}: ${esc(a.prazo)}` : '',
+          ].filter(Boolean);
+          const meta2 = bits.length ? ` <span class="meta2">(${bits.join(' • ')})</span>` : '';
+          return `<li class="action">☐ <span>${esc(a.tarefa)}${meta2}</span></li>`;
+        })
+        .join('')}</ul>`,
+    );
+  }
+  if (minutes.topicos.length) {
+    parts.push(
+      `<h3>${p(l, 'mTopics')}</h3><ul>${minutes.topicos
+        .map((tp) => `<li><time>${msToClock(tp.inicioMs)}</time>${esc(tp.titulo)}</li>`)
+        .join('')}</ul>`,
+    );
+  }
+  if (parts.length === 0) return '';
+
+  return `${title}
+    <div class="minutes">${parts.join('')}</div>
+    <div class="tdl"><a href="/rec/${meta.id}/ata.md">${p(l, 'minutesDownload')}</a></div>`;
 }
 
 function renderTranscription(meta: RecordingMeta, transcript: TranscriptSegment[] | undefined, l: Locale): string {

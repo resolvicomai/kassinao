@@ -34,7 +34,12 @@ import {
   STOP_BUTTON_ID,
   StopReason,
 } from './recorder/RecordingSession';
-import { enqueueTranscription, killPendingTranscriptions, validateTranscriptionConfig } from './processing/transcribe';
+import {
+  enqueueMinutesOnly,
+  enqueueTranscription,
+  killPendingTranscriptions,
+  validateTranscriptionConfig,
+} from './processing/transcribe';
 import { listGuildMetas, listMetas, pageUrl, RecordingMeta, recoverInterruptedRecordings } from './store';
 import { startWebServer } from './web/server';
 
@@ -252,7 +257,9 @@ async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise
   if (!state || (state.status !== 'done' && state.status !== 'error')) return;
   const text =
     state.status === 'done'
-      ? t(locale, 'transcript.ready', { url: pageUrl(meta.id) })
+      ? meta.minutes?.status === 'done'
+        ? t(locale, 'minutes.ready', { url: pageUrl(meta.id) }) // ata + transcrição prontas
+        : t(locale, 'transcript.ready', { url: pageUrl(meta.id) })
       : t(locale, 'transcript.failed', { error: state.error ?? '?' });
   try {
     const channel = (await client.channels.fetch(meta.voiceChannelId)) as TextBasedChannel | null;
@@ -600,10 +607,21 @@ client.once(Events.ClientReady, async () => {
   // client pronto, para as notificações de "pronta" conseguirem ser enviadas
   for (const meta of listMetas()) {
     if (meta.status !== 'done') continue;
-    const st = meta.transcription?.status;
     const recent = (meta.endedAt ?? 0) > Date.now() - 24 * 60 * 60 * 1000;
+    const st = meta.transcription?.status;
     if (st === 'pending' || st === 'running' || (st === undefined && recent)) {
       enqueueTranscription(meta.id, (m) => notifyTranscription(m, 'pt'));
+    } else if (st === 'done') {
+      // Retoma SÓ a ata que ficou pela metade num reinício. generateMinutesStep
+      // grava 'running' como 1º passo, então interrupção real deixa pending/running —
+      // 'undefined' significaria "nunca tentou" (não fazer backfill em massa no 1º deploy).
+      const ms = meta.minutes?.status;
+      if (ms === 'pending' || ms === 'running') {
+        enqueueMinutesOnly(meta.id, (m) => {
+          // só avisa se a ata retomada REALMENTE ficou pronta (não re-notifica a transcrição)
+          if (m.minutes?.status === 'done') notifyTranscription(m, 'pt');
+        });
+      }
     }
   }
 });
