@@ -91,6 +91,8 @@ export interface RecordingMeta {
   transcription?: TranscriptionState;
   minutes?: MinutesState;
   expiresAt?: number;
+  /** true apenas para a gravação de exemplo servida publicamente em /demo. */
+  demo?: boolean;
 }
 
 export function recordingDir(id: string): string {

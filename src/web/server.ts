@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { PermissionFlagsBits } from 'discord.js';
 import express, { Request } from 'express';
 import { config } from '../config';
@@ -108,6 +110,42 @@ export function startWebServer(): void {
 
   app.get('/', (req, res) => {
     res.type('html').send(landingPage(pageLang(req)));
+  });
+
+  // Demo PÚBLICA (sem login) — serve SOMENTE os dados fictícios de docs/example.
+  // Totalmente separada das rotas /rec/:id (gravações reais), que continuam protegidas.
+  const DEMO_DIR = path.join(process.cwd(), 'docs', 'example');
+  const readDemo = () => {
+    try {
+      return {
+        meta: JSON.parse(fs.readFileSync(path.join(DEMO_DIR, 'meta.json'), 'utf8')) as RecordingMeta,
+        transcript: JSON.parse(fs.readFileSync(path.join(DEMO_DIR, 'transcript.json'), 'utf8')),
+        minutes: JSON.parse(fs.readFileSync(path.join(DEMO_DIR, 'minutes.json'), 'utf8')),
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  app.get('/demo', (req, res) => {
+    const l = pageLang(req);
+    const d = readDemo();
+    if (!d) {
+      res.status(404).type('html').send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], undefined, l));
+      return;
+    }
+    res
+      .type('html')
+      .send(recordingPage(d.meta, { live: false, canDelete: false, lang: l, transcript: d.transcript, minutes: d.minutes, demo: true }));
+  });
+
+  app.get('/demo/audio', (_req, res) => {
+    const f = path.join(DEMO_DIR, 'sample-audio.mp3');
+    if (!fs.existsSync(f)) {
+      res.status(404).send('sem áudio de amostra');
+      return;
+    }
+    res.sendFile(f);
   });
 
   app.get('/auth/login', (req, res) => {

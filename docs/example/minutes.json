@@ -1,0 +1,35 @@
+{
+  "resumo": "The team reviewed launch readiness for the v3 dashboard, investigated a churn spike traced to the new onboarding flow, and green-lit the annual pricing experiment after positive results. A production incident from Tuesday was postmortem'd (a Redis eviction issue), and the group agreed to hire a second infra engineer given rising cloud costs. Launch is confirmed for next Thursday, gated on the onboarding fix and a load test.",
+  "decisoes": [
+    "v3 dashboard launches next Thursday, gated on the onboarding fix + a passing load test.",
+    "Roll back the new onboarding flow's mandatory tour — it correlates with the churn spike.",
+    "Ship the annual-plan pricing experiment to 100% (was +18% conversion at 20% rollout).",
+    "Open a headcount for a second infra/SRE engineer.",
+    "Adopt a weekly load test in CI before each release."
+  ],
+  "acoes": [
+    { "tarefa": "Merge the onboarding rollback + feature-flag it", "responsavel": "Rafael", "prazo": "Wed" },
+    { "tarefa": "Run the load test against staging and share numbers", "responsavel": "Mei", "prazo": "Wed EOD" },
+    { "tarefa": "Finalize launch email + changelog, schedule for Thu 9am", "responsavel": "Priya", "prazo": "Thu" },
+    { "tarefa": "Write the Redis incident postmortem and add the eviction alert", "responsavel": "James", "prazo": "Fri" },
+    { "tarefa": "Open the infra/SRE job posting and share the JD for review", "responsavel": "Sofia", "prazo": "this week" },
+    { "tarefa": "Pull the annual-plan cohort retention at 30 days", "responsavel": "Tobias", "prazo": "next sync" }
+  ],
+  "topicos": [
+    { "titulo": "Kickoff & agenda", "inicioMs": 0 },
+    { "titulo": "v3 dashboard launch readiness", "inicioMs": 270000 },
+    { "titulo": "Churn spike investigation (onboarding flow)", "inicioMs": 970000 },
+    { "titulo": "Pricing experiment results", "inicioMs": 1780000 },
+    { "titulo": "Tuesday incident postmortem (Redis)", "inicioMs": 2345000 },
+    { "titulo": "Hiring & cloud cost", "inicioMs": 2900000 },
+    { "titulo": "Wrap-up & action items", "inicioMs": 3330000 }
+  ],
+  "porParticipante": [
+    { "nome": "Rafael", "pontos": ["Flagged the onboarding tour as the likely churn cause", "Owns the rollback and the launch gate"] },
+    { "nome": "Mei", "pontos": ["Raised the missing load test in CI", "Will run it against staging before launch"] },
+    { "nome": "Priya", "pontos": ["Confirmed launch scope and comms", "Owns the launch email and changelog"] },
+    { "nome": "James", "pontos": ["Diagnosed the Redis eviction incident", "Owns the postmortem and alerting"] },
+    { "nome": "Sofia", "pontos": ["Pushed for the infra hire given on-call load", "Owns the job posting"] },
+    { "nome": "Tobias", "pontos": ["Presented the pricing experiment results", "Owns the 30-day retention readout"] }
+  ]
+}

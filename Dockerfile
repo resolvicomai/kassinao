@@ -32,6 +32,7 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
 COPY scripts ./scripts
+COPY docs ./docs
 EXPOSE 8080
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["tini", "--"]

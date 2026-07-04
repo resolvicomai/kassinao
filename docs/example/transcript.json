@@ -1,0 +1,22 @@
+[
+  { "startMs": 12000, "endMs": 28000, "speaker": "Priya", "text": "Alright, everyone's here — let's keep this to an hour. Three big things: launch readiness, the churn number, and Tobias's pricing results." },
+  { "startMs": 31000, "endMs": 43000, "speaker": "Rafael", "text": "Before that — can we timebox the incident from Tuesday? James has the writeup half done." },
+  { "startMs": 45000, "endMs": 52000, "speaker": "Priya", "text": "Good call, we'll do the postmortem near the end. Launch first." },
+  { "startMs": 273000, "endMs": 285000, "speaker": "Priya", "text": "v3 dashboard — where are we? Are we go for Thursday?" },
+  { "startMs": 302000, "endMs": 318000, "speaker": "Rafael", "text": "Code's basically done. My worry isn't the dashboard, it's the onboarding flow we shipped last week." },
+  { "startMs": 320000, "endMs": 331000, "speaker": "Mei", "text": "And we still don't have a load test in CI. We're guessing on capacity." },
+  { "startMs": 974000, "endMs": 989000, "speaker": "Priya", "text": "Okay, the churn spike. It jumped from 3.1% to 4.4% in two weeks. What changed?" },
+  { "startMs": 999000, "endMs": 1012000, "speaker": "Rafael", "text": "The only thing that shipped in that window is the mandatory onboarding tour." },
+  { "startMs": 1025000, "endMs": 1038000, "speaker": "Tobias", "text": "The funnel backs that up — 22% of new users drop on step 3 of the tour." },
+  { "startMs": 1090000, "endMs": 1099000, "speaker": "Sofia", "text": "So we roll it back and make it skippable?" },
+  { "startMs": 1102000, "endMs": 1114000, "speaker": "Rafael", "text": "Roll it back for launch, feature-flag it, and we redesign it after." },
+  { "startMs": 1784000, "endMs": 1799000, "speaker": "Tobias", "text": "Pricing — the annual plan test at 20% rollout is up 18% on conversion, no hit to refunds." },
+  { "startMs": 1872000, "endMs": 1882000, "speaker": "Priya", "text": "That's strong. Any reason not to go to 100%?" },
+  { "startMs": 1890000, "endMs": 1902000, "speaker": "Tobias", "text": "None I can see. I'll pull 30-day retention on the annual cohort to be sure." },
+  { "startMs": 2349000, "endMs": 2364000, "speaker": "James", "text": "Tuesday — Redis hit maxmemory and started evicting keys we assumed were durable. Sessions dropped." },
+  { "startMs": 2510000, "endMs": 2524000, "speaker": "James", "text": "Fix is a bigger instance plus an eviction alert. I'll write the postmortem by Friday." },
+  { "startMs": 2905000, "endMs": 2918000, "speaker": "Sofia", "text": "Which brings up on-call. We're one deep on infra. I want to open a second SRE role." },
+  { "startMs": 2980000, "endMs": 2992000, "speaker": "Mei", "text": "+1. The load test and the incident both trace back to us being stretched." },
+  { "startMs": 3334000, "endMs": 3348000, "speaker": "Priya", "text": "Okay — action items. Rafael: onboarding rollback by Wednesday. Mei: load test by Wednesday EOD..." },
+  { "startMs": 3468000, "endMs": 3482000, "speaker": "Priya", "text": "...Sofia opens the SRE role, Tobias gets retention numbers. Launch Thursday if the gate's green. Thanks all." }
+]

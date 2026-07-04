@@ -1,0 +1,37 @@
+{
+  "id": "demo",
+  "guildId": "0",
+  "guildName": "Northwind (demo)",
+  "voiceChannelId": "0",
+  "voiceChannelName": "product-sync",
+  "startedBy": { "id": "0", "name": "Priya" },
+  "startedAt": 1750773600000,
+  "endedAt": 1750777092000,
+  "status": "done",
+  "demo": true,
+  "participants": [
+    { "id": "1", "name": "Priya", "avatar": null, "trackFile": "1.flac", "index": 1 },
+    { "id": "2", "name": "Rafael", "avatar": null, "trackFile": "2.flac", "index": 2 },
+    { "id": "3", "name": "Mei", "avatar": null, "trackFile": "3.flac", "index": 3 },
+    { "id": "4", "name": "Tobias", "avatar": null, "trackFile": "4.flac", "index": 4 },
+    { "id": "5", "name": "James", "avatar": null, "trackFile": "5.flac", "index": 5 },
+    { "id": "6", "name": "Sofia", "avatar": null, "trackFile": "6.flac", "index": 6 }
+  ],
+  "events": [
+    { "atMs": 0, "text": "▶️ Recording started by Priya" },
+    { "atMs": 12000, "text": "🎤 Priya joined the recording" },
+    { "atMs": 31000, "text": "🎤 Rafael joined the recording" },
+    { "atMs": 320000, "text": "🎤 Mei joined the recording" },
+    { "atMs": 1025000, "text": "🎤 Tobias joined the recording" },
+    { "atMs": 1090000, "text": "🎤 Sofia joined the recording" },
+    { "atMs": 2349000, "text": "🎤 James joined the recording" },
+    { "atMs": 3492000, "text": "⏹️ Priya stopped the recording" }
+  ],
+  "notes": [
+    { "atMs": 1102000, "author": "Rafael", "text": "roll back onboarding tour, feature-flag it" },
+    { "atMs": 2510000, "author": "James", "text": "Redis postmortem + add eviction alert" }
+  ],
+  "transcription": { "status": "done", "provider": "demo" },
+  "minutes": { "status": "done", "model": "demo" },
+  "expiresAt": 4102444800000
+}

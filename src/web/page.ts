@@ -59,6 +59,15 @@ const P: Record<string, { pt: string; en: string }> = {
     pt: 'Clique num horário para pular pra aquele momento.',
     en: 'Click a timestamp to jump to that moment.',
   },
+  demoBanner: {
+    pt: '🎬 <b>Exemplo ao vivo</b> — uma reunião fictícia. Numa gravação real você também tem player com áudio completo, downloads (MP3/FLAC/mix/Audacity) e horários clicáveis, tudo protegido por login.',
+    en: '🎬 <b>Live demo</b> — a fictional meeting. On a real recording you also get an audio player, downloads (MP3/FLAC/mix/Audacity) and clickable timestamps, all behind login.',
+  },
+  sampleAudio: { pt: '🔊 Áudio de amostra (trecho de abertura)', en: '🔊 Sample audio (opening excerpt)' },
+  sampleNote: {
+    pt: 'Trecho curto e fictício, só pra dar o tom. Numa gravação real o áudio tem a duração completa e os horários acima são clicáveis.',
+    en: 'A short, fictional excerpt just to set the tone. On a real recording the audio is full-length and the timestamps are clickable.',
+  },
   cooking: {
     pt: 'O arquivo é processado na hora — gravações longas podem levar alguns segundos.',
     en: 'Files are processed on demand — long recordings may take a few seconds.',
@@ -176,9 +185,10 @@ window.kseek = function(ms){
 };
 </script>`;
 
-/** Horário clicável que pula o player de áudio pra aquele momento. */
-function tsLink(ms: number): string {
+/** Horário clicável que pula o player de áudio; `seekable=false` (ex.: demo) rende só o texto. */
+function tsLink(ms: number, seekable = true): string {
   const v = Math.max(0, Math.floor(ms));
+  if (!seekable) return `<time class="ts" style="cursor:default">${msToClock(v)}</time>`;
   return `<a class="ts" href="#" onclick="kseek(${v});return false">${msToClock(v)}</a>`;
 }
 
@@ -218,13 +228,16 @@ export function recordingPage(
   opts: {
     live: boolean;
     canDelete: boolean;
-    user: WebUser;
+    user?: WebUser;
     lang: Locale;
     transcript?: TranscriptSegment[];
     minutes?: MeetingMinutes;
+    demo?: boolean;
   },
 ): string {
   const { live, lang: l } = opts;
+  const demo = opts.demo ?? false;
+  const seekable = !demo; // no modo demo o áudio é só um trecho, então horários não pulam
   const endedAt = meta.endedAt ?? Date.now();
   const badge = live
     ? `<span class="badge live">${p(l, 'live')}</span>`
@@ -241,7 +254,7 @@ export function recordingPage(
       : `<p class="muted">${p(l, 'nobody')}</p>`;
 
   const downloads =
-    meta.participants.length > 0
+    !demo && meta.participants.length > 0
       ? `<div class="downloads">
           <a class="btn" href="/rec/${meta.id}/download/mp3">🎵 MP3 <small>${p(l, 'mp3sub')}</small></a>
           <a class="btn" href="/rec/${meta.id}/download/flac">💎 FLAC <small>${p(l, 'flacsub')}</small></a>
@@ -258,21 +271,28 @@ export function recordingPage(
           .join('')}</ul>`
       : '';
 
-  const minutes = renderMinutes(meta, opts.minutes, l);
-  const transcription = renderTranscription(meta, opts.transcript, l);
+  const minutes = renderMinutes(meta, opts.minutes, l, seekable);
+  const transcription = renderTranscription(meta, opts.transcript, l, seekable);
 
-  // Player de áudio (mix) — só em gravações finalizadas com participantes. Os horários
-  // clicáveis da ata/transcrição pulam o áudio pra aquele momento.
-  const showPlayer = !live && meta.participants.length > 0;
-  const player = showPlayer
-    ? `<h2>${p(l, 'listen')}</h2>
+  // Player de áudio. Real: mix cozinhado (id=kplayer, horários pulam pra ali).
+  // Demo: um trecho curto de amostra (sem id=kplayer, sem seek).
+  let player = '';
+  if (demo) {
+    player = `<h2>${p(l, 'sampleAudio')}</h2>
+       <div class="player">
+         <audio preload="none" controls src="/demo/audio"></audio>
+         <div class="hint">${p(l, 'sampleNote')}</div>
+       </div>`;
+  } else if (!live && meta.participants.length > 0) {
+    player = `<h2>${p(l, 'listen')}</h2>
        <div class="player">
          <audio id="kplayer" preload="none" controls src="/rec/${meta.id}/audio"></audio>
          <div class="hint">${p(l, 'seekHint')}</div>
-       </div>`
-    : '';
+       </div>`;
+  }
 
   const liveNote = live ? `<div class="note">${p(l, 'livenote')}</div>` : '';
+  const demoNote = demo ? `<div class="note">${p(l, 'demoBanner')}</div>` : '';
 
   const events =
     meta.events.length > 0
@@ -295,6 +315,7 @@ export function recordingPage(
   return shell(
     `${p(l, 'recording')} ${meta.id}`,
     `<h1>🎙️ ${p(l, 'recording')} ${badge}</h1>
+     ${demoNote}
      <dl class="grid">
        <dt>${p(l, 'server')}</dt><dd>${esc(meta.guildName)}</dd>
        <dt>${p(l, 'channel')}</dt><dd>🔊 ${esc(meta.voiceChannelName)}</dd>
@@ -305,7 +326,7 @@ export function recordingPage(
      ${liveNote}
      <h2>${p(l, 'participants')}</h2>
      ${people}
-     ${meta.participants.length > 0 ? `<h2>${p(l, 'downloads')}</h2>` : ''}
+     ${!demo && meta.participants.length > 0 ? `<h2>${p(l, 'downloads')}</h2>` : ''}
      ${downloads}
      ${player}
      ${minutes}
@@ -330,7 +351,12 @@ export function recordingPage(
   );
 }
 
-function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined, l: Locale): string {
+function renderMinutes(
+  meta: RecordingMeta,
+  minutes: MeetingMinutes | undefined,
+  l: Locale,
+  seekable = true,
+): string {
   const state = meta.minutes;
   if (!state || state.status === 'disabled') return '';
   const title = `<h2>📋 ${p(l, 'minutes')}</h2>`;
@@ -362,7 +388,7 @@ function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined,
   if (minutes.topicos.length) {
     parts.push(
       `<h3>${p(l, 'mTopics')}</h3><ul>${minutes.topicos
-        .map((tp) => `<li>${tsLink(tp.inicioMs)}${esc(tp.titulo)}</li>`)
+        .map((tp) => `<li>${tsLink(tp.inicioMs, seekable)}${esc(tp.titulo)}</li>`)
         .join('')}</ul>`,
     );
   }
@@ -377,12 +403,17 @@ function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined,
   }
   if (parts.length === 0) return '';
 
-  return `${title}
-    <div class="minutes">${parts.join('')}</div>
-    <div class="tdl"><a href="/rec/${meta.id}/ata.md">${p(l, 'minutesDownload')}</a></div>`;
+  // Download .md vai pela rota protegida /rec/:id — no modo demo (público) omitimos.
+  const dl = seekable ? `<div class="tdl"><a href="/rec/${meta.id}/ata.md">${p(l, 'minutesDownload')}</a></div>` : '';
+  return `${title}<div class="minutes">${parts.join('')}</div>${dl}`;
 }
 
-function renderTranscription(meta: RecordingMeta, transcript: TranscriptSegment[] | undefined, l: Locale): string {
+function renderTranscription(
+  meta: RecordingMeta,
+  transcript: TranscriptSegment[] | undefined,
+  l: Locale,
+  seekable = true,
+): string {
   const state = meta.transcription;
   if (!state || state.status === 'disabled') return '';
   const title = `<h2>${p(l, 'transcript')}</h2>`;
@@ -393,14 +424,16 @@ function renderTranscription(meta: RecordingMeta, transcript: TranscriptSegment[
   if (!transcript || transcript.length === 0) return `${title}<p class="tstate">${p(l, 'transcriptEmpty')}</p>`;
 
   const body = transcript
-    .map((s) => `<p>${tsLink(s.startMs)}<span class="who">${esc(s.speaker)}:</span> ${esc(s.text)}</p>`)
+    .map((s) => `<p>${tsLink(s.startMs, seekable)}<span class="who">${esc(s.speaker)}:</span> ${esc(s.text)}</p>`)
     .join('');
-  return `${title}
-    <div class="transcript">${body}</div>
-    <div class="tdl">
+  // Downloads .md/.txt vão pelas rotas protegidas /rec/:id — no modo demo (público) omitimos.
+  const dl = seekable
+    ? `<div class="tdl">
       <a href="/rec/${meta.id}/transcricao.md">${p(l, 'transcriptDownload')}</a>
       <a href="/rec/${meta.id}/transcricao.txt">${p(l, 'transcriptDownloadTxt')}</a>
-    </div>`;
+    </div>`
+    : '';
+  return `${title}<div class="transcript">${body}</div>${dl}`;
 }
 
 export function messagePage(title: string, message: string, user?: WebUser, lang?: Locale): string {
