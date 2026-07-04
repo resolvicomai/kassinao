@@ -20,8 +20,14 @@ interface Access {
 }
 
 /** Idioma da página pelo Accept-Language do navegador (pt-BR ou inglês). */
+// Idioma da página: escolha explícita (?lang) > cookie salvo > PADRÃO INGLÊS.
+// Inglês por padrão pra não misturar idiomas; o usuário troca no toggle e fica salvo.
 function pageLang(req: Request): Locale {
-  return (req.headers['accept-language'] ?? '').toLowerCase().includes('pt') ? 'pt' : 'en';
+  const q = String(req.query.lang ?? '').toLowerCase();
+  if (q === 'pt' || q === 'en') return q;
+  const m = (req.headers.cookie ?? '').match(/(?:^|;\s*)kassinao_lang=(pt|en)\b/);
+  if (m) return m[1] as Locale;
+  return 'en';
 }
 
 const MSG = {
@@ -107,6 +113,16 @@ async function checkAccess(user: WebUser, meta: RecordingMeta): Promise<Access> 
 export function startWebServer(): void {
   const app = express();
   app.disable('x-powered-by');
+
+  // Persiste a escolha de idioma (?lang=en|pt) num cookie de 1 ano.
+  app.use((req, res, next) => {
+    const q = String(req.query.lang ?? '').toLowerCase();
+    if (q === 'pt' || q === 'en') {
+      const secure = config.baseUrl.startsWith('https') ? '; Secure' : '';
+      res.append('Set-Cookie', `kassinao_lang=${q}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`);
+    }
+    next();
+  });
 
   app.get('/', (req, res) => {
     res.type('html').send(landingPage(pageLang(req)));

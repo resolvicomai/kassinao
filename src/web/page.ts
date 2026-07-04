@@ -148,9 +148,14 @@ const SHELL_CSS = `
   button.danger { background: none; border: 1px solid #da373c; color: #da373c; padding: 8px 14px;
                   border-radius: 8px; font-size: 14px; cursor: pointer; }
   button.danger:hover { background: #da373c; color: #fff; }
-  .userbar { max-width: 640px; width: 100%; display: flex; justify-content: flex-end; align-items: center;
-             gap: 8px; margin-bottom: 12px; font-size: 13px; color: #949ba4; }
-  .userbar img { width: 22px; height: 22px; border-radius: 50%; }
+  .topbar { max-width: 640px; width: 100%; display: flex; justify-content: space-between; align-items: center;
+            gap: 8px; margin-bottom: 12px; font-size: 13px; color: #949ba4; }
+  .topbar .user { display: inline-flex; align-items: center; gap: 8px; }
+  .topbar img { width: 22px; height: 22px; border-radius: 50%; }
+  .langtoggle a { color: #949ba4; text-decoration: none; padding: 2px 4px; }
+  .langtoggle a.on { color: #f2f3f5; font-weight: 700; }
+  .langtoggle a:hover { color: #dbdee1; }
+  .langtoggle span { opacity: .5; margin: 0 2px; }
   .note { background: #232428; border-left: 3px solid #f0b232; padding: 10px 14px; border-radius: 6px;
           font-size: 14px; margin-top: 14px; }
   footer { margin-top: 26px; font-size: 13px; color: #949ba4; }
@@ -197,9 +202,14 @@ function shell(
   body: string,
   opts: { user?: WebUser; lang?: Locale; refreshSeconds?: number } = {},
 ): string {
-  const userbar = opts.user
-    ? `<div class="userbar">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</div>`
-    : '';
+  const lang = opts.lang === 'pt' ? 'pt' : 'en';
+  // Toggle de idioma (fica salvo via cookie); links relativos preservam a rota atual.
+  const langToggle = `<div class="langtoggle"><a href="?lang=en"${lang === 'en' ? ' class="on"' : ''}>EN</a><span>·</span><a href="?lang=pt"${lang === 'pt' ? ' class="on"' : ''}>PT</a></div>`;
+  const userbar = `<div class="topbar">${langToggle}${
+    opts.user
+      ? `<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</span>`
+      : ''
+  }</div>`;
   // Auto-refresh (enquanto transcrição/ata processam) via JS em vez de <meta refresh>,
   // pra NÃO recarregar e cortar o áudio enquanto a pessoa está ouvindo o player.
   const refresh = opts.refreshSeconds
