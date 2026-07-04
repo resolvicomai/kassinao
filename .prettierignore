@@ -4,3 +4,5 @@ recordings
 *.md
 .github
 scratchpad
+mcp/dist
+mcp/node_modules

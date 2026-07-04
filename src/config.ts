@@ -32,6 +32,22 @@ function loadCookieSecret(): string {
   }
 }
 
+/**
+ * Deriva um segredo dedicado por finalidade a partir do MCP_SECRET (HKDF-SHA256).
+ * Rótulos distintos ⇒ segredos distintos: um token de refresh apresentado como
+ * access (ou vice-versa) QUEBRA o HMAC, não depende só da checagem de `typ`.
+ */
+function deriveSecret(secret: string, label: string): string {
+  return Buffer.from(crypto.hkdfSync('sha256', Buffer.from(secret), Buffer.alloc(0), Buffer.from(label), 32)).toString(
+    'hex',
+  );
+}
+
+// MCP é OPT-IN: só liga quando MCP_SECRET vem do ambiente. NUNCA auto-gerado em
+// disco (como o cookie) — rotacionar o segredo é o botão de pânico que invalida
+// todos os tokens de uma vez, então ele tem que ser deliberado e estável.
+const mcpSecret = process.env.MCP_SECRET || '';
+
 export const config = {
   token: required('DISCORD_TOKEN'),
   applicationId: required('APPLICATION_ID'),
@@ -74,4 +90,35 @@ export const config = {
   minutesModel: process.env.MINUTES_MODEL || 'llama-3.3-70b-versatile',
   /** Teto de tokens de saída da ata. 8192 cobre reuniões longas; o modelo suporta até 32768. */
   minutesMaxTokens: Number(process.env.MINUTES_MAX_TOKENS || 8192),
+
+  // ---------- MCP (conector para assistentes de IA) — opt-in via MCP_SECRET ----------
+  /** Liga a API /api/* e o comando /mcp quando há MCP_SECRET. */
+  mcpEnabled: !!mcpSecret,
+  mcpSecret,
+  /** Segredos dedicados por finalidade (HKDF do MCP_SECRET) — isolados do cookieSecret. */
+  mcpAccessSecret: mcpSecret ? deriveSecret(mcpSecret, 'kassinao-mcp-access-v1') : '',
+  mcpRefreshSecret: mcpSecret ? deriveSecret(mcpSecret, 'kassinao-mcp-refresh-v1') : '',
+  /** IDs Discord autorizados a emitir/revogar tokens pelo comando /mcp (allowlist explícita). */
+  ownerIds: (process.env.OWNER_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  /** Vida do access token (curto: se vazar, morre sozinho). */
+  mcpAccessTtlMin: Number(process.env.MCP_ACCESS_TTL_MIN || 15),
+  /** Vida do refresh token (rotacionado a cada uso). */
+  mcpRefreshTtlDays: Number(process.env.MCP_REFRESH_TTL_DAYS || 30),
 };
+
+// Isolamento de blast-radius: o segredo do MCP não pode coincidir com o dos
+// cookies (senão um token de sessão web e um token de MCP se forjariam entre si,
+// exatamente a classe de bug do crítico histórico #1).
+if (config.mcpEnabled) {
+  if (config.mcpSecret === config.cookieSecret) {
+    console.error('MCP_SECRET não pode ser igual ao COOKIE_SECRET (isolamento de segurança).');
+    process.exit(1);
+  }
+  if (config.mcpAccessSecret === config.mcpRefreshSecret || !config.mcpAccessSecret || !config.mcpRefreshSecret) {
+    console.error('Erro interno: derivação dos segredos MCP falhou.');
+    process.exit(1);
+  }
+}

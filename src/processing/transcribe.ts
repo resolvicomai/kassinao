@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
+import { cleanInline, neutralizeFences } from '../sanitize';
 import {
   cacheDir,
   Participant,
@@ -546,19 +547,24 @@ export function transcriptToMarkdown(meta: RecordingMeta, segments: TranscriptSe
   // fuso explícito: o arquivo é estático (sem navegador para reescrever a data)
   const when = new Date(meta.startedAt).toLocaleString('pt-BR', { timeZone: config.timezone });
   const lines = [
-    `# Transcrição — ${meta.voiceChannelName} (${when})`,
+    `# Transcrição — ${cleanInline(meta.voiceChannelName)} (${when})`,
     '',
-    `Gravação \`${meta.id}\` • ${meta.participants.map((p) => p.name).join(', ')}`,
+    `Gravação \`${meta.id}\` • ${meta.participants.map((p) => cleanInline(p.name)).join(', ')}`,
     '',
   ];
   for (const seg of segments) {
-    lines.push(`**[${msToClock(seg.startMs)}] ${seg.speaker}:** ${seg.text}`);
+    // fala/apelido são entrada adversarial: limpa controle/ANSI e neutraliza fences
+    lines.push(
+      `**[${msToClock(seg.startMs)}] ${cleanInline(seg.speaker)}:** ${neutralizeFences(cleanInline(seg.text))}`,
+    );
     lines.push('');
   }
   if (meta.notes.length > 0) {
     lines.push('---', '', '## Notas da gravação', '');
     for (const note of meta.notes) {
-      lines.push(`- **[${msToClock(note.atMs)}]** ${note.author}: ${note.text}`);
+      lines.push(
+        `- **[${msToClock(note.atMs)}]** ${cleanInline(note.author)}: ${neutralizeFences(cleanInline(note.text))}`,
+      );
     }
   }
   return lines.join('\n');

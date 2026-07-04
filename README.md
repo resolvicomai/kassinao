@@ -39,6 +39,7 @@ Kassinão combines both **and sidesteps the hard part**: because every participa
 - [Quick start](#quick-start)
 - [How it compares](#how-it-compares)
 - [Transcription backends](#transcription-backends)
+- [AI connector (MCP)](#ai-connector-mcp)
 - [Commands](#commands)
 - [Configuration](#configuration)
 - [Security & privacy](#security--privacy)
@@ -54,6 +55,7 @@ Kassinão combines both **and sidesteps the hard part**: because every participa
 - **🔊 Recording web page** — audio player with **clickable timestamps**, downloads in **MP3 / FLAC / single mix / Audacity project**, transcript & minutes rendered inline — all behind **Discord login**.
 - **🔒 Real access control** — only call participants, people who can see the channel, the initiator, or admins can open a recording. A leaked link opens nothing.
 - **🎛️ Live panel** in the voice channel with **Stop** / **Add note** buttons and a `[RECORDING]` nickname indicator (visible consent).
+- **🔌 MCP connector** *(optional)* — ask your meetings from **Claude Desktop / Cursor**: time-window queries, cross-meeting **action items with deadlines**, full-text search — each user scoped to exactly what they can already see. See [`mcp/`](mcp/).
 - **🤖 Auto-record** — starts by itself when N people join a channel; stops when it empties.
 - **❓ Built-in onboarding** — `/help` with interactive topic buttons; DM the bot and it replies with the guide too.
 - **🌎 Bilingual** (pt-BR / English), **HTTPS via Cloudflare Tunnel** (no open ports), auto-stop, retention/expiry, crash recovery and graceful shutdown.
@@ -117,6 +119,18 @@ MINUTES_ENABLED=auto
 | **Local** (`faster-whisper`) | Free | Good (`small`+) | 🔒 Never leaves your server | Slower without a GPU; see [`scripts/transcribe-local.py`](scripts/transcribe-local.py) |
 
 The AI minutes run on Groq's LLM (same key), a few cents per meeting.
+
+## AI connector (MCP)
+
+*Optional, off by default.* Plug your meetings into **Claude Desktop, Cursor** or any MCP client and ask them in natural language:
+
+- *"What's pending this week, and who owns it?"* — aggregates action items with deadlines across meetings.
+- *"List the calls in this channel between June 1 and 30."* — time-window queries (timezone-aware).
+- *"When did Ana talk about the budget? Give me the link."* — search with deep links to the exact moment.
+
+**Security by design:** the connector runs locally and only carries a **personal token**; the bot applies the *same* access check as the web page, meeting by meeting — each person sees only what they'd see on the site. Read-only, no audio, revocable. Meeting text is wrapped as untrusted data (prompt-injection defense).
+
+Turn it on by setting `MCP_SECRET` (a strong secret, **≠** `COOKIE_SECRET`). Users self-serve at `/conectar-ia`. Client package & full docs: [`mcp/`](mcp/).
 
 ## Commands
 

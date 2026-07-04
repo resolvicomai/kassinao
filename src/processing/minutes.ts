@@ -1,4 +1,5 @@
 import { config } from '../config';
+import { cleanInline, cleanText, fenceUntrusted, neutralizeFences, UNTRUSTED_GUARD } from '../sanitize';
 import { MeetingMinutes, MinutesAction, MinutesPerson, MinutesTopic, RecordingMeta, TranscriptSegment } from '../store';
 import { msToClock } from './transcribe';
 
@@ -17,6 +18,7 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
   const transcriptText = buildTranscriptText(meta, segments);
 
   const system = [
+    UNTRUSTED_GUARD,
     'Você é um assistente que gera ATA DE REUNIÃO em português do Brasil a partir de uma transcrição',
     'que já vem com o NOME de quem falou e o horário [hh:mm:ss]. Responda SOMENTE um objeto JSON válido,',
     'sem markdown e sem texto fora do JSON, com exatamente estas chaves:',
@@ -65,10 +67,10 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
 
 function buildTranscriptText(meta: RecordingMeta, segments: TranscriptSegment[]): string {
   const header = [
-    `Reunião no canal: ${meta.voiceChannelName}`,
-    `Participantes: ${meta.participants.map((p) => p.name).join(', ') || '—'}`,
+    `Reunião no canal: ${cleanInline(meta.voiceChannelName)}`,
+    `Participantes: ${meta.participants.map((p) => cleanInline(p.name)).join(', ') || '—'}`,
     meta.notes.length > 0
-      ? `Notas marcadas: ${meta.notes.map((n) => `[${msToClock(n.atMs)}] ${n.author}: ${n.text}`).join(' | ')}`
+      ? `Notas marcadas: ${meta.notes.map((n) => `[${msToClock(n.atMs)}] ${cleanInline(n.author)}: ${cleanInline(n.text)}`).join(' | ')}`
       : '',
     '',
     'TRANSCRIÇÃO:',
@@ -76,7 +78,9 @@ function buildTranscriptText(meta: RecordingMeta, segments: TranscriptSegment[])
     .filter(Boolean)
     .join('\n');
 
-  const body = segments.map((s) => `[${msToClock(s.startMs)}] ${s.speaker}: ${s.text}`).join('\n');
+  const body = segments
+    .map((s) => `[${msToClock(s.startMs)}] ${cleanInline(s.speaker)}: ${cleanText(s.text)}`)
+    .join('\n');
 
   let full = `${header}\n${body}`;
   if (full.length > MAX_TRANSCRIPT_CHARS) {
@@ -84,7 +88,9 @@ function buildTranscriptText(meta: RecordingMeta, segments: TranscriptSegment[])
     const half = Math.floor(MAX_TRANSCRIPT_CHARS / 2);
     full = `${full.slice(0, half)}\n\n[... trecho do meio omitido por tamanho ...]\n\n${full.slice(-half)}`;
   }
-  return full;
+  // envolve num bloco de dados-não-confiáveis com nonce (o LLM é instruído a
+  // tratar o interior como DADOS, nunca instruções — ver UNTRUSTED_GUARD)
+  return fenceUntrusted(full);
 }
 
 /** Parse defensivo: o modelo pode variar chaves/tipos; coage tudo para o formato esperado. */
@@ -183,33 +189,38 @@ function clockToMs(v: string): number {
 
 /** Ata em Markdown (para o .txt/.md e o info). */
 export function minutesToMarkdown(meta: RecordingMeta, m: MeetingMinutes): string {
-  const lines = [`# Ata — ${meta.voiceChannelName}`, ''];
-  if (m.resumo) lines.push('## Resumo', '', m.resumo, '');
+  // A ata vem do LLM, mas o LLM leu transcrição adversarial; limpamos na saída também.
+  const lines = [`# Ata — ${cleanInline(meta.voiceChannelName)}`, ''];
+  if (m.resumo) lines.push('## Resumo', '', neutralizeFences(cleanText(m.resumo)), '');
   if (m.decisoes.length) {
     lines.push('## Decisões', '');
-    for (const d of m.decisoes) lines.push(`- ${d}`);
+    for (const d of m.decisoes) lines.push(`- ${neutralizeFences(cleanInline(d))}`);
     lines.push('');
   }
   if (m.acoes.length) {
     lines.push('## Itens de ação', '');
     for (const a of m.acoes) {
-      const extra = [a.responsavel && `resp.: ${a.responsavel}`, a.prazo && `prazo: ${a.prazo}`]
+      const extra = [
+        a.responsavel && `resp.: ${cleanInline(a.responsavel)}`,
+        a.prazo && `prazo: ${cleanInline(a.prazo)}`,
+      ]
         .filter(Boolean)
         .join(' • ');
-      lines.push(`- [ ] ${a.tarefa}${extra ? ` (${extra})` : ''}`);
+      lines.push(`- [ ] ${neutralizeFences(cleanInline(a.tarefa))}${extra ? ` (${extra})` : ''}`);
     }
     lines.push('');
   }
   if (m.topicos.length) {
     lines.push('## Tópicos', '');
-    for (const tp of m.topicos) lines.push(`- \`${msToClock(tp.inicioMs)}\` ${tp.titulo}`);
+    for (const tp of m.topicos)
+      lines.push(`- \`${msToClock(tp.inicioMs)}\` ${neutralizeFences(cleanInline(tp.titulo))}`);
     lines.push('');
   }
   if (m.porParticipante?.length) {
     lines.push('## Por participante', '');
     for (const pp of m.porParticipante) {
-      lines.push(`### ${pp.nome}`);
-      for (const pt of pp.pontos) lines.push(`- ${pt}`);
+      lines.push(`### ${cleanInline(pp.nome)}`);
+      for (const pt of pp.pontos) lines.push(`- ${neutralizeFences(cleanInline(pt))}`);
       lines.push('');
     }
   }

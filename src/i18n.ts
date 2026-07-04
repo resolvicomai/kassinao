@@ -225,6 +225,20 @@ const STRINGS: Strings = {
   },
   'autorecord.view-title': { pt: '🤖 Auto-record deste servidor', en: '🤖 Auto-record in this server' },
   'autorecord.view-line': { pt: '{channel} — mínimo de {min} pessoa(s)', en: '{channel} — minimum {min} person(s)' },
+
+  // MCP (conector de IA)
+  'mcp.web-only': {
+    pt: '🔌 Para conectar seu assistente de IA, abra {url} e entre com o Discord (é self-serve, com o seu acesso).',
+    en: '🔌 To connect your AI assistant, open {url} and sign in with Discord (self-serve, scoped to you).',
+  },
+  'mcp.new': {
+    pt: '🔌 **Conectar assistente de IA** (código válido por ~5 min, uso único):\n```\nnpx -y @kassinao/mcp exchange {code}\n```\nDepois cole a config que o comando imprimir no Claude Desktop/Cursor. Ou, mais fácil, use {url}/conectar-ia no navegador.',
+    en: '🔌 **Connect your AI assistant** (code valid ~5 min, single use):\n```\nnpx -y @kassinao/mcp exchange {code}\n```\nThen paste the config it prints into Claude Desktop/Cursor. Or, easier, use {url}/conectar-ia in the browser.',
+  },
+  'mcp.revoked': {
+    pt: '🔒 Pronto — revoguei {n} conector(es) de IA seu(s). Os tokens deixaram de funcionar na hora.',
+    en: '🔒 Done — revoked {n} of your AI connector(s). The tokens stopped working immediately.',
+  },
 };
 
 export function t(locale: Locale, key: string, vars: Record<string, string | number> = {}): string {

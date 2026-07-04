@@ -469,3 +469,96 @@ export function landingPage(lang: Locale): string {
   // landing é indexável (sem noindex) — é a vitrine pública
   return shell('Kassinão', body, { lang });
 }
+
+/**
+ * Página "Conectar assistente de IA" (/conectar-ia): o usuário loga com Discord,
+ * gera um token pessoal e cola no Claude Desktop/Cursor. O token só enxerga o que
+ * a pessoa já veria no site. Sempre noindex (é conteúdo por-usuário, com segredo).
+ */
+export function connectPage(opts: {
+  lang: Locale;
+  user?: WebUser;
+  refreshToken?: string;
+  sessionCount?: number;
+  revoked?: boolean;
+}): string {
+  const pt = opts.lang === 'pt';
+  const T = (a: string, b: string): string => (pt ? a : b);
+  const title = T('Conectar assistente de IA', 'Connect your AI assistant');
+
+  if (!opts.user) {
+    const body = `<h1>🔌 ${esc(title)}</h1>
+      <p class="muted" style="margin-top:12px">${esc(
+        T(
+          'Conecte suas reuniões do Kassinão ao seu assistente de IA (Claude Desktop, Cursor…). Entre com o Discord — você só verá as gravações que já pode ver no site.',
+          'Connect your Kassinão meetings to your AI assistant (Claude Desktop, Cursor…). Sign in with Discord — you will only see recordings you can already see on the site.',
+        ),
+      )}</p>
+      <div class="downloads" style="margin-top:18px">
+        <a class="btn" href="/auth/login?next=%2Fconectar-ia">${esc(T('Entrar com Discord', 'Sign in with Discord'))}</a>
+      </div>`;
+    return shell(title, body, { lang: opts.lang, noindex: true });
+  }
+
+  if (opts.refreshToken) {
+    const cfg = JSON.stringify(
+      {
+        mcpServers: {
+          kassinao: {
+            command: 'npx',
+            args: ['-y', '@kassinao/mcp'],
+            env: { KASSINAO_URL: config.baseUrl, KASSINAO_REFRESH_TOKEN: opts.refreshToken },
+          },
+        },
+      },
+      null,
+      2,
+    );
+    const body = `<h1>✅ ${esc(T('Token gerado', 'Token generated'))}</h1>
+      <p style="color:#ffb454;margin-top:12px">⚠️ ${esc(
+        T(
+          'Copie agora — este token NÃO será mostrado de novo. Ele dá ao SEU assistente de IA acesso às gravações que VOCÊ pode ver.',
+          'Copy it now — this token will NOT be shown again. It gives YOUR AI assistant access to the recordings YOU can see.',
+        ),
+      )}</p>
+      <p class="muted" style="margin-top:12px">${esc(
+        T(
+          'Cole no claude_desktop_config.json (Claude Desktop) ou no equivalente do Cursor:',
+          'Paste into claude_desktop_config.json (Claude Desktop) or the Cursor equivalent:',
+        ),
+      )}</p>
+      <pre style="background:#111;padding:14px;border-radius:8px;overflow-x:auto;white-space:pre;font-size:13px">${esc(cfg)}</pre>
+      <p class="muted" style="margin-top:12px">${esc(
+        T(
+          'Depois reinicie o Claude Desktop/Cursor e pergunte: "o que ficou pendente essa semana?"',
+          'Then restart Claude Desktop/Cursor and ask: "what is pending this week?"',
+        ),
+      )}</p>
+      <div class="downloads" style="margin-top:18px"><a class="btn" href="/conectar-ia">${esc(T('Voltar', 'Back'))}</a></div>`;
+    return shell(title, body, { lang: opts.lang, user: opts.user, noindex: true });
+  }
+
+  const count = opts.sessionCount ?? 0;
+  const revokedMsg = opts.revoked
+    ? `<p style="color:#8f8;margin-top:12px">✅ ${esc(T('Todos os seus conectores foram revogados.', 'All your connectors were revoked.'))}</p>`
+    : '';
+  const btnStyle = 'border:0;cursor:pointer;font:inherit';
+  const body = `<h1>🔌 ${esc(title)}</h1>
+    ${revokedMsg}
+    <p class="muted" style="margin-top:12px">${esc(
+      T(
+        'Gere um token para plugar o Kassinão no seu assistente de IA. Cada token só enxerga as gravações que você já pode ver — e pode ser revogado quando quiser.',
+        'Generate a token to plug Kassinão into your AI assistant. Each token only sees recordings you can already see — and can be revoked anytime.',
+      ),
+    )}</p>
+    <p class="muted" style="margin-top:8px">${esc(T('Conectores ativos', 'Active connectors'))}: ${count}</p>
+    <div class="downloads" style="margin-top:18px">
+      <form method="post" action="/conectar-ia/gerar" style="display:inline"><button class="btn" type="submit" style="${btnStyle}">${esc(T('Gerar token de conexão', 'Generate connection token'))}</button></form>
+      ${
+        count > 0
+          ? `<form method="post" action="/conectar-ia/revogar" style="display:inline"><button class="btn" type="submit" style="${btnStyle};background:#5a2a2a">${esc(T('Revogar todos', 'Revoke all'))}</button></form>`
+          : ''
+      }
+    </div>`;
+  return shell(title, body, { lang: opts.lang, user: opts.user, noindex: true });
+}

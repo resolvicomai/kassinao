@@ -16,25 +16,57 @@ interface StateToken {
   next: string;
 }
 
+/** Mínimo que o checkAccess precisa: quem é o usuário (sessão web OU token MCP). */
+export interface AccessIdentity {
+  id: string;
+  name: string;
+}
+
+/** Token de acesso do MCP (curto, em memória do conector, viaja em cada request). */
+export interface McpToken {
+  typ: 'mcp';
+  id: string;
+  name: string;
+  exp: number;
+  jti: string;
+}
+
+/** Token de refresh do MCP (longo, no cofre do SO do usuário, rotacionado a cada uso). */
+export interface McpRefreshToken {
+  typ: 'mcp-refresh';
+  id: string;
+  name: string;
+  exp: number;
+  /** id da SESSÃO do conector (estável); o access token carrega o mesmo em `jti`. */
+  jti: string;
+  /** geração do refresh: incrementa a cada rotação; divergência = reuso detectado. */
+  gen: number;
+}
+
 const SESSION_COOKIE = 'kassinao_session';
 const STATE_COOKIE = 'kassinao_state';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-// ---------- assinatura de cookies (HMAC-SHA256) ----------
+// ---------- assinatura de tokens (HMAC-SHA256) ----------
 
-function sign(payload: object): string {
+// O SEGREDO é sempre parâmetro EXPLÍCITO — nunca capturado do escopo. Isso impede
+// que um token assinado com um segredo (ex.: sessão web) passe na verificação de
+// outro (ex.: access do MCP): domínios com segredos diferentes ficam isolados por
+// construção, não só por uma checagem de `typ` (lição do crítico histórico #1).
+
+function sign(payload: object, secret: string): string {
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const mac = crypto.createHmac('sha256', config.cookieSecret).update(body).digest('base64url');
+  const mac = crypto.createHmac('sha256', secret).update(body).digest('base64url');
   return `${body}.${mac}`;
 }
 
-function verify<T>(token: string | undefined): T | undefined {
+function verify<T>(token: string | undefined, secret: string): T | undefined {
   if (!token) return undefined;
   const dot = token.lastIndexOf('.');
   if (dot < 0) return undefined;
   const body = token.slice(0, dot);
   const mac = token.slice(dot + 1);
-  const expected = crypto.createHmac('sha256', config.cookieSecret).update(body).digest('base64url');
+  const expected = crypto.createHmac('sha256', secret).update(body).digest('base64url');
   if (mac.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(expected))) {
     return undefined;
   }
@@ -66,7 +98,7 @@ function setCookie(res: Response, name: string, value: string, maxAgeMs: number)
 // ---------- sessão ----------
 
 export function getWebUser(req: Request): WebUser | undefined {
-  const user = verify<WebUser>(parseCookies(req)[SESSION_COOKIE]);
+  const user = verify<WebUser>(parseCookies(req)[SESSION_COOKIE], config.cookieSecret);
   // Checagens estritas: um cookie de state (mesmo segredo HMAC) NÃO pode passar
   // como sessão. Exige typ correto, exp numérico no futuro e id de verdade.
   if (!user || user.typ !== 'session') return undefined;
@@ -90,7 +122,7 @@ export function beginLogin(res: Response, next: string): void {
   // apenas caminhos locais: "//evil.com" e "/\evil.com" são redirects externos no navegador
   const safeNext = /^\/(?![/\\])/.test(next) && !next.includes('\\') ? next : '/';
   const stateToken: StateToken = { typ: 'state', state, next: safeNext };
-  setCookie(res, STATE_COOKIE, sign(stateToken), 10 * 60 * 1000);
+  setCookie(res, STATE_COOKIE, sign(stateToken, config.cookieSecret), 10 * 60 * 1000);
   const params = new URLSearchParams({
     client_id: config.applicationId,
     redirect_uri: redirectUri(),
@@ -104,7 +136,7 @@ export function beginLogin(res: Response, next: string): void {
 
 export async function finishLogin(req: Request, res: Response): Promise<string | undefined> {
   const { code, state } = req.query as { code?: string; state?: string };
-  const saved = verify<StateToken>(parseCookies(req)[STATE_COOKIE]);
+  const saved = verify<StateToken>(parseCookies(req)[STATE_COOKIE], config.cookieSecret);
   clearStateCookie(res); // consome o state: não fica vivo 10 min no navegador
   if (!code || !state || !saved || saved.typ !== 'state' || saved.state !== state) return undefined;
 
@@ -141,6 +173,57 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
     avatar: me.avatar ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png?size=64` : null,
     exp: Date.now() + SESSION_TTL_MS,
   };
-  setCookie(res, SESSION_COOKIE, sign(user), SESSION_TTL_MS);
+  setCookie(res, SESSION_COOKIE, sign(user, config.cookieSecret), SESSION_TTL_MS);
   return saved.next;
+}
+
+// ---------- tokens do MCP (HMAC com segredos DEDICADOS, isolados do cookie) ----------
+
+const BEARER = /^Bearer\s+(.+)$/i;
+
+function bearerToken(req: Request): string | undefined {
+  const h = req.headers.authorization;
+  if (!h) return undefined;
+  const m = BEARER.exec(h);
+  return m ? m[1].trim() : undefined;
+}
+
+/** Assina um access token do MCP (jti/exp definidos por quem emite). */
+export function signMcpAccess(payload: Omit<McpToken, 'typ'>): string {
+  return sign({ typ: 'mcp', ...payload }, config.mcpAccessSecret);
+}
+
+/** Assina um refresh token do MCP. */
+export function signMcpRefresh(payload: Omit<McpRefreshToken, 'typ'>): string {
+  return sign({ typ: 'mcp-refresh', ...payload }, config.mcpRefreshSecret);
+}
+
+/**
+ * Verifica um refresh token do MCP: `typ` estrito, exp numérico no futuro, id e
+ * jti não-vazios. NÃO consulta a denylist — quem chama (o endpoint de refresh) faz.
+ */
+export function verifyMcpRefresh(token: string | undefined): McpRefreshToken | undefined {
+  const t = verify<McpRefreshToken>(token, config.mcpRefreshSecret);
+  if (!t || t.typ !== 'mcp-refresh') return undefined;
+  if (typeof t.exp !== 'number' || t.exp < Date.now()) return undefined;
+  if (typeof t.id !== 'string' || !t.id) return undefined;
+  if (typeof t.jti !== 'string' || !t.jti) return undefined;
+  return t;
+}
+
+/**
+ * Extrai e valida o usuário do MCP a partir do header `Authorization: Bearer`.
+ * Espelho ESTRITO do getWebUser (typ==='mcp', exp numérico futuro, id não-vazio,
+ * jti presente). NÃO consulta a denylist: isso é responsabilidade do middleware
+ * único da API /api/* (revogação num só lugar). Retorna undefined em qualquer
+ * falha — a API converte tudo num 401 uniforme (sem oráculo de causa).
+ */
+export function getMcpUser(req: Request): McpToken | undefined {
+  if (!config.mcpEnabled) return undefined;
+  const t = verify<McpToken>(bearerToken(req), config.mcpAccessSecret);
+  if (!t || t.typ !== 'mcp') return undefined;
+  if (typeof t.exp !== 'number' || t.exp < Date.now()) return undefined;
+  if (typeof t.id !== 'string' || !t.id) return undefined;
+  if (typeof t.jti !== 'string' || !t.jti) return undefined;
+  return t;
 }

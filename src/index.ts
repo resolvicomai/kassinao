@@ -25,6 +25,7 @@ import {
 import { config } from './config';
 import { startCleanupJob } from './cleanup';
 import { client } from './discord/client';
+import { markClientReady } from './discord/ready';
 import { Locale, localeOf, t } from './i18n';
 import { autoRecordStore, isArmed, setArmed } from './recorder/autorecord';
 import { sessionManager } from './recorder/manager';
@@ -45,6 +46,8 @@ import {
   validateTranscriptionConfig,
 } from './processing/transcribe';
 import { listGuildMetas, listMetas, pageUrl, RecordingMeta, recoverInterruptedRecordings } from './store';
+import { forgetMember } from './web/access';
+import { createExchangeCode, revokeUser } from './web/mcpTokens';
 import { startWebServer } from './web/server';
 
 const NOTE_MODAL_ID = 'kassinao_note_modal';
@@ -172,7 +175,36 @@ function buildCommands() {
     });
   localized(autorecord, 'autorecord', '🤖 Automatic recording when people join a voice channel');
 
-  return [gravar, parar, nota, status, ajuda, gravacoes, autorecord].map((c) => c.toJSON());
+  const cmds = [gravar, parar, nota, status, ajuda, gravacoes, autorecord];
+
+  // /mcp só existe quando o conector de IA está habilitado (MCP_SECRET definido).
+  if (config.mcpEnabled) {
+    const mcp = new SlashCommandBuilder()
+      .setName('mcp')
+      .setDescription('🔌 Conecta seu assistente de IA (Claude/Cursor) às gravações')
+      .addSubcommand((sc) => {
+        sc.setName('novo').setDescription('Gera um código para conectar seu assistente de IA');
+        sc.setNameLocalizations({ 'en-US': 'new', 'en-GB': 'new' });
+        sc.setDescriptionLocalizations({
+          'en-US': 'Generate a code to connect your AI assistant',
+          'en-GB': 'Generate a code to connect your AI assistant',
+        });
+        return sc;
+      })
+      .addSubcommand((sc) => {
+        sc.setName('revogar-tudo').setDescription('Revoga todos os seus conectores de IA');
+        sc.setNameLocalizations({ 'en-US': 'revoke-all', 'en-GB': 'revoke-all' });
+        sc.setDescriptionLocalizations({
+          'en-US': 'Revoke all your AI connectors',
+          'en-GB': 'Revoke all your AI connectors',
+        });
+        return sc;
+      });
+    localized(mcp, 'mcp', '🔌 Connect your AI assistant (Claude/Cursor) to the recordings');
+    cmds.push(mcp);
+  }
+
+  return cmds.map((c) => c.toJSON());
 }
 
 async function registerCommands(): Promise<void> {
@@ -618,6 +650,33 @@ async function handleAutorecord(interaction: ChatInputCommandInteraction): Promi
   }
 }
 
+async function handleMcp(interaction: ChatInputCommandInteraction): Promise<void> {
+  const l = localeOf(interaction.locale);
+  if (!config.mcpEnabled) {
+    await interaction.reply({ content: t(l, 'err.generic'), ephemeral: true });
+    return;
+  }
+  // /mcp é só para donos (allowlist explícita OWNER_IDS). Membros comuns usam
+  // a página /conectar-ia (self-serve, com o próprio acesso) — não inferimos
+  // "dono" de estar numa DM. Resposta SEMPRE efêmera; o código nunca é logado.
+  if (!config.ownerIds.includes(interaction.user.id)) {
+    await interaction.reply({
+      content: t(l, 'mcp.web-only', { url: `${config.baseUrl}/conectar-ia` }),
+      ephemeral: true,
+    });
+    return;
+  }
+  const member = interaction.member as GuildMember | null;
+  const name = (member && 'displayName' in member ? member.displayName : null) ?? interaction.user.username;
+  if (interaction.options.getSubcommand() === 'novo') {
+    const code = createExchangeCode(interaction.user.id, name);
+    await interaction.reply({ content: t(l, 'mcp.new', { code, url: config.baseUrl }), ephemeral: true });
+  } else {
+    const n = revokeUser(interaction.user.id);
+    await interaction.reply({ content: t(l, 'mcp.revoked', { n }), ephemeral: true });
+  }
+}
+
 // ---------- auto-record e paradas por população ----------
 
 const pendingChecks = new Map<string, NodeJS.Timeout>(); // `${guildId}:${channelId}`
@@ -671,6 +730,9 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
 // ---------- eventos do Discord ----------
 
 client.once(Events.ClientReady, async () => {
+  // Marca ANTES de qualquer await: a partir daqui os caches de guild/canal são
+  // confiáveis e o checkAccess (web + API do MCP) pode avaliar acesso de verdade.
+  markClientReady();
   console.log(`Kassinão online como ${client.user?.tag} 🎙️`);
   await registerCommands().catch((err) => console.error('Falha ao registrar comandos:', err));
   // canais que já estavam cheios quando o bot subiu disparam o auto-record
@@ -726,6 +788,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           break;
         case 'autorecord':
           await handleAutorecord(interaction);
+          break;
+        case 'mcp':
+          await handleMcp(interaction);
           break;
       }
     } else if (interaction.isButton() && interaction.customId === STOP_BUTTON_ID) {
@@ -796,6 +861,23 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   if (newState.channelId) channels.add(newState.channelId);
   for (const channelId of channels) scheduleAutoRecordCheck(guild, channelId);
 });
+
+// Saiu do servidor → mata as sessões MCP dele e limpa o cache de membership.
+// OBS: só dispara se a intent privilegiada GuildMembers estiver habilitada; sem
+// ela, ex-membros perdem o acesso pelas camadas de servidor no próximo query
+// (checkAccess refaz o members.fetch), mantendo só participante/iniciador — a
+// mesma política da página web. Revogação total manual: /mcp revoke-all.
+if (config.mcpEnabled) {
+  client.on(Events.GuildMemberRemove, (member) => {
+    try {
+      const n = revokeUser(member.id);
+      forgetMember(member.guild.id, member.id);
+      if (n > 0) console.log(`MCP: ${n} sessão(ões) revogada(s) — ${member.id} saiu de ${member.guild.name}.`);
+    } catch (err) {
+      console.error('Erro revogando sessões MCP no guildMemberRemove:', err);
+    }
+  });
+}
 
 // ---------- shutdown gracioso ----------
 

@@ -1,23 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { PermissionFlagsBits } from 'discord.js';
-import express, { Request } from 'express';
+import express, { Request, Response } from 'express';
 import { config } from '../config';
-import { client } from '../discord/client';
+import { isClientReady } from '../discord/ready';
 import { Locale } from '../i18n';
 import { cook, CookFormat, COOK_FORMATS } from '../processing/cook';
 import { isTranscribing, transcriptToMarkdown } from '../processing/transcribe';
 import { minutesToMarkdown } from '../processing/minutes';
 import { sessionManager } from '../recorder/manager';
 import { deleteRecording, readMeta, readMinutes, readTranscript, RecordingMeta } from '../store';
-import { beginLogin, finishLogin, getWebUser, WebUser } from './auth';
-import { landingPage, messagePage, recordingPage } from './page';
+import { checkAccess } from './access';
+import { mountMcpApi } from './api';
+import { beginLogin, finishLogin, getWebUser, signMcpRefresh, WebUser } from './auth';
+import { countUserSessions, createSession, revokeUser } from './mcpTokens';
+import { connectPage, landingPage, messagePage, recordingPage } from './page';
 import { beginDownload, endDownload, hasActiveDownloads } from './tracker';
-
-interface Access {
-  view: boolean;
-  delete: boolean;
-}
 
 /** Idioma da página pelo Accept-Language do navegador (pt-BR ou inglês). */
 // Idioma da página: escolha explícita (?lang) > cookie salvo > PADRÃO INGLÊS.
@@ -70,44 +67,28 @@ const MSG = {
     pt: 'Pronto — os arquivos foram removidos para sempre. 🗑️',
     en: 'Done — the files were removed forever. 🗑️',
   },
+  startingTitle: { pt: 'Iniciando…', en: 'Starting up…' },
+  starting: {
+    pt: 'O Kassinão está conectando ao Discord. Recarregue em alguns segundos.',
+    en: 'Kassinão is connecting to Discord. Reload in a few seconds.',
+  },
 } as const;
 
 /**
- * Regra de acesso de uma gravação:
- *  - participou da call OU iniciou a gravação → pode ver
- *  - consegue VER o canal de voz de origem no Discord → pode ver
- *  - tem "Gerenciar Servidor" → pode ver e apagar
- *  - quem iniciou também pode apagar
- * Qualquer outra pessoa (mesmo com o link) não acessa.
+ * Gate de prontidão: enquanto o gateway não está pronto, os caches de guild/canal
+ * estão vazios e o checkAccess daria um 403 falso a quem tem direito via "enxerga o
+ * canal"/ManageGuild. Responde 503 (retriável) em vez de um veredito de acesso errado.
+ * Só entra DEPOIS do login (a rota já resolveu o usuário) — o fluxo OAuth usa REST,
+ * não depende do gateway.
  */
-async function checkAccess(user: WebUser, meta: RecordingMeta): Promise<Access> {
-  // Sem id válido não há acesso a nada — impede que null/undefined "case" com
-  // startedBy null (auto-record) ou dispare guild.members.fetch(undefined).
-  if (!user.id) return { view: false, delete: false };
-
-  const isInitiator = !!meta.startedBy && meta.startedBy.id === user.id;
-  const isParticipant = meta.participants.some((p) => p.id === user.id);
-  let canView = isInitiator || isParticipant;
-  let canDelete = isInitiator;
-
-  try {
-    const guild = client.guilds.cache.get(meta.guildId);
-    if (guild) {
-      const member = await guild.members.fetch(user.id);
-      if (member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-        canView = true;
-        canDelete = true;
-      }
-      const channel = guild.channels.cache.get(meta.voiceChannelId);
-      if (channel && channel.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel)) {
-        canView = true;
-      }
-    }
-  } catch {
-    // usuário não é (mais) membro do servidor — vale só participante/iniciador
-  }
-
-  return { view: canView, delete: canDelete };
+function notReady(res: Response, l: Locale, user?: WebUser): boolean {
+  if (isClientReady()) return false;
+  res
+    .status(503)
+    .set('Retry-After', '5')
+    .type('html')
+    .send(messagePage(MSG.startingTitle[l], MSG.starting[l], user, l));
+  return true;
 }
 
 export function startWebServer(): void {
@@ -123,6 +104,44 @@ export function startWebServer(): void {
     }
     next();
   });
+
+  // API do MCP (/api/*) — só monta quando MCP_SECRET está definido (opt-in).
+  mountMcpApi(app);
+
+  // Página de onboarding do conector MCP (self-serve por usuário logado).
+  if (config.mcpEnabled) {
+    app.get('/conectar-ia', (req, res) => {
+      const l = pageLang(req);
+      const user = getWebUser(req);
+      const sessionCount = user ? countUserSessions(user.id) : 0;
+      res.type('html').send(connectPage({ lang: l, user, sessionCount, revoked: req.query.revoked === '1' }));
+    });
+
+    app.post('/conectar-ia/gerar', (req, res) => {
+      const l = pageLang(req);
+      const user = getWebUser(req);
+      if (!user) {
+        beginLogin(res, '/conectar-ia');
+        return;
+      }
+      // O usuário recebe um REFRESH token (o conector troca por access via /api/mcp/refresh).
+      const s = createSession(user.id, user.name);
+      const refreshToken = signMcpRefresh({ id: user.id, name: user.name, exp: s.exp, jti: s.sid, gen: s.gen });
+      console.log(`MCP: sessão ${s.sid} criada para ${user.name} (${user.id}) via web.`);
+      res.type('html').send(connectPage({ lang: l, user, refreshToken }));
+    });
+
+    app.post('/conectar-ia/revogar', (req, res) => {
+      const user = getWebUser(req);
+      if (!user) {
+        beginLogin(res, '/conectar-ia');
+        return;
+      }
+      const n = revokeUser(user.id);
+      console.log(`MCP: ${n} sessão(ões) revogada(s) por ${user.name} (${user.id}) via web.`);
+      res.redirect('/conectar-ia?revoked=1');
+    });
+  }
 
   app.get('/', (req, res) => {
     res.type('html').send(landingPage(pageLang(req)));
@@ -207,6 +226,7 @@ export function startWebServer(): void {
       beginLogin(res, `/rec/${req.params.id}`);
       return;
     }
+    if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
       res
@@ -236,6 +256,7 @@ export function startWebServer(): void {
       beginLogin(res, `/rec/${req.params.id}`);
       return;
     }
+    if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
     if (!meta || meta.participants.length === 0) {
       res.status(404).send('sem áudio');
@@ -280,6 +301,7 @@ export function startWebServer(): void {
       beginLogin(res, `/rec/${req.params.id}`);
       return;
     }
+    if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
     const minutes = meta && meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
     if (!meta || !minutes) {
@@ -310,6 +332,7 @@ export function startWebServer(): void {
       beginLogin(res, `/rec/${req.params.id}`);
       return;
     }
+    if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
     if (!meta || meta.transcription?.status !== 'done') {
       res
@@ -341,6 +364,7 @@ export function startWebServer(): void {
       beginLogin(res, `/rec/${req.params.id}`);
       return;
     }
+    if (notReady(res, l, user)) return;
     const format = req.params.format as CookFormat;
     if (!COOK_FORMATS.includes(format)) {
       res.status(400).send('Formato inválido / invalid format.');
@@ -385,6 +409,7 @@ export function startWebServer(): void {
       beginLogin(res, `/rec/${req.params.id}`);
       return;
     }
+    if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
       res
