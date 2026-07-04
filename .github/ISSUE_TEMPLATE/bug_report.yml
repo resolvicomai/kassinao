@@ -1,0 +1,43 @@
+name: 🐛 Bug report
+description: Something isn't working as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Ran /gravar in ...
+        2. ...
+        3. See error
+    validations:
+      required: true
+  - type: dropdown
+    id: how
+    attributes:
+      label: How are you running Kassinão?
+      options:
+        - Docker (docker compose)
+        - Local (npm run dev)
+        - One-click deploy (Render/Railway)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "Relevant output from `docker compose logs kassinao` (remove any tokens/secrets!)."
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: "v1.0.0 or commit sha"

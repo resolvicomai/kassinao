@@ -1,0 +1,31 @@
+# Deploy no Render (https://render.com) — "Blueprint".
+# Botão: https://render.com/deploy?repo=https://github.com/resolvicomai/kassinao
+# Preencha as variáveis marcadas como sync:false no dashboard do Render após o deploy.
+services:
+  - type: web
+    name: kassinao
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter # precisa de um plano com processo sempre ativo (o Gateway de voz é WebSocket)
+    healthCheckPath: /
+    disk:
+      name: recordings
+      mountPath: /app/recordings
+      sizeGB: 10
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: APPLICATION_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: BASE_URL
+        sync: false # ex.: https://kassinao.onrender.com (use a URL pública do serviço)
+      - key: GUILD_ID
+        sync: false
+      - key: RECORDINGS_DIR
+        value: /app/recordings
+      - key: TRANSCRIBE_PROVIDER
+        value: none
+      - key: TZ
+        value: America/Sao_Paulo

@@ -1,165 +1,170 @@
+<div align="center">
+
 # Kassinão 🎙️
 
-> Grave chamadas de voz do Discord com **uma faixa por pessoa**, e receba **transcrição** e **ata** (resumo, decisões e tarefas) geradas por IA — automaticamente, com o nome exato de quem falou.
+### Self-hosted Discord recorder with per-speaker AI notes
 
-Um gravador de voz multi-track para Discord, auto-hospedado, inspirado no [Craig](https://craig.chat/) — com as principais features "premium" liberadas e um extra que nenhum concorrente entrega bem: como cada participante tem uma faixa de áudio separada, a **atribuição de quem falou o quê é perfeita** (sem diarização por IA, que é onde Otter/Fireflies erram).
+Record Discord voice calls with **one separate track per person**, then get an **AI transcript** and **meeting minutes** (summary, decisions, action items) — automatically, with **perfect speaker attribution** and no AI guessing who said what.
 
-<!-- Dica: adicione aqui um screenshot da página da gravação (docs/pagina.png) -->
+**🌎 Language:** **English** · [Português (BR)](README.pt-BR.md)
 
----
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/resolvicomai/kassinao/actions/workflows/ci.yml/badge.svg)](https://github.com/resolvicomai/kassinao/actions/workflows/ci.yml)
+[![Made with TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)](https://www.typescriptlang.org/)
+[![Runs on Docker](https://img.shields.io/badge/Docker-ready-2496ed.svg)](https://www.docker.com/)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-## ✨ Features
+</div>
 
-- **🎚️ Multi-track sincronizado** — uma faixa FLAC (lossless) separada por falante, todas na mesma linha do tempo.
-- **📝 Transcrição automática** — com o nome de quem falou e horários. Motor plugável: **Groq**, **OpenAI**, **Gemini** ou **comando local** (faster-whisper/whisper.cpp) para privacidade total.
-- **📋 Ata com IA** — resumo, decisões, itens de ação (com responsável/prazo), tópicos com horário e **um bloco por participante**. Gerada por LLM sobre a transcrição.
-- **🔊 Página web da gravação** — player de áudio com **horários clicáveis** (pula pro momento), downloads em **MP3 / FLAC / Mix único / projeto Audacity**, transcrição e ata renderizadas, tudo protegido por **login com Discord**.
-- **🔒 Acesso restrito de verdade** — só abre para quem **participou da call**, **enxerga o canal**, **iniciou** a gravação ou é **admin**. Link vazado não dá acesso a estranhos.
-- **🎛️ Painel ao vivo** no chat do canal de voz — log de eventos, botões de **Parar** e **Nota**, indicador `[GRAVANDO]` no apelido do bot (consentimento visível).
-- **🗒️ Notas com timestamp** (`/nota` ou botão) — entram no painel, na transcrição, na ata e nos labels do projeto Audacity.
-- **🤖 Auto-record** — começa a gravar sozinho quando N pessoas entram num canal e para quando esvazia.
-- **❓ Onboarding embutido** — `/ajuda` com botões interativos por tópico; mandar DM ao bot também responde o guia.
-- **🌎 Bilíngue** (pt-BR / inglês, pelo idioma de cada usuário) e **cadeado HTTPS** via Cloudflare Tunnel (sem abrir portas).
-- Robustez: aviso de silêncio, parada automática (limite de horas / canal vazio / desconexão), expiração automática, recuperação pós-reinício e shutdown gracioso.
-
-## 🧭 Comandos
-
-| pt-BR | inglês | o que faz |
-|---|---|---|
-| `/gravar [canal]` | `/record [channel]` | Começa a gravar (seu canal de voz, ou o indicado) |
-| `/parar` | `/stop` | Encerra e gera o link com áudio, transcrição e ata |
-| `/nota <texto>` | `/note <text>` | Marca uma nota no tempo atual (ou botão 📝 do painel) |
-| `/status` | `/status` | Estado da gravação em andamento |
-| `/gravacoes` | `/recordings` | Suas últimas gravações, com links (filtradas por acesso) |
-| `/ajuda` | `/help` | Guia interativo (também responde por DM) |
-| `/autorecord ligar/desligar/ver` | `/autorecord on/off/view` | Gravação automática por canal (admin) |
-
-Qualquer membro grava e para. `/autorecord` exige **Gerenciar Servidor**. Apagar uma gravação (pela página) é restrito a quem iniciou ou a admins.
+<!-- 📹 DEMO: substitua por um GIF/vídeo real (docs/demo.gif) mostrando /gravar → painel → página com player + ata. É o ativo #1 do lançamento. -->
+<p align="center"><em>▶️ Demo GIF coming here — <code>/record</code> → live panel → recording page with player, clickable timestamps and AI minutes.</em></p>
 
 ---
 
-## 🚀 Instalação (do zero)
+## Why Kassinão?
 
-### Pré-requisitos
-- Um servidor (VPS) com **Docker** e **Docker Compose**.
-- Uma conta no **Discord**.
-- *(Recomendado)* Um **domínio na Cloudflare** para ter HTTPS sem abrir portas. *(Alternativa: usar o IP do VPS direto.)*
+Bots like [Craig](https://craig.chat/) nail multi-track recording. AI note-takers like Otter or Fireflies nail summaries — but they **guess** who spoke (diarization), and that guessing breaks on crosstalk and non-English names.
 
-### 1. Criar o app do bot no Discord
-1. Em <https://discord.com/developers/applications> → **New Application** → dê um nome.
-2. **General Information**: copie o **Application ID** → `APPLICATION_ID`.
-3. **Bot** → **Reset Token** → copie → `DISCORD_TOKEN`. (Nenhuma *privileged intent* é necessária.)
-4. **OAuth2** → copie o **Client Secret** → `DISCORD_CLIENT_SECRET`.
-5. **OAuth2 → Redirects** → adicione `SUA_BASE_URL/auth/callback` (ex.: `https://kassinao.seu-dominio.com/auth/callback`). Sem isso, o login da página falha.
-6. Convide o bot (troque `SEU_APP_ID`):
-   ```
-   https://discord.com/oauth2/authorize?client_id=SEU_APP_ID&scope=bot%20applications.commands&permissions=68176896
-   ```
-   Permissões: Ver Canais, Enviar Mensagens, Inserir Links, Conectar, Alterar Apelido.
-   > Em canais **restritos**, libere o bot no próprio canal (Ver Canal + Conectar), ou dê a ele um cargo com acesso.
+Kassinão combines both **and sidesteps the hard part**: because every participant is captured on their **own audio track**, it already knows *exactly* who said what. The transcript and the AI minutes inherit that perfect attribution for free. It's open-source, self-hosted, and privacy-first.
 
-### 2. Pegar o código e configurar
+## Contents
+
+- [Features](#features)
+- [Quick start](#quick-start)
+- [How it compares](#how-it-compares)
+- [Transcription backends](#transcription-backends)
+- [Commands](#commands)
+- [Configuration](#configuration)
+- [Security & privacy](#security--privacy)
+- [How it works](#how-it-works)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Features
+
+- **🎚️ Multi-track** — one lossless FLAC track per speaker, all sample-aligned.
+- **📝 AI transcription** with exact speaker names & timestamps. Engines: **Groq**, **OpenAI**, **Gemini**, or a **local** command (faster-whisper / whisper.cpp) for full privacy.
+- **📋 AI meeting minutes** — summary, decisions, action items (with owner/due), timestamped topics, and a **per-participant** breakdown.
+- **🔊 Recording web page** — audio player with **clickable timestamps**, downloads in **MP3 / FLAC / single mix / Audacity project**, transcript & minutes rendered inline — all behind **Discord login**.
+- **🔒 Real access control** — only call participants, people who can see the channel, the initiator, or admins can open a recording. A leaked link opens nothing.
+- **🎛️ Live panel** in the voice channel with **Stop** / **Add note** buttons and a `[RECORDING]` nickname indicator (visible consent).
+- **🤖 Auto-record** — starts by itself when N people join a channel; stops when it empties.
+- **❓ Built-in onboarding** — `/help` with interactive topic buttons; DM the bot and it replies with the guide too.
+- **🌎 Bilingual** (pt-BR / English), **HTTPS via Cloudflare Tunnel** (no open ports), auto-stop, retention/expiry, crash recovery and graceful shutdown.
+
+## Quick start
+
+You need a machine with **Docker** and a **Discord application** ([1-minute setup](#1-create-the-discord-app)).
+
 ```bash
-git clone <url-do-repo> kassinao && cd kassinao
-cp .env.example .env
-# edite o .env (veja a tabela de configurações abaixo)
-```
-
-### 3. Como o bot fica acessível (escolha um)
-
-**Opção A — Cloudflare Tunnel (recomendado: HTTPS, sem abrir portas)**
-1. Em <https://one.dash.cloudflare.com> → **Networks → Tunnels → Create a tunnel → Cloudflared**.
-2. Dê um nome, copie o **token** (`eyJ...`) → `TUNNEL_TOKEN` no `.env`.
-3. Em **Public Hostname**: subdomínio + seu domínio, **Type = HTTP**, **URL = `kassinao:8080`**.
-4. No `.env`: `BASE_URL=https://SEU_SUBDOMINIO.seu-dominio.com`.
-   O `docker-compose.yml` já sobe o conector do túnel junto do bot.
-
-**Opção B — IP direto (mais simples, sem HTTPS)**
-- No `.env`: `BASE_URL=http://SEU_IP:8080`, publique a porta 8080 e cadastre o redirect OAuth correspondente. *(Remova o serviço `cloudflared` do compose ou deixe `TUNNEL_TOKEN` vazio.)*
-
-### 4. Subir
-```bash
+git clone https://github.com/resolvicomai/kassinao.git && cd kassinao
+cp .env.example .env      # fill DISCORD_TOKEN, APPLICATION_ID, DISCORD_CLIENT_SECRET, BASE_URL
 docker compose up -d --build
-docker compose logs -f     # deve mostrar "Kassinão online como ..."
 ```
-As gravações ficam em `./recordings` (volume — sobrevivem a rebuilds). Rode `/gravar` num canal de voz e pronto.
 
-### 5. *(Opcional)* Ligar transcrição + ata
-A transcrição e a ata ligam sozinhas quando há uma chave da Groq (a Groq roda os dois):
+Then run **`/record`** in a Discord voice channel. That's it. Full walkthrough below.
+
+> ☁️ One-click hosts: [Render blueprint](render.yaml) included. Avoid serverless (Vercel/Netlify) — the voice gateway needs a always-on WebSocket.
+
+### 1. Create the Discord app
+1. <https://discord.com/developers/applications> → **New Application**.
+2. **General Information** → copy **Application ID** → `APPLICATION_ID`.
+3. **Bot** → **Reset Token** → `DISCORD_TOKEN` (no privileged intents needed).
+4. **OAuth2** → copy **Client Secret** → `DISCORD_CLIENT_SECRET`; add `BASE_URL/auth/callback` under **Redirects**.
+5. Invite it (replace `APP_ID`):
+   `https://discord.com/oauth2/authorize?client_id=APP_ID&scope=bot%20applications.commands&permissions=68176896`
+
+### 2. Make it reachable
+- **Recommended — Cloudflare Tunnel** (HTTPS, no open ports): create a tunnel, set `TUNNEL_TOKEN`, point the public hostname to `kassinao:8080`, and set `BASE_URL=https://your-subdomain.your-domain.com`. The bundled `docker-compose.yml` runs the tunnel for you.
+- **Simple — direct IP**: `BASE_URL=http://YOUR_IP:8080`, publish port 8080, and register the matching OAuth redirect.
+
+### 3. (Optional) Turn on transcription + minutes
+Both light up automatically once a Groq key is present (Groq runs the LLM too):
 ```env
 TRANSCRIBE_PROVIDER=groq
-GROQ_API_KEY=gsk_...        # crie em https://console.groq.com
-MINUTES_ENABLED=auto        # ata liga sozinha quando há GROQ_API_KEY
+GROQ_API_KEY=gsk_...     # https://console.groq.com  (enable Zero Data Retention!)
+MINUTES_ENABLED=auto
 ```
-> 🔒 **Privacidade:** no painel da Groq, ligue o **Zero Data Retention (ZDR)** para o áudio não ser retido. Ou use o motor **local** (`TRANSCRIBE_PROVIDER=command`) para o áudio nunca sair do servidor.
 
-Custo de referência da transcrição (por hora de fala, por faixa): Groq ~US$0,04 · OpenAI ~US$0,36 · Gemini ~centavos. A ata custa centavos por reunião.
+## How it compares
 
----
+| | **Kassinão** | Craig | Otter / Fireflies |
+|---|:---:|:---:|:---:|
+| Multi-track (one file per speaker) | ✅ | ✅ | ❌ |
+| Perfect speaker attribution (no AI diarization) | ✅ | ✅ | ❌ (guessed) |
+| AI minutes (summary, decisions, tasks) | ✅ | ❌ | ✅ |
+| Per-participant breakdown | ✅ | ❌ | ⚠️ |
+| Self-hosted / your data | ✅ | ⚠️ | ❌ |
+| Access gated by login (not "who has the link") | ✅ | ⚠️ | ✅ |
+| Open-source (MIT) | ✅ | ✅ | ❌ |
+| Price | Free | Freemium | Paid |
 
-## ⚙️ Configuração (`.env`)
+## Transcription backends
 
-| Variável | Padrão | Descrição |
+| Provider | Cost (per audio hour) | pt-BR quality | Privacy | Notes |
+|---|---|---|---|---|
+| **Groq** (`whisper-large-v3-turbo`) | ~US$0.04 | Excellent | Cloud (enable ZDR) | Best value; free tier often covers small teams |
+| **OpenAI** (`whisper-1`) | ~US$0.36 | Excellent | Cloud | Timestamped segments |
+| **Gemini** (`gemini-2.x-flash`) | ~cents | Good | Cloud (paid tier only) | Free tier trains on your audio — avoid |
+| **Local** (`faster-whisper`) | Free | Good (`small`+) | 🔒 Never leaves your server | Slower without a GPU; see [`scripts/transcribe-local.py`](scripts/transcribe-local.py) |
+
+The AI minutes run on Groq's LLM (same key), a few cents per meeting.
+
+## Commands
+
+| English | pt-BR | Does |
 |---|---|---|
-| `DISCORD_TOKEN` | — | Token do bot |
-| `APPLICATION_ID` | — | ID da aplicação |
-| `DISCORD_CLIENT_SECRET` | — | Client Secret (login OAuth da página) |
-| `GUILD_ID` | — | Registra comandos na hora nesse servidor (sem ele, usa os servidores em que o bot está) |
-| `BASE_URL` | `http://localhost:8080` | URL pública dos links e do OAuth |
-| `TUNNEL_TOKEN` | — | Token do Cloudflare Tunnel (Opção A) |
-| `PORT` | `8080` | Porta do servidor web |
-| `RECORDINGS_DIR` | `./recordings` | Onde salvar as gravações |
-| `RETENTION_DAYS` | `7` | Dias até a gravação expirar |
-| `MAX_RECORDING_HOURS` | `6` | Duração máxima por gravação |
-| `MP3_BITRATE` | `192k` | Bitrate dos MP3 |
-| `COOKIE_SECRET` | gerado | Segredo dos cookies de sessão |
-| `TZ` | `America/Sao_Paulo` | Fuso das datas (a página usa o do navegador) |
-| `TRANSCRIBE_PROVIDER` | `none` | `none` / `openai` / `groq` / `gemini` / `command` |
-| `TRANSCRIBE_MODEL` | por provider | Ex.: `whisper-large-v3-turbo` |
-| `TRANSCRIBE_LANGUAGE` | `pt` | Idioma falado nas calls |
-| `TRANSCRIBE_COMMAND` | — | Comando local com `{input}`/`{output}` (provider `command`) |
-| `TRANSCRIBE_TIMEOUT_FACTOR` | `5` | Watchdog do provider `command` |
-| `OPENAI_API_KEY` / `GROQ_API_KEY` / `GEMINI_API_KEY` | — | Chave do provider escolhido |
-| `MINUTES_ENABLED` | `auto` | Ata com IA: `auto` (liga com GROQ_API_KEY) / `true` / `false` |
-| `MINUTES_MODEL` | `llama-3.3-70b-versatile` | Modelo de LLM (Groq) para a ata |
-| `MINUTES_MAX_TOKENS` | `8192` | Teto de tokens da ata |
+| `/record [channel]` | `/gravar [canal]` | Start recording (your voice channel, or the given one) |
+| `/stop` | `/parar` | End it and generate the link with audio, transcript and minutes |
+| `/note <text>` | `/nota <texto>` | Mark a note at the current time (or the 📝 panel button) |
+| `/status` | `/status` | Current recording status |
+| `/recordings` | `/gravacoes` | Your latest recordings, with links (filtered by access) |
+| `/help` | `/ajuda` | Interactive guide (also replies in DMs) |
+| `/autorecord on/off/view` | `/autorecord ligar/desligar/ver` | Automatic recording per channel (admin) |
 
-### Transcrição local (privacidade total)
-Com `TRANSCRIBE_PROVIDER=command` o áudio nunca sai do servidor. Wrapper pronto para faster-whisper em [`scripts/transcribe-local.py`](scripts/transcribe-local.py):
-```env
-TRANSCRIBE_PROVIDER=command
-TRANSCRIBE_COMMAND=python3 ./scripts/transcribe-local.py {input} {output}
-```
-No Docker, construa com Python + faster-whisper na imagem: `docker compose build --build-arg LOCAL_TRANSCRIBE=1`. Qualquer comando serve, desde que escreva em `{output}` um JSON `[{"start":s,"end":s,"text":"..."}]`.
+Anyone can record and stop. `/autorecord` requires **Manage Server**. Deleting a recording (from its page) is limited to the initiator or admins.
+
+## Configuration
+
+All options live in [`.env.example`](.env.example). Key ones:
+
+| Variable | Default | Description |
+|---|---|---|
+| `DISCORD_TOKEN` · `APPLICATION_ID` · `DISCORD_CLIENT_SECRET` | — | Bot credentials (Developer Portal) |
+| `BASE_URL` | `http://localhost:8080` | Public URL for links & OAuth |
+| `TUNNEL_TOKEN` | — | Cloudflare Tunnel token (recommended HTTPS path) |
+| `GUILD_ID` | — | Registers commands instantly in that server |
+| `RETENTION_DAYS` · `MAX_RECORDING_HOURS` | `7` · `6` | Retention & max length |
+| `TRANSCRIBE_PROVIDER` | `none` | `none` / `openai` / `groq` / `gemini` / `command` |
+| `GROQ_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` | — | Key for the chosen provider |
+| `MINUTES_ENABLED` | `auto` | AI minutes: `auto` (on when a Groq key exists) / `true` / `false` |
+| `TZ` | `America/Sao_Paulo` | Timezone for dates (the web page uses the visitor's) |
+
+## Security & privacy
+
+Recording voice is processing **personal data**. Kassinão is built accordingly:
+
+- Access is always validated by **Discord OAuth login** + participant/channel checks — never by "who has the link".
+- The bot shows `[RECORDING]` in its nickname and posts a panel in the channel (visible consent).
+- Run transcription **locally**, or enable **Zero Data Retention** on your cloud provider, so audio isn't retained by third parties.
+- Secrets live only in `.env` (git-ignored) — **never** committed. See [SECURITY.md](SECURITY.md).
+
+## How it works
+
+Opus packets from each speaker are decoded to PCM and fed to **one ffmpeg per speaker** writing **continuous FLAC** (silence between speech compresses to almost nothing and keeps every track in sync). Downloads (MP3/FLAC/mix/Audacity) are cooked on demand and cached. Transcription and minutes run in a **serial queue** after the call; the web page refreshes itself until they're ready. The page authenticates with **Discord OAuth** (`identify`) and the backend re-checks with Discord who may open each recording.
+
+**Stack:** Node.js · TypeScript · discord.js / @discordjs/voice · Express · ffmpeg · Docker · Cloudflare Tunnel.
+
+## Contributing
+
+PRs and issues welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Run `npm run build` before opening a PR.
+
+## License
+
+[MIT](LICENSE) © Mauro Marques. Use, modify and share freely.
 
 ---
 
-## 🔐 Segurança e privacidade (LGPD)
-
-- Gravar voz é tratar **dado pessoal**. Avise os participantes (o bot já mostra `[GRAVANDO]` no apelido e um painel no canal) e defina uma política de retenção (`RETENTION_DAYS`).
-- O acesso às gravações é sempre validado por login no Discord + participação/visibilidade do canal — nunca por "quem tem o link".
-- Prefira **ZDR** (Groq) ou o **motor local** para que o áudio não seja retido por terceiros.
-- **Nunca comite o `.env`** (já está no `.gitignore`). As chaves ficam só no servidor.
-
-## 🧠 Como funciona por dentro
-
-- Recebe os pacotes Opus de cada falante via `@discordjs/voice`, decodifica para PCM e alimenta **um ffmpeg por falante** gravando **FLAC contínuo** (silêncio entre falas comprime a quase nada e mantém tudo sincronizado).
-- Downloads (MP3/FLAC/mix/Audacity) são gerados sob demanda a partir dos masters, com cache.
-- Transcrição e ata rodam numa **fila serial** após a gravação; a página se atualiza sozinha até ficarem prontas.
-- A página autentica com **OAuth2 do Discord** (escopo `identify`) e o backend confere no Discord se a pessoa pode acessar aquela gravação.
-
-**Stack:** Node.js + TypeScript · discord.js / @discordjs/voice · Express · ffmpeg · Docker · Cloudflare Tunnel.
-
-## 💻 Desenvolvimento
-```bash
-npm install
-cp .env.example .env
-npm run dev     # reload automático
-npm run build   # compila para dist/
-```
-
-## 🤝 Contribuindo
-Issues e PRs são bem-vindos. Rode `npm run build` antes de abrir um PR.
-
-## 📄 Licença
-[MIT](LICENSE) — use, modifique e compartilhe à vontade.
+<div align="center">
+<sub>If Kassinão is useful to you, a ⭐ helps others find it.</sub>
+</div>

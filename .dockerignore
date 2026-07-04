@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.github
+recordings
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+npm-debug.log*
+scratchpad

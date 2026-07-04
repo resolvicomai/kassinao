@@ -1,9 +1,33 @@
 {
   "name": "kassinao",
   "version": "1.0.0",
-  "description": "Kassinão — bot de gravação de voz multi-track para Discord (inspirado no Craig)",
-  "private": true,
+  "description": "Self-hosted Discord voice recorder with per-speaker AI transcription and meeting minutes.",
+  "license": "MIT",
+  "author": "Mauro Marques (resolvicomai)",
+  "homepage": "https://github.com/resolvicomai/kassinao#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/resolvicomai/kassinao.git"
+  },
+  "bugs": {
+    "url": "https://github.com/resolvicomai/kassinao/issues"
+  },
+  "keywords": [
+    "discord",
+    "discord-bot",
+    "voice-recording",
+    "transcription",
+    "meeting-notes",
+    "ai",
+    "whisper",
+    "self-hosted",
+    "craig",
+    "typescript"
+  ],
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
