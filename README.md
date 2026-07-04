@@ -20,8 +20,9 @@ Record Discord voice calls with **one separate track per person**, then get an *
 <p align="center"><em>▶️ Demo GIF coming here — <code>/record</code> → live panel → recording page with player, clickable timestamps and AI minutes.</em></p>
 
 <p align="center">
-  <b>🔴 <a href="https://kassinao.resolvicomai.app/demo">Live demo →</a></b> (a fictional 6-person, 1-hour meeting) ·
-  <b><a href="docs/example/">See the sample in the repo →</a></b>
+  <b>▶️ <a href="https://kassinao.resolvicomai.app/demo">Try the live example →</a></b><br/>
+  <sub>A real rendered recording page from a fictional 6-person, 1-hour meeting — opens without login.<br/>
+  (Prefer plain text? Read the same transcript &amp; minutes <a href="docs/example/">on GitHub</a>.)</sub>
 </p>
 
 ---
