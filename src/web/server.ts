@@ -153,6 +153,45 @@ export function startWebServer(): void {
     res.type('html').send(recordingPage(meta, { live, canDelete: access.delete, user, lang: l, transcript, minutes }));
   });
 
+  app.get('/rec/:id/audio', async (req, res) => {
+    const l = pageLang(req);
+    const user = getWebUser(req);
+    if (!user) {
+      beginLogin(res, `/rec/${req.params.id}`);
+      return;
+    }
+    const meta = readMeta(req.params.id);
+    if (!meta || meta.participants.length === 0) {
+      res.status(404).send('sem áudio');
+      return;
+    }
+    // ao vivo: o mix seria parcial e não-cacheável (re-cozinha a cada hit) — bloqueia
+    const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
+    if (live) {
+      res.status(409).send('gravação em andamento');
+      return;
+    }
+    const access = await checkAccess(user, meta);
+    if (!access.view) {
+      res.status(403).type('html').send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      return;
+    }
+    // marca ANTES do cook (que pode levar minutos): delete/cleanup não apagam no meio
+    beginDownload(meta.id);
+    try {
+      const result = await cook(meta, 'mix'); // mp3 único, cacheado após o 1º
+      // sendFile já trata Range (seek do player) e Content-Type por extensão
+      res.sendFile(result.filePath, (err?: Error) => {
+        endDownload(meta.id);
+        if (err && !res.headersSent) res.status(500).end();
+      });
+    } catch (err) {
+      endDownload(meta.id);
+      console.error(`Erro servindo áudio ${meta.id}:`, err);
+      res.status(500).send('erro ao preparar o áudio');
+    }
+  });
+
   app.get('/rec/:id/ata.md', async (req, res) => {
     const l = pageLang(req);
     const user = getWebUser(req);

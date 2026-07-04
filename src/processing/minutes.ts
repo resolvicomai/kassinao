@@ -1,5 +1,12 @@
 import { config } from '../config';
-import { MeetingMinutes, MinutesAction, MinutesTopic, RecordingMeta, TranscriptSegment } from '../store';
+import {
+  MeetingMinutes,
+  MinutesAction,
+  MinutesPerson,
+  MinutesTopic,
+  RecordingMeta,
+  TranscriptSegment,
+} from '../store';
 import { msToClock } from './transcribe';
 
 /** Teto de texto enviado ao LLM (~15k tokens). Calls muito longas são cortadas no meio. */
@@ -26,6 +33,9 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
     '  Use "" quando não souber o responsável ou o prazo. NUNCA invente responsáveis ou prazos.',
     '- "topicos": array de {"titulo": string, "inicio": "hh:mm:ss"} — principais tópicos na ordem em que',
     '  apareceram, com o horário aproximado de início (use os horários que estão na transcrição).',
+    '- "porParticipante": array de {"nome": string, "pontos": [string]} — para CADA pessoa que falou, os',
+    '  principais pontos que ELA levantou e com o que se comprometeu. Use exatamente os nomes que aparecem',
+    '  na transcrição. Não inclua quem não falou.',
     'Baseie-se APENAS no que está na transcrição. Não invente fatos, nomes ou números. Seja conciso e claro.',
   ].join('\n');
 
@@ -146,7 +156,23 @@ export function normalizeMinutes(raw: string): MeetingMinutes {
         .filter((t): t is MinutesTopic => t !== null)
     : [];
 
-  return { resumo, decisoes, acoes, topicos };
+  const porParticipante: MinutesPerson[] = Array.isArray(obj.porParticipante)
+    ? obj.porParticipante
+        .map((pp): MinutesPerson | null => {
+          if (!pp || typeof pp !== 'object') return null;
+          const o = pp as Record<string, unknown>;
+          const nome = String(o.nome ?? o.name ?? o.participante ?? '').trim();
+          if (!nome) return null;
+          const pontos = Array.isArray(o.pontos ?? o.points)
+            ? ((o.pontos ?? o.points) as unknown[]).map((x) => String(x).trim()).filter(Boolean)
+            : [];
+          if (pontos.length === 0) return null;
+          return { nome, pontos };
+        })
+        .filter((p): p is MinutesPerson => p !== null)
+    : [];
+
+  return { resumo, decisoes, acoes, topicos, porParticipante };
 }
 
 /** "hh:mm:ss" ou "mm:ss" ou número (ms/s) → milissegundos. */
@@ -185,6 +211,14 @@ export function minutesToMarkdown(meta: RecordingMeta, m: MeetingMinutes): strin
     lines.push('## Tópicos', '');
     for (const tp of m.topicos) lines.push(`- \`${msToClock(tp.inicioMs)}\` ${tp.titulo}`);
     lines.push('');
+  }
+  if (m.porParticipante?.length) {
+    lines.push('## Por participante', '');
+    for (const pp of m.porParticipante) {
+      lines.push(`### ${pp.nome}`);
+      for (const pt of pp.pontos) lines.push(`- ${pt}`);
+      lines.push('');
+    }
   }
   return lines.join('\n');
 }

@@ -4,8 +4,10 @@ import {
   ButtonInteraction,
   ChannelType,
   ChatInputCommandInteraction,
+  EmbedBuilder,
   Events,
   Guild,
+  GuildBasedChannel,
   GuildMember,
   ModalBuilder,
   ModalSubmitInteraction,
@@ -93,6 +95,9 @@ function buildCommands() {
   const status = new SlashCommandBuilder().setName('status').setDescription('ℹ️ Mostra o estado da gravação atual');
   localized(status, 'status', 'ℹ️ Show the current recording status');
 
+  const ajuda = new SlashCommandBuilder().setName('ajuda').setDescription('❓ Como usar o Kassinão (comandos e passo a passo)');
+  localized(ajuda, 'help', '❓ How to use Kassinão (commands and quick start)');
+
   const gravacoes = new SlashCommandBuilder()
     .setName('gravacoes')
     .setDescription('📼 Lista as últimas gravações deste servidor com os links');
@@ -154,7 +159,7 @@ function buildCommands() {
     });
   localized(autorecord, 'autorecord', '🤖 Automatic recording when people join a voice channel');
 
-  return [gravar, parar, nota, status, gravacoes, autorecord].map((c) => c.toJSON());
+  return [gravar, parar, nota, status, ajuda, gravacoes, autorecord].map((c) => c.toJSON());
 }
 
 async function registerCommands(): Promise<void> {
@@ -438,6 +443,24 @@ async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<voi
   await interaction.reply({ content: t(l, added ? 'note.added' : 'note.discarded', { offset: formatOffset(atMs) }), ephemeral: true });
 }
 
+function buildHelpEmbed(l: Locale): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(t(l, 'help.title'))
+    .setDescription(t(l, 'help.intro'))
+    .addFields(
+      { name: t(l, 'help.commands'), value: t(l, 'help.cmd-list') },
+      { name: t(l, 'help.flow'), value: t(l, 'help.flow-body') },
+      { name: t(l, 'help.privacy'), value: t(l, 'help.privacy-body') },
+    )
+    .setFooter({ text: t(l, 'help.footer') });
+}
+
+async function handleAjuda(interaction: ChatInputCommandInteraction): Promise<void> {
+  const l = localeOf(interaction.locale);
+  await interaction.reply({ embeds: [buildHelpEmbed(l)], ephemeral: true });
+}
+
 async function handleStatus(interaction: ChatInputCommandInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
   if (!interaction.guild) {
@@ -642,6 +665,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         case 'status':
           await handleStatus(interaction);
           break;
+        case 'ajuda':
+          await handleAjuda(interaction);
+          break;
         case 'gravacoes':
           await handleGravacoes(interaction);
           break;
@@ -664,6 +690,40 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (interaction.deferred || interaction.replied) await interaction.followUp(message).catch(() => {});
       else await interaction.reply(message).catch(() => {});
     }
+  }
+});
+
+// Boas-vindas ao entrar num servidor novo: onboarding sem precisar procurar nada.
+client.on(Events.GuildCreate, async (guild) => {
+  const l = localeOf(guild.preferredLocale);
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(t(l, 'welcome.title'))
+    .setDescription(t(l, 'welcome.body'))
+    .setFooter({ text: t(l, 'help.footer') });
+  // Enviar embed exige Ver Canal + Enviar Mensagens + Inserir Links. E só canais de
+  // TEXTO de verdade (não voz/palco/thread). Tenta o canal de sistema; senão, o 1º válido.
+  const me = guild.members.me;
+  const canPostEmbed = (ch: GuildBasedChannel | null | undefined): boolean =>
+    !!ch &&
+    !!me &&
+    (ch.type === ChannelType.GuildText || ch.type === ChannelType.GuildAnnouncement) &&
+    !!ch
+      .permissionsFor(me)
+      ?.has([
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.EmbedLinks,
+      ]);
+
+  let channel: GuildBasedChannel | undefined = guild.systemChannel ?? undefined;
+  if (!canPostEmbed(channel)) {
+    channel = guild.channels.cache.find(canPostEmbed);
+  }
+  try {
+    if (channel && channel.isTextBased()) await channel.send({ embeds: [embed] });
+  } catch {
+    // sem canal onde eu possa postar — /ajuda continua disponível
   }
 });
 

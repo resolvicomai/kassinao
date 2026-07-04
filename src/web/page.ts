@@ -43,7 +43,10 @@ const P: Record<string, { pt: string; en: string }> = {
   mTopics: { pt: 'Tópicos', en: 'Topics' },
   mOwner: { pt: 'resp.', en: 'owner' },
   mDue: { pt: 'prazo', en: 'due' },
+  mPerPerson: { pt: 'Por participante', en: 'By participant' },
   minutesDownload: { pt: '⬇️ Baixar ata (.md)', en: '⬇️ Download minutes (.md)' },
+  listen: { pt: '🔊 Ouvir a gravação', en: '🔊 Listen to the recording' },
+  seekHint: { pt: 'Clique num horário para pular pra aquele momento.', en: 'Click a timestamp to jump to that moment.' },
   cooking: { pt: 'O arquivo é processado na hora — gravações longas podem levar alguns segundos.', en: 'Files are processed on demand — long recordings may take a few seconds.' },
   livenote: {
     pt: '🔴 Gravação em andamento: os downloads trazem o áudio <strong>até este momento</strong>. Esta página se atualiza sozinha a cada 30 segundos.',
@@ -107,6 +110,13 @@ const SHELL_CSS = `
   .minutes .action { display: flex; gap: 8px; align-items: baseline; }
   .minutes .meta2 { color: #949ba4; font-size: 12.5px; }
   .minutes time { color: #949ba4; font-family: ui-monospace, monospace; margin-right: 6px; }
+  .minutes .who { color: #f2f3f5; font-weight: 600; margin: 10px 0 4px; }
+  .ts { color: #00a8fc; font-family: ui-monospace, monospace; font-size: 12px; margin-right: 8px;
+        text-decoration: none; cursor: pointer; }
+  .ts:hover { text-decoration: underline; }
+  .player { margin: 14px 0 4px; }
+  .player audio { width: 100%; }
+  .player .hint { font-size: 12.5px; color: #949ba4; margin-top: 4px; }
   form.delete { margin-top: 26px; border-top: 1px solid #3f4147; padding-top: 16px; }
   button.danger { background: none; border: 1px solid #da373c; color: #da373c; padding: 8px 14px;
                   border-radius: 8px; font-size: 14px; cursor: pointer; }
@@ -138,20 +148,37 @@ const TZ_SCRIPT = `<script>
 document.querySelectorAll('time[data-ts]').forEach(function(el){
   try { el.textContent = new Date(+el.dataset.ts).toLocaleString(navigator.language, {dateStyle:'long', timeStyle:'short'}); } catch(e){}
 });
+// pular pro momento no player de áudio (no-op se não houver player, ex.: gravação ao vivo)
+window.kseek = function(ms){
+  var p = document.getElementById('kplayer');
+  if (!p) return;
+  p.currentTime = Math.max(0, ms/1000);
+  p.play().catch(function(){});
+  p.scrollIntoView({behavior:'smooth', block:'center'});
+};
 </script>`;
+
+/** Horário clicável que pula o player de áudio pra aquele momento. */
+function tsLink(ms: number): string {
+  const v = Math.max(0, Math.floor(ms));
+  return `<a class="ts" href="#" onclick="kseek(${v});return false">${msToClock(v)}</a>`;
+}
 
 function shell(title: string, body: string, opts: { user?: WebUser; lang?: Locale; refreshSeconds?: number } = {}): string {
   const userbar = opts.user
     ? `<div class="userbar">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</div>`
     : '';
-  const refresh = opts.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeconds}">` : '';
+  // Auto-refresh (enquanto transcrição/ata processam) via JS em vez de <meta refresh>,
+  // pra NÃO recarregar e cortar o áudio enquanto a pessoa está ouvindo o player.
+  const refresh = opts.refreshSeconds
+    ? `<script>setTimeout(function(){var p=document.getElementById('kplayer');if(p&&!p.paused)return;location.reload();},${opts.refreshSeconds * 1000});</script>`
+    : '';
   return `<!doctype html>
 <html lang="${opts.lang === 'en' ? 'en' : 'pt-BR'}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-${refresh}
 <title>${esc(title)} — Kassinão</title>
 <style>${SHELL_CSS}</style>
 </head>
@@ -159,6 +186,7 @@ ${refresh}
 ${userbar}
 <div class="card">${body}</div>
 ${TZ_SCRIPT}
+${refresh}
 </body>
 </html>`;
 }
@@ -209,6 +237,17 @@ export function recordingPage(
   const minutes = renderMinutes(meta, opts.minutes, l);
   const transcription = renderTranscription(meta, opts.transcript, l);
 
+  // Player de áudio (mix) — só em gravações finalizadas com participantes. Os horários
+  // clicáveis da ata/transcrição pulam o áudio pra aquele momento.
+  const showPlayer = !live && meta.participants.length > 0;
+  const player = showPlayer
+    ? `<h2>${p(l, 'listen')}</h2>
+       <div class="player">
+         <audio id="kplayer" preload="none" controls src="/rec/${meta.id}/audio"></audio>
+         <div class="hint">${p(l, 'seekHint')}</div>
+       </div>`
+    : '';
+
   const liveNote = live ? `<div class="note">${p(l, 'livenote')}</div>` : '';
 
   const events =
@@ -228,7 +267,7 @@ export function recordingPage(
 
   const expires =
     meta.expiresAt && !live
-      ? `<footer>${p(l, 'expires', { date: ' ' }).replace(' ', datetime(meta.expiresAt, l))}</footer>`
+      ? `<footer>${p(l, 'expires', { date: datetime(meta.expiresAt, l) })}</footer>`
       : '';
 
   return shell(
@@ -246,6 +285,7 @@ export function recordingPage(
      ${people}
      ${meta.participants.length > 0 ? `<h2>${p(l, 'downloads')}</h2>` : ''}
      ${downloads}
+     ${player}
      ${minutes}
      ${transcription}
      ${notes}
@@ -299,8 +339,18 @@ function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined,
   if (minutes.topicos.length) {
     parts.push(
       `<h3>${p(l, 'mTopics')}</h3><ul>${minutes.topicos
-        .map((tp) => `<li><time>${msToClock(tp.inicioMs)}</time>${esc(tp.titulo)}</li>`)
+        .map((tp) => `<li>${tsLink(tp.inicioMs)}${esc(tp.titulo)}</li>`)
         .join('')}</ul>`,
+    );
+  }
+  if (minutes.porParticipante?.length) {
+    parts.push(
+      `<h3>${p(l, 'mPerPerson')}</h3>${minutes.porParticipante
+        .map(
+          (pp) =>
+            `<p class="who">${esc(pp.nome)}</p><ul>${pp.pontos.map((pt) => `<li>${esc(pt)}</li>`).join('')}</ul>`,
+        )
+        .join('')}`,
     );
   }
   if (parts.length === 0) return '';
@@ -320,10 +370,7 @@ function renderTranscription(meta: RecordingMeta, transcript: TranscriptSegment[
   if (!transcript || transcript.length === 0) return `${title}<p class="tstate">${p(l, 'transcriptEmpty')}</p>`;
 
   const body = transcript
-    .map(
-      (s) =>
-        `<p><time>${msToClock(s.startMs)}</time><span class="who">${esc(s.speaker)}:</span> ${esc(s.text)}</p>`,
-    )
+    .map((s) => `<p>${tsLink(s.startMs)}<span class="who">${esc(s.speaker)}:</span> ${esc(s.text)}</p>`)
     .join('');
   return `${title}
     <div class="transcript">${body}</div>

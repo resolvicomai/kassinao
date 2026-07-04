@@ -52,12 +52,19 @@ export interface MinutesTopic {
   inicioMs: number;
 }
 
+/** O que cada participante trouxe/decidiu — a ata organizada por pessoa. */
+export interface MinutesPerson {
+  nome: string;
+  pontos: string[];
+}
+
 /** Ata gerada por IA a partir da transcrição. */
 export interface MeetingMinutes {
   resumo: string;
   decisoes: string[];
   acoes: MinutesAction[];
   topicos: MinutesTopic[];
+  porParticipante: MinutesPerson[];
 }
 
 export interface MinutesState {

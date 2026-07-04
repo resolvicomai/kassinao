@@ -104,6 +104,34 @@ const STRINGS: Strings = {
   'transcript.failed': { pt: '⚠️ A transcrição falhou: {error}', en: '⚠️ Transcription failed: {error}' },
   'minutes.ready': { pt: '📋 Ata e transcrição prontas: {url}', en: '📋 Minutes and transcript ready: {url}' },
 
+  // onboarding / ajuda
+  'help.title': { pt: '🎙️ Kassinão — como usar', en: '🎙️ Kassinão — how to use' },
+  'help.intro': {
+    pt: 'Eu gravo o seu canal de voz com **uma faixa separada por pessoa** e, depois, gero **transcrição** e **ata** (resumo + tarefas + decisões) automaticamente.',
+    en: 'I record your voice channel with **one separate track per person** and then generate **transcript** and **minutes** (summary + tasks + decisions) automatically.',
+  },
+  'help.commands': { pt: 'Comandos', en: 'Commands' },
+  'help.cmd-list': {
+    pt: '**/gravar** — entra no seu canal de voz e começa a gravar\n**/parar** — encerra e gera o link com áudio, transcrição e ata\n**/nota** — marca uma anotação no momento atual da call\n**/status** — mostra a gravação em andamento\n**/gravacoes** — lista suas últimas gravações com os links\n**/autorecord** — (admin) grava sozinho quando entram pessoas num canal',
+    en: '**/record** — joins your voice channel and starts recording\n**/stop** — ends it and generates the link with audio, transcript and minutes\n**/note** — marks a note at the current time of the call\n**/status** — shows the recording in progress\n**/recordings** — lists your latest recordings with links\n**/autorecord** — (admin) records automatically when people join a channel',
+  },
+  'help.flow': { pt: 'Passo a passo', en: 'Quick start' },
+  'help.flow-body': {
+    pt: '1. Entre num canal de voz e use **/gravar**\n2. Conversem normalmente (o painel mostra quem entrou)\n3. Use **/parar** — em ~1 min chega o link pronto\n4. Abra o link, faça login com Discord e baixe/leia a ata',
+    en: '1. Join a voice channel and use **/record**\n2. Talk normally (the panel shows who joined)\n3. Use **/stop** — in ~1 min the ready link arrives\n4. Open the link, log in with Discord and download/read the minutes',
+  },
+  'help.privacy': { pt: '🔒 Privacidade', en: '🔒 Privacy' },
+  'help.privacy-body': {
+    pt: 'Só quem participou da call, enxerga o canal ou é admin consegue abrir as gravações (protegido por login). Em canais **restritos**, me libere no canal (permissão Ver Canal + Conectar) para eu poder gravar.',
+    en: 'Only call participants, people who can see the channel, or admins can open recordings (login-protected). In **restricted** channels, grant me access (View Channel + Connect) so I can record.',
+  },
+  'help.footer': { pt: 'Kassinão 🎙️ • use /ajuda a qualquer momento', en: 'Kassinão 🎙️ • use /help anytime' },
+  'welcome.title': { pt: '👋 Obrigado por me adicionar!', en: '👋 Thanks for adding me!' },
+  'welcome.body': {
+    pt: 'Eu sou o **Kassinão**, gravador de voz do Discord com transcrição e ata automáticas.\n\nPara começar: entre num canal de voz e use **/gravar**. Use **/ajuda** para ver tudo que eu faço.\n\n🔒 Em canais restritos, lembre de me dar acesso ao canal (Ver Canal + Conectar).',
+    en: "I'm **Kassinão**, a Discord voice recorder with automatic transcript and minutes.\n\nTo start: join a voice channel and use **/record**. Use **/help** to see everything I do.\n\n🔒 In restricted channels, remember to grant me channel access (View Channel + Connect).",
+  },
+
   // status
   'status.none': { pt: '💤 Nenhuma gravação em andamento.', en: '💤 No recording in progress.' },
   'status.recording': {
