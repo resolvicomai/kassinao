@@ -19,6 +19,8 @@ Record Discord voice calls with **one separate track per person**, then get an *
 <!-- 📹 DEMO: substitua por um GIF/vídeo real (docs/demo.gif) mostrando /gravar → painel → página com player + ata. É o ativo #1 do lançamento. -->
 <p align="center"><em>▶️ Demo GIF coming here — <code>/record</code> → live panel → recording page with player, clickable timestamps and AI minutes.</em></p>
 
+<p align="center"><b>👉 See a full sample:</b> <a href="docs/example/">a 6-person, 1-hour meeting</a> — the transcript & AI minutes Kassinão generates.</p>
+
 ---
 
 ## Why Kassinão?
