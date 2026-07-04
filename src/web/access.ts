@@ -33,8 +33,12 @@ interface AccessResult extends Access {
 /** Erro transitório: o chamador (API MCP) deve responder 503 Retry-After, nunca 403. */
 export class TransientAccessError extends Error {}
 
+// "Definitivamente não é membro daqui" (nega camadas de servidor, sem 503):
+//  10007 Unknown Member (saiu do servidor) • 10013 Unknown User (id inexistente).
+// Só erro TRANSITÓRIO (429/5xx/timeout/rede) vira 503 retriável.
 function isUnknownMember(err: unknown): boolean {
-  return !!err && typeof err === 'object' && (err as { code?: unknown }).code === 10007;
+  const code = !!err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
+  return code === 10007 || code === 10013;
 }
 
 // Cache de membership COMPARTILHADO entre requests (não só intra-request): evita
