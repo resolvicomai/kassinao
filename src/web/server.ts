@@ -147,12 +147,22 @@ export function startWebServer(): void {
     const l = pageLang(req);
     const d = readDemo();
     if (!d) {
-      res.status(404).type('html').send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], undefined, l));
+      res
+        .status(404)
+        .type('html')
+        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], undefined, l));
       return;
     }
-    res
-      .type('html')
-      .send(recordingPage(d.meta, { live: false, canDelete: false, lang: l, transcript: d.transcript, minutes: d.minutes, demo: true }));
+    res.type('html').send(
+      recordingPage(d.meta, {
+        live: false,
+        canDelete: false,
+        lang: l,
+        transcript: d.transcript,
+        minutes: d.minutes,
+        demo: true,
+      }),
+    );
   });
 
   app.get('/demo/audio', (_req, res) => {
@@ -231,18 +241,20 @@ export function startWebServer(): void {
       res.status(404).send('sem áudio');
       return;
     }
-    // ao vivo: o mix seria parcial e não-cacheável (re-cozinha a cada hit) — bloqueia
-    const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
-    if (live) {
-      res.status(409).send('gravação em andamento');
-      return;
-    }
+    // checkAccess ANTES de qualquer checagem de estado (ao-vivo) — não vaza a
+    // quem não tem acesso se a gravação existe/está ao vivo (oráculo de enumeração).
     const access = await checkAccess(user, meta);
     if (!access.view) {
       res
         .status(403)
         .type('html')
         .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      return;
+    }
+    // ao vivo: o mix seria parcial e não-cacheável (re-cozinha a cada hit) — bloqueia
+    const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
+    if (live) {
+      res.status(409).send('gravação em andamento');
       return;
     }
     // marca ANTES do cook (que pode levar minutos): delete/cleanup não apagam no meio

@@ -11,8 +11,16 @@
     { "tarefa": "Merge the onboarding rollback + feature-flag it", "responsavel": "Rafael", "prazo": "Wed" },
     { "tarefa": "Run the load test against staging and share numbers", "responsavel": "Mei", "prazo": "Wed EOD" },
     { "tarefa": "Finalize launch email + changelog, schedule for Thu 9am", "responsavel": "Priya", "prazo": "Thu" },
-    { "tarefa": "Write the Redis incident postmortem and add the eviction alert", "responsavel": "James", "prazo": "Fri" },
-    { "tarefa": "Open the infra/SRE job posting and share the JD for review", "responsavel": "Sofia", "prazo": "this week" },
+    {
+      "tarefa": "Write the Redis incident postmortem and add the eviction alert",
+      "responsavel": "James",
+      "prazo": "Fri"
+    },
+    {
+      "tarefa": "Open the infra/SRE job posting and share the JD for review",
+      "responsavel": "Sofia",
+      "prazo": "this week"
+    },
     { "tarefa": "Pull the annual-plan cohort retention at 30 days", "responsavel": "Tobias", "prazo": "next sync" }
   ],
   "topicos": [
@@ -25,7 +33,10 @@
     { "titulo": "Wrap-up & action items", "inicioMs": 3330000 }
   ],
   "porParticipante": [
-    { "nome": "Rafael", "pontos": ["Flagged the onboarding tour as the likely churn cause", "Owns the rollback and the launch gate"] },
+    {
+      "nome": "Rafael",
+      "pontos": ["Flagged the onboarding tour as the likely churn cause", "Owns the rollback and the launch gate"]
+    },
     { "nome": "Mei", "pontos": ["Raised the missing load test in CI", "Will run it against staging before launch"] },
     { "nome": "Priya", "pontos": ["Confirmed launch scope and comms", "Owns the launch email and changelog"] },
     { "nome": "James", "pontos": ["Diagnosed the Redis eviction incident", "Owns the postmortem and alerting"] },

@@ -200,7 +200,7 @@ function tsLink(ms: number, seekable = true): string {
 function shell(
   title: string,
   body: string,
-  opts: { user?: WebUser; lang?: Locale; refreshSeconds?: number } = {},
+  opts: { user?: WebUser; lang?: Locale; refreshSeconds?: number; noindex?: boolean } = {},
 ): string {
   const lang = opts.lang === 'pt' ? 'pt' : 'en';
   // Toggle de idioma (fica salvo via cookie); links relativos preservam a rota atual.
@@ -216,11 +216,11 @@ function shell(
     ? `<script>setTimeout(function(){var p=document.getElementById('kplayer');if(p&&!p.paused)return;location.reload();},${opts.refreshSeconds * 1000});</script>`
     : '';
   return `<!doctype html>
-<html lang="${opts.lang === 'en' ? 'en' : 'pt-BR'}">
+<html lang="${lang === 'pt' ? 'pt-BR' : 'en'}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
+${opts.noindex ? '<meta name="robots" content="noindex">' : ''}
 <title>${esc(title)} — Kassinão</title>
 <style>${SHELL_CSS}</style>
 </head>
@@ -320,7 +320,9 @@ export function recordingPage(
       : '';
 
   const expires =
-    meta.expiresAt && !live ? `<footer>${p(l, 'expires', { date: datetime(meta.expiresAt, l) })}</footer>` : '';
+    meta.expiresAt && !live && !demo
+      ? `<footer>${p(l, 'expires', { date: datetime(meta.expiresAt, l) })}</footer>`
+      : '';
 
   return shell(
     `${p(l, 'recording')} ${meta.id}`,
@@ -348,6 +350,7 @@ export function recordingPage(
     {
       user: opts.user,
       lang: l,
+      noindex: !demo, // gravações reais (/rec/:id) fora de busca; a demo pública é indexável
       // ao vivo OU transcrição/ata em andamento: a página se atualiza sozinha
       refreshSeconds:
         live ||
@@ -361,12 +364,7 @@ export function recordingPage(
   );
 }
 
-function renderMinutes(
-  meta: RecordingMeta,
-  minutes: MeetingMinutes | undefined,
-  l: Locale,
-  seekable = true,
-): string {
+function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined, l: Locale, seekable = true): string {
   const state = meta.minutes;
   if (!state || state.status === 'disabled') return '';
   const title = `<h2>📋 ${p(l, 'minutes')}</h2>`;
@@ -447,16 +445,27 @@ function renderTranscription(
 }
 
 export function messagePage(title: string, message: string, user?: WebUser, lang?: Locale): string {
+  // Páginas de mensagem/erro (404/403/etc.) não devem ser indexadas.
   return shell(title, `<h1>${esc(title)}</h1><p class="muted" style="margin-top:12px">${esc(message)}</p>`, {
     user,
     lang,
+    noindex: true,
   });
 }
 
 export function landingPage(lang: Locale): string {
-  const text =
-    lang === 'pt'
-      ? 'Bot de gravação de voz do Discord — uma faixa separada e sincronizada por pessoa. Os links das gravações chegam pelo painel no chat do canal de voz.'
-      : 'Discord voice recording bot — one separate, synchronized track per speaker. Recording links are posted on the panel in the voice channel chat.';
-  return shell('Kassinão', `<h1>🎙️ Kassinão</h1><p class="muted" style="margin-top:12px">${text}</p>`, { lang });
+  const pt = lang === 'pt';
+  const text = pt
+    ? 'Gravador de voz do Discord, open source e auto-hospedado — uma faixa separada por pessoa, com transcrição e ata geradas por IA.'
+    : 'Open-source, self-hosted Discord voice recorder — one separate track per person, with AI-generated transcript and meeting minutes.';
+  const demoCta = pt ? '▶️ Ver o exemplo ao vivo' : '▶️ See the live example';
+  const repoCta = pt ? '⭐ Código no GitHub' : '⭐ Code on GitHub';
+  const body = `<h1>🎙️ Kassinão</h1>
+    <p class="muted" style="margin-top:12px">${text}</p>
+    <div class="downloads" style="margin-top:18px">
+      <a class="btn" href="/demo">${demoCta}</a>
+      <a class="btn" href="https://github.com/resolvicomai/kassinao" style="background:#3a3c42">${repoCta}</a>
+    </div>`;
+  // landing é indexável (sem noindex) — é a vitrine pública
+  return shell('Kassinão', body, { lang });
 }
