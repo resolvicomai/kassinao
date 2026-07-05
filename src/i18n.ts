@@ -256,8 +256,8 @@ const STRINGS: Strings = {
     en: '🔌 To connect your AI assistant, open {url} and sign in with Discord (self-serve, scoped to you).',
   },
   'mcp.new': {
-    pt: '🔌 **Conectar assistente de IA** (código válido por ~5 min, uso único):\n```\nnpx -y @kassinao/mcp exchange {code}\n```\nDepois cole a config que o comando imprimir no Claude Desktop/Cursor. Ou, mais fácil, use {url}/conectar-ia no navegador.',
-    en: '🔌 **Connect your AI assistant** (code valid ~5 min, single use):\n```\nnpx -y @kassinao/mcp exchange {code}\n```\nThen paste the config it prints into Claude Desktop/Cursor. Or, easier, use {url}/conectar-ia in the browser.',
+    pt: '🔌 **Conectar assistente de IA** (código válido ~5 min, uso único). No terminal:\n```\nKASSINAO_URL={url} npx -y @kassinao/mcp exchange {code}\n```\nO comando salva o token e imprime a config pra colar no Claude Desktop/Cursor. Mais fácil ainda: abra {url}/conectar-ia no navegador.',
+    en: '🔌 **Connect your AI assistant** (code valid ~5 min, single use). In a terminal:\n```\nKASSINAO_URL={url} npx -y @kassinao/mcp exchange {code}\n```\nIt saves the token and prints the config to paste into Claude Desktop/Cursor. Even easier: open {url}/conectar-ia in the browser.',
   },
   'mcp.revoked': {
     pt: '🔒 Pronto — revoguei {n} conector(es) de IA seu(s). Os tokens deixaram de funcionar na hora.',

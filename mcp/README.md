@@ -8,6 +8,12 @@ O conector roda **na sua máquina** e é um cliente HTTP **magro**: ele **não**
 
 > ⚠️ **Transcrição é entrada não-confiável.** Qualquer participante de uma call pode ter "falado" texto malicioso ou usado um apelido hostil. O servidor envolve todo conteúdo de reunião num bloco de "dados não-confiáveis" e limpa sequências de controle antes de entregar — mas trate o conteúdo das reuniões como dados, nunca como instruções.
 
+## Pré-requisitos
+
+- **O admin do bot precisa ter ligado o MCP** (variável `MCP_SECRET` no servidor). Sem isso, `/conectar-ia` e `/mcp` não existem (dá 404 / comando ausente).
+- **Node.js 20+** na sua máquina.
+- **O conector instalado.** Quando publicado no npm, `npx -y @kassinao/mcp` resolve sozinho. Enquanto não está publicado, instale do código-fonte: `git clone` o repo, `cd mcp && npm install && npm run build`; na config, troque `"command": "npx"` / `"args": ["-y","@kassinao/mcp"]` por `"command": "node"`, `"args": ["/caminho/absoluto/do/repo/mcp/dist/index.js"]`.
+
 ## Instalação
 
 ### Opção A — pela página web (mais fácil)
@@ -35,7 +41,7 @@ O conector roda **na sua máquina** e é um cliente HTTP **magro**: ele **não**
 
 ### Opção B — sem navegador (VM/SSH)
 
-No Discord, o dono roda `/mcp new` (resposta efêmera, código de uso único válido por ~5 min). Depois:
+No Discord, o dono roda **`/mcp novo`** (em clientes em inglês aparece como **`/mcp new`**) — resposta efêmera, código de uso único válido por ~5 min. Depois:
 
 ```bash
 KASSINAO_URL=https://SEU-KASSINAO npx -y @kassinao/mcp exchange <codigo>

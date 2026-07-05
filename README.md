@@ -67,13 +67,13 @@ You need a machine with **Docker** and a **Discord application** ([1-minute setu
 ```bash
 git clone https://github.com/resolvicomai/kassinao.git && cd kassinao
 cp .env.example .env      # fill DISCORD_TOKEN, APPLICATION_ID, DISCORD_CLIENT_SECRET, BASE_URL
+                          # tip: set GUILD_ID too, so slash commands show up instantly
 docker compose up -d --build
 ```
 
-Then run **`/record`** in a Discord voice channel. That's it. Full walkthrough below.
+Then **invite the bot** (step 1) and run **`/record`** in a Discord voice channel. That's it. Full walkthrough below.
 
-> ☁️ One-click hosts: [Render blueprint](render.yaml) included.
-> [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/resolvicomai/kassinao)
+> ☁️ **One-click deploy:** [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/resolvicomai/kassinao) — blueprint in [`render.yaml`](render.yaml). Set `GROQ_API_KEY` + `TRANSCRIBE_PROVIDER=groq` in the dashboard to turn on transcription & minutes.
 > Avoid serverless (Vercel/Netlify) — the voice gateway needs an always-on WebSocket.
 
 ### 1. Create the Discord app
@@ -85,8 +85,8 @@ Then run **`/record`** in a Discord voice channel. That's it. Full walkthrough b
    `https://discord.com/oauth2/authorize?client_id=APP_ID&scope=bot%20applications.commands&permissions=68176896`
 
 ### 2. Make it reachable
-- **Recommended — Cloudflare Tunnel** (HTTPS, no open ports): create a tunnel, set `TUNNEL_TOKEN`, point the public hostname to `kassinao:8080`, and set `BASE_URL=https://your-subdomain.your-domain.com`. The bundled `docker-compose.yml` runs the tunnel for you.
-- **Simple — direct IP**: `BASE_URL=http://YOUR_IP:8080`, publish port 8080, and register the matching OAuth redirect.
+- **Recommended — Cloudflare Tunnel** (HTTPS, no open ports): create a tunnel, then in `.env` set `TUNNEL_TOKEN` **and** `COMPOSE_PROFILES=tunnel`, point the public hostname to `kassinao:8080`, set `BASE_URL=https://your-subdomain.your-domain.com`, and re-run `docker compose up -d`. The bundled tunnel service only starts under the `tunnel` profile (so it never crash-loops when you're not using it).
+- **Direct IP (dev/test only — no HTTPS)**: uncomment `ports: ['8080:8080']` in `docker-compose.yml` and set `BASE_URL=http://YOUR_IP:8080`. ⚠️ Discord OAuth only accepts `https` (or `localhost`) redirects, so the login/download page won't work over a plain IP — use the tunnel (or any HTTPS proxy) for real use.
 
 ### 3. (Optional) Turn on transcription + minutes
 Both light up automatically once a Groq key is present (Groq runs the LLM too):
@@ -111,14 +111,14 @@ MINUTES_ENABLED=auto
 
 ## Transcription backends
 
-| Provider | Cost (per audio hour) | pt-BR quality | Privacy | Notes |
+| Provider | Cost (per audio hour, **per track**) | pt-BR quality | Privacy | Notes |
 |---|---|---|---|---|
 | **Groq** (`whisper-large-v3-turbo`) | ~US$0.04 | Excellent | Cloud (enable ZDR) | Best value; free tier often covers small teams |
 | **OpenAI** (`whisper-1`) | ~US$0.36 | Excellent | Cloud | Timestamped segments |
 | **Gemini** (`gemini-2.x-flash`) | ~cents | Good | Cloud (paid tier only) | Free tier trains on your audio — avoid |
 | **Local** (`faster-whisper`) | Free | Good (`small`+) | 🔒 Never leaves your server | Slower without a GPU; see [`scripts/transcribe-local.py`](scripts/transcribe-local.py) |
 
-The AI minutes run on Groq's LLM (same key), a few cents per meeting.
+> 💡 Recording is **multi-track**, so cost scales with speakers: a 1-hour call with 6 people ≈ 6 audio-hours of transcription (silence in each track is skipped, so it's usually less). The AI minutes run once per meeting on Groq's LLM (same key), a few cents each.
 
 ## AI connector (MCP)
 

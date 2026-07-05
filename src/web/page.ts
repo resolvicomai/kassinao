@@ -523,7 +523,16 @@ export function connectPage(opts: {
       null,
       2,
     );
+    const localhostWarn = config.baseUrl.startsWith('http://localhost')
+      ? `<p style="color:#f0553a;margin-top:12px">🚫 ${esc(
+          T(
+            'Este servidor está com BASE_URL de localhost — o token gerado NÃO vai funcionar de outra máquina. Defina BASE_URL (a URL pública do bot) no servidor antes de gerar tokens de verdade.',
+            'This server has a localhost BASE_URL — the generated token will NOT work from another machine. Set BASE_URL (the bot public URL) on the server before generating real tokens.',
+          ),
+        )}</p>`
+      : '';
     const body = `<h1>✅ ${esc(T('Token gerado', 'Token generated'))}</h1>
+      ${localhostWarn}
       <p style="color:#ffb454;margin-top:12px">⚠️ ${esc(
         T(
           'Copie agora — este token NÃO será mostrado de novo. Ele dá ao SEU assistente de IA acesso às gravações que VOCÊ pode ver.',
@@ -538,6 +547,12 @@ export function connectPage(opts: {
       )}</p>
       <div style="margin-top:12px"><button id="kcopy" class="btn" type="button" style="border:0;cursor:pointer;font:inherit">📋 ${esc(T('Copiar config', 'Copy config'))}</button></div>
       <pre id="kcfg" style="background:#111;padding:14px;border-radius:8px;overflow-x:auto;white-space:pre;font-size:13px;margin-top:10px">${esc(cfg)}</pre>
+      <p class="muted" style="margin-top:8px">${esc(
+        T(
+          'Já usa outros MCP servers? Cole só o bloco "kassinao" dentro do seu "mcpServers" — não substitua o arquivo inteiro. Requer o conector instalado (Node 20+): "npx -y @kassinao/mcp" quando publicado, ou do código-fonte (veja o repo).',
+          'Already have other MCP servers? Paste only the "kassinao" block inside your existing "mcpServers" — do not replace the whole file. Requires the connector (Node 20+): "npx -y @kassinao/mcp" once published, or from source (see the repo).',
+        ),
+      )}</p>
       <p class="muted" style="margin-top:12px">${esc(
         T(
           'Depois reinicie o Claude Desktop/Cursor e pergunte: "o que ficou pendente essa semana?"',

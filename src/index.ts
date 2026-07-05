@@ -828,6 +828,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 // Boas-vindas ao entrar num servidor novo: onboarding sem precisar procurar nada.
 client.on(Events.GuildCreate, async (guild) => {
   const l = localeOf(guild.preferredLocale);
+  // Registra os comandos NESTE servidor na hora — sem isso, o registro global do
+  // boot pode levar até 1h, e a pessoa digita /gravar logo após convidar e não vê nada.
+  try {
+    await new REST()
+      .setToken(config.token)
+      .put(Routes.applicationGuildCommands(config.applicationId, guild.id), { body: buildCommands() });
+    console.log(`Comandos registrados no novo servidor ${guild.name} (${guild.id}).`);
+  } catch (err) {
+    console.error(`Falha ao registrar comandos no servidor ${guild.id}:`, err);
+  }
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle(t(l, 'welcome.title'))
@@ -858,7 +868,9 @@ client.on(Events.GuildCreate, async (guild) => {
 // DM ao bot → responde o guia (onboarding). Não lê o conteúdo, só reage ao evento.
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || message.guildId) return; // só DMs de pessoas
-  const l: Locale = 'pt'; // DM não expõe o locale do usuário; time é pt-BR
+  // DM não expõe o locale do usuário → inglês por padrão (coerente com o resto do
+  // app e com o README "bilingual"); dentro dos servidores cada um vê no seu idioma.
+  const l: Locale = 'en';
   try {
     await message.channel.send({ content: t(l, 'help.dm-hint'), ...buildHelpPayload(l) });
   } catch {

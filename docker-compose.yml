@@ -16,6 +16,10 @@ services:
     # pela rede interna do Docker. Nada exposto direto no IP do VPS.
     expose:
       - '8080'
+    # Só pra dev/teste SEM túnel (expõe no IP do host, HTTP puro — o login OAuth
+    # do Discord exige https/localhost, então não serve pra produção). Descomente:
+    # ports:
+    #   - '8080:8080'
     volumes:
       - ./recordings:/app/recordings
 
@@ -26,6 +30,10 @@ services:
     container_name: kassinao-tunnel
     restart: unless-stopped
     command: tunnel --no-autoupdate run
+    # Só sobe com o perfil "tunnel" ativo — assim quem NÃO usa Cloudflare Tunnel
+    # não fica com um serviço vermelho reiniciando à toa. Para ligar: ponha
+    # COMPOSE_PROFILES=tunnel no .env (recomendado) ou use `--profile tunnel`.
+    profiles: ['tunnel']
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN}
     depends_on:

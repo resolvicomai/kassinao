@@ -129,7 +129,9 @@ export function beginLogin(res: Response, next: string): void {
     response_type: 'code',
     scope: 'identify',
     state,
-    prompt: 'none',
+    // sem prompt:'none' — num app novo ninguém autorizou ainda, e prompt:'none'
+    // devolveria consent_required (sem code) e quebraria o 1º login. O Discord
+    // mostra o consentimento na 1ª vez e pula automaticamente nas seguintes.
   });
   res.redirect(`https://discord.com/oauth2/authorize?${params}`);
 }

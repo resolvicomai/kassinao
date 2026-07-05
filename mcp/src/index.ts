@@ -236,8 +236,15 @@ async function runExchange(code: string): Promise<void> {
   }
   const data = (await r.json()) as TokenResponse;
   saveStore({ url: URL_BASE, refreshToken: data.refresh_token });
-  console.error('✅ Conectado! Token guardado em ~/.config/kassinao-mcp/token.json (0600).');
-  console.error('Agora aponte seu cliente MCP para: kassinao-mcp (sem argumentos), com KASSINAO_URL definido.');
+  // O token de refresh já ficou salvo em disco (0600) — a config NÃO precisa dele.
+  const cfg = JSON.stringify(
+    { mcpServers: { kassinao: { command: 'npx', args: ['-y', '@kassinao/mcp'], env: { KASSINAO_URL: URL_BASE } } } },
+    null,
+    2,
+  );
+  console.error('✅ Conectado! Token salvo em ~/.config/kassinao-mcp/token.json (0600).');
+  console.error('Cole este bloco no claude_desktop_config.json (ou no equivalente do Cursor) e reinicie o app:\n');
+  console.log(cfg); // stdout = a config, pronta pra copiar
 }
 
 // ---------- servidor MCP ----------
