@@ -558,7 +558,9 @@ async function handleHelpButton(interaction: ButtonInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
   const key = interaction.customId.split(':')[1];
   const topic = HELP_TOPICS[key]?.topic;
-  await interaction.reply({ content: topic ? t(l, topic) : t(l, 'help.intro'), ephemeral: true });
+  // passa os valores REAIS de config pros tópicos (limite de horas, retenção)
+  const vars = { hours: config.maxRecordingHours, days: config.retentionDays };
+  await interaction.reply({ content: topic ? t(l, topic, vars) : t(l, 'help.intro'), ephemeral: true });
 }
 
 async function handleStatus(interaction: ChatInputCommandInteraction): Promise<void> {
