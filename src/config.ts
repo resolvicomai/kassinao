@@ -65,6 +65,8 @@ export const config = {
   cookieSecret: loadCookieSecret(),
   /** Fuso para datas no transcript .md e fallback da página (o navegador tem prioridade na web). */
   timezone: process.env.TZ || 'America/Sao_Paulo',
+  /** Idioma padrão onde não há locale do usuário (ex.: DM). 'pt' se DEFAULT_LOCALE começar com "pt", senão 'en'. */
+  defaultLocale: ((process.env.DEFAULT_LOCALE || '').toLowerCase().startsWith('pt') ? 'pt' : 'en') as 'pt' | 'en',
 
   /**
    * Motor de transcrição: 'none' | 'openai' | 'groq' | 'gemini' | 'command'.

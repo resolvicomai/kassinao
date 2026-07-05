@@ -868,9 +868,9 @@ client.on(Events.GuildCreate, async (guild) => {
 // DM ao bot → responde o guia (onboarding). Não lê o conteúdo, só reage ao evento.
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || message.guildId) return; // só DMs de pessoas
-  // DM não expõe o locale do usuário → inglês por padrão (coerente com o resto do
-  // app e com o README "bilingual"); dentro dos servidores cada um vê no seu idioma.
-  const l: Locale = 'en';
+  // DM não expõe o locale do usuário → usa DEFAULT_LOCALE (padrão 'en' no repo;
+  // defina DEFAULT_LOCALE=pt pra responder em português). Em servidores cada um vê no seu idioma.
+  const l: Locale = config.defaultLocale;
   console.log(`DM recebida de ${message.author.id} — respondendo o guia.`);
   try {
     // o canal de DM pode chegar PARCIAL (Partials.Channel) — completa antes de enviar
