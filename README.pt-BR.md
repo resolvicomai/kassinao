@@ -6,6 +6,8 @@
 
 Um gravador de voz multi-track para Discord, auto-hospedado, inspirado no [Craig](https://craig.chat/) — com as principais features "premium" liberadas e um extra que nenhum concorrente entrega bem: como cada participante tem uma faixa de áudio separada, a **atribuição de quem falou o quê é perfeita** (sem diarização por IA, que é onde Otter/Fireflies erram).
 
+🔗 **Demo ao vivo (sem instalar nada):** <https://kassinao.resolvicomai.app/demo> — reunião fictícia com transcrição, ata e player. E dá pra **conectar ao seu assistente de IA** (Claude/Cursor) — veja [Conector de IA](#-conector-de-ia-mcp).
+
 <!-- Dica: adicione aqui um screenshot da página da gravação (docs/pagina.png) -->
 
 ---
@@ -19,6 +21,7 @@ Um gravador de voz multi-track para Discord, auto-hospedado, inspirado no [Craig
 - **🔒 Acesso restrito de verdade** — só abre para quem **participou da call**, **enxerga o canal**, **iniciou** a gravação ou é **admin**. Link vazado não dá acesso a estranhos.
 - **🎛️ Painel ao vivo** no chat do canal de voz — log de eventos, botões de **Parar** e **Nota**, indicador `[GRAVANDO]` no apelido do bot (consentimento visível).
 - **🗒️ Notas com timestamp** (`/nota` ou botão) — entram no painel, na transcrição, na ata e nos labels do projeto Audacity.
+- **🔌 Conector MCP** *(opcional)* — pergunte sobre suas reuniões pelo **Claude Desktop/Cursor**: janela de tempo, **itens de ação com prazo** cruzando reuniões, busca full-text — cada um só vê o que já poderia ver. Veja [`mcp/`](mcp/).
 - **🤖 Auto-record** — começa a gravar sozinho quando N pessoas entram num canal e para quando esvazia.
 - **❓ Onboarding embutido** — `/ajuda` com botões interativos por tópico; mandar DM ao bot também responde o guia.
 - **🌎 Bilíngue** (pt-BR / inglês, pelo idioma de cada usuário) e **cadeado HTTPS** via Cloudflare Tunnel (sem abrir portas).
@@ -35,8 +38,23 @@ Um gravador de voz multi-track para Discord, auto-hospedado, inspirado no [Craig
 | `/gravacoes` | `/recordings` | Suas últimas gravações, com links (filtradas por acesso) |
 | `/ajuda` | `/help` | Guia interativo (também responde por DM) |
 | `/autorecord ligar/desligar/ver` | `/autorecord on/off/view` | Gravação automática por canal (admin) |
+| `/mcp novo/revogar-tudo` | `/mcp new/revoke-all` | Conectar/revogar seu assistente de IA (quando o MCP está ligado) |
 
 Qualquer membro grava e para. `/autorecord` exige **Gerenciar Servidor**. Apagar uma gravação (pela página) é restrito a quem iniciou ou a admins.
+
+---
+
+## 🔌 Conector de IA (MCP)
+
+*Opcional, desligado por padrão.* Plugue suas reuniões no **Claude Desktop, Cursor** ou outro cliente MCP e pergunte em linguagem natural:
+
+- *"O que ficou pendente essa semana, e de quem?"* — junta itens de ação com prazo de várias reuniões.
+- *"Lista as calls deste canal entre 1 e 30 de junho."* — busca por janela de tempo (ciente do fuso).
+- *"Quando a Ana falou de orçamento? Me dá o link."* — busca com link no minuto exato.
+
+**Seguro por construção:** o conector roda na sua máquina e carrega só um **token pessoal**; o bot aplica o *mesmo* controle de acesso da página, reunião por reunião — cada pessoa só vê o que já veria no site. Somente leitura, sem áudio, revogável. O conteúdo das reuniões vai embrulhado como "dados não-confiáveis" (defesa contra prompt-injection).
+
+Para ligar, defina `MCP_SECRET` (segredo forte, **≠** `COOKIE_SECRET`). Cada pessoa se conecta sozinha em `/conectar-ia`. Pacote e docs completos: [`mcp/`](mcp/).
 
 ---
 

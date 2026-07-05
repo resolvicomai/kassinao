@@ -174,11 +174,6 @@ const STRINGS: Strings = {
     pt: '1. Entre num canal de voz e use **/gravar**\n2. Conversem normalmente (o painel mostra quem entrou)\n3. Use **/parar** — em ~1 min chega o link pronto\n4. Abra o link, faça login com Discord e baixe/leia a ata',
     en: '1. Join a voice channel and use **/record**\n2. Talk normally (the panel shows who joined)\n3. Use **/stop** — in ~1 min the ready link arrives\n4. Open the link, log in with Discord and download/read the minutes',
   },
-  'help.privacy': { pt: '🔒 Privacidade', en: '🔒 Privacy' },
-  'help.privacy-body': {
-    pt: 'Só quem participou da call, enxerga o canal ou é admin consegue abrir as gravações (protegido por login). Em canais **restritos**, me libere no canal (permissão Ver Canal + Conectar) para eu poder gravar.',
-    en: 'Only call participants, people who can see the channel, or admins can open recordings (login-protected). In **restricted** channels, grant me access (View Channel + Connect) so I can record.',
-  },
   'help.footer': { pt: 'Kassinão 🎙️ • use /ajuda a qualquer momento', en: 'Kassinão 🎙️ • use /help anytime' },
   // botões e tópicos do /ajuda (onboarding interativo)
   'help.btn-record': { pt: '🎥 Como gravar', en: '🎥 How to record' },
@@ -200,6 +195,11 @@ const STRINGS: Strings = {
   'help.topic-auto': {
     pt: '🤖 **Auto-record** (só admin)\n**/autorecord ligar canal:#daily minimo:2** — eu começo a gravar sozinho quando 2+ pessoas entram no canal, e paro quando esvazia.\n**/autorecord desligar canal:#daily** — desliga.\n**/autorecord ver** — mostra o que está configurado.',
     en: '🤖 **Auto-record** (admin only)\n**/autorecord on channel:#daily minimum:2** — I start recording by myself when 2+ people join, and stop when it empties.\n**/autorecord off channel:#daily** — turns it off.\n**/autorecord view** — shows what is configured.',
+  },
+  'help.mcp-title': { pt: '🔌 Conectar assistente de IA', en: '🔌 Connect your AI assistant' },
+  'help.mcp-body': {
+    pt: 'Pergunte sobre suas reuniões pelo Claude Desktop/Cursor ("o que ficou pendente essa semana?"). Gere seu token em {url}/conectar-ia.',
+    en: 'Ask about your meetings from Claude Desktop/Cursor ("what is pending this week?"). Generate your token at {url}/conectar-ia.',
   },
   'help.dm-hint': {
     pt: 'Sou um bot de gravação — me use pelos **comandos dentro do servidor**. Aqui vai o guia rápido:',
@@ -226,7 +226,6 @@ const STRINGS: Strings = {
   'recordings.live': { pt: '(ao vivo)', en: '(live)' },
 
   // /autorecord
-  'autorecord.only-voice': { pt: 'Escolha um canal de voz.', en: 'Pick a voice channel.' },
   'autorecord.no-permission': {
     pt: 'Você precisa da permissão **Gerenciar Servidor** para configurar o auto-record.',
     en: 'You need the **Manage Server** permission to configure auto-record.',

@@ -521,15 +521,19 @@ const HELP_TOPICS: Record<string, { btn: string; topic: string }> = {
 };
 
 function buildHelpEmbed(l: Locale): EmbedBuilder {
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle(t(l, 'help.title'))
     .setDescription(t(l, 'help.intro'))
     .addFields(
       { name: t(l, 'help.commands'), value: t(l, 'help.cmd-list') },
       { name: t(l, 'help.flow'), value: t(l, 'help.flow-body') },
-    )
-    .setFooter({ text: t(l, 'help.footer') });
+    );
+  // só mostra o conector de IA quando ele está ligado neste servidor
+  if (config.mcpEnabled) {
+    embed.addFields({ name: t(l, 'help.mcp-title'), value: t(l, 'help.mcp-body', { url: config.baseUrl }) });
+  }
+  return embed.setFooter({ text: t(l, 'help.footer') });
 }
 
 /** Payload do /ajuda com botões pra explorar cada tópico (onboarding interativo). */

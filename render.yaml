@@ -7,7 +7,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: starter # precisa de um plano com processo sempre ativo (o Gateway de voz é WebSocket)
-    healthCheckPath: /
+    healthCheckPath: /health
     disk:
       name: recordings
       mountPath: /app/recordings
@@ -25,7 +25,12 @@ services:
         sync: false
       - key: RECORDINGS_DIR
         value: /app/recordings
+      # Transcrição + Ata por IA: ponha "groq" e preencha GROQ_API_KEY pra ligar (ou deixe vazio p/ só gravar).
       - key: TRANSCRIBE_PROVIDER
-        value: none
+        sync: false # groq | openai | gemini | none
+      - key: GROQ_API_KEY
+        sync: false # https://console.groq.com — liga transcrição E ata (ative Zero Data Retention)
+      - key: DEFAULT_LOCALE
+        value: en # 'pt' pra respostas de DM em português
       - key: TZ
         value: America/Sao_Paulo

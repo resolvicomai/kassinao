@@ -469,11 +469,16 @@ export function landingPage(lang: Locale): string {
     : 'Open-source, self-hosted Discord voice recorder — one separate track per person, with AI-generated transcript and meeting minutes.';
   const demoCta = pt ? '▶️ Ver o exemplo ao vivo' : '▶️ See the live example';
   const repoCta = pt ? '⭐ Código no GitHub' : '⭐ Code on GitHub';
+  const mcpCta = pt ? '🔌 Conectar ao Claude/Cursor' : '🔌 Connect Claude/Cursor';
+  // CTA do conector de IA só quando ele está ligado neste servidor
+  const mcpButton = config.mcpEnabled
+    ? `\n      <a class="btn" href="/conectar-ia" style="background:#3a3c42">${mcpCta}</a>`
+    : '';
   const body = `<h1>🎙️ Kassinão</h1>
     <p class="muted" style="margin-top:12px">${text}</p>
     <div class="downloads" style="margin-top:18px">
       <a class="btn" href="/demo">${demoCta}</a>
-      <a class="btn" href="https://github.com/resolvicomai/kassinao" style="background:#3a3c42">${repoCta}</a>
+      <a class="btn" href="https://github.com/resolvicomai/kassinao" style="background:#3a3c42">${repoCta}</a>${mcpButton}
     </div>`;
   // landing é indexável (sem noindex) — é a vitrine pública
   return shell('Kassinão', body, { lang });
