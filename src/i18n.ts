@@ -45,28 +45,39 @@ const STRINGS: Strings = {
 
   // fluxo de gravação
   'record.started': {
-    pt: '🔴 Gravando **{channel}**! Painel da gravação: {panel}',
-    en: '🔴 Recording **{channel}**! Recording panel: {panel}',
+    pt: '🔴 Pronto, tô gravando **{channel}**! Postei o painel aqui 👉 {panel}',
+    en: "🔴 All set — I'm recording **{channel}**! I posted the panel here 👉 {panel}",
   },
   'record.started-no-panel': {
-    pt: '🔴 Gravando **{channel}**!\n📥 Página da gravação: {url}\n(não consegui postar o painel no chat do canal de voz — confira minhas permissões)',
-    en: '🔴 Recording **{channel}**!\n📥 Recording page: {url}\n(I could not post the panel in the voice channel chat — check my permissions)',
+    pt: '🔴 Tô gravando **{channel}**!\n📥 Página da gravação: {url}\n_(não consegui postar o painel no chat do canal de voz — dá uma olhada nas minhas permissões)_',
+    en: "🔴 I'm recording **{channel}**!\n📥 Recording page: {url}\n_(I couldn't post the panel in the voice channel chat — check my permissions)_",
   },
   'record.stopped': {
-    pt: '⏹️ Gravação encerrada. Página da gravação: {url}',
-    en: '⏹️ Recording stopped. Recording page: {url}',
+    pt: '⏹️ Encerrei! Em ~1 min a **ata** e a **transcrição** ficam prontas aqui 👉 {url}',
+    en: '⏹️ Done! In ~1 min the **minutes** and **transcript** will be ready here 👉 {url}',
   },
 
   // painel
-  'panel.title-recording': { pt: '🔴 Gravando — {channel}', en: '🔴 Recording — {channel}' },
-  'panel.title-done': { pt: '⏹️ Gravação encerrada — {channel}', en: '⏹️ Recording finished — {channel}' },
+  'panel.title-recording': { pt: '🔴 Gravando • {channel}', en: '🔴 Recording • {channel}' },
+  'panel.title-done': { pt: '✅ Gravação encerrada • {channel}', en: '✅ Recording finished • {channel}' },
+  // saudação amigável (texto acima do painel) — deixa o time à vontade e explica o que rola
+  'panel.greeting-recording': {
+    pt: '👋 Oi, pessoal! Estou **gravando este canal** — no final eu gero a **ata** e a **transcrição** sozinho. 🔒 Só quem participa da call ou enxerga o canal consegue abrir depois.',
+    en: "👋 Hey everyone! I'm **recording this channel** — I'll generate the **minutes** and **transcript** myself at the end. 🔒 Only people in the call or who can see the channel can open it afterward.",
+  },
+  'panel.greeting-done': {
+    pt: '✅ **Gravação encerrada!** Já tô preparando a transcrição e a ata — fica pronto em ~1 min. 🙌',
+    en: "✅ **Recording finished!** I'm putting together the transcript and minutes now — ready in ~1 min. 🙌",
+  },
+  'panel.by-user': { pt: 'a pedido de {user}', en: 'requested by {user}' },
+  'panel.by-auto': { pt: 'automaticamente (auto-record)', en: 'automatically (auto-record)' },
   'panel.desc-recording': {
-    pt: 'Iniciada {rel} por {starter}.\nUma faixa separada e sincronizada por pessoa.\n\n📥 **[Página da gravação]({url})** — dá pra baixar até durante a gravação.',
-    en: 'Started {rel} by {starter}.\nOne separate, synchronized track per speaker.\n\n📥 **[Recording page]({url})** — you can download even while recording.',
+    pt: 'Comecei {rel}, {starter}.\n\n🎧 Uma faixa separada e sincronizada por pessoa\n🤖 Transcrição e ata geradas sozinhas no final\n📥 **[Abrir a página da gravação]({url})** — dá pra acompanhar e baixar até durante a call',
+    en: 'Started {rel}, {starter}.\n\n🎧 One separate, synced track per person\n🤖 Transcript and minutes generated automatically at the end\n📥 **[Open the recording page]({url})** — follow along and download even during the call',
   },
   'panel.desc-done': {
-    pt: '**Duração:** {duration}\n**Participantes:** {participants}\n\n📥 **[Página da gravação]({url})**\n⏳ Expira em {expires}.',
-    en: '**Duration:** {duration}\n**Participants:** {participants}\n\n📥 **[Recording page]({url})**\n⏳ Expires {expires}.',
+    pt: 'Durou **{duration}** • Participaram: {participants}\n\n📥 **[Abrir a gravação]({url})** — áudio, transcrição e ata\n⏳ Disponível até {expires}',
+    en: 'Lasted **{duration}** • Participants: {participants}\n\n📥 **[Open the recording]({url})** — audio, transcript and minutes\n⏳ Available until {expires}',
   },
   'panel.no-participants': { pt: 'ninguém falou 🤷', en: 'nobody spoke 🤷' },
   'panel.field-id': { pt: 'ID', en: 'ID' },
@@ -80,13 +91,13 @@ const STRINGS: Strings = {
   // DM para quem iniciou
   'dm.title-start': { pt: '🔴 Gravação iniciada', en: '🔴 Recording started' },
   'dm.desc-start': {
-    pt: 'Estou gravando **{channel}** em **{guild}**.\n\n📥 **[Página da gravação]({url})** — downloads funcionam até durante a gravação.\n\n⏱️ Gravarei por até **{hours}h**. A gravação expira **{expiresDays} dias** após terminar.\n🔒 Só quem participou da call ou enxerga o canal consegue abrir o link.',
-    en: 'I am recording **{channel}** in **{guild}**.\n\n📥 **[Recording page]({url})** — downloads work even while recording.\n\n⏱️ I will record for up to **{hours}h**. The recording expires **{expiresDays} days** after it ends.\n🔒 Only call participants or people who can see the channel can open the link.',
+    pt: 'Comecei a gravar **{channel}** em **{guild}**. 👍\n\n📥 **[Página da gravação]({url})** — dá pra baixar até durante a call.\n⏱️ Gravo por até **{hours}h** • fica disponível por **{expiresDays} dias** depois de terminar.\n🔒 Só quem participou ou enxerga o canal abre o link.',
+    en: 'I started recording **{channel}** in **{guild}**. 👍\n\n📥 **[Recording page]({url})** — you can download even during the call.\n⏱️ I record for up to **{hours}h** • it stays available for **{expiresDays} days** after it ends.\n🔒 Only participants or people who can see the channel can open the link.',
   },
-  'dm.title-stop': { pt: '⏹️ Gravação encerrada', en: '⏹️ Recording finished' },
+  'dm.title-stop': { pt: '✅ Gravação encerrada', en: '✅ Recording finished' },
   'dm.desc-stop': {
-    pt: '**{channel}** — duração **{duration}**.\n\n📥 **[Página da gravação]({url})**\n⏳ Expira em {expires}.',
-    en: '**{channel}** — duration **{duration}**.\n\n📥 **[Recording page]({url})**\n⏳ Expires {expires}.',
+    pt: 'Fechei a gravação de **{channel}** — durou **{duration}**. ✅\n\n📥 **[Abrir a gravação]({url})** — áudio, transcrição e ata em ~1 min.\n⏳ Disponível até {expires}.',
+    en: 'I wrapped up the **{channel}** recording — it lasted **{duration}**. ✅\n\n📥 **[Open the recording]({url})** — audio, transcript and minutes in ~1 min.\n⏳ Available until {expires}.',
   },
 
   // notas
@@ -130,9 +141,18 @@ const STRINGS: Strings = {
   },
 
   // transcrição
-  'transcript.ready': { pt: '📝 Transcrição pronta: {url}', en: '📝 Transcript ready: {url}' },
-  'transcript.failed': { pt: '⚠️ A transcrição falhou: {error}', en: '⚠️ Transcription failed: {error}' },
-  'minutes.ready': { pt: '📋 Ata e transcrição prontas: {url}', en: '📋 Minutes and transcript ready: {url}' },
+  'transcript.ready': {
+    pt: '📝 Transcrição pronta! Já está na página 👉 {url}',
+    en: '📝 Transcript ready! It’s on the page now 👉 {url}',
+  },
+  'transcript.failed': {
+    pt: '⚠️ Não consegui transcrever desta vez: {error}\nO áudio continua disponível na página, viu?',
+    en: '⚠️ I couldn’t transcribe this time: {error}\nThe audio is still available on the page.',
+  },
+  'minutes.ready': {
+    pt: '📋 Prontinho! A **ata** e a **transcrição** já estão na página 👉 {url}',
+    en: '📋 All done! The **minutes** and **transcript** are on the page 👉 {url}',
+  },
 
   // onboarding / ajuda
   'help.title': { pt: '🎙️ Kassinão — como usar', en: '🎙️ Kassinão — how to use' },
@@ -183,8 +203,8 @@ const STRINGS: Strings = {
   },
   'welcome.title': { pt: '👋 Obrigado por me adicionar!', en: '👋 Thanks for adding me!' },
   'welcome.body': {
-    pt: 'Eu sou o **Kassinão**, gravador de voz do Discord com transcrição e ata automáticas.\n\nPara começar: entre num canal de voz e use **/gravar**. Use **/ajuda** para ver tudo que eu faço.\n\n🔒 Em canais restritos, lembre de me dar acesso ao canal (Ver Canal + Conectar).',
-    en: "I'm **Kassinão**, a Discord voice recorder with automatic transcript and minutes.\n\nTo start: join a voice channel and use **/record**. Use **/help** to see everything I do.\n\n🔒 In restricted channels, remember to grant me channel access (View Channel + Connect).",
+    pt: 'Eu sou o **Kassinão** 🎙️ — gravo suas calls do Discord com **uma faixa por pessoa** e gero **transcrição** e **ata** (resumo, decisões e tarefas) automaticamente.\n\n**Pra começar:** entre num canal de voz e use **/gravar**. Quer ver tudo que eu faço? **/ajuda**.\n\n🔒 Em canais restritos, me dê acesso ao canal (Ver Canal + Conectar) pra eu conseguir entrar.',
+    en: "I'm **Kassinão** 🎙️ — I record your Discord calls with **one track per person** and auto-generate **transcript** and **minutes** (summary, decisions and tasks).\n\n**To start:** join a voice channel and use **/record**. Want the full tour? **/help**.\n\n🔒 In restricted channels, grant me channel access (View Channel + Connect) so I can join.",
   },
 
   // status

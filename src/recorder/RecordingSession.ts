@@ -412,7 +412,9 @@ export class RecordingSession {
       embed.setDescription(
         t(l, 'panel.desc-recording', {
           rel: `<t:${Math.floor(this.startedAt / 1000)}:R>`,
-          starter: this.meta.startedBy ? `<@${this.meta.startedBy.id}>` : 'auto-record',
+          starter: this.meta.startedBy
+            ? t(l, 'panel.by-user', { user: `<@${this.meta.startedBy.id}>` })
+            : t(l, 'panel.by-auto'),
           url: this.pageUrl,
         }),
       );
@@ -452,7 +454,10 @@ export class RecordingSession {
       new ButtonBuilder().setLabel(t(l, 'panel.btn-page')).setStyle(ButtonStyle.Link).setURL(this.pageUrl),
     );
 
-    return { embeds: [embed], components: [row] };
+    // saudação amigável em texto puro ACIMA do embed (sem @menção, não faz ping).
+    // Deixa o time à vontade e explica o que está acontecendo — consentimento visível.
+    const content = t(l, isDone ? 'panel.greeting-done' : 'panel.greeting-recording');
+    return { content, embeds: [embed], components: [row] };
   }
 
   /** Edita o painel com throttle para não estourar o rate limit do Discord. */
