@@ -20,12 +20,14 @@ import {
 } from 'discord.js';
 import prism from 'prism-media';
 import { config } from '../config';
+import { freeMB } from '../disk';
 import { Locale, t } from '../i18n';
+import { alertOwners } from '../monitor';
 import { pageUrl, RecordingMeta, saveMeta, tracksDir } from '../store';
 import { safeSlice } from '../util';
 import { UserTrack } from './UserTrack';
 
-export type StopReason = 'manual' | 'tempo-maximo' | 'canal-vazio' | 'desconectado';
+export type StopReason = 'manual' | 'tempo-maximo' | 'canal-vazio' | 'desconectado' | 'disco-cheio';
 
 export const STOP_BUTTON_ID = 'kassinao_stop';
 export const NOTE_BUTTON_ID = 'kassinao_note';
@@ -358,7 +360,20 @@ export class RecordingSession {
   }
 
   private checkSilence(): void {
-    if (this.stopping || this.silenceWarned) return;
+    if (this.stopping) return;
+    // Guarda de disco: se o espaço estiver acabando, encerra AGORA — melhor uma
+    // gravação curta e íntegra do que uma faixa cortada/corrompida sem aviso.
+    if (freeMB() < config.minFreeMbAbort) {
+      this.addEvent(t(this.locale, 'event.stopped-disco-cheio'));
+      saveMeta(this.meta);
+      void alertOwners(
+        'disk-abort',
+        `Encerrei uma gravação em **#${this.voiceChannel.name}** porque o disco está quase cheio (**${freeMB()} MB** livres).`,
+      );
+      void this.stop('disco-cheio').then(() => this.onAutoStop?.(this, 'disco-cheio'));
+      return;
+    }
+    if (this.silenceWarned) return;
     if (Date.now() - this.lastAudioAt >= SILENCE_WARN_MS) {
       this.silenceWarned = true;
       this.addEvent(t(this.locale, 'event.silence'));

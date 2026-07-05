@@ -24,8 +24,10 @@ import {
 } from 'discord.js';
 import { config } from './config';
 import { startCleanupJob } from './cleanup';
+import { freeMB } from './disk';
 import { client } from './discord/client';
 import { markClientReady } from './discord/ready';
+import { startMonitor } from './monitor';
 import { Locale, localeOf, t } from './i18n';
 import { autoRecordStore, isArmed, setArmed } from './recorder/autorecord';
 import { sessionManager } from './recorder/manager';
@@ -254,6 +256,15 @@ async function startSession(opts: {
   if (guildBusy(opts.guild.id)) {
     throw new Error(
       opts.locale === 'pt' ? 'já existe uma gravação neste servidor' : 'a recording already exists in this server',
+    );
+  }
+  // Guarda de disco: não começa uma gravação que vai corromper por falta de espaço.
+  const free = freeMB();
+  if (free < config.minFreeMbStart) {
+    throw new Error(
+      opts.locale === 'pt'
+        ? `sem espaço em disco suficiente no servidor (${free} MB livres) — apague gravações antigas primeiro`
+        : `not enough disk space on the server (${free} MB free) — delete old recordings first`,
     );
   }
   startingGuilds.add(opts.guild.id);
@@ -733,6 +744,7 @@ client.once(Events.ClientReady, async () => {
   // Marca ANTES de qualquer await: a partir daqui os caches de guild/canal são
   // confiáveis e o checkAccess (web + API do MCP) pode avaliar acesso de verdade.
   markClientReady();
+  startMonitor(); // alertas por DM ao dono (disco, etc.)
   console.log(`Kassinão online como ${client.user?.tag} 🎙️`);
   await registerCommands().catch((err) => console.error('Falha ao registrar comandos:', err));
   // canais que já estavam cheios quando o bot subiu disparam o auto-record

@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import express, { Request, Response } from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 import { config } from '../config';
+import { freeMB } from '../disk';
 import { isClientReady } from '../discord/ready';
 import { Locale } from '../i18n';
 import { cook, CookFormat, COOK_FORMATS } from '../processing/cook';
@@ -94,6 +95,48 @@ function notReady(res: Response, l: Locale, user?: WebUser): boolean {
 export function startWebServer(): void {
   const app = express();
   app.disable('x-powered-by');
+  // Atrás do Cloudflare Tunnel (1 proxy): faz req.ip refletir o IP real do cliente,
+  // pra o rate-limit por IP não ser burlado forjando X-Forwarded-For.
+  app.set('trust proxy', 1);
+
+  // Headers de segurança (defesa em profundidade barata). CSP permite o próprio
+  // site + avatares do Discord + estilos/scripts inline (a página usa inline).
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; img-src 'self' https://cdn.discordapp.com data:; media-src 'self'; " +
+        "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+    );
+    if (config.baseUrl.startsWith('https')) {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+    next();
+  });
+
+  // Health check público (sem segredos) — pra um uptime monitor (ex.: UptimeRobot).
+  app.get('/health', (_req, res) => {
+    res.json({ ok: true, ready: isClientReady(), freeMB: freeMB(), activeRecordings: sessionManager.all().length });
+  });
+
+  // Rate-limit leve por IP nas rotas web (a API /api/* tem o dela). Segura
+  // brute-force/reconhecimento sem incomodar uso real.
+  const webHits = new Map<string, { n: number; reset: number }>();
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (!/^\/(rec|auth|demo)\b/.test(req.path)) return next();
+    const now = Date.now();
+    if (webHits.size > 5000) for (const [k, v] of webHits) if (v.reset < now) webHits.delete(k);
+    const ip = req.ip ?? 'unknown';
+    const h = webHits.get(ip);
+    if (!h || h.reset < now) {
+      webHits.set(ip, { n: 1, reset: now + 60_000 });
+    } else if (++h.n > 120) {
+      res.status(429).set('Retry-After', '30').send('Muitas requisições — tente de novo em instantes.');
+      return;
+    }
+    next();
+  });
 
   // Persiste a escolha de idioma (?lang=en|pt) num cookie de 1 ano.
   app.use((req, res, next) => {

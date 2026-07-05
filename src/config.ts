@@ -107,6 +107,14 @@ export const config = {
   mcpAccessTtlMin: Number(process.env.MCP_ACCESS_TTL_MIN || 15),
   /** Vida do refresh token (rotacionado a cada uso). */
   mcpRefreshTtlDays: Number(process.env.MCP_REFRESH_TTL_DAYS || 30),
+
+  // ---------- guarda de disco e monitoramento ----------
+  /** Espaço livre mínimo (MB) para INICIAR uma gravação; abaixo disso, recusa com aviso. */
+  minFreeMbStart: Number(process.env.MIN_FREE_MB_START || 500),
+  /** Espaço livre mínimo (MB) DURANTE a gravação; abaixo disso, encerra pra não corromper a faixa. */
+  minFreeMbAbort: Number(process.env.MIN_FREE_MB_ABORT || 150),
+  /** % de uso de disco que dispara alerta por DM ao(s) dono(s). */
+  diskAlertPct: Number(process.env.DISK_ALERT_PCT || 85),
 };
 
 // Isolamento de blast-radius: o segredo do MCP não pode coincidir com o dos

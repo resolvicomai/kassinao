@@ -527,14 +527,16 @@ export function connectPage(opts: {
           'Paste into claude_desktop_config.json (Claude Desktop) or the Cursor equivalent:',
         ),
       )}</p>
-      <pre style="background:#111;padding:14px;border-radius:8px;overflow-x:auto;white-space:pre;font-size:13px">${esc(cfg)}</pre>
+      <div style="margin-top:12px"><button id="kcopy" class="btn" type="button" style="border:0;cursor:pointer;font:inherit">📋 ${esc(T('Copiar config', 'Copy config'))}</button></div>
+      <pre id="kcfg" style="background:#111;padding:14px;border-radius:8px;overflow-x:auto;white-space:pre;font-size:13px;margin-top:10px">${esc(cfg)}</pre>
       <p class="muted" style="margin-top:12px">${esc(
         T(
           'Depois reinicie o Claude Desktop/Cursor e pergunte: "o que ficou pendente essa semana?"',
           'Then restart Claude Desktop/Cursor and ask: "what is pending this week?"',
         ),
       )}</p>
-      <div class="downloads" style="margin-top:18px"><a class="btn" href="/conectar-ia">${esc(T('Voltar', 'Back'))}</a></div>`;
+      <div class="downloads" style="margin-top:18px"><a class="btn" href="/conectar-ia">${esc(T('Voltar', 'Back'))}</a></div>
+      <script>(function(){var b=document.getElementById('kcopy');if(!b)return;b.addEventListener('click',function(){var t=(document.getElementById('kcfg').textContent)||'';navigator.clipboard.writeText(t).then(function(){var o=b.textContent;b.textContent='${esc(T('Copiado ✓', 'Copied ✓'))}';setTimeout(function(){b.textContent=o;},2000);});});})();</script>`;
     return shell(title, body, { lang: opts.lang, user: opts.user, noindex: true });
   }
 

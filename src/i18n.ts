@@ -135,6 +135,10 @@ const STRINGS: Strings = {
     en: '⏹️ I was disconnected — recording stopped',
   },
   'event.stopped-reinicio': { pt: '⏹️ Encerrada por reinício do bot', en: '⏹️ Stopped due to bot restart' },
+  'event.stopped-disco-cheio': {
+    pt: '⏹️ Espaço em disco acabando — encerrei pra não corromper a gravação',
+    en: '⏹️ Disk almost full — I stopped to avoid corrupting the recording',
+  },
   'event.no-nickname': {
     pt: '⚠️ Sem permissão "Alterar apelido" — gravando sem o indicador [GRAVANDO]',
     en: '⚠️ Missing "Change Nickname" permission — recording without the [RECORDING] indicator',
