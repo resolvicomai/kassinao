@@ -36,8 +36,8 @@ const MSG = {
   },
   forbiddenTitle: { pt: 'Sem acesso', en: 'No access' },
   forbidden: {
-    pt: 'Esta gravação é restrita: só quem participou da call ou tem acesso ao canal de voz pode abri-la.',
-    en: 'This recording is restricted: only call participants or people with access to the voice channel can open it.',
+    pt: 'Esta gravação é restrita. Você abre se participou da call, se enxerga o canal de voz de origem, ou se administra o servidor — caso contrário, peça o acesso a quem iniciou.',
+    en: 'This recording is restricted. You can open it if you joined the call, can see the source voice channel, or manage the server — otherwise ask whoever started it for access.',
   },
   loginFailTitle: { pt: 'Falha no login', en: 'Login failed' },
   loginFail: {

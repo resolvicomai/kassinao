@@ -241,21 +241,23 @@ export class RecordingSession {
     if (!startedBy) return;
     const l = this.locale;
     const endedAt = this.meta.endedAt ?? Date.now();
+    const empty = this.meta.participants.length === 0;
+    const desc = empty
+      ? t(l, 'dm.desc-stop-empty', { channel: `#${this.voiceChannel.name}` })
+      : t(l, 'dm.desc-stop', {
+          channel: `#${this.voiceChannel.name}`,
+          duration: formatDuration(endedAt - this.startedAt),
+          url: this.pageUrl,
+          expires: `<t:${Math.floor((this.meta.expiresAt ?? endedAt) / 1000)}:D>`,
+        });
     // users.send funciona mesmo se a pessoa saiu do servidor (members.fetch não)
     this.guild.client.users
       .send(startedBy.id, {
         embeds: [
           new EmbedBuilder()
-            .setColor(0x57f287)
+            .setColor(empty ? 0x949ba4 : 0x57f287)
             .setTitle(t(l, 'dm.title-stop'))
-            .setDescription(
-              t(l, 'dm.desc-stop', {
-                channel: `#${this.voiceChannel.name}`,
-                duration: formatDuration(endedAt - this.startedAt),
-                url: this.pageUrl,
-                expires: `<t:${Math.floor((this.meta.expiresAt ?? endedAt) / 1000)}:D>`,
-              }),
-            )
+            .setDescription(desc)
             .setFooter({ text: t(l, 'panel.footer') }),
         ],
       })
@@ -471,7 +473,14 @@ export class RecordingSession {
 
     // saudação amigável em texto puro ACIMA do embed (sem @menção, não faz ping).
     // Deixa o time à vontade e explica o que está acontecendo — consentimento visível.
-    const content = t(l, isDone ? 'panel.greeting-done' : 'panel.greeting-recording');
+    // Gravação vazia (ninguém falou) não promete ata/transcrição.
+    const empty = this.meta.participants.length === 0;
+    const greetingKey = isDone
+      ? empty
+        ? 'panel.greeting-done-empty'
+        : 'panel.greeting-done'
+      : 'panel.greeting-recording';
+    const content = t(l, greetingKey);
     return { content, embeds: [embed], components: [row] };
   }
 

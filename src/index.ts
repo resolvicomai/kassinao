@@ -34,7 +34,6 @@ import { sessionManager } from './recorder/manager';
 import {
   formatDuration,
   formatOffset,
-  joinNames,
   MAX_NOTE_LENGTH,
   NOTE_BUTTON_ID,
   RecordingSession,
@@ -70,7 +69,7 @@ function localized<T extends { setNameLocalizations: any; setDescriptionLocaliza
 function buildCommands() {
   const gravar = new SlashCommandBuilder()
     .setName('gravar')
-    .setDescription('🔴 Grava o canal de voz — uma faixa separada e sincronizada por pessoa')
+    .setDescription('🔴 Grava a call — uma faixa por pessoa + transcrição e ata automáticas')
     .addChannelOption((o) => {
       o.setName('canal')
         .setDescription('Canal de voz a gravar (padrão: o canal onde você está)')
@@ -83,7 +82,7 @@ function buildCommands() {
       });
       return o;
     });
-  localized(gravar, 'record', '🔴 Record the voice channel — one separate synced track per speaker');
+  localized(gravar, 'record', '🔴 Record the call — per-person tracks + auto transcript & minutes');
 
   const parar = new SlashCommandBuilder().setName('parar').setDescription('⏹️ Para a gravação em andamento');
   localized(parar, 'stop', '⏹️ Stop the current recording');
@@ -411,13 +410,22 @@ async function handleParar(interaction: ChatInputCommandInteraction | ButtonInte
     await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
     return;
   }
-  await interaction.deferReply({ ephemeral: true });
   const member = interaction.member as GuildMember | null;
+  // Encerrar é destrutivo e irreversível — exige o mesmo acesso do /nota (ver o canal).
+  if (!canAnnotate(session, member)) {
+    await interaction.reply({
+      content: t(l, 'err.stop-no-access', { channel: `#${session.voiceChannel.name}` }),
+      ephemeral: true,
+    });
+    return;
+  }
+  await interaction.deferReply({ ephemeral: true });
+  const empty = session.participantNames.length === 0;
   await stopSession(session, 'manual', {
     id: interaction.user.id,
     name: member?.displayName ?? interaction.user.username,
   });
-  await interaction.editReply(t(l, 'record.stopped', { url: session.pageUrl }));
+  await interaction.editReply(t(l, empty ? 'record.stopped-empty' : 'record.stopped', { url: session.pageUrl }));
 }
 
 /**
@@ -569,21 +577,25 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
     await interaction.reply({ content: t(l, 'err.guild-only'), ephemeral: true });
     return;
   }
+  await interaction.deferReply({ ephemeral: true });
   const session = sessionManager.get(interaction.guild.id);
   if (!session) {
-    await interaction.reply({ content: t(l, 'status.none'), ephemeral: true });
+    await interaction.editReply(t(l, 'status.none'));
     return;
   }
-  const names = session.participantNames;
-  await interaction.reply({
-    content: t(l, 'status.recording', {
+  const inRoom = session.voiceChannel.members.filter((m) => !m.user.bot).size;
+  const starter = session.meta.startedBy?.name ?? t(l, 'recordings.by-auto');
+  await interaction.editReply(
+    t(l, 'status.recording', {
       channel: `#${session.voiceChannel.name}`,
       duration: formatDuration(session.durationMs),
-      speakers: names.length > 0 ? t(l, 'status.speakers', { names: joinNames(names, l) }) : t(l, 'status.no-speakers'),
+      inRoom,
+      spoke: session.participantNames.length,
+      notes: session.meta.notes.length,
+      starter,
       url: session.pageUrl,
     }),
-    ephemeral: true,
-  });
+  );
 }
 
 /**
@@ -608,19 +620,38 @@ async function handleGravacoes(interaction: ChatInputCommandInteraction): Promis
   }
   const member = interaction.member as GuildMember;
   // Filtra para SÓ as gravações que esta pessoa pode acessar (não vaza as outras).
-  const metas = listGuildMetas(interaction.guild.id, 100)
-    .filter((m) => memberCanAccessRecording(member, m, interaction.guild!))
-    .slice(0, 5);
-  if (metas.length === 0) {
+  const all = listGuildMetas(interaction.guild.id, 100).filter((m) =>
+    memberCanAccessRecording(member, m, interaction.guild!),
+  );
+  if (all.length === 0) {
     await interaction.reply({ content: t(l, 'recordings.none'), ephemeral: true });
     return;
   }
+  const metas = all.slice(0, 5);
   const lines = metas.map((m) => {
-    const live = m.status === 'recording' ? ` ${t(l, 'recordings.live')}` : '';
-    const duration = m.endedAt ? formatDuration(m.endedAt - m.startedAt) : '…';
-    return `• **#${m.voiceChannelName}** — <t:${Math.floor(m.startedAt / 1000)}:f> — ${duration}${live}\n  [${pageUrl(m.id)}](${pageUrl(m.id)})`;
+    const when = `<t:${Math.floor(m.startedAt / 1000)}:f>`;
+    const badge = recordingBadge(m, l);
+    const who = m.startedBy ? `👤 ${m.startedBy.name}` : `🤖 ${t(l, 'recordings.by-auto')}`;
+    const dur = m.endedAt ? formatDuration(m.endedAt - m.startedAt) : `🔴 ${t(l, 'recordings.live')}`;
+    const expires = m.expiresAt && m.status !== 'recording' ? ` • ⏳ <t:${Math.floor(m.expiresAt / 1000)}:R>` : '';
+    return `**#${m.voiceChannelName}** — ${when} • ${dur} • ${who} • 🎙️ ${m.participants.length} • ${badge}${expires}\n[${t(l, 'recordings.open')}](${pageUrl(m.id)})`;
   });
-  await interaction.reply({ content: `**${t(l, 'recordings.title')}**\n${lines.join('\n')}`, ephemeral: true });
+  let content = `**${t(l, 'recordings.title')}**\n${lines.join('\n')}`;
+  if (all.length > metas.length) content += `\n${t(l, 'recordings.more', { n: all.length - metas.length })}`;
+  await interaction.reply({ content, ephemeral: true });
+}
+
+/** Selo do estado de transcrição/ata pra lista de gravações. */
+function recordingBadge(m: RecordingMeta, l: Locale): string {
+  if (m.status === 'recording') return `🔴 ${t(l, 'recordings.live')}`;
+  if (m.minutes?.status === 'done') return t(l, 'recordings.badge-ready');
+  if (m.transcription?.status === 'error') return t(l, 'recordings.badge-failed');
+  const ts = m.transcription?.status;
+  const ms = m.minutes?.status;
+  if (ts === 'pending' || ts === 'running' || ms === 'pending' || ms === 'running')
+    return t(l, 'recordings.badge-processing');
+  if (ts === 'done') return t(l, 'recordings.badge-transcript');
+  return t(l, 'recordings.badge-none');
 }
 
 async function handleAutorecord(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -644,7 +675,11 @@ async function handleAutorecord(interaction: ChatInputCommandInteraction): Promi
     autoRecordStore.set(interaction.guild.id, { channelId: channel.id, minimum, createdBy: interaction.user.id });
     setArmed(interaction.guild.id, channel.id, true);
     await interaction.reply({
-      content: t(l, 'autorecord.enabled', { channel: `#${channel.name}`, min: minimum }),
+      content: t(l, 'autorecord.enabled', {
+        channel: `#${channel.name}`,
+        min: minimum,
+        hours: config.maxRecordingHours,
+      }),
       ephemeral: true,
     });
     // se o canal já está cheio, dispara
@@ -652,18 +687,37 @@ async function handleAutorecord(interaction: ChatInputCommandInteraction): Promi
   } else if (sub === 'desligar') {
     const channel = interaction.options.getChannel('canal', true);
     const removed = autoRecordStore.remove(interaction.guild.id, channel.id);
-    await interaction.reply({
-      content: t(l, removed ? 'autorecord.disabled' : 'autorecord.not-set', { channel: `#${channel.name}` }),
-      ephemeral: true,
-    });
+    // se havia uma gravação automática rolando NESTE canal, avisa que ela continua
+    const s = sessionManager.get(interaction.guild.id);
+    const liveHere = removed && s?.auto && s.currentChannelId === channel.id && s.meta.status === 'recording';
+    const key = liveHere ? 'autorecord.disabled-live' : removed ? 'autorecord.disabled' : 'autorecord.not-set';
+    await interaction.reply({ content: t(l, key, { channel: `#${channel.name}` }), ephemeral: true });
   } else {
     const rules = autoRecordStore.list(interaction.guild.id);
     if (rules.length === 0) {
       await interaction.reply({ content: t(l, 'autorecord.view-none'), ephemeral: true });
       return;
     }
-    const lines = rules.map((r) => t(l, 'autorecord.view-line', { channel: `<#${r.channelId}>`, min: r.minimum }));
-    await interaction.reply({ content: `**${t(l, 'autorecord.view-title')}**\n${lines.join('\n')}`, ephemeral: true });
+    const session = sessionManager.get(interaction.guild.id);
+    const lines = rules.map((r) => {
+      const recordingHere =
+        session?.auto && session.currentChannelId === r.channelId && session.meta.status === 'recording';
+      const state = recordingHere
+        ? t(l, 'autorecord.state-recording')
+        : isArmed(interaction.guild!.id, r.channelId)
+          ? t(l, 'autorecord.state-armed')
+          : t(l, 'autorecord.state-waiting');
+      return t(l, 'autorecord.view-line', {
+        state,
+        channel: `<#${r.channelId}>`,
+        min: r.minimum,
+        by: r.createdBy ? `<@${r.createdBy}>` : '—',
+      });
+    });
+    await interaction.reply({
+      content: `**${t(l, 'autorecord.view-title')}**\n${lines.join('\n')}\n${t(l, 'autorecord.view-hint')}`,
+      ephemeral: true,
+    });
   }
 }
 

@@ -62,7 +62,8 @@ interface TokenResponse {
 async function refreshTokens(): Promise<void> {
   if (!URL_BASE) throw new Error('Defina KASSINAO_URL (ex.: https://kassinao.suaempresa.com).');
   if (!refreshToken) {
-    throw new Error('Sem token. Gere um em <URL>/conectar-ia ou rode: kassinao-mcp exchange <codigo>.');
+    const base = URL_BASE || '<sua URL do Kassinão>';
+    throw new Error(`Sem token. Gere um em ${base}/conectar-ia ou rode: kassinao-mcp exchange <codigo>.`);
   }
   const r = await fetch(`${URL_BASE}/api/mcp/refresh`, {
     method: 'POST',
@@ -70,7 +71,8 @@ async function refreshTokens(): Promise<void> {
     body: JSON.stringify({ refresh_token: refreshToken }),
   });
   if (!r.ok) {
-    throw new Error(`Não consegui renovar o token (HTTP ${r.status}). Gere um novo em <URL>/conectar-ia.`);
+    const base = URL_BASE || '<sua URL do Kassinão>';
+    throw new Error(`Não consegui renovar o token (HTTP ${r.status}). Gere um novo em ${base}/conectar-ia.`);
   }
   const data = (await r.json()) as TokenResponse;
   refreshToken = data.refresh_token; // rotação: guarda o novo imediatamente

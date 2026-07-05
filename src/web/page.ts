@@ -197,6 +197,19 @@ window.kseek = function(ms){
   p.play().catch(function(){});
   p.scrollIntoView({behavior:'smooth', block:'center'});
 };
+// deep link do MCP/transcrição: #t=<segundos> pula pro momento ao abrir (e ao trocar o hash).
+// preload=none: se os metadados ainda não carregaram, espera loadedmetadata antes de buscar.
+function kseekFromHash(){
+  var m = /#t=(\\d+)/.exec(location.hash);
+  if (!m) return;
+  var p = document.getElementById('kplayer');
+  if (!p) return;
+  var secs = +m[1];
+  if (p.readyState >= 1) { window.kseek(secs*1000); }
+  else { p.addEventListener('loadedmetadata', function(){ window.kseek(secs*1000); }, {once:true}); try { p.load(); } catch(e){} }
+}
+kseekFromHash();
+window.addEventListener('hashchange', kseekFromHash);
 </script>`;
 
 /** Horário clicável que pula o player de áudio; `seekable=false` (ex.: demo) rende só o texto. */
@@ -455,11 +468,12 @@ function renderTranscription(
 
 export function messagePage(title: string, message: string, user?: WebUser, lang?: Locale): string {
   // Páginas de mensagem/erro (404/403/etc.) não devem ser indexadas.
-  return shell(title, `<h1>${esc(title)}</h1><p class="muted" style="margin-top:12px">${esc(message)}</p>`, {
-    user,
-    lang,
-    noindex: true,
-  });
+  // Link de saída pra não virar beco sem saída.
+  const back = lang === 'pt' ? '← Início' : '← Home';
+  const body =
+    `<h1>${esc(title)}</h1><p class="muted" style="margin-top:12px">${esc(message)}</p>` +
+    `<div class="downloads" style="margin-top:18px"><a class="btn" href="/">${back}</a></div>`;
+  return shell(title, body, { user, lang, noindex: true });
 }
 
 export function landingPage(lang: Locale): string {

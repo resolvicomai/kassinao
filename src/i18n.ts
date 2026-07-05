@@ -37,6 +37,10 @@ const STRINGS: Strings = {
     pt: 'Não há nenhuma gravação em andamento. Use `/gravar` para começar.',
     en: 'No recording in progress. Use `/record` to start one.',
   },
+  'err.stop-no-access': {
+    pt: '🔒 Só quem enxerga o canal **{channel}** (ou o admin) pode encerrar esta gravação.',
+    en: '🔒 Only people who can see **{channel}** (or an admin) can stop this recording.',
+  },
   'err.join-failed': {
     pt: '❌ Não consegui entrar no canal de voz: {reason}',
     en: '❌ I could not join the voice channel: {reason}',
@@ -56,6 +60,10 @@ const STRINGS: Strings = {
     pt: '⏹️ Encerrei! Em ~1 min a **ata** e a **transcrição** ficam prontas aqui 👉 {url}',
     en: '⏹️ Done! In ~1 min the **minutes** and **transcript** will be ready here 👉 {url}',
   },
+  'record.stopped-empty': {
+    pt: '⏹️ Encerrei, mas ninguém falou nessa — então não vou gerar transcrição nem ata. Se foi engano, é só gravar de novo. 🙂',
+    en: "⏹️ Stopped, but nobody spoke — so there's no transcript or minutes to generate. If that was a mistake, just record again. 🙂",
+  },
 
   // painel
   'panel.title-recording': { pt: '🔴 Gravando • {channel}', en: '🔴 Recording • {channel}' },
@@ -68,6 +76,10 @@ const STRINGS: Strings = {
   'panel.greeting-done': {
     pt: '✅ **Gravação encerrada!** Já tô preparando a transcrição e a ata — fica pronto em ~1 min. 🙌',
     en: "✅ **Recording finished!** I'm putting together the transcript and minutes now — ready in ~1 min. 🙌",
+  },
+  'panel.greeting-done-empty': {
+    pt: '⏹️ **Gravação encerrada.** Ninguém falou, então não há transcrição nem ata — só gravar de novo quando quiser. 🙂',
+    en: "⏹️ **Recording finished.** Nobody spoke, so there's no transcript or minutes — just record again anytime. 🙂",
   },
   'panel.by-user': { pt: 'a pedido de {user}', en: 'requested by {user}' },
   'panel.by-auto': { pt: 'automaticamente (auto-record)', en: 'automatically (auto-record)' },
@@ -98,6 +110,10 @@ const STRINGS: Strings = {
   'dm.desc-stop': {
     pt: 'Fechei a gravação de **{channel}** — durou **{duration}**. ✅\n\n📥 **[Abrir a gravação]({url})** — áudio, transcrição e ata em ~1 min.\n⏳ Disponível até {expires}.',
     en: 'I wrapped up the **{channel}** recording — it lasted **{duration}**. ✅\n\n📥 **[Open the recording]({url})** — audio, transcript and minutes in ~1 min.\n⏳ Available until {expires}.',
+  },
+  'dm.desc-stop-empty': {
+    pt: 'Fechei a gravação de **{channel}** — mas ninguém falou, então não gerei transcrição nem ata. Se foi engano, é só gravar de novo. 🙂',
+    en: "I wrapped up the **{channel}** recording — but nobody spoke, so I didn't generate a transcript or minutes. If that was a mistake, just record again. 🙂",
   },
 
   // notas
@@ -212,18 +228,30 @@ const STRINGS: Strings = {
   },
 
   // status
-  'status.none': { pt: '💤 Nenhuma gravação em andamento.', en: '💤 No recording in progress.' },
-  'status.recording': {
-    pt: '🔴 Gravando **{channel}** há **{duration}**.\n{speakers}\n📥 Página: {url}',
-    en: '🔴 Recording **{channel}** for **{duration}**.\n{speakers}\n📥 Page: {url}',
+  'status.none': {
+    pt: '💤 Nenhuma gravação rolando agora. Entre num canal de voz e use **/gravar** pra começar.',
+    en: '💤 No recording right now. Join a voice channel and use **/record** to start.',
   },
-  'status.speakers': { pt: 'Falaram até agora: {names}', en: 'Spoke so far: {names}' },
-  'status.no-speakers': { pt: 'Ninguém falou ainda.', en: 'Nobody spoke yet.' },
+  'status.recording': {
+    pt: '🔴 Gravando **{channel}** há **{duration}**\n👥 {inRoom} na sala · 🎙️ {spoke} já falaram · 📝 {notes} nota(s)\n▶️ Iniciada por **{starter}**\n📥 {url}',
+    en: '🔴 Recording **{channel}** for **{duration}**\n👥 {inRoom} in the room · 🎙️ {spoke} spoke · 📝 {notes} note(s)\n▶️ Started by **{starter}**\n📥 {url}',
+  },
 
   // /gravacoes
-  'recordings.none': { pt: 'Nenhuma gravação encontrada neste servidor.', en: 'No recordings found in this server.' },
-  'recordings.title': { pt: '🎙️ Últimas gravações deste servidor', en: '🎙️ Latest recordings in this server' },
-  'recordings.live': { pt: '(ao vivo)', en: '(live)' },
+  'recordings.none': {
+    pt: 'Você ainda não tem gravações por aqui. Entre num canal de voz e use **/gravar** pra criar a primeira. 🎙️',
+    en: 'You have no recordings here yet. Join a voice channel and use **/record** to create the first one. 🎙️',
+  },
+  'recordings.title': { pt: '🎙️ Gravações que você pode abrir', en: '🎙️ Recordings you can open' },
+  'recordings.live': { pt: 'gravando agora', en: 'recording now' },
+  'recordings.open': { pt: '📥 Abrir gravação', en: '📥 Open recording' },
+  'recordings.by-auto': { pt: 'auto-record', en: 'auto-record' },
+  'recordings.badge-ready': { pt: '📋 ata pronta', en: '📋 minutes ready' },
+  'recordings.badge-transcript': { pt: '📝 transcrição pronta', en: '📝 transcript ready' },
+  'recordings.badge-processing': { pt: '⏳ processando', en: '⏳ processing' },
+  'recordings.badge-failed': { pt: '⚠️ transcrição falhou', en: '⚠️ transcription failed' },
+  'recordings.badge-none': { pt: '🔇 sem transcrição', en: '🔇 no transcript' },
+  'recordings.more': { pt: '_… e mais {n} mais antiga(s)._', en: '_… and {n} older one(s)._' },
 
   // /autorecord
   'autorecord.no-permission': {
@@ -231,28 +259,42 @@ const STRINGS: Strings = {
     en: 'You need the **Manage Server** permission to configure auto-record.',
   },
   'autorecord.enabled': {
-    pt: '✅ Auto-record ligado em **{channel}**: começo a gravar quando **{min}+** pessoa(s) entrarem e paro quando esvaziar.',
-    en: '✅ Auto-record enabled in **{channel}**: I start recording when **{min}+** person(s) join and stop when it empties.',
+    pt: '✅ Auto-record ligado em **{channel}**: começo quando **{min}+** pessoa(s) entram e paro quando esvazia. Se passar de {hours}h, encerro e recomeço automaticamente pra cobrir o resto.',
+    en: '✅ Auto-record enabled in **{channel}**: I start when **{min}+** person(s) join and stop when it empties. Past {hours}h I stop and start again automatically to cover the rest.',
   },
   'autorecord.disabled': {
     pt: '🛑 Auto-record desligado em **{channel}**.',
     en: '🛑 Auto-record disabled in **{channel}**.',
+  },
+  'autorecord.disabled-live': {
+    pt: '🛑 Auto-record desligado em **{channel}**. A gravação em andamento continua até o canal esvaziar — use **/parar** pra encerrar agora.',
+    en: '🛑 Auto-record disabled in **{channel}**. The ongoing recording keeps going until the channel empties — use **/stop** to end it now.',
   },
   'autorecord.not-set': {
     pt: 'Não havia auto-record configurado em **{channel}**.',
     en: 'There was no auto-record configured in **{channel}**.',
   },
   'autorecord.view-none': {
-    pt: 'Nenhum auto-record configurado neste servidor.',
-    en: 'No auto-record configured in this server.',
+    pt: 'Nenhum auto-record ainda. Ligue com **/autorecord ligar canal:#seu-canal minimo:2** — eu passo a gravar sozinho quando o pessoal entrar. 🤖',
+    en: 'No auto-record yet. Turn it on with **/autorecord on channel:#your-channel minimum:2** — I record on my own when people join. 🤖',
   },
   'autorecord.view-title': { pt: '🤖 Auto-record deste servidor', en: '🤖 Auto-record in this server' },
-  'autorecord.view-line': { pt: '{channel} — mínimo de {min} pessoa(s)', en: '{channel} — minimum {min} person(s)' },
+  'autorecord.view-line': {
+    pt: '{state} {channel} — mín. **{min}** • ligado por {by}',
+    en: '{state} {channel} — min. **{min}** • set by {by}',
+  },
+  'autorecord.state-recording': { pt: '🔴', en: '🔴' },
+  'autorecord.state-armed': { pt: '✅', en: '✅' },
+  'autorecord.state-waiting': { pt: '💤', en: '💤' },
+  'autorecord.view-hint': {
+    pt: '_Desligar: **/autorecord desligar canal:#…**_',
+    en: '_Turn off: **/autorecord off channel:#…**_',
+  },
 
   // MCP (conector de IA)
   'mcp.web-only': {
-    pt: '🔌 Para conectar seu assistente de IA, abra {url} e entre com o Discord (é self-serve, com o seu acesso).',
-    en: '🔌 To connect your AI assistant, open {url} and sign in with Discord (self-serve, scoped to you).',
+    pt: 'O `/mcp novo` é só pra quem administra o bot. Pra você, o caminho é abrir {url}/conectar-ia e entrar com o Discord — self-serve, com o seu próprio acesso. 👉',
+    en: '`/mcp new` is only for bot admins. For you, just open {url}/conectar-ia and sign in with Discord — self-serve, scoped to your own access. 👉',
   },
   'mcp.new': {
     pt: '🔌 **Conectar assistente de IA** (código válido ~5 min, uso único). No terminal:\n```\nKASSINAO_URL={url} npx -y @kassinao/mcp exchange {code}\n```\nO comando salva o token e imprime a config pra colar no Claude Desktop/Cursor. Mais fácil ainda: abra {url}/conectar-ia no navegador.',
