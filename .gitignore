@@ -2,5 +2,6 @@ node_modules/
 dist/
 recordings/
 .env
+.npmrc
 *.log
 .DS_Store
