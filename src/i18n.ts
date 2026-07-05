@@ -155,6 +155,10 @@ const STRINGS: Strings = {
     pt: '⏹️ Espaço em disco acabando — encerrei pra não corromper a gravação',
     en: '⏹️ Disk almost full — I stopped to avoid corrupting the recording',
   },
+  'event.track-cap': {
+    pt: '⚠️ Limite de {max} faixas atingido — novos falantes não estão sendo gravados nesta sessão',
+    en: '⚠️ {max}-track limit reached — new speakers are not being recorded in this session',
+  },
   'event.no-nickname': {
     pt: '⚠️ Sem permissão "Alterar apelido" — gravando sem o indicador [GRAVANDO]',
     en: '⚠️ Missing "Change Nickname" permission — recording without the [RECORDING] indicator',

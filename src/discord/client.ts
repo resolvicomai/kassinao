@@ -11,4 +11,7 @@ import { Client, GatewayIntentBits, Partials } from 'discord.js';
 export const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.DirectMessages],
   partials: [Partials.Channel],
+  // Nunca dispara @everyone/@here/menção de role a partir de conteúdo (defesa contra
+  // regressão: um nome/apelido malicioso jamais vira ping em massa).
+  allowedMentions: { parse: [] },
 });

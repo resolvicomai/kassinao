@@ -102,7 +102,7 @@ export function getWebUser(req: Request): WebUser | undefined {
   // Checagens estritas: um cookie de state (mesmo segredo HMAC) NÃO pode passar
   // como sessão. Exige typ correto, exp numérico no futuro e id de verdade.
   if (!user || user.typ !== 'session') return undefined;
-  if (typeof user.exp !== 'number' || user.exp < Date.now()) return undefined;
+  if (!Number.isFinite(user.exp) || user.exp < Date.now()) return undefined; // NaN/Infinity não vira token eterno
   if (typeof user.id !== 'string' || !user.id) return undefined;
   return user;
 }
@@ -207,7 +207,7 @@ export function signMcpRefresh(payload: Omit<McpRefreshToken, 'typ'>): string {
 export function verifyMcpRefresh(token: string | undefined): McpRefreshToken | undefined {
   const t = verify<McpRefreshToken>(token, config.mcpRefreshSecret);
   if (!t || t.typ !== 'mcp-refresh') return undefined;
-  if (typeof t.exp !== 'number' || t.exp < Date.now()) return undefined;
+  if (!Number.isFinite(t.exp) || t.exp < Date.now()) return undefined; // NaN/Infinity não vira token eterno
   if (typeof t.id !== 'string' || !t.id) return undefined;
   if (typeof t.jti !== 'string' || !t.jti) return undefined;
   return t;
@@ -224,7 +224,7 @@ export function getMcpUser(req: Request): McpToken | undefined {
   if (!config.mcpEnabled) return undefined;
   const t = verify<McpToken>(bearerToken(req), config.mcpAccessSecret);
   if (!t || t.typ !== 'mcp') return undefined;
-  if (typeof t.exp !== 'number' || t.exp < Date.now()) return undefined;
+  if (!Number.isFinite(t.exp) || t.exp < Date.now()) return undefined; // NaN/Infinity não vira token eterno
   if (typeof t.id !== 'string' || !t.id) return undefined;
   if (typeof t.jti !== 'string' || !t.jti) return undefined;
   return t;

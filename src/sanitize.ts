@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { escapeMarkdown } from 'discord.js';
 
 /**
  * Neutralização de conteúdo controlado por TERCEIROS antes de ele entrar num
@@ -29,6 +30,17 @@ export function cleanText(s: string): string {
 /** Limpa campo INLINE (nome, autor, título): cleanText + colapsa espaço/quebra num só. */
 export function cleanInline(s: string): string {
   return cleanText(s).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Nome de terceiro (canal/pessoa/servidor) SEGURO pra exibir em mensagem/embed do
+ * Discord. cleanInline tira controle/ANSI/quebras; escapeMarkdown neutraliza * _ ~ ` | >;
+ * e escapamos [ ] ( ) pra matar "masked links" [texto](url), que renderizam como link
+ * clicável em embeds (vetor de phishing via apelido/nome de canal). Ex.: um apelido
+ * "[Baixe aqui](http://phish)" viraria link azul no painel oficial — safeName mata isso.
+ */
+export function safeName(s: string): string {
+  return escapeMarkdown(cleanInline(s)).replace(/[[\]()]/g, '\\$&');
 }
 
 /** Impede que a fala transcrita ABRA/FECHE um code fence no Markdown (quebra de contexto). */

@@ -21,11 +21,19 @@ const inflight = new Map<string, Promise<CookResult>>();
 // No máximo 2 cozimentos simultâneos no processo inteiro: re-encodar horas de
 // FLAC é caro, e sem teto um clique-frenesi na página derrubaria o VPS.
 const MAX_CONCURRENT_COOKS = 2;
+/** Teto de pedidos aguardando um slot — acima disso, recusa (503) em vez de empilhar handlers HTTP sem fim. */
+const MAX_COOK_WAITERS = 24;
 let activeCooks = 0;
 const cookWaiters: (() => void)[] = [];
 
+/** Lançado quando a fila de cook está cheia — o chamador deve responder 503. */
+export class CookBusyError extends Error {}
+
 async function acquireCookSlot(): Promise<void> {
   if (activeCooks >= MAX_CONCURRENT_COOKS) {
+    if (cookWaiters.length >= MAX_COOK_WAITERS) {
+      throw new CookBusyError('fila de processamento cheia — tente de novo em instantes');
+    }
     await new Promise<void>((resolve) => cookWaiters.push(resolve));
   }
   activeCooks++;

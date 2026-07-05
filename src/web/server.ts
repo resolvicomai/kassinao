@@ -5,7 +5,7 @@ import { config } from '../config';
 import { freeMB } from '../disk';
 import { isClientReady } from '../discord/ready';
 import { Locale } from '../i18n';
-import { cook, CookFormat, COOK_FORMATS } from '../processing/cook';
+import { cook, CookBusyError, CookFormat, COOK_FORMATS } from '../processing/cook';
 import { isTranscribing, transcriptToMarkdown } from '../processing/transcribe';
 import { minutesToMarkdown } from '../processing/minutes';
 import { sessionManager } from '../recorder/manager';
@@ -171,7 +171,10 @@ export function startWebServer(): void {
       const s = createSession(user.id, user.name);
       const refreshToken = signMcpRefresh({ id: user.id, name: user.name, exp: s.exp, jti: s.sid, gen: s.gen });
       console.log(`MCP: sessão ${s.sid} criada para ${user.name} (${user.id}) via web.`);
-      res.type('html').send(connectPage({ lang: l, user, refreshToken }));
+      res
+        .set('Cache-Control', 'no-store')
+        .type('html')
+        .send(connectPage({ lang: l, user, refreshToken }));
     });
 
     app.post('/conectar-ia/revogar', (req, res) => {
@@ -332,6 +335,10 @@ export function startWebServer(): void {
       });
     } catch (err) {
       endDownload(meta.id);
+      if (err instanceof CookBusyError) {
+        res.status(503).set('Retry-After', '20').send('processando muitas gravações agora — tente em instantes');
+        return;
+      }
       console.error(`Erro servindo áudio ${meta.id}:`, err);
       res.status(500).send('erro ao preparar o áudio');
     }
@@ -346,20 +353,28 @@ export function startWebServer(): void {
     }
     if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
-    const minutes = meta && meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
-    if (!meta || !minutes) {
+    if (!meta) {
       res
         .status(404)
         .type('html')
         .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
+    // checkAccess ANTES de olhar o estado da ata — senão vaza a terceiros se a ata já ficou pronta
     const access = await checkAccess(user, meta);
     if (!access.view) {
       res
         .status(403)
         .type('html')
         .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      return;
+    }
+    const minutes = meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
+    if (!minutes) {
+      res
+        .status(404)
+        .type('html')
+        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
     res
@@ -377,19 +392,27 @@ export function startWebServer(): void {
     }
     if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
-    if (!meta || meta.transcription?.status !== 'done') {
+    if (!meta) {
       res
         .status(404)
         .type('html')
         .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
+    // checkAccess ANTES do estado da transcrição — não vaza a terceiros se já ficou pronta
     const access = await checkAccess(user, meta);
     if (!access.view) {
       res
         .status(403)
         .type('html')
         .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      return;
+    }
+    if (meta.transcription?.status !== 'done') {
+      res
+        .status(404)
+        .type('html')
+        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
     const markdown = transcriptToMarkdown(meta, readTranscript(meta.id) ?? []);
@@ -429,6 +452,13 @@ export function startWebServer(): void {
         .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
       return;
     }
+    // ao vivo: cada formato cozinharia um snapshot completo dos masters (sem dedupe
+    // entre formatos), enchendo o disco. Bloqueia igual à rota /audio até encerrar.
+    const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
+    if (live) {
+      res.status(409).send('gravação em andamento — baixe depois de encerrar');
+      return;
+    }
     // marca ANTES do cook: o processamento (minutos, em gravações longas) já
     // conta como download em andamento, então delete/cleanup não apagam no meio
     beginDownload(meta.id);
@@ -437,6 +467,14 @@ export function startWebServer(): void {
       res.download(result.filePath, result.fileName, () => endDownload(meta.id));
     } catch (err) {
       endDownload(meta.id);
+      if (err instanceof CookBusyError) {
+        res
+          .status(503)
+          .set('Retry-After', '20')
+          .type('html')
+          .send(messagePage(MSG.cookErrorTitle[l], MSG.cookError[l], user, l));
+        return;
+      }
       console.error(`Erro processando download ${meta.id}/${format}:`, err);
       res
         .status(500)

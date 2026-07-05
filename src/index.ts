@@ -46,6 +46,7 @@ import {
   killPendingTranscriptions,
   validateTranscriptionConfig,
 } from './processing/transcribe';
+import { safeName } from './sanitize';
 import { listGuildMetas, listMetas, pageUrl, RecordingMeta, recoverInterruptedRecordings } from './store';
 import { forgetMember } from './web/access';
 import { createExchangeCode, revokeUser } from './web/mcpTokens';
@@ -584,10 +585,10 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
     return;
   }
   const inRoom = session.voiceChannel.members.filter((m) => !m.user.bot).size;
-  const starter = session.meta.startedBy?.name ?? t(l, 'recordings.by-auto');
+  const starter = session.meta.startedBy ? safeName(session.meta.startedBy.name) : t(l, 'recordings.by-auto');
   await interaction.editReply(
     t(l, 'status.recording', {
-      channel: `#${session.voiceChannel.name}`,
+      channel: `#${safeName(session.voiceChannel.name)}`,
       duration: formatDuration(session.durationMs),
       inRoom,
       spoke: session.participantNames.length,
@@ -631,10 +632,10 @@ async function handleGravacoes(interaction: ChatInputCommandInteraction): Promis
   const lines = metas.map((m) => {
     const when = `<t:${Math.floor(m.startedAt / 1000)}:f>`;
     const badge = recordingBadge(m, l);
-    const who = m.startedBy ? `👤 ${m.startedBy.name}` : `🤖 ${t(l, 'recordings.by-auto')}`;
+    const who = m.startedBy ? `👤 ${safeName(m.startedBy.name)}` : `🤖 ${t(l, 'recordings.by-auto')}`;
     const dur = m.endedAt ? formatDuration(m.endedAt - m.startedAt) : `🔴 ${t(l, 'recordings.live')}`;
     const expires = m.expiresAt && m.status !== 'recording' ? ` • ⏳ <t:${Math.floor(m.expiresAt / 1000)}:R>` : '';
-    return `**#${m.voiceChannelName}** — ${when} • ${dur} • ${who} • 🎙️ ${m.participants.length} • ${badge}${expires}\n[${t(l, 'recordings.open')}](${pageUrl(m.id)})`;
+    return `**#${safeName(m.voiceChannelName)}** — ${when} • ${dur} • ${who} • 🎙️ ${m.participants.length} • ${badge}${expires}\n[${t(l, 'recordings.open')}](${pageUrl(m.id)})`;
   });
   let content = `**${t(l, 'recordings.title')}**\n${lines.join('\n')}`;
   if (all.length > metas.length) content += `\n${t(l, 'recordings.more', { n: all.length - metas.length })}`;

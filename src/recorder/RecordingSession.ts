@@ -23,6 +23,7 @@ import { config } from '../config';
 import { freeMB } from '../disk';
 import { Locale, t } from '../i18n';
 import { alertOwners } from '../monitor';
+import { safeName } from '../sanitize';
 import { pageUrl, RecordingMeta, saveMeta, tracksDir } from '../store';
 import { safeSlice } from '../util';
 import { UserTrack } from './UserTrack';
@@ -36,6 +37,8 @@ export const MAX_NOTE_LENGTH = 500;
 const SILENCE_WARN_MS = 5 * 60 * 1000;
 const PANEL_EDIT_MIN_INTERVAL_MS = 2500;
 const MAX_PANEL_EVENTS = 10;
+/** Teto de faixas simultâneas (1 ffmpeg por falante) — protege CPU/processos num VPS pequeno. */
+const MAX_TRACKS = 25;
 
 export class RecordingSession {
   readonly id: string;
@@ -59,6 +62,7 @@ export class RecordingSession {
   private silenceTimer?: NodeJS.Timeout;
   private lastAudioAt: number;
   private silenceWarned = false;
+  private trackCapWarned = false;
 
   private panelMessage?: Message;
   private panelLastEditAt = 0;
@@ -96,7 +100,7 @@ export class RecordingSession {
     };
     this.addEvent(
       opts.startedBy
-        ? t(this.locale, 'event.started', { name: opts.startedBy.name })
+        ? t(this.locale, 'event.started', { name: safeName(opts.startedBy.name) })
         : t(this.locale, 'event.started-auto'),
     );
     saveMeta(this.meta);
@@ -221,8 +225,8 @@ export class RecordingSession {
             .setTitle(t(l, 'dm.title-start'))
             .setDescription(
               t(l, 'dm.desc-start', {
-                channel: `#${this.voiceChannel.name}`,
-                guild: this.guild.name,
+                channel: `#${safeName(this.voiceChannel.name)}`,
+                guild: safeName(this.guild.name),
                 url: this.pageUrl,
                 hours: config.maxRecordingHours,
                 expiresDays: config.retentionDays,
@@ -243,9 +247,9 @@ export class RecordingSession {
     const endedAt = this.meta.endedAt ?? Date.now();
     const empty = this.meta.participants.length === 0;
     const desc = empty
-      ? t(l, 'dm.desc-stop-empty', { channel: `#${this.voiceChannel.name}` })
+      ? t(l, 'dm.desc-stop-empty', { channel: `#${safeName(this.voiceChannel.name)}` })
       : t(l, 'dm.desc-stop', {
-          channel: `#${this.voiceChannel.name}`,
+          channel: `#${safeName(this.voiceChannel.name)}`,
           duration: formatDuration(endedAt - this.startedAt),
           url: this.pageUrl,
           expires: `<t:${Math.floor((this.meta.expiresAt ?? endedAt) / 1000)}:D>`,
@@ -276,7 +280,7 @@ export class RecordingSession {
     const cleanAuthor = author.replace(/[\r\n\t]+/g, ' ').slice(0, 80);
     const at = atMs ?? Date.now() - this.startedAt;
     this.meta.notes.push({ atMs: at, author: cleanAuthor, text: clean });
-    this.addEvent(`📝 ${cleanAuthor}: ${safeSlice(clean, 120)}`);
+    this.addEvent(`📝 ${safeName(cleanAuthor)}: ${safeName(safeSlice(clean, 120))}`);
     saveMeta(this.meta);
     this.schedulePanelUpdate();
     return true;
@@ -286,6 +290,19 @@ export class RecordingSession {
 
   private onSpeakingStart(userId: string): void {
     if (this.stopping) return;
+
+    // Teto de faixas: cada falante = 1 ffmpeg contínuo. Num VPS pequeno, uma sala
+    // gigante esgotaria CPU/processos. Novos falantes além do teto não são gravados
+    // (os já em gravação continuam) — avisa uma vez no painel.
+    if (!this.tracks.has(userId) && this.tracks.size >= MAX_TRACKS) {
+      if (!this.trackCapWarned) {
+        this.trackCapWarned = true;
+        this.addEvent(t(this.locale, 'event.track-cap', { max: MAX_TRACKS }));
+        saveMeta(this.meta);
+        this.schedulePanelUpdate();
+      }
+      return;
+    }
 
     // Realinha a faixa a CADA "começou a falar" — o Discord re-emite o evento
     // após pausas curtas (>=100ms) dentro da mesma subscription, sem enviar
@@ -347,13 +364,13 @@ export class RecordingSession {
         if (this.stopping) return;
         participant.name = member.displayName;
         participant.avatar = member.displayAvatarURL({ size: 128, extension: 'png' });
-        this.addEvent(t(this.locale, 'event.joined', { name: member.displayName }));
+        this.addEvent(t(this.locale, 'event.joined', { name: safeName(member.displayName) }));
         saveMeta(this.meta);
         this.schedulePanelUpdate();
       })
       .catch(() => {
         if (this.stopping) return;
-        this.addEvent(t(this.locale, 'event.joined', { name: participant.name }));
+        this.addEvent(t(this.locale, 'event.joined', { name: safeName(participant.name) }));
         saveMeta(this.meta);
         this.schedulePanelUpdate();
       });
@@ -409,7 +426,11 @@ export class RecordingSession {
     const isDone = this.meta.status === 'done';
     const embed = new EmbedBuilder()
       .setColor(isDone ? 0x57f287 : 0xed4245)
-      .setTitle(t(l, isDone ? 'panel.title-done' : 'panel.title-recording', { channel: `#${this.voiceChannel.name}` }))
+      .setTitle(
+        t(l, isDone ? 'panel.title-done' : 'panel.title-recording', {
+          channel: `#${safeName(this.voiceChannel.name)}`,
+        }),
+      )
       .setFooter({ text: t(l, 'panel.footer') });
 
     if (isDone) {
@@ -540,7 +561,7 @@ export class RecordingSession {
     const eventKey = `event.stopped-${reason}` as const;
     this.addEvent(
       reason === 'manual'
-        ? t(this.locale, 'event.stopped-manual', { name: stoppedBy?.name ?? '?' })
+        ? t(this.locale, 'event.stopped-manual', { name: safeName(stoppedBy?.name ?? '?') })
         : t(this.locale, eventKey, { hours: config.maxRecordingHours }),
     );
     saveMeta(this.meta);
@@ -574,7 +595,8 @@ function StopTrack(endedAt: number) {
 
 /** Junta nomes com limite — calls grandes não estouram os limites de tamanho do Discord. */
 export function joinNames(names: string[], locale: Locale, max = 12): string {
-  const shown = names.slice(0, max).map((n) => `**${n}**`);
+  // safeName escapa markdown/masked-link — o nome é de terceiro (apelido no Discord)
+  const shown = names.slice(0, max).map((n) => `**${safeName(n)}**`);
   const rest = names.length - max;
   if (rest > 0) shown.push(locale === 'pt' ? `e mais ${rest}` : `and ${rest} more`);
   return shown.join(', ');
@@ -605,7 +627,7 @@ export function sanitizeFilename(name: string): string {
     name
       .normalize('NFKD')
       .replace(/[̀-ͯ]/g, '')
-      .replace(/[^a-zA-Z0-9-_]+/g, '_')
+      .replace(/[^a-zA-Z0-9_-]+/g, '_')
       .replace(/^_+|_+$/g, '')
       .slice(0, 40) || 'participante'
   );

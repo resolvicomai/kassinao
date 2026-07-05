@@ -67,9 +67,9 @@ function rateLimited(key: string, max: number, windowMs: number): boolean {
 }
 
 function clientIp(req: Request): string {
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff) return xff.split(',')[0].trim();
-  return req.socket.remoteAddress ?? 'unknown';
+  // NUNCA ler X-Forwarded-For[0] (o cliente forja e rotaciona, furando o rate-limit).
+  // Com `trust proxy=1` (definido no server), req.ip é o hop confiável atrás do Cloudflare.
+  return req.ip ?? 'unknown';
 }
 
 // ---------- helpers de query ----------
@@ -319,7 +319,7 @@ export function mountMcpApi(app: Express): void {
       res.status(400).json({ error: 'invalid_code' });
       return;
     }
-    res.json(issueTokens(claimed.userId, claimed.name));
+    res.set('Cache-Control', 'no-store').json(issueTokens(claimed.userId, claimed.name));
   });
 
   api.post('/mcp/refresh', (req, res) => {
@@ -339,7 +339,7 @@ export function mountMcpApi(app: Express): void {
       res.status(401).json({ error: 'unauthorized' });
       return;
     }
-    res.json(signPair(rot.userId, rot.name, parsed.jti, rot.gen, rot.exp));
+    res.set('Cache-Control', 'no-store').json(signPair(rot.userId, rot.name, parsed.jti, rot.gen, rot.exp));
   });
 
   // ----- rotas autenticadas de dados -----
