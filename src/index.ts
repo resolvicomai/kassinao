@@ -871,10 +871,13 @@ client.on(Events.MessageCreate, async (message) => {
   // DM não expõe o locale do usuário → inglês por padrão (coerente com o resto do
   // app e com o README "bilingual"); dentro dos servidores cada um vê no seu idioma.
   const l: Locale = 'en';
+  console.log(`DM recebida de ${message.author.id} — respondendo o guia.`);
   try {
+    // o canal de DM pode chegar PARCIAL (Partials.Channel) — completa antes de enviar
+    if (message.channel.partial) await message.channel.fetch();
     await message.channel.send({ content: t(l, 'help.dm-hint'), ...buildHelpPayload(l) });
-  } catch {
-    // DM bloqueada ou sem permissão — ignora
+  } catch (err) {
+    console.error(`Falha ao responder DM de ${message.author.id}:`, err);
   }
 });
 
