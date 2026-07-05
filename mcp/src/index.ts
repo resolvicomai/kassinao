@@ -240,7 +240,7 @@ async function runExchange(code: string): Promise<void> {
   saveStore({ url: URL_BASE, refreshToken: data.refresh_token });
   // O token de refresh já ficou salvo em disco (0600) — a config NÃO precisa dele.
   const cfg = JSON.stringify(
-    { mcpServers: { kassinao: { command: 'npx', args: ['-y', '@kassinao/mcp'], env: { KASSINAO_URL: URL_BASE } } } },
+    { mcpServers: { kassinao: { command: 'npx', args: ['-y', 'kassinao-mcp'], env: { KASSINAO_URL: URL_BASE } } } },
     null,
     2,
   );

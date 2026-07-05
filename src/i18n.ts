@@ -301,8 +301,8 @@ const STRINGS: Strings = {
     en: '`/mcp new` is only for bot admins. For you, just open {url}/conectar-ia and sign in with Discord — self-serve, scoped to your own access. 👉',
   },
   'mcp.new': {
-    pt: '🔌 **Conectar assistente de IA** (código válido ~5 min, uso único). No terminal:\n```\nKASSINAO_URL={url} npx -y @kassinao/mcp exchange {code}\n```\nO comando salva o token e imprime a config pra colar no Claude Desktop/Cursor. Mais fácil ainda: abra {url}/conectar-ia no navegador.',
-    en: '🔌 **Connect your AI assistant** (code valid ~5 min, single use). In a terminal:\n```\nKASSINAO_URL={url} npx -y @kassinao/mcp exchange {code}\n```\nIt saves the token and prints the config to paste into Claude Desktop/Cursor. Even easier: open {url}/conectar-ia in the browser.',
+    pt: '🔌 **Conectar assistente de IA** (código válido ~5 min, uso único). No terminal:\n```\nKASSINAO_URL={url} npx -y kassinao-mcp exchange {code}\n```\nO comando salva o token e imprime a config pra colar no Claude Desktop/Cursor. Mais fácil ainda: abra {url}/conectar-ia no navegador.',
+    en: '🔌 **Connect your AI assistant** (code valid ~5 min, single use). In a terminal:\n```\nKASSINAO_URL={url} npx -y kassinao-mcp exchange {code}\n```\nIt saves the token and prints the config to paste into Claude Desktop/Cursor. Even easier: open {url}/conectar-ia in the browser.',
   },
   'mcp.revoked': {
     pt: '🔒 Pronto — revoguei {n} conector(es) de IA seu(s). Os tokens deixaram de funcionar na hora.',

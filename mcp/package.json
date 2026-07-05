@@ -1,5 +1,5 @@
 {
-  "name": "@kassinao/mcp",
+  "name": "kassinao-mcp",
   "version": "1.0.0",
   "description": "MCP connector for Kassinão — ask your Discord meeting recordings (transcripts, minutes, action items) from Claude Desktop, Cursor and other MCP clients.",
   "type": "module",

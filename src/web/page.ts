@@ -534,7 +534,7 @@ export function connectPage(opts: {
         mcpServers: {
           kassinao: {
             command: 'npx',
-            args: ['-y', '@kassinao/mcp'],
+            args: ['-y', 'kassinao-mcp'],
             env: { KASSINAO_URL: config.baseUrl, KASSINAO_REFRESH_TOKEN: opts.refreshToken },
           },
         },
@@ -568,8 +568,8 @@ export function connectPage(opts: {
       <pre id="kcfg" style="background:#111;padding:14px;border-radius:8px;overflow-x:auto;white-space:pre;font-size:13px;margin-top:10px">${esc(cfg)}</pre>
       <p class="muted" style="margin-top:8px">${esc(
         T(
-          'Já usa outros MCP servers? Cole só o bloco "kassinao" dentro do seu "mcpServers" — não substitua o arquivo inteiro. Requer o conector instalado (Node 20+): "npx -y @kassinao/mcp" quando publicado, ou do código-fonte (veja o repo).',
-          'Already have other MCP servers? Paste only the "kassinao" block inside your existing "mcpServers" — do not replace the whole file. Requires the connector (Node 20+): "npx -y @kassinao/mcp" once published, or from source (see the repo).',
+          'Já usa outros MCP servers? Cole só o bloco "kassinao" dentro do seu "mcpServers" — não substitua o arquivo inteiro. Requer o conector instalado (Node 20+): "npx -y kassinao-mcp", ou do código-fonte (veja o repo).',
+          'Already have other MCP servers? Paste only the "kassinao" block inside your existing "mcpServers" — do not replace the whole file. Requires the connector (Node 20+): "npx -y kassinao-mcp", or from source (see the repo).',
         ),
       )}</p>
       <p class="muted" style="margin-top:12px">${esc(

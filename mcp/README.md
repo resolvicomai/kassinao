@@ -1,4 +1,4 @@
-# @kassinao/mcp
+# kassinao-mcp
 
 Conector **MCP** do [Kassinão](https://github.com/resolvicomai/kassinao): faz o seu assistente de IA (Claude Desktop, Cursor, etc.) responder perguntas sobre as reuniões que o bot gravou — **"o que ficou pendente essa semana?"**, **"quem falou de orçamento na terça?"**, **"lista as calls entre 1 e 30 de junho"** — em linguagem natural.
 
@@ -12,7 +12,7 @@ O conector roda **na sua máquina** e é um cliente HTTP **magro**: ele **não**
 
 - **O admin do bot precisa ter ligado o MCP** (variável `MCP_SECRET` no servidor). Sem isso, `/conectar-ia` e `/mcp` não existem (dá 404 / comando ausente).
 - **Node.js 20+** na sua máquina.
-- **O conector instalado.** Quando publicado no npm, `npx -y @kassinao/mcp` resolve sozinho. Enquanto não está publicado, instale do código-fonte: `git clone` o repo, `cd mcp && npm install && npm run build`; na config, troque `"command": "npx"` / `"args": ["-y","@kassinao/mcp"]` por `"command": "node"`, `"args": ["/caminho/absoluto/do/repo/mcp/dist/index.js"]`.
+- **O conector.** `npx -y kassinao-mcp` baixa e roda sozinho — você não precisa instalar nada à mão (só ter o Node). Prefere rodar do código-fonte? `git clone` o repo, `cd mcp && npm install && npm run build`; na config, troque `"command": "npx"` / `"args": ["-y","kassinao-mcp"]` por `"command": "node"`, `"args": ["/caminho/absoluto/do/repo/mcp/dist/index.js"]`.
 
 ## Instalação
 
@@ -27,7 +27,7 @@ O conector roda **na sua máquina** e é um cliente HTTP **magro**: ele **não**
   "mcpServers": {
     "kassinao": {
       "command": "npx",
-      "args": ["-y", "@kassinao/mcp"],
+      "args": ["-y", "kassinao-mcp"],
       "env": {
         "KASSINAO_URL": "https://SEU-KASSINAO",
         "KASSINAO_REFRESH_TOKEN": "COLE_O_TOKEN_AQUI"
@@ -44,7 +44,7 @@ O conector roda **na sua máquina** e é um cliente HTTP **magro**: ele **não**
 No Discord, o dono roda **`/mcp novo`** (em clientes em inglês aparece como **`/mcp new`**) — resposta efêmera, código de uso único válido por ~5 min. Depois:
 
 ```bash
-KASSINAO_URL=https://SEU-KASSINAO npx -y @kassinao/mcp exchange <codigo>
+KASSINAO_URL=https://SEU-KASSINAO npx -y kassinao-mcp exchange <codigo>
 ```
 
 Isso guarda o token localmente. Configure o cliente MCP igual à Opção A (o `KASSINAO_REFRESH_TOKEN` no env vira opcional depois do primeiro uso).
