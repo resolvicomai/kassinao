@@ -159,6 +159,15 @@ const SHELL_CSS = `
   .note { background: #232428; border-left: 3px solid #f0b232; padding: 10px 14px; border-radius: 6px;
           font-size: 14px; margin-top: 14px; }
   footer { margin-top: 26px; font-size: 13px; color: #949ba4; }
+  /* nada de imagem/palavra longa forçando scroll horizontal no celular */
+  img { max-width: 100%; height: auto; }
+  .transcript p, .minutes, .note, .muted, .events li, h1 { overflow-wrap: anywhere; }
+  @media (max-width: 480px) {
+    body { padding: 20px 10px; }
+    .card { padding: 18px; }
+    h1 { font-size: 19px; }
+    .downloads a.btn { flex: 1 1 auto; text-align: center; }
+  }
 `;
 
 /**
