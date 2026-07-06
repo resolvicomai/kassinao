@@ -12,6 +12,7 @@ import {
   readMinutes,
   readTranscript,
   RecordingMeta,
+  transcriptReady,
   TranscriptSegment,
 } from '../store';
 import { checkAccessForMcp, TransientAccessError } from './access';
@@ -107,7 +108,9 @@ function meetingSummary(m: RecordingMeta): Record<string, unknown> {
     participantCount: m.participants.length,
     startedByName: m.startedBy ? cleanInline(m.startedBy.name) : null,
     status: m.status,
-    hasTranscript: m.transcription?.status === 'done',
+    hasTranscript: transcriptReady(m),
+    /** 'partial' = faltam faixas (o cliente deve tratar o transcript como incompleto). */
+    transcriptStatus: m.transcription?.status ?? 'none',
     hasMinutes: m.minutes?.status === 'done',
     noteCount: m.notes.length,
   };
@@ -391,7 +394,7 @@ export function mountMcpApi(app: Express): void {
         const min = readMinutes(meta.id);
         if (min) body.minutes = cleanMinutes(min);
       }
-      if (include.has('transcript') && meta.transcription?.status === 'done') {
+      if (include.has('transcript') && transcriptReady(meta)) {
         const segs = readTranscript(meta.id) ?? [];
         const limit = qint(req, 'transcriptLimit', 500, 5000);
         body.transcript = cleanSegments(meta.id, segs.slice(0, limit));
@@ -419,11 +422,15 @@ export function mountMcpApi(app: Express): void {
         res.status(404).json({ error: 'not_found' });
         return;
       }
-      if (meta.transcription?.status !== 'done') {
+      if (!transcriptReady(meta)) {
         res.json({ id: meta.id, status: meta.transcription?.status ?? 'none', segments: [] });
         return;
       }
-      res.json({ id: meta.id, status: 'done', segments: cleanSegments(meta.id, readTranscript(meta.id) ?? []) });
+      res.json({
+        id: meta.id,
+        status: meta.transcription?.status ?? 'done',
+        segments: cleanSegments(meta.id, readTranscript(meta.id) ?? []),
+      });
     }),
   );
 
@@ -470,7 +477,7 @@ export function mountMcpApi(app: Express): void {
         return;
       }
       if (format === 'transcricao.md' || format === 'transcricao.txt') {
-        if (meta.transcription?.status !== 'done') {
+        if (!transcriptReady(meta)) {
           res.status(404).json({ error: 'no_transcript' });
           return;
         }
@@ -565,7 +572,7 @@ export function mountMcpApi(app: Express): void {
           const min = readMinutes(m.id);
           if (min) collectMinutesHits(min, terms, mode, hits);
         }
-        if (scope.has('transcript') && m.transcription?.status === 'done') {
+        if (scope.has('transcript') && transcriptReady(m)) {
           for (const s of readTranscript(m.id) ?? []) {
             if (matchIn(s.text, terms, mode) > 0) {
               const idx = s.text.toLowerCase().indexOf(terms[0]);
@@ -618,7 +625,7 @@ export function mountMcpApi(app: Express): void {
 
       const out: Record<string, unknown>[] = [];
       for (const m of metas) {
-        if (m.transcription?.status !== 'done') continue;
+        if (!transcriptReady(m)) continue;
         const segs = readTranscript(m.id) ?? [];
         for (let i = 0; i < segs.length; i++) {
           const s = segs[i];

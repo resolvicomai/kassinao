@@ -48,6 +48,18 @@ function deriveSecret(secret: string, label: string): string {
 // todos os tokens de uma vez, então ele tem que ser deliberado e estável.
 const mcpSecret = process.env.MCP_SECRET || '';
 
+// Provider da ata, normalizado UMA vez (o default do modelo depende dele).
+const minutesProvider = (process.env.MINUTES_PROVIDER || (process.env.OPENROUTER_API_KEY ? 'openrouter' : 'groq'))
+  .trim()
+  .toLowerCase();
+
+// Prompt de contexto do Whisper: o default em pt-BR só vale quando o idioma é pt
+// (um deploy em inglês não pode receber viés de português).
+const transcribeLanguage = process.env.TRANSCRIBE_LANGUAGE || 'pt';
+const defaultTranscribePrompt = transcribeLanguage.startsWith('pt')
+  ? 'Transcrição de uma reunião de trabalho informal em português do Brasil.'
+  : '';
+
 export const config = {
   token: required('DISCORD_TOKEN'),
   applicationId: required('APPLICATION_ID'),
@@ -71,28 +83,38 @@ export const config = {
   defaultLocale: ((process.env.DEFAULT_LOCALE || '').toLowerCase().startsWith('pt') ? 'pt' : 'en') as 'pt' | 'en',
 
   /**
-   * Motor de transcrição: 'none' | 'openai' | 'groq' | 'gemini' | 'command'.
+   * Motor de transcrição: 'none' | 'assemblyai' | 'openai' | 'groq' | 'gemini' | 'command'.
+   * 'assemblyai' (Universal, top-3 em pt-BR) cai sozinho pro Groq se falhar e houver GROQ_API_KEY.
    * 'command' roda um executável local (faster-whisper, whisper.cpp, Parakeet...)
    * definido em TRANSCRIBE_COMMAND com os placeholders {input} e {output}.
    */
   transcribeProvider: (process.env.TRANSCRIBE_PROVIDER || 'none').toLowerCase(),
   transcribeModel: process.env.TRANSCRIBE_MODEL || '',
-  transcribeLanguage: process.env.TRANSCRIBE_LANGUAGE || 'pt',
+  transcribeLanguage,
+  /** Prompt de contexto pro Whisper (vocabulário/estilo) — reduz alucinação e melhora jargão. */
+  transcribePrompt: process.env.TRANSCRIBE_PROMPT ?? defaultTranscribePrompt,
   transcribeCommand: process.env.TRANSCRIBE_COMMAND || '',
   /** Timeout do provider 'command' = max(10min, duração do chunk × este fator). */
   transcribeTimeoutFactor: Number(process.env.TRANSCRIBE_TIMEOUT_FACTOR || 5),
   openaiApiKey: process.env.OPENAI_API_KEY || '',
   groqApiKey: process.env.GROQ_API_KEY || '',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
+  assemblyaiApiKey: process.env.ASSEMBLYAI_API_KEY || '',
+  openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
 
   /**
    * Ata com IA (resumo + decisões + tarefas) gerada após a transcrição.
-   * 'auto' (padrão): liga sozinha quando há GROQ_API_KEY. 'false' desliga. 'true' força.
-   * Usa a API da Groq (mesma chave da transcrição) com um modelo de LLM.
+   * 'auto' (padrão): liga sozinha quando há OPENROUTER_API_KEY ou GROQ_API_KEY.
+   * 'false' desliga. 'true' força.
+   * Provider: MINUTES_PROVIDER = openrouter | groq. Padrão: openrouter se houver
+   * OPENROUTER_API_KEY (modelos melhores e sem o TPM apertado do free tier da
+   * Groq, que estoura em call longa — HTTP 413), senão groq.
    */
   minutesEnabled: (process.env.MINUTES_ENABLED || 'auto').toLowerCase(),
-  minutesModel: process.env.MINUTES_MODEL || 'llama-3.3-70b-versatile',
-  /** Teto de tokens de saída da ata. 8192 cobre reuniões longas; o modelo suporta até 32768. */
+  minutesProvider,
+  minutesModel:
+    process.env.MINUTES_MODEL || (minutesProvider === 'groq' ? 'llama-3.3-70b-versatile' : 'google/gemini-2.5-flash'),
+  /** Teto de tokens de saída da ata. 8192 cobre reuniões longas. */
   minutesMaxTokens: Number(process.env.MINUTES_MAX_TOKENS || 8192),
 
   // ---------- MCP (conector para assistentes de IA) — opt-in via MCP_SECRET ----------

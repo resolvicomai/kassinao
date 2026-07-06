@@ -25,11 +25,15 @@ services:
         sync: false
       - key: RECORDINGS_DIR
         value: /app/recordings
-      # Transcrição + Ata por IA: ponha "groq" e preencha GROQ_API_KEY pra ligar (ou deixe vazio p/ só gravar).
+      # Transcrição + Ata por IA: ponha um provider e a chave correspondente (ou deixe vazio p/ só gravar).
       - key: TRANSCRIBE_PROVIDER
-        sync: false # groq | openai | gemini | none
+        sync: false # assemblyai | groq | openai | gemini | none
+      - key: ASSEMBLYAI_API_KEY
+        sync: false # https://www.assemblyai.com — US$50 de crédito grátis (top-3 em pt-BR)
       - key: GROQ_API_KEY
-        sync: false # https://console.groq.com — liga transcrição E ata (ative Zero Data Retention)
+        sync: false # https://console.groq.com — transcrição free tier + fallback (ative Zero Data Retention)
+      - key: OPENROUTER_API_KEY
+        sync: false # https://openrouter.ai — LLM da ata (padrão google/gemini-2.5-flash)
       - key: DEFAULT_LOCALE
         value: en # 'pt' pra respostas de DM em português
       - key: TZ

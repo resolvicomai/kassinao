@@ -9,7 +9,7 @@ import { cook, CookBusyError, CookFormat, COOK_FORMATS } from '../processing/coo
 import { isTranscribing, transcriptToMarkdown } from '../processing/transcribe';
 import { minutesToMarkdown } from '../processing/minutes';
 import { sessionManager } from '../recorder/manager';
-import { deleteRecording, readMeta, readMinutes, readTranscript, RecordingMeta } from '../store';
+import { deleteRecording, readMeta, readMinutes, readTranscript, RecordingMeta, transcriptReady } from '../store';
 import { checkAccess } from './access';
 import { mountMcpApi } from './api';
 import { beginLogin, finishLogin, getWebUser, signMcpRefresh, WebUser } from './auth';
@@ -300,7 +300,7 @@ export function startWebServer(): void {
       return;
     }
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
-    const transcript = meta.transcription?.status === 'done' ? readTranscript(meta.id) : undefined;
+    const transcript = transcriptReady(meta) ? readTranscript(meta.id) : undefined;
     const minutes = meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
     res.type('html').send(recordingPage(meta, { live, canDelete: access.delete, user, lang: l, transcript, minutes }));
   });
@@ -418,7 +418,7 @@ export function startWebServer(): void {
         .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
       return;
     }
-    if (meta.transcription?.status !== 'done') {
+    if (!transcriptReady(meta)) {
       res
         .status(404)
         .type('html')

@@ -17,14 +17,25 @@
     { "id": "5", "name": "James", "avatar": null, "trackFile": "5.flac", "index": 5 },
     { "id": "6", "name": "Sofia", "avatar": null, "trackFile": "6.flac", "index": 6 }
   ],
+  "presence": [
+    { "id": "1", "name": "Priya", "joinedAtMs": 0 },
+    { "id": "2", "name": "Rafael", "joinedAtMs": 0 },
+    { "id": "3", "name": "Mei", "joinedAtMs": 0 },
+    { "id": "4", "name": "Tobias", "joinedAtMs": 980000 },
+    { "id": "5", "name": "James", "joinedAtMs": 0 },
+    { "id": "6", "name": "Sofia", "joinedAtMs": 0 },
+    { "id": "7", "name": "Noah", "joinedAtMs": 0 }
+  ],
   "events": [
     { "atMs": 0, "text": "▶️ Recording started by Priya" },
-    { "atMs": 12000, "text": "🎤 Priya joined the recording" },
-    { "atMs": 31000, "text": "🎤 Rafael joined the recording" },
-    { "atMs": 320000, "text": "🎤 Mei joined the recording" },
-    { "atMs": 1025000, "text": "🎤 Tobias joined the recording" },
-    { "atMs": 1090000, "text": "🎤 Sofia joined the recording" },
-    { "atMs": 2349000, "text": "🎤 James joined the recording" },
+    { "atMs": 500, "text": "👥 In the call: Priya, Rafael, Mei, James, Sofia, Noah" },
+    { "atMs": 12000, "text": "🎤 Priya spoke for the first time" },
+    { "atMs": 31000, "text": "🎤 Rafael spoke for the first time" },
+    { "atMs": 320000, "text": "🎤 Mei spoke for the first time" },
+    { "atMs": 980000, "text": "🔊 Tobias joined the call" },
+    { "atMs": 1025000, "text": "🎤 Tobias spoke for the first time" },
+    { "atMs": 1090000, "text": "🎤 Sofia spoke for the first time" },
+    { "atMs": 2349000, "text": "🎤 James spoke for the first time" },
     { "atMs": 3492000, "text": "⏹️ Priya stopped the recording" }
   ],
   "notes": [

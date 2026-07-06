@@ -95,6 +95,7 @@ export class RecordingSession {
       startedAt: this.startedAt,
       status: 'recording',
       participants: [],
+      presence: [],
       events: [],
       notes: [],
     };
@@ -181,9 +182,66 @@ export class RecordingSession {
 
     this.silenceTimer = setInterval(() => this.checkSilence(), 30_000);
 
+    // Presença: quem JÁ está na sala entra no registro agora (mesmo que nunca
+    // desmute) — presença na call dá acesso à gravação, falar não é requisito.
+    this.snapshotPresence();
+
     await this.setRecordingNickname();
     await this.createPanel();
     this.sendStartDM();
+  }
+
+  // ---------- presença (quem está na call, falando ou não) ----------
+
+  /**
+   * Registra quem está no canal AGORA (idempotente — só adiciona quem falta).
+   * Chamado no start() e de novo quando a sessão entra no manager: quem entrou
+   * na janela entre os dois (o start leva ~1-2s de REST) não pode ficar de fora.
+   */
+  snapshotPresence(): void {
+    const list = (this.meta.presence ??= []);
+    const names: string[] = [];
+    for (const [, member] of this.voiceChannel.members) {
+      if (member.user.bot || list.some((p) => p.id === member.id)) continue;
+      list.push({ id: member.id, name: member.displayName, joinedAtMs: Date.now() - this.startedAt });
+      names.push(member.displayName);
+    }
+    if (names.length === 0) return;
+    // no início vira UMA linha ("Na call: A, B, C"); retardatários da janela ganham linha própria
+    if (this.meta.events.length <= 1) {
+      this.addEvent(t(this.locale, 'event.present-initial', { names: names.map((n) => safeName(n)).join(', ') }));
+    } else {
+      for (const n of names) this.addEvent(t(this.locale, 'event.voice-joined', { name: safeName(n) }));
+    }
+    saveMeta(this.meta);
+  }
+
+  /** Alguém entrou no canal gravado (chamado pelo VoiceStateUpdate). */
+  noteVoiceJoin(userId: string, name: string): void {
+    if (this.stopping) return;
+    const list = (this.meta.presence ??= []);
+    const existing = list.find((p) => p.id === userId);
+    if (existing) {
+      // voltou depois de sair: reabre a presença (mantém o 1º joinedAtMs)
+      if (existing.leftAtMs === undefined) return; // já estava dentro (evento duplicado)
+      delete existing.leftAtMs;
+    } else {
+      list.push({ id: userId, name, joinedAtMs: Date.now() - this.startedAt });
+    }
+    this.addEvent(t(this.locale, 'event.voice-joined', { name: safeName(name) }));
+    saveMeta(this.meta);
+    this.schedulePanelUpdate();
+  }
+
+  /** Alguém saiu do canal gravado. */
+  noteVoiceLeave(userId: string, name: string): void {
+    if (this.stopping) return;
+    const entry = this.meta.presence?.find((p) => p.id === userId && p.leftAtMs === undefined);
+    if (!entry) return; // não estava registrado (ex.: bot) — nada a fazer
+    entry.leftAtMs = Date.now() - this.startedAt;
+    this.addEvent(t(this.locale, 'event.voice-left', { name: safeName(name) }));
+    saveMeta(this.meta);
+    this.schedulePanelUpdate();
   }
 
   /** Consentimento visível: o bot vira "[GRAVANDO] ..." enquanto grava. */
@@ -353,6 +411,12 @@ export class RecordingSession {
       index,
     };
     this.meta.participants.push(participant);
+    // quem fala obviamente está na call — garante presença mesmo se o
+    // VoiceStateUpdate se perdeu (ex.: reconexão do gateway)
+    const presence = (this.meta.presence ??= []);
+    if (!presence.some((p) => p.id === userId)) {
+      presence.push({ id: userId, name: participant.name, joinedAtMs: Date.now() - this.startedAt });
+    }
     saveMeta(this.meta);
 
     // Nome e avatar chegam via REST em segundo plano (não atrasa o áudio).
@@ -364,6 +428,8 @@ export class RecordingSession {
         if (this.stopping) return;
         participant.name = member.displayName;
         participant.avatar = member.displayAvatarURL({ size: 128, extension: 'png' });
+        const pres = this.meta.presence?.find((p) => p.id === userId);
+        if (pres && pres.name.startsWith('usuario-')) pres.name = member.displayName;
         this.addEvent(t(this.locale, 'event.joined', { name: safeName(member.displayName) }));
         saveMeta(this.meta);
         this.schedulePanelUpdate();

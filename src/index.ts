@@ -40,6 +40,7 @@ import { startMonitor } from './monitor';
 import { Locale, localeOf, t } from './i18n';
 import { autoRecordStore, isArmed, setArmed } from './recorder/autorecord';
 import { sessionManager } from './recorder/manager';
+import { cook } from './processing/cook';
 import {
   formatDuration,
   formatOffset,
@@ -53,6 +54,7 @@ import {
   enqueueMinutesOnly,
   enqueueTranscription,
   killPendingTranscriptions,
+  MAX_TRANSCRIPTION_ATTEMPTS,
   validateTranscriptionConfig,
 } from './processing/transcribe';
 import { safeName } from './sanitize';
@@ -296,6 +298,9 @@ async function startSession(opts: {
     // se o bot foi expulso durante o próprio start, não registra sessão morta
     if (session.meta.status === 'recording') {
       sessionManager.set(opts.guild.id, session);
+      // quem entrou no canal DURANTE o start (~1-2s de REST) não disparou o
+      // handler de presença (a sessão ainda não estava no manager) — completa agora
+      session.snapshotPresence();
       // start() leva até ~20s; se o canal esvaziou nesse meio-tempo, nenhum
       // voiceStateUpdate futuro virá — reavalia agora para não gravar sala vazia
       scheduleAutoRecordCheck(opts.guild, session.currentChannelId);
@@ -329,19 +334,31 @@ function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
   for (const rule of autoRecordStore.list(session.guild.id)) {
     scheduleAutoRecordCheck(session.guild, rule.channelId);
   }
+  // Pré-cozinha o mix MP3 em segundo plano: o primeiro clique no player deixa de
+  // esperar minutos de ffmpeg (o cook tem semáforo próprio e cacheia o resultado).
+  if (session.meta.participants.length > 0) {
+    cook(session.meta, 'mix').catch((err) =>
+      console.warn(`Pré-cook do mix de ${session.id} falhou (fica pro primeiro clique):`, (err as Error).message),
+    );
+  }
   enqueueTranscription(session.id, (meta) => notifyTranscription(meta, session.locale));
 }
 
 /** Avisa no chat do canal de voz (e na DM de quem iniciou) que a transcrição terminou. */
 async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise<void> {
   const state = meta.transcription;
-  if (!state || (state.status !== 'done' && state.status !== 'error')) return;
+  if (!state || (state.status !== 'done' && state.status !== 'partial' && state.status !== 'error')) return;
   const text =
     state.status === 'done'
       ? meta.minutes?.status === 'done'
         ? t(locale, 'minutes.ready', { url: pageUrl(meta.id) }) // ata + transcrição prontas
         : t(locale, 'transcript.ready', { url: pageUrl(meta.id) })
-      : t(locale, 'transcript.failed', { error: state.error ?? '?' });
+      : state.status === 'partial'
+        ? t(locale, 'transcript.partial', {
+            names: (state.error ?? '?').replace(/^faixas pendentes:\s*/i, ''),
+            url: pageUrl(meta.id),
+          })
+        : t(locale, 'transcript.failed', { error: state.error ?? '?' });
   try {
     const channel = (await client.channels.fetch(meta.voiceChannelId)) as TextBasedChannel | null;
     if (channel && 'send' in channel) await channel.send(text);
@@ -633,13 +650,15 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
 }
 
 /**
- * Uma pessoa só pode ver/listar uma gravação se: iniciou, participou (falou),
- * é admin, ou enxerga o canal de voz de origem. Mesma regra do controle de
- * acesso da página web — aqui aplicada para o /gravacoes não vazar metadados.
+ * Uma pessoa só pode ver/listar uma gravação se: iniciou, esteve na call
+ * (falando ou não), é admin, ou enxerga o canal de voz de origem. Mesma regra
+ * do controle de acesso da página web — aqui aplicada para o /gravacoes não
+ * vazar metadados.
  */
 function memberCanAccessRecording(member: GuildMember, meta: RecordingMeta, guild: Guild): boolean {
   if (meta.startedBy?.id === member.id) return true;
   if (meta.participants.some((p) => p.id === member.id)) return true;
+  if (meta.presence?.some((p) => p.id === member.id)) return true;
   if (member.permissions.has(PermissionFlagsBits.ManageGuild)) return true;
   const channel = guild.channels.cache.get(meta.voiceChannelId);
   if (channel && channel.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel)) return true;
@@ -682,8 +701,15 @@ function recordingBadge(m: RecordingMeta, l: Locale): string {
   if (m.transcription?.status === 'error') return t(l, 'recordings.badge-failed');
   const ts = m.transcription?.status;
   const ms = m.minutes?.status;
-  if (ts === 'pending' || ts === 'running' || ms === 'pending' || ms === 'running')
+  if (
+    ts === 'pending' ||
+    ts === 'running' ||
+    (ts === 'partial' && m.transcription?.retryScheduled) ||
+    ms === 'pending' ||
+    ms === 'running'
+  )
     return t(l, 'recordings.badge-processing');
+  if (ts === 'partial') return t(l, 'recordings.badge-partial');
   if (ts === 'done') return t(l, 'recordings.badge-transcript');
   return t(l, 'recordings.badge-none');
 }
@@ -853,9 +879,13 @@ client.once(Events.ClientReady, async () => {
     if (meta.status !== 'done') continue;
     const recent = (meta.endedAt ?? 0) > Date.now() - 24 * 60 * 60 * 1000;
     const st = meta.transcription?.status;
+    const tries = meta.transcription?.attempts ?? 0;
     if (st === 'pending' || st === 'running' || (st === undefined && recent)) {
       enqueueTranscription(meta.id, (m) => notifyTranscription(m, 'pt'));
-    } else if (st === 'done') {
+    } else if (st === 'partial' && tries < MAX_TRANSCRIPTION_ATTEMPTS) {
+      // rodada agendada morreu com o reinício — retoma só as faixas que faltam
+      enqueueTranscription(meta.id, (m) => notifyTranscription(m, 'pt'));
+    } else if (st === 'done' || st === 'partial') {
       // Retoma SÓ a ata que ficou pela metade num reinício. generateMinutesStep
       // grava 'running' como 1º passo, então interrupção real deixa pending/running —
       // 'undefined' significaria "nunca tentou" (não fazer backfill em massa no 1º deploy).
@@ -980,6 +1010,20 @@ client.on(Events.MessageCreate, async (message) => {
 
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   const guild = oldState.guild;
+
+  // Presença na gravação ativa: entrar/sair do canal gravado vira registro no
+  // meta (acesso à gravação) + evento na linha do tempo — mesmo sem desmutar.
+  const session = sessionManager.get(guild.id);
+  if (session && newState.member && !newState.member.user.bot) {
+    const recordedChannel = session.currentChannelId;
+    const name = newState.member.displayName;
+    if (newState.channelId === recordedChannel && oldState.channelId !== recordedChannel) {
+      session.noteVoiceJoin(newState.member.id, name);
+    } else if (oldState.channelId === recordedChannel && newState.channelId !== recordedChannel) {
+      session.noteVoiceLeave(newState.member.id, name);
+    }
+  }
+
   const channels = new Set<string>();
   if (oldState.channelId) channels.add(oldState.channelId);
   if (newState.channelId) channels.add(newState.channelId);
