@@ -77,22 +77,19 @@ function verify<T>(token: string | undefined, secret: string): T | undefined {
   }
 }
 
-function parseCookies(req: Request): Record<string, string> {
-  // Object.create(null): sem protótipo, então um cookie chamado __proto__/constructor
-  // não polui o Object.prototype nem confunde lookups (property injection).
-  const out: Record<string, string> = Object.create(null);
+// Lê UM cookie por nome, sem montar objeto com chave controlada pelo cliente
+// (mata property/prototype injection: nada de out[nomeDoCookie] = ...).
+function readCookie(req: Request, name: string): string | undefined {
   for (const part of (req.headers.cookie ?? '').split(';')) {
     const eq = part.indexOf('=');
-    if (eq < 0) continue;
-    const name = part.slice(0, eq).trim();
-    if (name === '__proto__' || name === 'constructor' || name === 'prototype') continue;
+    if (eq < 0 || part.slice(0, eq).trim() !== name) continue;
     try {
-      out[name] = decodeURIComponent(part.slice(eq + 1).trim());
+      return decodeURIComponent(part.slice(eq + 1).trim());
     } catch {
-      // valor com %-encoding malformado: ignora esse cookie em vez de derrubar o request
+      return undefined; // %-encoding malformado: trata como cookie ausente
     }
   }
-  return out;
+  return undefined;
 }
 
 function setCookie(res: Response, name: string, value: string, maxAgeMs: number): void {
@@ -106,7 +103,7 @@ function setCookie(res: Response, name: string, value: string, maxAgeMs: number)
 // ---------- sessão ----------
 
 export function getWebUser(req: Request): WebUser | undefined {
-  const user = verify<WebUser>(parseCookies(req)[SESSION_COOKIE], config.cookieSecret);
+  const user = verify<WebUser>(readCookie(req, SESSION_COOKIE), config.cookieSecret);
   // Checagens estritas: um cookie de state (mesmo segredo HMAC) NÃO pode passar
   // como sessão. Exige typ correto, exp numérico no futuro e id de verdade.
   if (!user || user.typ !== 'session') return undefined;
@@ -146,7 +143,7 @@ export function beginLogin(res: Response, next: string): void {
 
 export async function finishLogin(req: Request, res: Response): Promise<string | undefined> {
   const { code, state } = req.query as { code?: string; state?: string };
-  const saved = verify<StateToken>(parseCookies(req)[STATE_COOKIE], config.cookieSecret);
+  const saved = verify<StateToken>(readCookie(req, STATE_COOKIE), config.cookieSecret);
   clearStateCookie(res); // consome o state: não fica vivo 10 min no navegador
   if (!code || !state || !saved || saved.typ !== 'state' || saved.state !== state) return undefined;
 
