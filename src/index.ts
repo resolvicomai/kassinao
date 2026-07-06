@@ -1,3 +1,12 @@
+/*
+ * Kassinão — gravador de voz self-hosted para Discord.
+ * Copyright (C) 2026 Mauro Marques (resolvicomai)
+ *
+ * Este programa é software livre: você pode redistribuí-lo e/ou modificá-lo sob
+ * os termos da GNU Affero General Public License, publicada pela Free Software
+ * Foundation, na versão 3 ou (a seu critério) qualquer versão posterior.
+ * Veja <https://www.gnu.org/licenses/> para o texto completo.
+ */
 import fs from 'node:fs';
 import {
   ActionRowBuilder,
@@ -54,6 +63,10 @@ import { startWebServer } from './web/server';
 
 const NOTE_MODAL_ID = 'kassinao_note_modal';
 const NOTE_INPUT_ID = 'kassinao_note_text';
+
+// Código-fonte oficial. Exibido no /sobre para creditar a autoria e cumprir a
+// obrigação da AGPL §13 (oferecer o fonte a quem interage com o bot pela rede).
+const SOURCE_URL = 'https://github.com/resolvicomai/kassinao';
 
 // ---------- definição dos comandos (pt-BR nativo + localização em inglês) ----------
 
@@ -177,7 +190,12 @@ function buildCommands() {
     });
   localized(autorecord, 'autorecord', '🤖 Automatic recording when people join a voice channel');
 
-  const cmds = [gravar, parar, nota, status, ajuda, gravacoes, autorecord];
+  const sobre = new SlashCommandBuilder()
+    .setName('sobre')
+    .setDescription('ℹ️ Sobre o Kassinão: autor, licença e código-fonte');
+  localized(sobre, 'about', 'ℹ️ About Kassinão: author, license and source code');
+
+  const cmds = [gravar, parar, nota, status, ajuda, gravacoes, autorecord, sobre];
 
   // /mcp só existe quando o conector de IA está habilitado (MCP_SECRET definido).
   if (config.mcpEnabled) {
@@ -572,6 +590,21 @@ async function handleHelpButton(interaction: ButtonInteraction): Promise<void> {
   await interaction.reply({ content: topic ? t(l, topic, vars) : t(l, 'help.intro'), ephemeral: true });
 }
 
+async function handleSobre(interaction: ChatInputCommandInteraction): Promise<void> {
+  const l = localeOf(interaction.locale);
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle('🎙️ Kassinão')
+    .setDescription(t(l, 'about.desc'))
+    .addFields(
+      { name: t(l, 'about.author'), value: 'Mauro Marques (resolvicomai)' },
+      { name: t(l, 'about.license'), value: 'GNU AGPL-3.0-or-later' },
+      { name: t(l, 'about.source'), value: SOURCE_URL },
+    )
+    .setFooter({ text: t(l, 'about.footer') });
+  await interaction.reply({ embeds: [embed], ephemeral: true });
+}
+
 async function handleStatus(interaction: ChatInputCommandInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
   if (!interaction.guild) {
@@ -864,6 +897,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
           break;
         case 'mcp':
           await handleMcp(interaction);
+          break;
+        case 'sobre':
+          await handleSobre(interaction);
           break;
       }
     } else if (interaction.isButton() && interaction.customId === STOP_BUTTON_ID) {
