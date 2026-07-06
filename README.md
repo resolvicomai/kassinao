@@ -64,6 +64,8 @@ Kassinão combines both **and sidesteps the hard part**: because every participa
 
 You need a machine with **Docker** and a **Discord application** ([1-minute setup](#1-create-the-discord-app)).
 
+> **Do step 1 (create the Discord app) first** — the bot won't boot without `DISCORD_TOKEN`.
+
 ```bash
 git clone https://github.com/resolvicomai/kassinao.git && cd kassinao
 cp .env.example .env      # fill DISCORD_TOKEN, APPLICATION_ID, DISCORD_CLIENT_SECRET, BASE_URL
@@ -97,6 +99,7 @@ GROQ_API_KEY=gsk_...       # optional fallback engine (https://console.groq.com)
 OPENROUTER_API_KEY=sk-or-...  # https://openrouter.ai — minutes LLM (default: google/gemini-2.5-flash)
 MINUTES_ENABLED=auto
 ```
+OpenRouter is a paid LLM gateway (one key, many models, its own credits) — the minutes cost roughly a few cents per meeting.
 Zero-cost path: `TRANSCRIBE_PROVIDER=groq` with just a `GROQ_API_KEY` (free tier: 8 audio-hours/day; the minutes then run on Groq's free LLM in map-reduce for long calls).
 
 ## How it compares
@@ -119,7 +122,7 @@ Zero-cost path: `TRANSCRIBE_PROVIDER=groq` with just a `GROQ_API_KEY` (free tier
 | **AssemblyAI** (`universal`) | ~US$0.21 (**US$50 free credit**) | Top-3 on the Open ASR Leaderboard | Cloud | Default pick; auto-falls back to Groq if a `GROQ_API_KEY` is set |
 | **Groq** (`whisper-large-v3`) | ~US$0.11 (free tier: 8 audio-h/day) | Excellent | Cloud (enable ZDR) | Best zero-cost option |
 | **OpenAI** (`whisper-1`) | ~US$0.36 | Excellent | Cloud | Timestamped segments |
-| **Gemini** (`gemini-2.x-flash`) | ~cents | Good | Cloud (paid tier only) | Free tier trains on your audio — avoid |
+| **Gemini** (`gemini-2.0-flash`, default) | ~cents | Good | Cloud (paid tier only) | Free tier trains on your audio — avoid |
 | **Local** (`faster-whisper`) | Free | Good (`small`+) | 🔒 Never leaves your server | Slower without a GPU; see [`scripts/transcribe-local.py`](scripts/transcribe-local.py) |
 
 > 💡 Recording is **multi-track**, but only **speech** is sent (VAD trims the silence-padded tracks), so a 1-hour call costs ≈ the total spoken time — not hours × speakers. The AI minutes run once per meeting (OpenRouter or Groq), a few cents each at most.
@@ -147,6 +150,7 @@ Turn it on by setting `MCP_SECRET` (a strong secret, **≠** `COOKIE_SECRET`). U
 | `/recordings` | `/gravacoes` | Your latest recordings, with links (filtered by access) |
 | `/help` | `/ajuda` | Interactive guide (also replies in DMs) |
 | `/autorecord on/off/view` | `/autorecord ligar/desligar/ver` | Automatic recording per channel (admin) |
+| `/mcp new` | `/mcp novo` | Owner-only: generate an AI-connector code (members self-serve at `/conectar-ia` on the web) |
 
 Anyone can record and stop. `/autorecord` requires **Manage Server**. Deleting a recording (from its page) is limited to the initiator or admins.
 
@@ -158,7 +162,8 @@ All options live in [`.env.example`](.env.example). Key ones:
 |---|---|---|
 | `DISCORD_TOKEN` · `APPLICATION_ID` · `DISCORD_CLIENT_SECRET` | — | Bot credentials (Developer Portal) |
 | `BASE_URL` | `http://localhost:8080` | Public URL for links & OAuth |
-| `TUNNEL_TOKEN` | — | Cloudflare Tunnel token (recommended HTTPS path) |
+| `REPO_PUBLIC` | `false` | `true` shows the GitHub/source links and the "auditable" claim on the landing page |
+| `TUNNEL_TOKEN` | — | Cloudflare Tunnel token (recommended HTTPS path; also set `COMPOSE_PROFILES=tunnel`) |
 | `GUILD_ID` | — | Registers commands instantly in that server |
 | `RETENTION_DAYS` · `MAX_RECORDING_HOURS` | `7` · `6` | Retention & max length |
 | `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
@@ -178,7 +183,7 @@ Recording voice is processing **personal data**. Kassinão is built accordingly:
 
 ## How it works
 
-Opus packets from each speaker are decoded to PCM and fed to **one ffmpeg per speaker** writing **continuous FLAC** (silence between speech compresses to almost nothing and keeps every track in sync). Downloads (MP3/FLAC/mix/Audacity) are cooked on demand and cached. Transcription and minutes run in a **serial queue** after the call; the web page refreshes itself until they're ready. The page authenticates with **Discord OAuth** (`identify`) and the backend re-checks with Discord who may open each recording.
+Opus packets from each speaker are decoded to PCM and fed to **one ffmpeg per speaker** writing **continuous FLAC** (silence between speech compresses to almost nothing and keeps every track in sync). When the recording stops, the single **mix is pre-cooked** right away so the player starts instantly; the other downloads (MP3/FLAC/Audacity) are still cooked on demand and cached. Transcription and minutes run in a **serial queue** after the call: **VAD** (ffmpeg `silencedetect`) trims each track so **only speech segments** are sent to the ASR provider (**AssemblyAI** — with Groq fallback —, **Groq**, **OpenAI**, **Gemini**, or a **local** command), then the minutes LLM runs via **OpenRouter** or **Groq**; the web page refreshes itself until they're ready. The page authenticates with **Discord OAuth** (`identify`) and the backend re-checks with Discord who may open each recording.
 
 ```mermaid
 flowchart LR
@@ -188,13 +193,17 @@ flowchart LR
     subgraph Kassinão
       BOT[Bot<br/>discord.js / voice]
       FF[ffmpeg per speaker<br/>→ FLAC master]
+      MIX[Pre-cooked mix<br/>other downloads on demand]
+      VAD[VAD silencedetect<br/>speech-only chunks]
       Q[Serial queue:<br/>transcription → AI minutes]
       WEB[Web page<br/>Express + OAuth]
     end
     VC -- Opus per speaker --> BOT --> FF
-    FF -- on stop --> Q
-    Q -- Groq / OpenAI / local --> Q
-    FF & Q --> WEB
+    FF -- on stop --> MIX
+    FF -- on stop --> VAD --> Q
+    Q -- "ASR: AssemblyAI / Groq / OpenAI / Gemini / local" --> Q
+    Q -- "Minutes: OpenRouter / Groq" --> Q
+    MIX & Q --> WEB
     USER[Participant] -- Discord login --> WEB
     WEB -. Cloudflare Tunnel / HTTPS .-> USER
 ```

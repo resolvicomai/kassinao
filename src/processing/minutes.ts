@@ -117,8 +117,17 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
   }
 
   // ---- map-reduce (Groq free tier, TPM 12k): blocos → notas parciais → ata final ----
+  // Teto de blocos: call gigante não pode segurar a fila serial por 1h de pausas.
+  // Acima do teto, mantém começo e fim (decisões vivem nas pontas) e pula o miolo.
+  const MAX_BLOCKS = 12;
   const blocks: string[] = [];
   for (let i = 0; i < body.length; i += GROQ_BLOCK_CHARS) blocks.push(body.slice(i, i + GROQ_BLOCK_CHARS));
+  if (blocks.length > MAX_BLOCKS) {
+    const head = blocks.slice(0, MAX_BLOCKS / 2);
+    const tail = blocks.slice(-MAX_BLOCKS / 2);
+    blocks.length = 0;
+    blocks.push(...head, ...tail);
+  }
 
   const mapSystem = [
     UNTRUSTED_GUARD,

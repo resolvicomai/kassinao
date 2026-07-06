@@ -32,6 +32,7 @@ import {
   VoiceBasedChannel,
 } from 'discord.js';
 import { config } from './config';
+import { shortError } from './util';
 import { startCleanupJob } from './cleanup';
 import { freeMB } from './disk';
 import { client } from './discord/client';
@@ -58,7 +59,15 @@ import {
   validateTranscriptionConfig,
 } from './processing/transcribe';
 import { safeName } from './sanitize';
-import { listGuildMetas, listMetas, pageUrl, RecordingMeta, recoverInterruptedRecordings } from './store';
+import {
+  listGuildMetas,
+  listMetas,
+  pageUrl,
+  readMeta,
+  RecordingMeta,
+  recoverInterruptedRecordings,
+  saveMeta,
+} from './store';
 import { forgetMember } from './web/access';
 import { createExchangeCode, revokeUser } from './web/mcpTokens';
 import { startWebServer } from './web/server';
@@ -340,8 +349,16 @@ function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
     cook(session.meta, 'mix').catch((err) =>
       console.warn(`Pré-cook do mix de ${session.id} falhou (fica pro primeiro clique):`, (err as Error).message),
     );
+    enqueueTranscription(session.id, (meta) => notifyTranscription(meta, session.locale));
+  } else {
+    // gravação vazia: marca 'disabled' JÁ (a página não pode prometer "na fila"
+    // por minutos enquanto a fila serial chega numa transcrição que nunca haverá)
+    const meta = readMeta(session.id);
+    if (meta && !meta.transcription) {
+      meta.transcription = { status: 'disabled' };
+      saveMeta(meta);
+    }
   }
-  enqueueTranscription(session.id, (meta) => notifyTranscription(meta, session.locale));
 }
 
 /** Avisa no chat do canal de voz (e na DM de quem iniciou) que a transcrição terminou. */
@@ -355,10 +372,12 @@ async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise
         : t(locale, 'transcript.ready', { url: pageUrl(meta.id) })
       : state.status === 'partial'
         ? t(locale, 'transcript.partial', {
-            names: (state.error ?? '?').replace(/^faixas pendentes:\s*/i, ''),
+            names:
+              (state.pendingTracks ?? []).map((n) => safeName(n)).join(', ') ||
+              (locale === 'pt' ? 'algumas faixas' : 'some tracks'),
             url: pageUrl(meta.id),
           })
-        : t(locale, 'transcript.failed', { error: state.error ?? '?' });
+        : t(locale, 'transcript.failed', { error: shortError(state.error, locale) });
   try {
     const channel = (await client.channels.fetch(meta.voiceChannelId)) as TextBasedChannel | null;
     if (channel && 'send' in channel) await channel.send(text);
@@ -634,7 +653,10 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
     await interaction.editReply(t(l, 'status.none'));
     return;
   }
-  const inRoom = session.voiceChannel.members.filter((m) => !m.user.bot).size;
+  // sala ATUAL do bot (ele pode ter sido arrastado depois do início)
+  const currentChannel = interaction.guild.channels.cache.get(session.currentChannelId);
+  const room = currentChannel?.isVoiceBased() ? currentChannel : session.voiceChannel;
+  const inRoom = room.members.filter((m) => !m.user.bot).size;
   const starter = session.meta.startedBy ? safeName(session.meta.startedBy.name) : t(l, 'recordings.by-auto');
   await interaction.editReply(
     t(l, 'status.recording', {
@@ -698,13 +720,14 @@ async function handleGravacoes(interaction: ChatInputCommandInteraction): Promis
 function recordingBadge(m: RecordingMeta, l: Locale): string {
   if (m.status === 'recording') return `🔴 ${t(l, 'recordings.live')}`;
   if (m.minutes?.status === 'done') return t(l, 'recordings.badge-ready');
-  if (m.transcription?.status === 'error') return t(l, 'recordings.badge-failed');
+  // erro com retry agendado ainda vai se resolver sozinho — não é falha definitiva
+  if (m.transcription?.status === 'error' && !m.transcription.retryScheduled) return t(l, 'recordings.badge-failed');
   const ts = m.transcription?.status;
   const ms = m.minutes?.status;
   if (
     ts === 'pending' ||
     ts === 'running' ||
-    (ts === 'partial' && m.transcription?.retryScheduled) ||
+    ((ts === 'partial' || ts === 'error') && m.transcription?.retryScheduled) ||
     ms === 'pending' ||
     ms === 'running'
   )
@@ -885,6 +908,10 @@ client.once(Events.ClientReady, async () => {
     } else if (st === 'partial' && tries < MAX_TRANSCRIPTION_ATTEMPTS) {
       // rodada agendada morreu com o reinício — retoma só as faixas que faltam
       enqueueTranscription(meta.id, (m) => notifyTranscription(m, 'pt'));
+    } else if (st === 'error' && tries < MAX_TRANSCRIPTION_ATTEMPTS && recent) {
+      // erro com tentativas sobrando (ex.: 429 em cadeia + deploy no meio):
+      // sem isso a gravação ficaria em erro pra sempre, em silêncio
+      enqueueTranscription(meta.id, (m) => notifyTranscription(m, 'pt'));
     } else if (st === 'done' || st === 'partial') {
       // Retoma SÓ a ata que ficou pela metade num reinício. generateMinutesStep
       // grava 'running' como 1º passo, então interrupção real deixa pending/running —
@@ -1057,7 +1084,8 @@ async function gracefulShutdown(signal: string): Promise<void> {
   killPendingTranscriptions();
   const actives = sessionManager.all();
   await Promise.all(
-    actives.map((s) => stopSession(s, 'desconectado').catch((err) => console.error(`Erro ao encerrar ${s.id}:`, err))),
+    // 'reinicio' e não 'desconectado': a timeline conta a história certa pro usuário
+    actives.map((s) => stopSession(s, 'reinicio').catch((err) => console.error(`Erro ao encerrar ${s.id}:`, err))),
   );
   try {
     client.destroy();

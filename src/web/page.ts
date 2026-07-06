@@ -3,6 +3,7 @@ import { Locale } from '../i18n';
 import { msToClock } from '../processing/transcribe';
 import { formatDuration, formatOffset } from '../recorder/RecordingSession';
 import { MeetingMinutes, RecordingMeta, TranscriptSegment } from '../store';
+import { shortError } from '../util';
 import type { WebUser } from './auth';
 
 function esc(s: string): string {
@@ -97,6 +98,21 @@ const P: Record<string, { pt: string; en: string }> = {
     pt: '⚠️ Transcrição parcial — estas faixas não puderam ser transcritas: {names}.',
     en: '⚠️ Partial transcript — these tracks could not be transcribed: {names}.',
   },
+  transcriptRetrying: {
+    pt: '⏳ O serviço de IA limitou o uso agora há pouco — vou tentar de novo sozinho em alguns minutos.',
+    en: '⏳ The AI service rate-limited us just now — I will retry by myself in a few minutes.',
+  },
+  presentAlsoLive: { pt: '👥 Na call agora (ainda sem falar)', en: '👥 In the call now (no speech yet)' },
+  presentOnly: { pt: '👥 Estavam na call, mas ninguém falou', en: '👥 Were in the call, but nobody spoke' },
+  nobodyDone: { pt: 'Ninguém falou nesta gravação.', en: 'Nobody spoke in this recording.' },
+  follow: { pt: 'seguir o áudio', en: 'follow audio' },
+  searchTranscript: { pt: 'Buscar na transcrição…', en: 'Search the transcript…' },
+  copyActions: { pt: 'Copiar itens de ação', en: 'Copy action items' },
+  timelineAll: { pt: 'Todos os eventos ({n})', en: 'All events ({n})' },
+  timelineLegend: {
+    pt: '● falou · ● entrou · ● saiu · ● nota · ● tópico — clique pra pular',
+    en: '● spoke · ● joined · ● left · ● note · ● topic — click to jump',
+  },
 };
 
 function p(l: Locale, key: string, vars: Record<string, string> = {}): string {
@@ -138,12 +154,59 @@ const SHELL_CSS = `
             max-height: 220px; overflow-y: auto; }
   .events time { color: #949ba4; font-family: ui-monospace, monospace; margin-right: 8px; }
   .wall { color: #6d7178 !important; font-size: 12px; }
-  .transcript { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto;
+  .transcript { display: flex; flex-direction: column; gap: 14px;
                 background: #232428; border-radius: 8px; padding: 14px; font-size: 14px; }
-  .transcript p { line-height: 1.45; }
+  .transcript p { line-height: 1.5; padding: 2px 6px; border-left: 2px solid transparent; border-radius: 4px; }
+  .transcript p.now { background: rgba(88,101,242,.12); border-left-color: #5865f2; }
   .transcript .who { color: #f2f3f5; font-weight: 600; }
+  .tblock .thead { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+  .tblock .thead img { width: 22px; height: 22px; border-radius: 50%; }
+  .tblock .thead .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: currentColor; }
+  /* paleta estável por falante */
+  .c0 { color: #7b90f7; } .c1 { color: #3dbf7a; } .c2 { color: #f0b232; } .c3 { color: #eb6ab5; }
+  .c4 { color: #29b0e8; } .c5 { color: #e8735a; } .c6 { color: #a58cf2; } .c7 { color: #4fd1c5; }
+  .tblock .thead .dot.c0 { background:#7b90f7 } .tblock .thead .dot.c1 { background:#3dbf7a }
+  .tblock .thead .dot.c2 { background:#f0b232 } .tblock .thead .dot.c3 { background:#eb6ab5 }
+  .tblock .thead .dot.c4 { background:#29b0e8 } .tblock .thead .dot.c5 { background:#e8735a }
+  .tblock .thead .dot.c6 { background:#a58cf2 } .tblock .thead .dot.c7 { background:#4fd1c5 }
+  .tsearch { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 10px; }
+  .tsearch input { background: #1e1f22; border: 1px solid #3f4147; color: #dbdee1; border-radius: 8px;
+                   padding: 9px 12px; font-size: 14px; width: 100%; }
+  .tsearch input:focus { outline: none; border-color: #5865f2; }
+  .fchips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .fchip { background: #2b2d31; border: 1px solid #3f4147; border-radius: 999px; padding: 3px 10px;
+           font-size: 12.5px; cursor: pointer; font-family: inherit; }
+  .fchip.off { opacity: .35; text-decoration: line-through; }
+  .copybtn { background: #3a3c42; border: 0; border-radius: 6px; color: #dbdee1; cursor: pointer;
+             font-size: 12px; padding: 3px 8px; vertical-align: middle; margin-left: 6px; }
+  .copybtn:hover { background: #45474e; }
+  .subline { color: #949ba4; font-size: 14px; margin-top: 6px; }
+  .playerwrap { position: sticky; top: 0; z-index: 5; background: #2b2d31; padding: 12px 0 8px;
+                margin: 18px 0 6px; border-bottom: 1px solid #3f4147; }
+  .playerwrap audio { width: 100%; }
+  .pctl { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 6px;
+          font-size: 12.5px; color: #949ba4; }
+  .speed { display: inline-flex; gap: 4px; }
+  .speed button { background: #232428; border: 1px solid #3f4147; color: #b5bac1; border-radius: 6px;
+                  padding: 2px 9px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .speed button.on { background: #5865f2; color: #fff; border-color: #5865f2; }
+  .follow { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+  .tlbar { position: relative; height: 26px; background: #232428; border-radius: 8px; margin: 4px 0 4px; }
+  .tlbar .mk { position: absolute; top: 6px; width: 8px; height: 14px; border-radius: 3px;
+               transform: translateX(-50%); text-decoration: none; }
+  .tlbar .mk:hover { transform: translateX(-50%) scaleY(1.25); }
+  .mk.speak { background: #7b90f7; } .mk.join { background: #3dbf7a; } .mk.leave { background: #6d7178; }
+  .mk.note { background: #f0b232; } .mk.topic { background: #a58cf2; top: 3px; height: 20px; }
+  .mk.sys { background: #4e5058; }
+  .tllegend { font-size: 11.5px; color: #6d7178; margin-bottom: 6px; }
+  .evlist summary { cursor: pointer; font-size: 13px; color: #949ba4; margin: 6px 0; }
+  .minutes .lead { font-size: 15.5px; line-height: 1.55; color: #f2f3f5; }
   .transcript time { color: #949ba4; font-family: ui-monospace, monospace; font-size: 12px; margin-right: 6px; }
   .tstate { font-size: 14px; color: #949ba4; }
+  details.tech { margin-top: 6px; font-size: 12px; color: #6d7178; }
+  details.tech summary { cursor: pointer; }
+  details.tech code { display: block; margin-top: 6px; padding: 8px 10px; background: #232428;
+                      border-radius: 6px; overflow-wrap: anywhere; }
   .tdl { display: flex; gap: 10px; margin-top: 10px; }
   .tdl a { color: #00a8fc; font-size: 13px; text-decoration: none; }
   .tdl a:hover { text-decoration: underline; }
@@ -195,6 +258,10 @@ const SHELL_CSS = `
     .card { padding: 18px; }
     h1 { font-size: 19px; }
     .downloads .btn { flex: 1 1 auto; text-align: center; align-items: center; }
+    /* leitura longa no celular: um pouco mais de corpo e respiro */
+    .transcript { font-size: 15px; padding: 12px 10px; }
+    .transcript p { line-height: 1.6; }
+    .pctl { gap: 10px; }
   }
 `;
 
@@ -232,12 +299,12 @@ document.querySelectorAll('time[data-ts]').forEach(function(el){
   } catch(e){}
 });
 // pular pro momento no player de áudio (no-op se não houver player, ex.: gravação ao vivo)
+// o player é sticky no topo — não precisa (nem deve) sequestrar o scroll do leitor
 window.kseek = function(ms){
   var p = document.getElementById('kplayer');
   if (!p) return;
   p.currentTime = Math.max(0, ms/1000);
   p.play().catch(function(){});
-  p.scrollIntoView({behavior:'smooth', block:'center'});
 };
 // deep link do MCP/transcrição: #t=<segundos> pula pro momento ao abrir (e ao trocar o hash).
 // preload=none: se os metadados ainda não carregaram, espera loadedmetadata antes de buscar.
@@ -283,8 +350,11 @@ function shell(
   const foot = `<footer class="topfoot"><a href="/">🎙️ Kassinão</a> · AGPL-3.0 · open-source · <a href="${ghHref()}">${repoLabel}</a></footer>`;
   // Auto-refresh (enquanto transcrição/ata processam) via JS em vez de <meta refresh>,
   // pra NÃO recarregar e cortar o áudio enquanto a pessoa está ouvindo o player.
+  // Preserva a posição de leitura (scrollY) entre os reloads.
   const refresh = opts.refreshSeconds
-    ? `<script>setTimeout(function(){var p=document.getElementById('kplayer');if(p&&!p.paused)return;location.reload();},${opts.refreshSeconds * 1000});</script>`
+    ? `<script>
+try { var ky = sessionStorage.getItem('k-scroll'); if (ky) { window.scrollTo(0, +ky); sessionStorage.removeItem('k-scroll'); } } catch(e){}
+setTimeout(function(){var p=document.getElementById('kplayer');if(p&&!p.paused)return;try{sessionStorage.setItem('k-scroll', String(window.scrollY));}catch(e){}location.reload();},${opts.refreshSeconds * 1000});</script>`
     : '';
   return `<!doctype html>
 <html lang="${lang === 'pt' ? 'pt-BR' : 'en'}">
@@ -306,6 +376,16 @@ ${refresh}
 </html>`;
 }
 
+/** Cor estável por falante (paleta Discord-friendly, 8 tons). */
+const SPEAKER_COLORS = 8;
+function speakerColorIdx(name: string, order: Map<string, number>): number {
+  const idx = order.get(name);
+  if (idx !== undefined) return idx % SPEAKER_COLORS;
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return h % SPEAKER_COLORS;
+}
+
 export function recordingPage(
   meta: RecordingMeta,
   opts: {
@@ -322,54 +402,38 @@ export function recordingPage(
   const demo = opts.demo ?? false;
   const seekable = !demo; // no modo demo o áudio é só um trecho, então horários não pulam
   const endedAt = meta.endedAt ?? Date.now();
+  const durMs = endedAt - meta.startedAt;
   const badge = live
     ? `<span class="badge live">${p(l, 'live')}</span>`
     : `<span class="badge done">${p(l, 'done')}</span>`;
+
+  // ---------- cabeçalho: o QUE é esta gravação, numa linha ----------
+  const nPeople = meta.participants.length;
+  const subline = `<p class="subline">${esc(meta.guildName)} · ${datetime(meta.startedAt, l)} · ${formatDuration(durMs)}${
+    live ? p(l, 'counting') : ''
+  }${nPeople > 0 ? ` · 🎙️ ${nPeople}` : ''}</p>`;
 
   const people =
     meta.participants.length > 0
       ? `<div class="people">${meta.participants
           .map(
-            (pt) =>
-              `<span class="person">${pt.avatar ? `<img src="${esc(pt.avatar)}" alt="">` : '🎤'}${esc(pt.name)}</span>`,
+            (pt, i) =>
+              `<span class="person">${pt.avatar ? `<img src="${esc(pt.avatar)}" alt="">` : '🎤'}<span class="who c${i % SPEAKER_COLORS}">${esc(pt.name)}</span></span>`,
           )
           .join('')}</div>`
-      : `<p class="muted">${p(l, 'nobody')}</p>`;
+      : `<p class="muted">${live ? p(l, 'nobody') : p(l, 'nobodyDone')}</p>`;
 
-  // quem esteve na call mas nunca falou (presença ≠ faixa): aparece, com estilo discreto
-  const silentIds = new Set(meta.participants.map((pt) => pt.id));
-  const silent = (meta.presence ?? []).filter((pr) => !silentIds.has(pr.id));
+  // quem esteve na call mas nunca falou (presença ≠ faixa): frase certa por estado
+  const spokeIds = new Set(meta.participants.map((pt) => pt.id));
+  const silent = (meta.presence ?? []).filter((pr) => !spokeIds.has(pr.id));
+  const silentLabel =
+    meta.participants.length === 0 ? p(l, 'presentOnly') : live ? p(l, 'presentAlsoLive') : `👥 ${p(l, 'presentAlso')}`;
   const presentAlso =
     silent.length > 0
-      ? `<p class="muted" style="margin-top:8px">👥 ${p(l, 'presentAlso')}: ${silent.map((pr) => esc(pr.name)).join(', ')}</p>`
+      ? `<p class="muted" style="margin-top:8px">${silentLabel}: ${silent.map((pr) => esc(pr.name)).join(', ')}</p>`
       : '';
 
-  const downloads =
-    !demo && meta.participants.length > 0
-      ? `<div class="downloads">
-          <a class="btn" href="/rec/${meta.id}/download/mp3">🎵 MP3 <small>${p(l, 'mp3sub')}</small></a>
-          <a class="btn" href="/rec/${meta.id}/download/flac">💎 FLAC <small>${p(l, 'flacsub')}</small></a>
-          <a class="btn" href="/rec/${meta.id}/download/mix">🎧 Mix <small>${p(l, 'mixsub')}</small></a>
-          <a class="btn" href="/rec/${meta.id}/download/audacity">🎚️ Audacity <small>${p(l, 'audacitysub')}</small></a>
-        </div>
-        <p class="muted" style="margin-top:10px">${p(l, 'cooking')}</p>`
-      : '';
-
-  const notes =
-    meta.notes.length > 0
-      ? `<h2>${p(l, 'notes')}</h2><ul class="notes">${meta.notes
-          .map(
-            (n) =>
-              `<li><time>${formatOffset(n.atMs)}</time>${clockTime(meta.startedAt + n.atMs, l)}<strong>${esc(n.author)}:</strong> ${esc(n.text)}</li>`,
-          )
-          .join('')}</ul>`
-      : '';
-
-  const minutes = renderMinutes(meta, opts.minutes, l, seekable);
-  const transcription = renderTranscription(meta, opts.transcript, l, seekable);
-
-  // Player de áudio. Real: mix cozinhado (id=kplayer, horários pulam pra ali).
-  // Demo: um trecho curto de amostra (sem id=kplayer, sem seek).
+  // ---------- player (sticky + velocidade + seguir) ----------
   let player = '';
   if (demo) {
     player = `<h2>${p(l, 'sampleAudio')}</h2>
@@ -378,24 +442,50 @@ export function recordingPage(
          <div class="hint">${p(l, 'sampleNote')}</div>
        </div>`;
   } else if (!live && meta.participants.length > 0) {
-    player = `<h2>${p(l, 'listen')}</h2>
-       <div class="player">
+    player = `<div class="playerwrap">
          <audio id="kplayer" preload="none" controls src="/rec/${meta.id}/audio"></audio>
-         <div class="hint">${p(l, 'seekHint')}</div>
+         <div class="pctl">
+           <span class="speed">
+             <button type="button" data-r="1" class="on">1×</button>
+             <button type="button" data-r="1.5">1.5×</button>
+             <button type="button" data-r="2">2×</button>
+           </span>
+           <label class="follow"><input type="checkbox" id="kfollow"> ${p(l, 'follow')}</label>
+           <span class="hint">${p(l, 'seekHint')}</span>
+         </div>
        </div>`;
   }
 
   const liveNote = live ? `<div class="note">${p(l, 'livenote')}</div>` : '';
   const demoNote = demo ? `<div class="note">${p(l, 'demoBanner')}</div>` : '';
 
-  const events =
-    meta.events.length > 0
-      ? `<h2>${p(l, 'timeline')}</h2><ul class="events">${meta.events
+  const minutes = renderMinutes(meta, opts.minutes, l, seekable);
+  const transcription = renderTranscription(meta, opts.transcript, l, seekable);
+
+  const notes =
+    meta.notes.length > 0
+      ? `<h2 id="notas">${p(l, 'notes')}</h2><ul class="notes">${meta.notes
           .map(
-            (e) =>
-              `<li><time>${formatOffset(e.atMs)}</time>${clockTime(meta.startedAt + e.atMs, l)}${esc(e.text)}</li>`,
+            (n) =>
+              `<li>${seekable ? `<a class="ts" href="#" onclick="kseek(${n.atMs});return false">${formatOffset(n.atMs)}</a>` : `<time>${formatOffset(n.atMs)}</time>`}${clockTime(meta.startedAt + n.atMs, l)}<strong>${esc(n.author)}:</strong> ${esc(n.text)}</li>`,
           )
           .join('')}</ul>`
+      : '';
+
+  // ---------- linha do tempo: barra visual clicável + lista dobrável ----------
+  const events = renderTimeline(meta, opts.minutes, l, durMs, live, seekable);
+
+  // ---------- exportar (uso raro → rebaixado pra baixo, estilo secundário) ----------
+  const downloads =
+    !demo && meta.participants.length > 0
+      ? `<h2 id="exportar">${p(l, 'downloads')}</h2>
+        <div class="downloads">
+          <a class="btn secondary" href="/rec/${meta.id}/download/mp3">🎵 MP3 <small>${p(l, 'mp3sub')}</small></a>
+          <a class="btn secondary" href="/rec/${meta.id}/download/flac">💎 FLAC <small>${p(l, 'flacsub')}</small></a>
+          <a class="btn secondary" href="/rec/${meta.id}/download/mix">🎧 Mix <small>${p(l, 'mixsub')}</small></a>
+          <a class="btn secondary" href="/rec/${meta.id}/download/audacity">🎚️ Audacity <small>${p(l, 'audacitysub')}</small></a>
+        </div>
+        <p class="muted" style="margin-top:10px">${p(l, 'cooking')}</p>`
       : '';
 
   const deleteForm =
@@ -406,50 +496,45 @@ export function recordingPage(
        </form>`
       : '';
 
-  const expires =
-    meta.expiresAt && !live && !demo
-      ? `<footer>${p(l, 'expires', { date: datetime(meta.expiresAt, l) })}</footer>`
-      : '';
+  const pageFoot = !demo
+    ? `<footer>${
+        meta.expiresAt && !live ? `${p(l, 'expires', { date: datetime(meta.expiresAt, l) })} · ` : ''
+      }ID <code>${esc(meta.id)}</code></footer>`
+    : '';
 
   // Demo é a vitrine: depois da prova, um CTA de conversão (fim do beco sem saída).
   const demoCta = demo
     ? `<div class="note" style="border-left-color:#5865f2;margin-top:28px">${
         l === 'pt'
-          ? 'Curtiu? Essa é uma call real gravada pelo Kassinão — a ata e a transcrição saíram sozinhas. <strong>Rode o seu:</strong> é open-source e roda no seu próprio servidor.'
-          : 'Like what you see? This is a real call recorded by Kassinão — the minutes and transcript wrote themselves. <strong>Deploy your own:</strong> it is open-source and runs on your server.'
+          ? 'Curtiu? É exatamente assim que uma call de verdade fica — a ata e a transcrição saem sozinhas, com o nome de quem falou. <strong>Rode o seu:</strong> é open-source e roda no seu próprio servidor.'
+          : 'Like what you see? This is exactly what a real call looks like — minutes and transcript write themselves, with exact speaker names. <strong>Deploy your own:</strong> it is open-source and runs on your server.'
       }</div>
      <div class="downloads" style="margin-top:14px">
        <a class="btn" href="${ghHref()}">${l === 'pt' ? '🚀 Rodar o meu Kassinão' : '🚀 Deploy your own'}</a>
        <a class="btn secondary" href="/">${l === 'pt' ? '← Início' : '← Home'}</a>
      </div>`
     : '';
-  const title = demo ? `🔊 #${esc(meta.voiceChannelName)}` : `🎙️ ${p(l, 'recording')}`;
+  const title = `🔊 #${esc(meta.voiceChannelName)}`;
 
   return shell(
-    demo ? `#${meta.voiceChannelName} (demo)` : `${p(l, 'recording')} ${meta.id}`,
+    demo ? `#${meta.voiceChannelName} (demo)` : `#${meta.voiceChannelName} — ${p(l, 'recording')}`,
     `<h1>${title} ${badge}</h1>
+     ${subline}
      ${demoNote}
-     <dl class="grid">
-       <dt>${p(l, 'server')}</dt><dd>${esc(meta.guildName)}</dd>
-       <dt>${p(l, 'channel')}</dt><dd>🔊 ${esc(meta.voiceChannelName)}</dd>
-       <dt>${p(l, 'started')}</dt><dd>${datetime(meta.startedAt, l)}</dd>
-       <dt>${p(l, 'duration')}</dt><dd>${formatDuration(endedAt - meta.startedAt)}${live ? p(l, 'counting') : ''}</dd>
-       <dt>ID</dt><dd><code>${esc(meta.id)}</code></dd>
-     </dl>
      ${liveNote}
      <h2>${p(l, 'participants')}</h2>
      ${people}
      ${presentAlso}
-     ${!demo && meta.participants.length > 0 ? `<h2>${p(l, 'downloads')}</h2>` : ''}
-     ${downloads}
      ${player}
      ${minutes}
      ${transcription}
      ${notes}
      ${events}
+     ${downloads}
      ${deleteForm}
-     ${expires}
-     ${demoCta}`,
+     ${pageFoot}
+     ${demoCta}
+     ${RECORDING_SCRIPT}`,
     {
       user: opts.user,
       lang: l,
@@ -459,8 +544,9 @@ export function recordingPage(
         live ||
         meta.transcription?.status === 'pending' ||
         meta.transcription?.status === 'running' ||
-        // parcial só re-atualiza enquanto há rodada automática agendada
+        // parcial/erro só re-atualizam enquanto há rodada automática agendada
         (meta.transcription?.status === 'partial' && meta.transcription.retryScheduled) ||
+        (meta.transcription?.status === 'error' && meta.transcription.retryScheduled) ||
         meta.minutes?.status === 'pending' ||
         meta.minutes?.status === 'running'
           ? 30
@@ -469,24 +555,147 @@ export function recordingPage(
   );
 }
 
+/** Barra do tempo clicável (marcadores por tipo) + lista completa dobrável. */
+function renderTimeline(
+  meta: RecordingMeta,
+  minutes: MeetingMinutes | undefined,
+  l: Locale,
+  durMs: number,
+  live: boolean,
+  seekable: boolean,
+): string {
+  if (meta.events.length === 0) return '';
+
+  const list = `<details class="evlist"${live ? ' open' : ''}><summary>${p(l, 'timelineAll', { n: String(meta.events.length) })}</summary><ul class="events">${meta.events
+    .map((e) => `<li><time>${formatOffset(e.atMs)}</time>${clockTime(meta.startedAt + e.atMs, l)}${esc(e.text)}</li>`)
+    .join('')}</ul></details>`;
+
+  // barra visual só faz sentido com duração fechada e player pra pular
+  let bar = '';
+  if (!live && durMs > 0) {
+    const markers: string[] = [];
+    for (const e of meta.events) {
+      const pct = Math.min(100, Math.max(0, (e.atMs / durMs) * 100));
+      const kind = e.text.startsWith('🎤')
+        ? 'speak'
+        : e.text.startsWith('🔊') || e.text.startsWith('👥')
+          ? 'join'
+          : e.text.startsWith('🚪')
+            ? 'leave'
+            : e.text.startsWith('📝')
+              ? 'note'
+              : 'sys';
+      const click = seekable ? ` onclick="kseek(${e.atMs});return false" href="#"` : '';
+      markers.push(
+        `<a class="mk ${kind}" style="left:${pct.toFixed(2)}%" title="${esc(`${formatOffset(e.atMs)} ${e.text}`)}"${click}></a>`,
+      );
+    }
+    for (const tp of minutes?.topicos ?? []) {
+      const pct = Math.min(100, Math.max(0, (tp.inicioMs / durMs) * 100));
+      const click = seekable ? ` onclick="kseek(${tp.inicioMs});return false" href="#"` : '';
+      markers.push(
+        `<a class="mk topic" style="left:${pct.toFixed(2)}%" title="${esc(`${formatOffset(tp.inicioMs)} · ${tp.titulo}`)}"${click}></a>`,
+      );
+    }
+    bar = `<div class="tlbar">${markers.join('')}</div>
+      <div class="tllegend">${p(l, 'timelineLegend')}</div>`;
+  }
+
+  return `<h2 id="timeline">${p(l, 'timeline')}</h2>${bar}${list}`;
+}
+
+/** Script da página de gravação: velocidade, seguir-áudio (karaoke) e busca na transcrição. */
+const RECORDING_SCRIPT = `<script>
+(function(){
+  var player = document.getElementById('kplayer');
+  // velocidade
+  document.querySelectorAll('.speed button').forEach(function(b){
+    b.addEventListener('click', function(){
+      if (!player) return;
+      player.playbackRate = +b.dataset.r;
+      document.querySelectorAll('.speed button').forEach(function(x){ x.classList.toggle('on', x===b); });
+    });
+  });
+  // karaoke-follow: destaca o trecho tocando; com "seguir" ligado, rola junto
+  var paras = Array.prototype.slice.call(document.querySelectorAll('.transcript p[data-s]'));
+  var current = null;
+  if (player && paras.length) {
+    player.addEventListener('timeupdate', function(){
+      var ms = player.currentTime * 1000, hit = null;
+      for (var i = 0; i < paras.length; i++) {
+        var s = +paras[i].dataset.s;
+        if (s > ms) break;
+        if (ms <= +paras[i].dataset.e + 1500) hit = paras[i];
+      }
+      if (hit === current) return;
+      if (current) current.classList.remove('now');
+      current = hit;
+      if (current) {
+        current.classList.add('now');
+        var f = document.getElementById('kfollow');
+        if (f && f.checked) current.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    });
+  }
+  // busca + filtro por falante
+  var input = document.getElementById('ksearch');
+  function applyFilter(){
+    var q = input ? input.value.trim().toLowerCase() : '';
+    var off = {};
+    document.querySelectorAll('.fchip.off').forEach(function(c){ off[c.dataset.sp] = true; });
+    document.querySelectorAll('.transcript .tblock').forEach(function(b){
+      if (off[b.dataset.sp]) { b.style.display = 'none'; return; }
+      var any = false;
+      b.querySelectorAll('p').forEach(function(pp){
+        var show = !q || pp.textContent.toLowerCase().indexOf(q) !== -1;
+        pp.style.display = show ? '' : 'none';
+        if (show) any = true;
+      });
+      b.style.display = any ? '' : 'none';
+    });
+  }
+  if (input) input.addEventListener('input', applyFilter);
+  document.querySelectorAll('.fchip').forEach(function(c){
+    c.addEventListener('click', function(){ c.classList.toggle('off'); applyFilter(); });
+  });
+  // copiar itens de ação
+  var cp = document.getElementById('kcopyact');
+  if (cp) cp.addEventListener('click', function(){
+    navigator.clipboard.writeText(cp.dataset.txt).then(function(){
+      var old = cp.textContent; cp.textContent = '✓'; setTimeout(function(){ cp.textContent = old; }, 1200);
+    }).catch(function(){});
+  });
+})();
+</script>`;
+
 function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined, l: Locale, seekable = true): string {
   const state = meta.minutes;
   if (!state || state.status === 'disabled') return '';
-  const title = `<h2>📋 ${p(l, 'minutes')}</h2>`;
+  const title = `<h2 id="ata">📋 ${p(l, 'minutes')}</h2>`;
   if (state.status === 'pending') return `${title}<p class="tstate">${p(l, 'minutesPending')}</p>`;
   if (state.status === 'running') return `${title}<p class="tstate">${p(l, 'minutesRunning')}</p>`;
   if (state.status === 'error')
-    return `${title}<p class="tstate">${p(l, 'minutesError')}${esc(state.error ?? '?')}</p>`;
+    return `${title}<p class="tstate">${p(l, 'minutesError')}${esc(shortError(state.error, l))}</p>${techDetails(state.error, l)}`;
   if (!minutes) return '';
 
   const parts: string[] = [];
-  if (minutes.resumo) parts.push(`<h3>${p(l, 'mSummary')}</h3><p>${esc(minutes.resumo)}</p>`);
+  // o resumo é o TL;DR — destaque tipográfico próprio
+  if (minutes.resumo) parts.push(`<h3 id="resumo">${p(l, 'mSummary')}</h3><p class="lead">${esc(minutes.resumo)}</p>`);
   if (minutes.decisoes.length) {
-    parts.push(`<h3>${p(l, 'mDecisions')}</h3><ul>${minutes.decisoes.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>`);
+    parts.push(
+      `<h3 id="decisoes">${p(l, 'mDecisions')}</h3><ul>${minutes.decisoes.map((d) => `<li>${esc(d)}</li>`).join('')}</ul>`,
+    );
   }
   if (minutes.acoes.length) {
+    // texto plano pro botão copiar (colar no chat do time é o fluxo nº 1 pós-call)
+    const plain = minutes.acoes
+      .map((a) => {
+        const extra = [a.responsavel, a.prazo].filter(Boolean).join(' — ');
+        return `- [ ] ${a.tarefa}${extra ? ` (${extra})` : ''}`;
+      })
+      .join('\n');
     parts.push(
-      `<h3>${p(l, 'mActions')}</h3><ul>${minutes.acoes
+      `<h3 id="acoes">${p(l, 'mActions')} <button type="button" class="copybtn" id="kcopyact" data-txt="${esc(plain)}" title="${p(l, 'copyActions')}">📋</button></h3><ul>${minutes.acoes
         .map((a) => {
           const bits = [
             a.responsavel ? `${p(l, 'mOwner')}: ${esc(a.responsavel)}` : '',
@@ -500,7 +709,7 @@ function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined,
   }
   if (minutes.topicos.length) {
     parts.push(
-      `<h3>${p(l, 'mTopics')}</h3><ul>${minutes.topicos
+      `<h3 id="topicos">${p(l, 'mTopics')}</h3><ul>${minutes.topicos
         .map((tp) => `<li>${tsLink(tp.inicioMs, seekable)}${esc(tp.titulo)}</li>`)
         .join('')}</ul>`,
     );
@@ -529,26 +738,78 @@ function renderTranscription(
 ): string {
   const state = meta.transcription;
   if (!state || state.status === 'disabled') return '';
-  const title = `<h2>${p(l, 'transcript')}</h2>`;
-  if (state.status === 'pending') return `${title}<p class="tstate">${p(l, 'transcriptPending')}</p>`;
-  if (state.status === 'running') return `${title}<p class="tstate">${p(l, 'transcriptRunning')}</p>`;
-  if (state.status === 'error')
-    return `${title}<p class="tstate">${p(l, 'transcriptError')}${esc(state.error ?? '?')}</p>`;
-  if (!transcript || transcript.length === 0) return `${title}<p class="tstate">${p(l, 'transcriptEmpty')}</p>`;
+  const title = `<h2 id="transcricao">${p(l, 'transcript')}</h2>`;
+  const hasContent = !!transcript && transcript.length > 0;
 
-  // parcial: mostra o que já existe + aviso de quais faixas ainda faltam
-  const partialNote =
-    state.status === 'partial'
-      ? `<p class="tstate" style="margin-bottom:8px">${p(
-          l,
-          state.retryScheduled ? 'transcriptPartial' : 'transcriptPartialFinal',
-          { names: esc((state.error ?? '?').replace(/^faixas pendentes:\s*/i, '')) },
-        )}</p>`
-      : '';
+  // Banner de estado (mostrado ACIMA do conteúdo, se houver conteúdo — texto
+  // já entregue nunca some da página durante uma rodada de retry).
+  let note = '';
+  if (state.status === 'pending') note = `<p class="tstate">${p(l, 'transcriptPending')}</p>`;
+  else if (state.status === 'running') note = `<p class="tstate">${p(l, 'transcriptRunning')}</p>`;
+  else if (state.status === 'error') {
+    // erro com retry agendado NÃO é falha definitiva — não assustar o usuário
+    note = state.retryScheduled
+      ? `<p class="tstate">${p(l, 'transcriptRetrying')}</p>`
+      : `${title}<p class="tstate">${p(l, 'transcriptError')}${esc(shortError(state.error, l))}</p>${techDetails(state.error, l)}`;
+    if (!state.retryScheduled) return note; // erro final substitui a seção
+  } else if (state.status === 'partial') {
+    const names =
+      (state.pendingTracks ?? []).map((n) => esc(n)).join(', ') || (l === 'pt' ? 'algumas faixas' : 'some tracks');
+    note = `<p class="tstate" style="margin-bottom:8px">${p(
+      l,
+      state.retryScheduled ? 'transcriptPartial' : 'transcriptPartialFinal',
+      { names },
+    )}</p>`;
+  }
 
-  const body = transcript
-    .map((s) => `<p>${tsLink(s.startMs, seekable)}<span class="who">${esc(s.speaker)}:</span> ${esc(s.text)}</p>`)
+  if (!hasContent) {
+    if (state.status === 'done') return `${title}<p class="tstate">${p(l, 'transcriptEmpty')}</p>`;
+    return `${title}${note || `<p class="tstate">${p(l, 'transcriptPending')}</p>`}`;
+  }
+
+  // ---------- agrupamento por falante + cor estável + busca/filtro ----------
+  const order = new Map<string, number>();
+  meta.participants.forEach((pt, i) => order.set(pt.name, i));
+  const avatarOf = new Map(meta.participants.map((pt) => [pt.name, pt.avatar]));
+
+  const blocks: string[] = [];
+  let curSpeaker = '';
+  let curParas: string[] = [];
+  const flush = () => {
+    if (!curParas.length) return;
+    const ci = speakerColorIdx(curSpeaker, order);
+    const av = avatarOf.get(curSpeaker);
+    blocks.push(
+      `<div class="tblock" data-sp="${esc(curSpeaker)}">
+        <div class="thead">${av ? `<img src="${esc(av)}" alt="">` : `<span class="dot c${ci}"></span>`}<span class="who c${ci}">${esc(curSpeaker)}</span></div>
+        ${curParas.join('')}
+      </div>`,
+    );
+    curParas = [];
+  };
+  for (const s of transcript!) {
+    if (s.speaker !== curSpeaker) {
+      flush();
+      curSpeaker = s.speaker;
+    }
+    curParas.push(
+      `<p data-s="${Math.floor(s.startMs)}" data-e="${Math.floor(s.endMs)}">${tsLink(s.startMs, seekable)}${esc(s.text)}</p>`,
+    );
+  }
+  flush();
+
+  const speakers = [...new Set(transcript!.map((s) => s.speaker))];
+  const chips = speakers
+    .map(
+      (sp) =>
+        `<button type="button" class="fchip c${speakerColorIdx(sp, order)}" data-sp="${esc(sp)}">${esc(sp)}</button>`,
+    )
     .join('');
+  const search = `<div class="tsearch">
+      <input id="ksearch" type="search" placeholder="${p(l, 'searchTranscript')}" autocomplete="off">
+      ${speakers.length > 1 ? `<div class="fchips">${chips}</div>` : ''}
+    </div>`;
+
   // Downloads .md/.txt vão pelas rotas protegidas /rec/:id — no modo demo (público) omitimos.
   const dl = seekable
     ? `<div class="tdl">
@@ -556,7 +817,13 @@ function renderTranscription(
       <a href="/rec/${meta.id}/transcricao.txt">${p(l, 'transcriptDownloadTxt')}</a>
     </div>`
     : '';
-  return `${title}${partialNote}<div class="transcript">${body}</div>${dl}`;
+  return `${title}${note}${search}<div class="transcript">${blocks.join('')}</div>${dl}`;
+}
+
+/** Detalhe técnico dobrado (o erro cru fica disponível, mas fora da cara do usuário). */
+function techDetails(error: string | undefined, l: Locale): string {
+  if (!error) return '';
+  return `<details class="tech"><summary>${l === 'pt' ? 'detalhes técnicos' : 'technical details'}</summary><code>${esc(error)}</code></details>`;
 }
 
 export function messagePage(title: string, message: string, user?: WebUser, lang?: Locale): string {

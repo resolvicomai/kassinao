@@ -28,7 +28,7 @@ import { pageUrl, RecordingMeta, saveMeta, tracksDir } from '../store';
 import { safeSlice } from '../util';
 import { UserTrack } from './UserTrack';
 
-export type StopReason = 'manual' | 'tempo-maximo' | 'canal-vazio' | 'desconectado' | 'disco-cheio';
+export type StopReason = 'manual' | 'tempo-maximo' | 'canal-vazio' | 'desconectado' | 'disco-cheio' | 'reinicio';
 
 export const STOP_BUTTON_ID = 'kassinao_stop';
 export const NOTE_BUTTON_ID = 'kassinao_note';
@@ -39,6 +39,10 @@ const PANEL_EDIT_MIN_INTERVAL_MS = 2500;
 const MAX_PANEL_EVENTS = 10;
 /** Teto de faixas simultâneas (1 ffmpeg por falante) — protege CPU/processos num VPS pequeno. */
 const MAX_TRACKS = 25;
+/** Teto do log de eventos no meta (entra/sai em loop não pode inflar o JSON sem limite). */
+const MAX_EVENTS = 300;
+/** Anti-spam: entra/sai da MESMA pessoa dentro desta janela não gera novo evento. */
+const PRESENCE_EVENT_COOLDOWN_MS = 60_000;
 
 export class RecordingSession {
   readonly id: string;
@@ -216,6 +220,16 @@ export class RecordingSession {
     saveMeta(this.meta);
   }
 
+  /** Último evento de entra/sai por pessoa (anti-spam: loop de entra/sai não enche a timeline). */
+  private lastPresenceEventAt = new Map<string, number>();
+
+  private presenceEventAllowed(userId: string): boolean {
+    const last = this.lastPresenceEventAt.get(userId) ?? 0;
+    if (Date.now() - last < PRESENCE_EVENT_COOLDOWN_MS) return false;
+    this.lastPresenceEventAt.set(userId, Date.now());
+    return true;
+  }
+
   /** Alguém entrou no canal gravado (chamado pelo VoiceStateUpdate). */
   noteVoiceJoin(userId: string, name: string): void {
     if (this.stopping) return;
@@ -228,9 +242,11 @@ export class RecordingSession {
     } else {
       list.push({ id: userId, name, joinedAtMs: Date.now() - this.startedAt });
     }
-    this.addEvent(t(this.locale, 'event.voice-joined', { name: safeName(name) }));
+    if (this.presenceEventAllowed(userId)) {
+      this.addEvent(t(this.locale, 'event.voice-joined', { name: safeName(name) }));
+      this.schedulePanelUpdate();
+    }
     saveMeta(this.meta);
-    this.schedulePanelUpdate();
   }
 
   /** Alguém saiu do canal gravado. */
@@ -239,9 +255,11 @@ export class RecordingSession {
     const entry = this.meta.presence?.find((p) => p.id === userId && p.leftAtMs === undefined);
     if (!entry) return; // não estava registrado (ex.: bot) — nada a fazer
     entry.leftAtMs = Date.now() - this.startedAt;
-    this.addEvent(t(this.locale, 'event.voice-left', { name: safeName(name) }));
+    if (this.presenceEventAllowed(`out:${userId}`)) {
+      this.addEvent(t(this.locale, 'event.voice-left', { name: safeName(name) }));
+      this.schedulePanelUpdate();
+    }
     saveMeta(this.meta);
-    this.schedulePanelUpdate();
   }
 
   /** Consentimento visível: o bot vira "[GRAVANDO] ..." enquanto grava. */
@@ -469,7 +487,16 @@ export class RecordingSession {
 
   // ---------- eventos e painel ----------
 
-  private addEvent(text: string): void {
+  private addEvent(text: string, force = false): void {
+    // Teto duro: uma pessoa entrando/saindo em loop não infla o meta.json sem
+    // limite (DoS de disco) nem enterra o painel. O último slot vira reticências.
+    // `force` fura o teto para eventos estruturais (ex.: o encerramento).
+    if (!force && this.meta.events.length >= MAX_EVENTS) {
+      if (this.meta.events[this.meta.events.length - 1]?.text !== '…') {
+        this.meta.events.push({ atMs: Date.now() - this.startedAt, text: '…' });
+      }
+      return;
+    }
     this.meta.events.push({ atMs: Date.now() - this.startedAt, text });
   }
 
@@ -629,6 +656,7 @@ export class RecordingSession {
       reason === 'manual'
         ? t(this.locale, 'event.stopped-manual', { name: safeName(stoppedBy?.name ?? '?') })
         : t(this.locale, eventKey, { hours: config.maxRecordingHours }),
+      true, // evento de encerramento sempre entra, mesmo com o log no teto
     );
     saveMeta(this.meta);
 

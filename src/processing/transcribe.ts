@@ -273,8 +273,9 @@ async function transcribeRecording(recordingId: string): Promise<void> {
       }
     }
 
-    // Só é erro total se NINGUÉM foi transcrito; caso contrário entrega o que deu.
-    if (all.length === 0 && failed.length > 0) {
+    // Só é erro total se NENHUMA faixa teve sucesso (fala transcrita OU faixa
+    // legitimamente silenciosa contam como sucesso); senão entrega o que deu.
+    if (failed.length > 0 && doneTrackIds.size === 0) {
       throw new Error(`todas as faixas falharam (${failed.join(', ')})`);
     }
 
@@ -290,6 +291,7 @@ async function transcribeRecording(recordingId: string): Promise<void> {
       status: failed.length > 0 ? 'partial' : 'done',
       provider: config.transcribeProvider,
       doneTrackIds: [...doneTrackIds],
+      pendingTracks: failed.length > 0 ? failed : undefined,
       error: failed.length > 0 ? `faixas pendentes: ${failed.join(', ')}` : undefined,
       finishedAt: Date.now(),
     };
@@ -612,9 +614,9 @@ async function assemblyaiTranscribe(file: string, chunkSec: number): Promise<Raw
   const created = (await create.json()) as { id?: string; status?: string; error?: string };
   if (!created.id) throw new Error(`AssemblyAI não criou o job: ${created.error ?? 'sem id'}`);
 
-  // poll proporcional à duração do áudio (piso 3 min) — eles transcrevem bem
-  // mais rápido que tempo real, mas fila deles pode segurar em pico
-  const deadline = Date.now() + Math.max(3 * 60_000, chunkSec * 1000);
+  // poll proporcional à duração do áudio (piso 3 min, teto 30 min — os lotes têm
+  // no máx. 20 min de fala, e um poll sem teto seguraria a fila serial por horas)
+  const deadline = Date.now() + Math.min(30 * 60_000, Math.max(3 * 60_000, chunkSec * 1000));
   for (;;) {
     await new Promise((r) => setTimeout(r, 3000));
     const st = await fetchWithRetry(`${AAI_BASE}/transcript/${created.id}`, { headers: auth }, { attempts: 3 });
