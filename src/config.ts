@@ -58,6 +58,8 @@ export const config = {
   port: Number(process.env.PORT || 8080),
   /** URL pública usada nos links (ex.: https://kassinao.suaempresa.com). */
   baseUrl: (process.env.BASE_URL || `http://localhost:${process.env.PORT || 8080}`).replace(/\/$/, ''),
+  /** true quando o repo do GitHub está público — libera os links "GitHub"/access.ts e a afirmação "auditável" na landing. Padrão false pra nunca servir link 404. */
+  repoPublic: process.env.REPO_PUBLIC === 'true',
   recordingsDir,
   retentionDays: Number(process.env.RETENTION_DAYS || 7),
   maxRecordingHours: Number(process.env.MAX_RECORDING_HOURS || 6),

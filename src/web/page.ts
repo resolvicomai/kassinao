@@ -244,6 +244,7 @@ function shell(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 ${opts.noindex ? '<meta name="robots" content="noindex">' : ''}
 <title>${esc(title)} — Kassinão</title>
+<link rel="icon" href="${FAVICON}">
 <style>${SHELL_CSS}</style>
 </head>
 <body>
@@ -478,13 +479,18 @@ export function messagePage(title: string, message: string, user?: WebUser, lang
 
 const REPO_URL = 'https://github.com/resolvicomai/kassinao';
 
+// favicon inline (marca "K" em blurple) — data: URI permitido pela CSP (img-src data:), sem asset externo
+const FAVICON =
+  "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%235865F2'/%3E%3Ctext%20x='16'%20y='23'%20font-size='19'%20font-weight='bold'%20text-anchor='middle'%20fill='white'%20font-family='sans-serif'%3EK%3C/text%3E%3C/svg%3E";
+
 // CSS da landing (vitrine pública). Documento próprio, full-width — NÃO usa o
 // .card estreito do shell(). Mesmos tokens de cor do Discord do SHELL_CSS.
 // Tudo self-contained (CSP: sem fonte/CSS/JS/imagem externa).
 const LANDING_CSS = `
   :root { color-scheme: dark; }
   * { box-sizing: border-box; margin: 0; }
-  html, body { max-width: 100%; overflow-x: hidden; }
+  /* clip (não hidden): impede scroll horizontal SEM virar container de scroll, senão quebra o position:sticky do topnav */
+  html, body { max-width: 100%; overflow-x: clip; }
   body { background: #1e1f22; color: #dbdee1;
          font-family: -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif; line-height: 1.55; }
   a { color: inherit; }
@@ -506,6 +512,7 @@ const LANDING_CSS = `
   .eyebrow b { color: #f2f3f5; font-weight: 700; }
   /* topbar */
   .topnav { position: sticky; top: 0; z-index: 20; background: rgba(30,31,34,.86);
+            -webkit-backdrop-filter: saturate(140%) blur(8px);
             backdrop-filter: saturate(140%) blur(8px); border-bottom: 1px solid #26282c; }
   .topnav .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px;
                   height: 56px; }
@@ -530,7 +537,7 @@ const LANDING_CSS = `
   .btn-outline:hover { border-color: #5865f2; }
   .btn-ghost { background: transparent; color: #b5bac1; padding: 13px 10px; }
   .btn-ghost:hover { color: #f2f3f5; }
-  .microline { margin-top: 16px; font-size: 0.86rem; color: #80848e; }
+  .microline { margin-top: 16px; font-size: 0.86rem; color: #949ba4; }
   .microline b { color: #b5bac1; font-weight: 600; }
   /* hero split */
   .hero-split { display: flex; gap: 16px; margin-top: 40px; align-items: stretch;
@@ -577,12 +584,13 @@ const LANDING_CSS = `
   .ans-row:nth-child(2){animation-delay:.15s} .ans-row:nth-child(3){animation-delay:.3s} .ans-row:nth-child(4){animation-delay:.45s}
   .sdot { width: 7px; height: 7px; border-radius: 50%; background: #f0b232; flex: 0 0 auto; }
   .ans-row .tk { color: #dbdee1; flex: 1 1 60%; min-width: 0; }
+  .ans-meta { display: flex; align-items: center; gap: 7px; margin-left: auto; flex-wrap: nowrap; }
   .pill { font-size: 0.72rem; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
   .pill-owner { background: #2b2d31; color: #b5bac1; border: 1px solid #3a3c42; }
   .pill-due { background: #322a12; color: #f0b232; border: 1px solid #46402a; }
   .ts { color: #00a8fc; text-decoration: none; font-size: 0.8rem; white-space: nowrap; }
   .ts:hover { text-decoration: underline; }
-  .ans-foot { color: #80848e; font-size: 0.72rem; margin-top: 10px; }
+  .ans-foot { color: #949ba4; font-size: 0.72rem; margin-top: 10px; }
   /* generic grids */
   .grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 34px; }
   .qcard { background: #2b2d31; border: 1px solid #26282c; border-radius: 12px; padding: 15px; }
@@ -637,7 +645,7 @@ const LANDING_CSS = `
   .step { flex: 1; background: #2b2d31; border: 1px solid #26282c; border-radius: 12px; padding: 16px; min-width: 0; }
   .step-num { width: 26px; height: 26px; border-radius: 50%; background: #5865f2; color: #fff; font-weight: 800;
               font-size: 0.85rem; display: flex; align-items: center; justify-content: center; margin-bottom: 10px; }
-  .step h4 { color: #f2f3f5; font-size: 0.98rem; margin-bottom: 5px; }
+  .step h3 { color: #f2f3f5; font-size: 0.98rem; margin-bottom: 5px; }
   .step p { color: #949ba4; font-size: 0.86rem; }
   .terminal { margin-top: 12px; background: #1a1b1e; border: 1px solid #26282c; border-radius: 9px; overflow: hidden; }
   .term-bar { display: flex; align-items: center; gap: 6px; padding: 8px 11px; border-bottom: 1px solid #26282c; }
@@ -645,8 +653,8 @@ const LANDING_CSS = `
   .term-bar .cp { margin-left: auto; font-size: 0.72rem; color: #949ba4; background: none; border: 0; cursor: pointer; font-family: inherit; }
   .term-body { padding: 12px; font-family: ui-monospace, monospace; font-size: 0.8rem; color: #b5bac1;
                white-space: pre-wrap; word-break: break-word; }
-  .term-body .flag { color: #80848e; }
-  .term-note { color: #80848e; font-size: 0.78rem; margin-top: 8px; }
+  .term-body .flag { color: #949ba4; }
+  .term-note { color: #949ba4; font-size: 0.78rem; margin-top: 8px; }
   .deploy-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
   .dcard { background: #232428; border: 1px solid #26282c; border-radius: 12px; padding: 15px; color: #949ba4; font-size: 0.87rem; }
   .dcard b { color: #dbdee1; }
@@ -654,7 +662,7 @@ const LANDING_CSS = `
   .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-top: 32px; }
   .feature { background: #2b2d31; border: 1px solid #26282c; border-radius: 12px; padding: 16px; }
   .f-icon { font-size: 1.5rem; margin-bottom: 9px; }
-  .feature h4 { color: #f2f3f5; font-size: 0.96rem; margin-bottom: 5px; }
+  .feature h3 { color: #f2f3f5; font-size: 0.96rem; margin-bottom: 5px; }
   .feature p { color: #949ba4; font-size: 0.86rem; }
   /* final cta */
   .final { background: radial-gradient(120% 120% at 50% 0%, rgba(88,101,242,.22) 0%, rgba(30,31,34,0) 60%); }
@@ -662,7 +670,11 @@ const LANDING_CSS = `
   /* footer */
   footer { border-top: 1px solid #26282c; padding: 26px 0; }
   footer .wrap { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
-  .sig { color: #80848e; font-size: 0.82rem; }
+  .sig { color: #949ba4; font-size: 0.82rem; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+                     clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+  a:focus-visible, button:focus-visible, .btn:focus-visible, .cp:focus-visible {
+    outline: 2px solid #a9b0ff; outline-offset: 2px; border-radius: 4px; }
   /* animations */
   @keyframes recpulse { 0%,100%{opacity:1; box-shadow:0 0 0 0 rgba(218,55,60,.5)} 50%{opacity:.55; box-shadow:0 0 0 5px rgba(218,55,60,0)} }
   @keyframes wave { 0%,100%{transform:scaleY(.4)} 50%{transform:scaleY(1)} }
@@ -676,6 +688,21 @@ const LANDING_CSS = `
     .wave i { animation: none !important; }
     .steps { flex-direction: column; }
     .receipts, .deploy-cards { grid-template-columns: 1fr; }
+    /* nav cabe em 375px: some com os links de texto (estão no herói/rodapé), fica marca + EN·PT */
+    .topnav .wrap { gap: 8px; }
+    .navlinks { gap: 4px; }
+    .navlinks > a { display: none; }
+  }
+  @media (max-width: 640px) {
+    /* tabela vs Craig vira cards empilhados: a coluna Kassinão aparece SEM scroll horizontal */
+    .cmp-wrap { overflow-x: visible; border: 0; }
+    table.cmp { min-width: 0; }
+    table.cmp thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    table.cmp tr { display: block; border: 1px solid #26282c; border-radius: 10px; margin-bottom: 10px; padding: 4px 0; }
+    table.cmp td { display: flex; justify-content: space-between; gap: 12px; border: 0; padding: 8px 14px; }
+    table.cmp td.feat { font-weight: 700; color: #f2f3f5; border-bottom: 1px solid #26282c; }
+    table.cmp td.us { background: none; }
+    table.cmp td:not(.feat)::before { content: attr(data-col); color: #949ba4; }
   }
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
@@ -702,11 +729,30 @@ export function landingPage(lang: Locale): string {
 
   const langToggle = `<div class="langtoggle"><a href="?lang=en"${!pt ? ' class="on"' : ''}>EN</a><span>·</span><a href="?lang=pt"${pt ? ' class="on"' : ''}>PT</a></div>`;
 
+  const langUrl = `${config.baseUrl}/?lang=${pt ? 'pt' : 'en'}`;
+
   // secondary CTA só quando o MCP está ligado neste servidor (mesmo gate do produto)
   const connectBtn = (cls: string): string =>
     mcpOn
       ? `<a class="btn ${cls}" href="/conectar-ia">${T('🔌 Conectar Claude/Cursor', '🔌 Connect Claude/Cursor')}</a>`
       : '';
+
+  // Gate do GitHub: enquanto o repo é privado, TODO link pro GitHub daria 404 — então
+  // o botão "GitHub" aponta pro pacote npm (público) e a afirmação "auditável" some.
+  // Vira o REPO_PUBLIC=true no servidor DEPOIS de tornar o repo público.
+  const NPM_URL = 'https://www.npmjs.com/package/kassinao-mcp';
+  const repoPublic = config.repoPublic;
+  const ghHref = repoPublic ? REPO_URL : NPM_URL;
+  const ghBtn = (cls: string): string =>
+    `<a class="btn ${cls}" href="${ghHref}">${repoPublic ? '⭐ GitHub' : '📦 npm'}</a>`;
+  const auditable = T(
+    repoPublic ? 'No seu servidor, MIT open-source, auditável.' : 'No seu servidor, MIT open-source.',
+    repoPublic ? 'Self-hosted, MIT open-source, auditable.' : 'Self-hosted, MIT open-source.',
+  );
+  // "recibo" access.ts: link real só quando o repo é público; senão texto puro (sem 404)
+  const accessReceipt = repoPublic
+    ? `<a class="pill-link" href="${REPO_URL}/blob/main/src/web/access.ts">&lt;/&gt; checkAccess() · access.ts →</a>`
+    : `<span class="pill-link">&lt;/&gt; checkAccess() · src/web/access.ts</span>`;
 
   // ---- HERO ----
   const avatars: [string, string][] = [
@@ -731,10 +777,10 @@ export function landingPage(lang: Locale): string {
 
   const chatQuestion = T('o que ficou pendente essa semana?', "what's pending this week?");
   const ansRow = (task: string, owner: string, due: string, ts: string): string =>
-    `<div class="ans-row"><span class="sdot"></span><span class="tk">${task}</span><span class="pill pill-owner">${owner}</span><span class="pill pill-due">${due}</span><a class="ts" href="/demo">▶ ${ts}</a></div>`;
+    `<div class="ans-row"><span class="sdot"></span><span class="tk">${task}</span><span class="ans-meta"><span class="pill pill-owner">${owner}</span><span class="pill pill-due">${due}</span><a class="ts" href="/demo">▶ ${ts}</a></span></div>`;
   const answerRows =
     ansRow(
-      T('Mergear o rollback do onboarding + feature-flag', 'Merge the onboarding rollback + feature-flag it'),
+      T('Dar merge no rollback do onboarding + feature-flag', 'Merge the onboarding rollback + feature-flag it'),
       'Rafael',
       T('qua', 'Wed'),
       '16:10',
@@ -762,7 +808,7 @@ export function landingPage(lang: Locale): string {
     <div class="ctarow">
       <a class="btn btn-primary" href="/demo">${T('▶️ Ver o exemplo ao vivo', '▶️ See the live example')}</a>
       ${connectBtn('btn-outline')}
-      <a class="btn btn-ghost" href="${REPO_URL}">${T('⭐ GitHub', '⭐ GitHub')}</a>
+      ${ghBtn('btn-ghost')}
     </div>
     <div class="microline">${T('Sem login', 'No login')} · <b>${T('roda no seu servidor', 'runs on your server')}</b> · ${T('MIT open-source', 'MIT open-source')}</div>
 
@@ -795,9 +841,9 @@ export function landingPage(lang: Locale): string {
     <h2>${T('Você pergunta em linguagem natural. Ele responde com prova.', 'You ask in plain language. It answers with proof.')}</h2>
     <p class="lead">${T('Cinco ferramentas MCP, no formato da pergunta que você digitaria — sem sair do seu assistente.', 'Five MCP tools, framed as the question you actually type — without leaving your assistant.')}</p>
     <div class="grid-cards">
-      ${qcard(true, T('⏳ O que ficou pendente essa semana?', "⏳ What's still pending this week?"), 'pending_actions', T('Rollback do onboarding — Rafael, qua · Load test — Mei · E-mail de lançamento — Priya, qui', 'Onboarding rollback — Rafael, Wed · Load test — Mei · Launch email — Priya, Thu'), T('cruza TODAS as calls', 'across ALL your calls'))}
+      ${qcard(true, T('⏳ O que ficou pendente essa semana?', "⏳ What's still pending this week?"), 'pending_actions', T('Rollback do onboarding — Rafael, qua · Load test — Mei, qua · E-mail de lançamento — Priya, qui', 'Onboarding rollback — Rafael, Wed · Load test — Mei, Wed EOD · Launch email — Priya, Thu'), T('cruza TODAS as calls', 'across ALL your calls'))}
       ${qcard(false, T('🗣️ Quando o Rafael falou do pico de churn?', '🗣️ When did Rafael flag the churn spike?'), 'who_said', T('Investigação do pico de churn (onboarding) <a class="ts" href="/demo">▶ 16:10</a>', 'Churn spike investigation (onboarding) <a class="ts" href="/demo">▶ 16:10</a>'))}
-      ${qcard(false, T('🔎 Onde a gente decidiu subir o plano anual?', '🔎 Where did we decide to ship annual pricing?'), 'search_meetings', T('Decisão: subir o plano anual pra 100% (+18% de conversão a 20%) <a class="ts" href="/demo">▶ 29:40</a>', 'Decision: ship annual pricing to 100% (was +18% conversion at 20%) <a class="ts" href="/demo">▶ 29:40</a>'))}
+      ${qcard(false, T('🔎 Onde a gente decidiu subir o plano anual?', '🔎 Where did we decide to ship annual pricing?'), 'search_meetings', T('Decisão: subir o plano anual pra 100% — +18% de conversão a 20% de rollout <a class="ts" href="/demo">▶ 29:40</a>', 'Decision: ship annual pricing to 100% — +18% conversion at 20% rollout <a class="ts" href="/demo">▶ 29:40</a>'))}
       ${qcard(false, T('📅 Lista as calls de 1 a 30 de junho', '📅 List the calls from June 1–30'), 'list_meetings', T('Janelas de data e "essa semana / semana passada" funcionam.', 'Date ranges and "this week / last week" windows both work.'))}
       ${qcard(false, T('📄 Me dá o dossiê da product-sync', '📄 Give me the product-sync dossier'), 'get_meeting', T('Resumo + decisões + itens de ação + timeline.', 'Summary + decisions + action items + timeline.'))}
     </div>
@@ -826,7 +872,7 @@ export function landingPage(lang: Locale): string {
         ${dec('Abrir vaga pra um segundo engenheiro de infra/SRE.', 'Open a headcount for a second infra/SRE engineer.')}
       </ul>
       <div class="mc-h3">${T('ITENS DE AÇÃO', 'ACTION ITEMS')}</div>
-      ${mcAction(T('Mergear o rollback do onboarding + feature-flag', 'Merge the onboarding rollback + feature-flag it'), 'Rafael · ' + T('qua', 'Wed'), '16:10')}
+      ${mcAction(T('Dar merge no rollback do onboarding + feature-flag', 'Merge the onboarding rollback + feature-flag it'), 'Rafael · ' + T('qua', 'Wed'), '16:10')}
       ${mcAction(T('Rodar o load test no staging e compartilhar os números', 'Run the load test against staging and share numbers'), 'Mei · ' + T('qua', 'Wed EOD'), '5:20')}
       ${mcAction(T('Finalizar e-mail de lançamento + changelog, agendar qui 9h', 'Finalize launch email + changelog, schedule for Thu 9am'), 'Priya · ' + T('qui', 'Thu'), '55:30')}
     </div>
@@ -840,25 +886,25 @@ export function landingPage(lang: Locale): string {
     <div class="kicker">${T('Confiança com recibo, não com adjetivo', 'Receipts, not adjectives')}</div>
     <h2>${T('Sua IA só vê as calls que você já veria. Nunca mais que isso.', 'Your AI only sees the calls you could already see. Never more.')}</h2>
     <div class="receipts">
-      ${receipt('🔐', T('Acesso pela sua identidade', 'Access by your identity'), T('Reconferido ao vivo contra o Discord por reunião: você iniciou, participou, enxerga o canal ou tem Gerenciar Servidor. Não existe modo "operador vê tudo".', 'Re-checked live against Discord per meeting: you started it, you were in it, you can see the channel, or you have Manage-Server. There is no "operator sees everything" mode.') + `<br><span class="mono strike">// seeAll — ${T('não existe', 'does not exist')}</span><br><a class="pill-link" href="${REPO_URL}/blob/main/src/web/access.ts">&lt;/&gt; checkAccess() · access.ts →</a>`)}
+      ${receipt('🔐', T('Acesso pela sua identidade', 'Access by your identity'), T('Reconferido ao vivo contra o Discord por reunião: você iniciou, participou, enxerga o canal ou tem Gerenciar Servidor. Não existe modo "operador vê tudo".', 'Re-checked live against Discord per meeting: you started it, you were in it, you can see the channel, or you have Manage-Server. There is no "operator sees everything" mode.') + `<br><span class="mono strike">// seeAll — ${T('não existe', 'does not exist')}</span><br>${accessReceipt}`)}
       ${receipt('👁️', T('Somente leitura', 'Read-only'), T('O conector não grava, não apaga e não serve áudio. Cinco ferramentas, todas de leitura.', 'The connector never writes, never deletes, never serves audio. Five tools, all read-only.'))}
       ${receipt('♻️', T('Token rotaciona a cada uso', 'Token rotates every use'), T('O refresh fica em ', 'The refresh token lives at ') + `<code>~/.config/kassinao-mcp/token.json</code> (<code>chmod 0600</code>)` + T('; um token roubado e reapresentado denuncia o reuso e mata a sessão. Fail-closed: sem verificar acesso, o MCP responde 503 — nunca um grant falso.', "; a replayed/stolen token trips reuse-detection and kills the session. Fail-closed: if access can't be verified the MCP returns 503 — never a false grant."))}
       ${receipt('🧨', T('Revogue quando quiser', 'Revoke anytime'), T('Três formas: "Revogar todos" na web, ', 'Three ways: "Revoke all" on the web, ') + `<code>/mcp revoke-all</code>` + T(' no Discord, ou girar o ', ' in Discord, or rotate ') + `<code>MCP_SECRET</code>` + T(' como botão de pânico do admin.', ' as the admin panic button.'))}
     </div>
-    <div class="inj-banner"><span>🛡️</span><span>${T('O conteúdo da reunião — transcrição, notas, até apelidos — é tratado como entrada não-confiável e higienizado antes de chegar em qualquer LLM (defesa contra prompt-injection). No seu servidor, MIT open-source, auditável.', 'Meeting content — transcript, notes, even display names — is treated as untrusted input and sanitized before it reaches any LLM (prompt-injection defense). Self-hosted, MIT open-source, auditable.')}</span></div>
+    <div class="inj-banner"><span>🛡️</span><span>${T('O conteúdo da reunião — transcrição, notas, até apelidos — é tratado como entrada não-confiável e higienizado antes de chegar em qualquer LLM (defesa contra prompt-injection).', 'Meeting content — transcript, notes, even display names — is treated as untrusted input and sanitized before it reaches any LLM (prompt-injection defense).')} ${auditable}</span></div>
   </div></section>`;
 
   // ---- CRAIG COMPARISON ----
-  const yes = '<span class="yes">✅</span>';
-  const dash = '<span class="no">—</span>';
+  const yes = `<span class="yes" role="img" aria-label="${T('Sim', 'Yes')}">✓</span>`;
+  const dash = `<span class="no">—<span class="visually-hidden"> ${T('Não', 'No')}</span></span>`;
   const row = (feat: string, craig: string, us: string): string =>
-    `<tr><td class="feat">${feat}</td><td>${craig}</td><td class="us">${us}</td></tr>`;
+    `<tr><td class="feat">${feat}</td><td data-col="Craig">${craig}</td><td class="us" data-col="Kassinão">${us}</td></tr>`;
   const craigSection = `<section><div class="wrap">
     <div class="kicker">${T('Vindo do Craig?', 'Coming from Craig?')}</div>
     <h2>${T('O Craig grava. O Kassinão lembra — e você pergunta.', 'Craig records. Kassinão remembers — and you ask.')}</h2>
     <p class="lead">${T('Cada pessoa numa faixa própria: quem falou é sabido, não chutado por diarização — nunca embola crosstalk nem nome fora do inglês. Você mantém tudo que o Craig faz bem e ganha a camada que ele te manda comprar em outro lugar.', 'Every participant on their own track: who spoke is known, not guessed by diarization — it never garbles crosstalk or non-English names. You keep everything Craig does well and gain the layer Craig sends you elsewhere to buy.')}</p>
     <div class="cmp-wrap"><table class="cmp">
-      <thead><tr><th>${T('Recurso', 'Feature')}</th><th>Craig</th><th class="us">Kassinão</th></tr></thead>
+      <thead><tr><th scope="col">${T('Recurso', 'Feature')}</th><th scope="col">Craig</th><th class="us" scope="col">Kassinão</th></tr></thead>
       <tbody>
         ${row(T('Multipista — uma faixa por pessoa', 'Multi-track — one track per person'), yes, yes)}
         ${row(T('Export MP3 · FLAC · Mix · Audacity', 'Export MP3 · FLAC · Mix · Audacity'), yes, yes)}
@@ -877,15 +923,15 @@ export function landingPage(lang: Locale): string {
     <div class="kicker">${T('No ar em minutos', 'Live in minutes')}</div>
     <h2>${T('No seu servidor — e honesto sobre o custo.', 'On your server — and honest about cost.')}</h2>
     <div class="steps">
-      <div class="step"><div class="step-num">1</div><h4>${T('Suba o bot', 'Boot the bot')}</h4><p>${T('Docker Compose + um app do Discord, ou o blueprint Deploy-to-Render de um clique. HTTPS via Cloudflare Tunnel, sem abrir portas.', 'Docker Compose + a Discord app, or the one-click Deploy-to-Render blueprint. HTTPS via Cloudflare Tunnel, no open ports.')}</p></div>
-      <div class="step"><div class="step-num">2</div><h4>${T('Grave', 'Record')}</h4><p>${T('/gravar num canal de voz, ou auto-grava quando 2+ pessoas entram — com o apelido [REC] e um painel ao vivo. Nunca secreto.', '/gravar in a voice channel, or auto-record when 2+ people join — with a [REC] nickname tag and a live in-channel panel. Never covert.')}</p></div>
-      <div class="step"><div class="step-num">3</div><h4>${T('Conecte', 'Connect')}</h4><p>${T('Abra /conectar-ia, entre com o Discord e rode o comando pra plugar o Claude ou o Cursor:', 'Open /conectar-ia, sign in with Discord, and run the command to connect Claude or Cursor:')}</p>
+      <div class="step"><div class="step-num">1</div><h3>${T('Suba o bot', 'Boot the bot')}</h3><p>${T('Docker Compose + um app do Discord, ou um blueprint Deploy-to-Render. HTTPS via Cloudflare Tunnel, sem abrir portas.', 'Docker Compose + a Discord app, or a Deploy-to-Render blueprint. HTTPS via Cloudflare Tunnel, no open ports.')}</p></div>
+      <div class="step"><div class="step-num">2</div><h3>${T('Grave', 'Record')}</h3><p>${T('/gravar num canal de voz, ou auto-grava quando 2+ pessoas entram — com o apelido [REC] e um painel ao vivo. Nunca secreto.', '/gravar in a voice channel, or auto-record when 2+ people join — with a [REC] nickname tag and a live in-channel panel. Never covert.')}</p></div>
+      <div class="step"><div class="step-num">3</div><h3>${T('Conecte', 'Connect')}</h3><p>${T('Abra /conectar-ia, entre com o Discord e rode o comando pra plugar o Claude ou o Cursor:', 'Open /conectar-ia, sign in with Discord, and run the command to connect Claude or Cursor:')}</p>
         <div class="terminal"><div class="term-bar"><i style="background:#da373c"></i><i style="background:#f0b232"></i><i style="background:#23a55a"></i><button class="cp mono" id="kcp" type="button">⧉ ${T('copiar', 'copy')}</button></div><div class="term-body mono" id="kcmd">${esc(cmd)}</div></div>
         <div class="term-note">${T('código válido ~5 min, uso único · ', 'code valid ~5 min, single use · ')}<span class="codechip">npx -y kassinao-mcp</span> · 5 ${T('ferramentas', 'tools')}</div>
       </div>
     </div>
     <div class="deploy-cards">
-      <div class="dcard">🐳 <b>Docker Compose</b> · 🚀 Deploy to Render · 🔒 Cloudflare Tunnel — 0 ${T('portas abertas', 'open ports')}</div>
+      <div class="dcard">🐳 <b>Docker Compose</b> · ${repoPublic ? `<a class="ts" href="https://render.com/deploy?repo=${REPO_URL}">🚀 Deploy to Render</a>` : '🚀 Deploy to Render'} · 🔒 Cloudflare Tunnel — 0 ${T('portas abertas', 'open ports')}</div>
       <div class="dcard">${T('Custo, direto: transcrição é BYO-key e multipista, então escala com o nº de pessoas — de alguns centavos a um pouco mais por reunião — ou rode 100% local com faster-whisper (o áudio nunca sai da sua máquina). Ata: alguns centavos.', 'Cost, straight: transcription is bring-your-own-key and multi-track, so it scales with the number of speakers — a few cents to a bit more per meeting — or run it 100% local with faster-whisper (audio never leaves your box). Minutes: a few cents.')} <span class="codechip">[REC]</span></div>
     </div>
   </div></section>`;
@@ -945,7 +991,7 @@ export function landingPage(lang: Locale): string {
   const featSection = `<section><div class="wrap">
     <div class="kicker">${T('Tudo funciona sozinho — a IA é o bônus', 'Everything works standalone — the AI is the bonus')}</div>
     <h2>${T('Um gravador completo. Mais uma memória que responde.', 'A complete recorder. Plus a memory that answers.')}</h2>
-    <div class="features">${feats.map(([ic, t, d]) => `<div class="feature"><div class="f-icon">${ic}</div><h4>${t}</h4><p>${d}</p></div>`).join('')}</div>
+    <div class="features">${feats.map(([ic, t, d]) => `<div class="feature"><div class="f-icon">${ic}</div><h3>${t}</h3><p>${d}</p></div>`).join('')}</div>
   </div></section>`;
 
   // ---- FINAL CTA ----
@@ -955,9 +1001,9 @@ export function landingPage(lang: Locale): string {
     <div class="ctarow">
       <a class="btn btn-primary" href="/demo">${T('▶️ Ver o exemplo ao vivo', '▶️ See the live example')}</a>
       ${connectBtn('btn-outline')}
-      <a class="btn btn-ghost" href="${REPO_URL}">⭐ GitHub</a>
+      ${ghBtn('btn-ghost')}
     </div>
-    <div class="microline"><span class="codechip">npm: kassinao-mcp</span></div>
+    <div class="microline"><a class="codechip" href="${NPM_URL}">npm: kassinao-mcp</a></div>
   </div></section>`;
 
   const topnav = `<div class="topnav"><div class="wrap">
@@ -965,7 +1011,7 @@ export function landingPage(lang: Locale): string {
     <div class="navlinks">
       <a href="/demo">${T('Exemplo', 'Demo')}</a>
       ${mcpOn ? `<a href="/conectar-ia">${T('Conectar IA', 'Connect AI')}</a>` : ''}
-      <a href="${REPO_URL}">GitHub</a>
+      <a href="${ghHref}">${repoPublic ? 'GitHub' : 'npm'}</a>
       ${langToggle}
     </div>
   </div></div>`;
@@ -982,13 +1028,21 @@ export function landingPage(lang: Locale): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#1e1f22">
+<link rel="icon" href="${FAVICON}">
 <title>${esc(metaTitle)}</title>
 <meta name="description" content="${esc(metaDesc)}">
+<link rel="canonical" href="${esc(langUrl)}">
+<link rel="alternate" hreflang="en" href="${esc(config.baseUrl)}/?lang=en">
+<link rel="alternate" hreflang="pt-BR" href="${esc(config.baseUrl)}/?lang=pt">
+<link rel="alternate" hreflang="x-default" href="${esc(config.baseUrl)}/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="${esc(metaTitle)}">
 <meta property="og:description" content="${esc(metaDesc)}">
-<meta property="og:url" content="${esc(config.baseUrl)}/">
+<meta property="og:url" content="${esc(langUrl)}">
 <meta property="og:image" content="${esc(config.baseUrl)}/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="${esc(metaTitle)}">
 <meta name="twitter:description" content="${esc(metaDesc)}">
