@@ -99,11 +99,23 @@ export async function detectSpeechIntervals(file: string, durationSec: number): 
 /**
  * Agrupa intervalos de fala em lotes de até `maxBatchSec` segundos de FALA.
  * Cada lote vira um único arquivo compactado (uma chamada de API).
+ * Intervalos individuais maiores que o teto são DIVIDIDOS (fala/música contínua
+ * de horas estouraria o limite de upload da API e a memória).
  */
 export function batchIntervals(intervals: SpeechInterval[], maxBatchSec: number): SpeechBatch[] {
+  const pieces: SpeechInterval[] = [];
+  for (const i of intervals) {
+    let start = i.start;
+    while (i.end - start > maxBatchSec) {
+      pieces.push({ start, end: start + maxBatchSec });
+      start += maxBatchSec;
+    }
+    if (i.end - start > 0) pieces.push({ start, end: i.end });
+  }
+
   const batches: SpeechBatch[] = [];
   let cur: SpeechBatch = { intervals: [], batchStarts: [], durationSec: 0 };
-  for (const i of intervals) {
+  for (const i of pieces) {
     const dur = i.end - i.start;
     if (
       cur.intervals.length > 0 &&

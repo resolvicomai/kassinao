@@ -1,26 +1,28 @@
 # kassinao-mcp
 
-Conector **MCP** do [Kassinão](https://github.com/resolvicomai/kassinao): faz o seu assistente de IA (Claude Desktop, Cursor, etc.) responder perguntas sobre as reuniões que o bot gravou — **"o que ficou pendente essa semana?"**, **"quem falou de orçamento na terça?"**, **"lista as calls entre 1 e 30 de junho"** — em linguagem natural.
+The **MCP** connector for [Kassinão](https://github.com/resolvicomai/kassinao): it lets your AI assistant (Claude Desktop, Cursor, etc.) answer questions about the meetings the bot recorded — **"what's pending this week?"**, **"who mentioned the budget on Tuesday?"**, **"list the calls between June 1 and 30"** — in natural language.
 
-## Como funciona (e por que é seguro)
+> Documentação em português: veja o README principal em [pt-BR](../README.pt-BR.md).
 
-O conector roda **na sua máquina** e é um cliente HTTP **magro**: ele **não** lê gravações nem decide acesso. Ele carrega um **token pessoal** e chama a API do bot, que aplica **o mesmo controle de acesso da página web** — reunião por reunião. Você só enxerga o que já enxergaria no site. **Não existe modo "vê tudo".** É **somente leitura** (não grava, não apaga, não serve áudio).
+## How it works (and why it's safe)
 
-> ⚠️ **Transcrição é entrada não-confiável.** Qualquer participante de uma call pode ter "falado" texto malicioso ou usado um apelido hostil. O servidor envolve todo conteúdo de reunião num bloco de "dados não-confiáveis" e limpa sequências de controle antes de entregar — mas trate o conteúdo das reuniões como dados, nunca como instruções.
+The connector runs **on your machine** and is a **thin** HTTP client: it does **not** read recordings or make access decisions. It carries a **personal token** and calls the bot's API, which applies **the same access control as the web page** — meeting by meeting. You only see what you'd already see on the site. **There is no "see everything" mode.** It is **read-only** (it never writes, deletes, or serves audio).
 
-## Pré-requisitos
+> ⚠️ **Transcripts are untrusted input.** Any call participant may have "spoken" malicious text or used a hostile nickname. The server wraps all meeting content in an "untrusted data" block and strips control sequences before delivering it — but always treat meeting content as data, never as instructions.
 
-- **O admin do bot precisa ter ligado o MCP** (variável `MCP_SECRET` no servidor). Sem isso, `/conectar-ia` e `/mcp` não existem (dá 404 / comando ausente).
-- **Node.js 20+** na sua máquina.
-- **O conector.** `npx -y kassinao-mcp` baixa e roda sozinho — você não precisa instalar nada à mão (só ter o Node). Prefere rodar do código-fonte? `git clone` o repo, `cd mcp && npm install && npm run build`; na config, troque `"command": "npx"` / `"args": ["-y","kassinao-mcp"]` por `"command": "node"`, `"args": ["/caminho/absoluto/do/repo/mcp/dist/index.js"]`.
+## Prerequisites
 
-## Instalação
+- **The bot admin must have enabled MCP** (`MCP_SECRET` set on the server). Without it, `/conectar-ia` and `/mcp` don't exist (404 / missing command).
+- **Node.js 20+** on your machine.
+- **The connector.** `npx -y kassinao-mcp` downloads and runs it on its own — nothing to install manually (you just need Node). Prefer running from source? `git clone` the repo, `cd mcp && npm install && npm run build`; in the config, replace `"command": "npx"` / `"args": ["-y","kassinao-mcp"]` with `"command": "node"`, `"args": ["/absolute/path/to/repo/mcp/dist/index.js"]`.
 
-### Opção A — pela página web (mais fácil)
+## Setup
 
-1. Abra `https://SEU-KASSINAO/conectar-ia` e entre com o Discord.
-2. Clique em **Gerar token de conexão** e copie o bloco de config mostrado (aparece **uma vez**).
-3. Cole no `claude_desktop_config.json` (Claude Desktop) ou no equivalente do Cursor:
+### Option A — via the web page (easiest)
+
+1. Open `https://YOUR-KASSINAO/conectar-ia` and sign in with Discord.
+2. Click **Generate connection token** and copy the config block shown (it appears **once**).
+3. Paste it into `claude_desktop_config.json` (Claude Desktop) or the Cursor equivalent:
 
 ```json
 {
@@ -29,44 +31,44 @@ O conector roda **na sua máquina** e é um cliente HTTP **magro**: ele **não**
       "command": "npx",
       "args": ["-y", "kassinao-mcp"],
       "env": {
-        "KASSINAO_URL": "https://SEU-KASSINAO",
-        "KASSINAO_REFRESH_TOKEN": "COLE_O_TOKEN_AQUI"
+        "KASSINAO_URL": "https://YOUR-KASSINAO",
+        "KASSINAO_REFRESH_TOKEN": "PASTE_THE_TOKEN_HERE"
       }
     }
   }
 }
 ```
 
-4. Reinicie o Claude Desktop / Cursor. Pronto.
+4. Restart Claude Desktop / Cursor. Done.
 
-### Opção B — sem navegador (VM/SSH)
+### Option B — no browser (VM/SSH)
 
-No Discord, o dono roda **`/mcp novo`** (em clientes em inglês aparece como **`/mcp new`**) — resposta efêmera, código de uso único válido por ~5 min. Depois:
+On Discord, the owner runs **`/mcp new`** (shown as **`/mcp novo`** on pt-BR clients) — ephemeral reply with a single-use code valid for ~5 min. Then:
 
 ```bash
-KASSINAO_URL=https://SEU-KASSINAO npx -y kassinao-mcp exchange <codigo>
+KASSINAO_URL=https://YOUR-KASSINAO npx -y kassinao-mcp exchange <code>
 ```
 
-Isso guarda o token localmente. Configure o cliente MCP igual à Opção A (o `KASSINAO_REFRESH_TOKEN` no env vira opcional depois do primeiro uso).
+This stores the token locally. Configure your MCP client just like Option A (the `KASSINAO_REFRESH_TOKEN` env var becomes optional after the first use).
 
-## Onde o token fica
+## Where the token lives
 
-Depois do primeiro uso, o token de refresh (rotacionado a cada renovação) fica em `~/.config/kassinao-mcp/token.json` com permissão `0600`. Nenhuma gravação/transcrição é copiada para a sua máquina — o conector só fala HTTPS com o servidor.
+After first use, the refresh token (rotated on every renewal) is stored at `~/.config/kassinao-mcp/token.json` with `0600` permissions. No recordings/transcripts are ever copied to your machine — the connector only talks HTTPS to the server.
 
-## Revogar
+## Revoking
 
-- Na página `/conectar-ia`: botão **Revogar todos**.
-- No Discord: `/mcp revoke-all`.
-- Botão de pânico do administrador: rotacionar `MCP_SECRET` no servidor (revoga **todos** os conectores de todo mundo).
+- On the `/conectar-ia` page: **Revoke all** button.
+- On Discord: `/mcp revoke-all`.
+- Admin panic button: rotate `MCP_SECRET` on the server (revokes **everyone's** connectors at once).
 
-## Ferramentas expostas
+## Exposed tools
 
-| Ferramenta | Para quê |
+| Tool | What for |
 |---|---|
-| `list_meetings` | listar reuniões numa janela de tempo (padrão: últimos 30 dias) |
-| `pending_actions` | ações/prazos pendentes cruzando várias reuniões (overdue / dueSoon / …) |
-| `search_meetings` | busca full-text em transcrição, ata e notas, com link no minuto exato |
-| `who_said` | trechos ditos por alguém sobre um assunto, com contexto e link |
-| `get_meeting` | dossiê de uma reunião: metadados, ata, transcrição, notas e linha do tempo |
+| `list_meetings` | list meetings within a time window (default: last 30 days) |
+| `pending_actions` | pending action items/deadlines across meetings (overdue / dueSoon / …) |
+| `search_meetings` | full-text search over transcripts, minutes and notes, with a link to the exact minute |
+| `who_said` | what someone said about a topic, with context and link |
+| `get_meeting` | full dossier of one meeting: metadata, minutes, transcript, notes and timeline |
 
-Requer Node.js ≥ 20. Licença AGPL-3.0.
+Requires Node.js ≥ 20. License: AGPL-3.0.

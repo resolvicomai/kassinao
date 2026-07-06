@@ -80,7 +80,7 @@ Para ligar, defina `MCP_SECRET` (segredo forte, **≠** `COOKIE_SECRET`). Cada p
 
 ### 2. Pegar o código e configurar
 ```bash
-git clone <url-do-repo> kassinao && cd kassinao
+git clone https://github.com/resolvicomai/kassinao.git && cd kassinao
 cp .env.example .env
 # edite o .env (veja a tabela de configurações abaixo)
 ```
@@ -91,11 +91,12 @@ cp .env.example .env
 1. Em <https://one.dash.cloudflare.com> → **Networks → Tunnels → Create a tunnel → Cloudflared**.
 2. Dê um nome, copie o **token** (`eyJ...`) → `TUNNEL_TOKEN` no `.env`.
 3. Em **Public Hostname**: subdomínio + seu domínio, **Type = HTTP**, **URL = `kassinao:8080`**.
-4. No `.env`: `BASE_URL=https://SEU_SUBDOMINIO.seu-dominio.com`.
-   O `docker-compose.yml` já sobe o conector do túnel junto do bot.
+4. No `.env`, defina **as duas** variáveis: `BASE_URL=https://SEU_SUBDOMINIO.seu-dominio.com` **e** `COMPOSE_PROFILES=tunnel`.
+   O serviço `cloudflared` do compose fica sob o profile `tunnel` e **não sobe sozinho** — sem o `COMPOSE_PROFILES=tunnel` (ou `docker compose --profile tunnel up -d`), o túnel simplesmente não inicia.
 
-**Opção B — IP direto (mais simples, sem HTTPS)**
-- No `.env`: `BASE_URL=http://SEU_IP:8080`, publique a porta 8080 e cadastre o redirect OAuth correspondente. *(Remova o serviço `cloudflared` do compose ou deixe `TUNNEL_TOKEN` vazio.)*
+**Opção B — IP direto (só dev/teste, sem HTTPS)**
+- No `.env`: `BASE_URL=http://SEU_IP:8080` e publique a porta 8080 (descomente o `ports` no `docker-compose.yml`). Não precisa mexer no serviço `cloudflared`: sem o profile `tunnel` ele nem sobe.
+- ⚠️ O OAuth do Discord só aceita redirect `https` (ou `localhost`), então o **login e os downloads da página não funcionam via IP puro** — para uso real, use o túnel (ou qualquer proxy HTTPS).
 
 ### 4. Subir
 ```bash
@@ -167,9 +168,32 @@ No Docker, construa com Python + faster-whisper na imagem: `docker compose build
 ## 🧠 Como funciona por dentro
 
 - Recebe os pacotes Opus de cada falante via `@discordjs/voice`, decodifica para PCM e alimenta **um ffmpeg por falante** gravando **FLAC contínuo** (silêncio entre falas comprime a quase nada e mantém tudo sincronizado).
-- Downloads (MP3/FLAC/mix/Audacity) são gerados sob demanda a partir dos masters, com cache.
-- Transcrição e ata rodam numa **fila serial** após a gravação; a página se atualiza sozinha até ficarem prontas.
+- Ao encerrar a gravação, o **mix já é pré-cozinhado** — o player toca na hora, sem esperar minutos no primeiro clique. Os demais downloads (MP3/FLAC/Audacity) continuam sendo gerados sob demanda, com cache.
+- Transcrição e ata rodam numa **fila serial** após a gravação: o **VAD** (`silencedetect` do ffmpeg) recorta cada faixa e **só os trechos com fala** vão pra API de transcrição (**AssemblyAI** — com fallback pra Groq —, **Groq**, **OpenAI**, **Gemini** ou **comando local**); a ata roda em seguida num LLM via **OpenRouter** ou **Groq**. A página se atualiza sozinha até tudo ficar pronto.
 - A página autentica com **OAuth2 do Discord** (escopo `identify`) e o backend confere no Discord se a pessoa pode acessar aquela gravação.
+
+```mermaid
+flowchart LR
+    subgraph Discord
+      VC[Canal de voz]
+    end
+    subgraph Kassinão
+      BOT[Bot<br/>discord.js / voice]
+      FF[ffmpeg por falante<br/>→ FLAC master]
+      MIX[Mix pré-cozido<br/>demais downloads sob demanda]
+      VAD[VAD silencedetect<br/>só trechos com fala]
+      Q[Fila serial:<br/>transcrição → ata com IA]
+      WEB[Página web<br/>Express + OAuth]
+    end
+    VC -- Opus por falante --> BOT --> FF
+    FF -- ao parar --> MIX
+    FF -- ao parar --> VAD --> Q
+    Q -- "ASR: AssemblyAI / Groq / OpenAI / Gemini / local" --> Q
+    Q -- "Ata: OpenRouter / Groq" --> Q
+    MIX & Q --> WEB
+    USER[Participante] -- Login com Discord --> WEB
+    WEB -. Cloudflare Tunnel / HTTPS .-> USER
+```
 
 **Stack:** Node.js + TypeScript · discord.js / @discordjs/voice · Express · ffmpeg · Docker · Cloudflare Tunnel.
 

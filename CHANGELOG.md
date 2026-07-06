@@ -42,4 +42,5 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
+[1.1.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.1.0
 [1.0.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.0.0

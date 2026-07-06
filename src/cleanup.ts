@@ -24,6 +24,9 @@ export function startCleanupJob(): void {
         continue;
       }
       // restos de cozimentos ao vivo (work-*) e transcrições que caíram (transcribe-*) com mais de 2h
+      // — mas NUNCA enquanto a transcrição desta gravação está rodando (um poll
+      // longo de provedor não toca os arquivos por horas e o dir parece "velho")
+      if (isTranscribing(meta.id)) continue;
       const cache = path.join(config.recordingsDir, meta.id, 'cache');
       try {
         for (const entry of fs.readdirSync(cache, { withFileTypes: true })) {

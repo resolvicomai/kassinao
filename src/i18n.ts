@@ -177,8 +177,8 @@ const STRINGS: Strings = {
     en: '⚠️ I couldn’t transcribe this time: {error}\nThe audio is still available on the page.',
   },
   'transcript.partial': {
-    pt: '📝 Transcrição pronta, mas **parcial** — não consegui transcrever: {names}. O resto já está na página 👉 {url}',
-    en: '📝 Transcript ready but **partial** — I could not transcribe: {names}. The rest is on the page 👉 {url}',
+    pt: '📝 Transcrição pronta, mas **parcial** — não consegui transcrever: {names}. O que deu (e a ata, se gerada) já está na página 👉 {url}',
+    en: '📝 Transcript ready but **partial** — I could not transcribe: {names}. What I got (and the minutes, if generated) is on the page 👉 {url}',
   },
   'minutes.ready': {
     pt: '📋 Prontinho! A **ata** e a **transcrição** já estão na página 👉 {url}',

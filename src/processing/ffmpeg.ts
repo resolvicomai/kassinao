@@ -15,11 +15,19 @@ const FFMPEG_TIMEOUT_MS = 30 * 60 * 1000;
  * `fullStderr`: capturar TUDO (até 8 MB) — obrigatório para quem PARSEIA o stderr
  * (ex.: silencedetect emite uma linha por silêncio; numa faixa longa as primeiras
  * linhas estouram a janela de 8 KB e o VAD "enxergaria" fala onde há silêncio).
+ * `nice`: baixa prioridade de CPU — exports/mix não podem competir de igual pra
+ * igual com uma GRAVAÇÃO ao vivo (decode Opus + ffmpeg por falante) em 2 vCPU.
  */
-export function runFfmpeg(args: string[], loglevel = 'error', opts: { fullStderr?: boolean } = {}): Promise<string> {
+export function runFfmpeg(
+  args: string[],
+  loglevel = 'error',
+  opts: { fullStderr?: boolean; nice?: boolean } = {},
+): Promise<string> {
   const cap = opts.fullStderr ? 8 * 1024 * 1024 : 8192;
+  const ffArgs = ['-hide_banner', '-loglevel', loglevel, ...args];
+  const [cmd, spawnArgs] = opts.nice ? ['nice', ['-n', '15', ffmpegPath(), ...ffArgs]] : [ffmpegPath(), ffArgs];
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath(), ['-hide_banner', '-loglevel', loglevel, ...args], {
+    const proc = spawn(cmd as string, spawnArgs as string[], {
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     let stderr = '';

@@ -300,7 +300,9 @@ export function startWebServer(): void {
       return;
     }
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
-    const transcript = transcriptReady(meta) ? readTranscript(meta.id) : undefined;
+    // transcript é lido sempre que existir (mesmo em rodada de retry/parcial):
+    // conteúdo já entregue nunca some da página
+    const transcript = readTranscript(meta.id);
     const minutes = meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
     res.type('html').send(recordingPage(meta, { live, canDelete: access.delete, user, lang: l, transcript, minutes }));
   });

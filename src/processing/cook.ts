@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
+import { freeMB } from '../disk';
 import { formatDuration, sanitizeFilename, formatOffset } from '../recorder/RecordingSession';
 import { cacheDir, RecordingMeta, tracksDir } from '../store';
 import { runFfmpeg } from './ffmpeg';
@@ -55,6 +56,15 @@ export function cook(meta: RecordingMeta, format: CookFormat): Promise<CookResul
 
   const existing = inflight.get(dedupeKey);
   if (existing) return existing;
+
+  // Guarda de disco: um export de call longa usa transitoriamente 2-3× o tamanho
+  // da gravação (snapshot + saídas + zip). Sem espaço, é melhor recusar o clique
+  // do que derrubar uma GRAVAÇÃO ao vivo por "disco cheio" em outro canal.
+  if (freeMB() < config.minFreeMbStart) {
+    return Promise.reject(
+      new CookBusyError(`sem espaço em disco para processar (${freeMB()} MB livres) — apague gravações antigas`),
+    );
+  }
 
   const promise = (async () => {
     await acquireCookSlot();
@@ -129,11 +139,13 @@ async function doCook(meta: RecordingMeta, format: CookFormat, live: boolean): P
         if (format === 'flac' || format === 'audacity') {
           // Re-mux para um FLAC "limpo" (com header/duração corretos, importante nos snapshots ao vivo)
           const out = path.join(work, `${src.name}.flac`);
-          await runFfmpeg(['-i', src.flac, '-c:a', 'flac', '-y', out]);
+          await runFfmpeg(['-i', src.flac, '-c:a', 'flac', '-y', out], 'error', { nice: true });
           entries.push({ path: out, name: `${src.name}.flac` });
         } else {
           const out = path.join(work, `${src.name}.mp3`);
-          await runFfmpeg(['-i', src.flac, '-codec:a', 'libmp3lame', '-b:a', config.mp3Bitrate, '-y', out]);
+          await runFfmpeg(['-i', src.flac, '-codec:a', 'libmp3lame', '-b:a', config.mp3Bitrate, '-y', out], 'error', {
+            nice: true,
+          });
           entries.push({ path: out, name: `${src.name}.mp3` });
         }
       }
@@ -226,7 +238,7 @@ async function cookMix(flacs: string[], outPath: string): Promise<void> {
       outPath,
     );
   }
-  await runFfmpeg(args);
+  await runFfmpeg(args, 'error', { nice: true });
 }
 
 function buildInfoText(meta: RecordingMeta, live: boolean, missing: { index: number; name: string }[] = []): string {

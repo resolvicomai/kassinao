@@ -52,6 +52,8 @@ export interface TranscriptionState {
   attempts?: number;
   /** Ids de participantes cujas faixas JÁ foram transcritas — a retomada pula essas (não regasta cota). */
   doneTrackIds?: string[];
+  /** Nomes das faixas que AINDA faltam (exibição) — estruturado, nada de parsear string de erro. */
+  pendingTracks?: string[];
   /** true = outra rodada automática está agendada; false/ausente com status 'partial' = resultado final. */
   retryScheduled?: boolean;
 }
