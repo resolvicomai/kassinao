@@ -539,6 +539,22 @@ const LANDING_CSS = `
   .btn-ghost:hover { color: #f2f3f5; }
   .microline { margin-top: 16px; font-size: 0.86rem; color: #949ba4; }
   .microline b { color: #b5bac1; font-weight: 600; }
+  /* hero centrado com brilho + energia */
+  section.hero { position: relative; overflow: hidden; text-align: center; padding-top: clamp(40px, 7vw, 76px); }
+  section.hero::before { content: ''; position: absolute; left: 50%; top: -160px; width: 900px; height: 620px;
+    transform: translateX(-50%); pointer-events: none; z-index: 0;
+    background: radial-gradient(50% 50% at 50% 40%, rgba(88,101,242,.30), rgba(88,101,242,0) 72%); }
+  section.hero .wrap { position: relative; z-index: 1; }
+  section.hero .eyebrow { background: rgba(88,101,242,.12); border-color: rgba(88,101,242,.4); color: #c7ccf5; }
+  .hero .lead { max-width: 40ch; margin-left: auto; margin-right: auto; color: #b5bac1; font-size: clamp(1.05rem, 1.8vw, 1.28rem); }
+  .hero .ctarow { justify-content: center; }
+  .accent { background: linear-gradient(92deg, #9aa4ff, #5865f2); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .flow { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 24px; }
+  .flow .chip { display: inline-flex; align-items: center; gap: 8px; background: #232428; border: 1px solid #30333a;
+    border-radius: 999px; padding: 9px 15px; font-size: 0.9rem; color: #dbdee1; font-weight: 600; }
+  .flow .arrow { color: #5865f2; font-weight: 800; align-self: center; }
+  .hero .hero-split { max-width: 860px; margin-left: auto; margin-right: auto; text-align: left;
+    border-color: #33374a; box-shadow: 0 24px 70px rgba(88,101,242,.18), 0 10px 34px rgba(0,0,0,.5); }
   /* hero split */
   .hero-split { display: flex; gap: 16px; margin-top: 40px; align-items: stretch;
                 background: #1a1b1e; border: 1px solid #26282c; border-radius: 16px; padding: 16px;
@@ -795,13 +811,21 @@ export function landingPage(lang: Locale): string {
       '55:30',
     );
 
+  const flow = `<div class="flow">
+      <span class="chip">🎙️ ${T('Grava a call', 'Record the call')}</span>
+      <span class="arrow">→</span>
+      <span class="chip">✍️ ${T('Transcreve por pessoa', 'One track per person')}</span>
+      <span class="arrow">→</span>
+      <span class="chip">🤖 ${T('Pergunta no Claude/Cursor', 'Ask in Claude / Cursor')}</span>
+    </div>`;
   const hero = `<section class="hero"><div class="wrap">
     <div class="eyebrow">🎙️ <span>${T('Open-source · mora no seu canal de voz do Discord', 'Open-source · lives in your Discord voice channel')}</span></div>
-    <h1>${T('Para de ler transcrição.<br>Pergunta pras suas calls.', 'Stop reading transcripts.<br>Ask your meetings.')}</h1>
+    <h1>${T('Para de ler transcrição.<br><span class="accent">Pergunta pras suas calls.</span>', 'Stop reading transcripts.<br><span class="accent">Ask your meetings.</span>')}</h1>
     <p class="lead">${T(
-      'A call acaba, o Kassinão grava faixa por faixa, transcreve cada pessoa e escreve a ata sozinho. Aí você pergunta do Claude ou do Cursor — "o que ficou pra essa semana?" — e ele responde com quem ficou de fazer, o prazo e o link pro segundo exato em que foi dito.',
-      'Kassinão records your Discord voice channel — one clean track per person — then turns every call into memory your AI can answer. Ask "what\'s due this week?" from Claude or Cursor and get the decision, the owner, and a link to the exact second.',
+      'O Kassinão grava seu canal de voz do Discord e transforma cada call em memória que a sua IA responde.',
+      'Kassinão records your Discord voice channel and turns every call into memory your AI can answer.',
     )}</p>
+    ${flow}
     <div class="ctarow">
       <a class="btn btn-primary" href="/demo">${T('▶️ Ver uma ata de verdade', '▶️ See a real call answered')}</a>
       ${connectBtn('btn-outline')}

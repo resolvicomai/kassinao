@@ -5,3 +5,4 @@ recordings/
 .npmrc
 *.log
 .DS_Store
+.claude/launch.json
