@@ -77,14 +77,19 @@ function verify<T>(token: string | undefined, secret: string): T | undefined {
   }
 }
 
-function parseCookies(req: Request): Record<string, string> {
-  const out: Record<string, string> = {};
+// Lê UM cookie por nome, sem montar objeto com chave controlada pelo cliente
+// (mata property/prototype injection: nada de out[nomeDoCookie] = ...).
+function readCookie(req: Request, name: string): string | undefined {
   for (const part of (req.headers.cookie ?? '').split(';')) {
     const eq = part.indexOf('=');
-    if (eq < 0) continue;
-    out[part.slice(0, eq).trim()] = decodeURIComponent(part.slice(eq + 1).trim());
+    if (eq < 0 || part.slice(0, eq).trim() !== name) continue;
+    try {
+      return decodeURIComponent(part.slice(eq + 1).trim());
+    } catch {
+      return undefined; // %-encoding malformado: trata como cookie ausente
+    }
   }
-  return out;
+  return undefined;
 }
 
 function setCookie(res: Response, name: string, value: string, maxAgeMs: number): void {
@@ -98,7 +103,7 @@ function setCookie(res: Response, name: string, value: string, maxAgeMs: number)
 // ---------- sessão ----------
 
 export function getWebUser(req: Request): WebUser | undefined {
-  const user = verify<WebUser>(parseCookies(req)[SESSION_COOKIE], config.cookieSecret);
+  const user = verify<WebUser>(readCookie(req, SESSION_COOKIE), config.cookieSecret);
   // Checagens estritas: um cookie de state (mesmo segredo HMAC) NÃO pode passar
   // como sessão. Exige typ correto, exp numérico no futuro e id de verdade.
   if (!user || user.typ !== 'session') return undefined;
@@ -138,7 +143,7 @@ export function beginLogin(res: Response, next: string): void {
 
 export async function finishLogin(req: Request, res: Response): Promise<string | undefined> {
   const { code, state } = req.query as { code?: string; state?: string };
-  const saved = verify<StateToken>(parseCookies(req)[STATE_COOKIE], config.cookieSecret);
+  const saved = verify<StateToken>(readCookie(req, STATE_COOKIE), config.cookieSecret);
   clearStateCookie(res); // consome o state: não fica vivo 10 min no navegador
   if (!code || !state || !saved || saved.typ !== 'state' || saved.state !== state) return undefined;
 
@@ -181,13 +186,15 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
 
 // ---------- tokens do MCP (HMAC com segredos DEDICADOS, isolados do cookie) ----------
 
-const BEARER = /^Bearer\s+(.+)$/i;
-
 function bearerToken(req: Request): string | undefined {
+  // Parse manual (sem regex) — o `^Bearer\s+(.+)$` era ambíguo (\s e . ambos casam
+  // espaço) e abria backtracking polinomial (ReDoS) num header controlado pelo cliente.
   const h = req.headers.authorization;
-  if (!h) return undefined;
-  const m = BEARER.exec(h);
-  return m ? m[1].trim() : undefined;
+  if (!h || h.length > 8192) return undefined;
+  const sp = h.indexOf(' ');
+  if (sp < 0 || h.slice(0, sp).toLowerCase() !== 'bearer') return undefined;
+  const token = h.slice(sp + 1).trim();
+  return token || undefined;
 }
 
 /** Assina um access token do MCP (jti/exp definidos por quem emite). */
