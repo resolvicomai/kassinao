@@ -6,7 +6,12 @@ import { MeetingMinutes, RecordingMeta, TranscriptSegment } from '../store';
 import type { WebUser } from './auth';
 
 function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;'); // aspas simples: seguro também em atributos com aspas simples
 }
 
 const P: Record<string, { pt: string; en: string }> = {

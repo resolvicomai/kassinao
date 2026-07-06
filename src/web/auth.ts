@@ -78,11 +78,19 @@ function verify<T>(token: string | undefined, secret: string): T | undefined {
 }
 
 function parseCookies(req: Request): Record<string, string> {
-  const out: Record<string, string> = {};
+  // Object.create(null): sem protótipo, então um cookie chamado __proto__/constructor
+  // não polui o Object.prototype nem confunde lookups (property injection).
+  const out: Record<string, string> = Object.create(null);
   for (const part of (req.headers.cookie ?? '').split(';')) {
     const eq = part.indexOf('=');
     if (eq < 0) continue;
-    out[part.slice(0, eq).trim()] = decodeURIComponent(part.slice(eq + 1).trim());
+    const name = part.slice(0, eq).trim();
+    if (name === '__proto__' || name === 'constructor' || name === 'prototype') continue;
+    try {
+      out[name] = decodeURIComponent(part.slice(eq + 1).trim());
+    } catch {
+      // valor com %-encoding malformado: ignora esse cookie em vez de derrubar o request
+    }
   }
   return out;
 }
@@ -181,13 +189,15 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
 
 // ---------- tokens do MCP (HMAC com segredos DEDICADOS, isolados do cookie) ----------
 
-const BEARER = /^Bearer\s+(.+)$/i;
-
 function bearerToken(req: Request): string | undefined {
+  // Parse manual (sem regex) — o `^Bearer\s+(.+)$` era ambíguo (\s e . ambos casam
+  // espaço) e abria backtracking polinomial (ReDoS) num header controlado pelo cliente.
   const h = req.headers.authorization;
-  if (!h) return undefined;
-  const m = BEARER.exec(h);
-  return m ? m[1].trim() : undefined;
+  if (!h || h.length > 8192) return undefined;
+  const sp = h.indexOf(' ');
+  if (sp < 0 || h.slice(0, sp).toLowerCase() !== 'bearer') return undefined;
+  const token = h.slice(sp + 1).trim();
+  return token || undefined;
 }
 
 /** Assina um access token do MCP (jti/exp definidos por quem emite). */

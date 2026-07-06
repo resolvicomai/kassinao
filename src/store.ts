@@ -113,7 +113,15 @@ function metaPath(id: string): string {
 
 const VALID_ID = /^[a-zA-Z0-9-]+$/;
 
+// Fail-closed: os writes recebem ids gerados pelo servidor, então um id fora do
+// padrão é bug/ataque (path traversal) — barramos antes de tocar o filesystem.
+// Espelha a validação que os reads já fazem (retornam undefined).
+function assertValidId(id: string): void {
+  if (!VALID_ID.test(id)) throw new Error(`store: id de gravação inválido: ${JSON.stringify(id)}`);
+}
+
 export function saveMeta(meta: RecordingMeta): void {
+  assertValidId(meta.id);
   fs.mkdirSync(recordingDir(meta.id), { recursive: true });
   const tmp = metaPath(meta.id) + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(meta, null, 2));
@@ -145,6 +153,7 @@ export function readTranscript(id: string): TranscriptSegment[] | undefined {
 }
 
 export function saveTranscript(id: string, segments: TranscriptSegment[]): void {
+  assertValidId(id);
   const tmp = transcriptPath(id) + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(segments));
   fs.renameSync(tmp, transcriptPath(id));
@@ -164,6 +173,7 @@ export function readMinutes(id: string): MeetingMinutes | undefined {
 }
 
 export function saveMinutes(id: string, minutes: MeetingMinutes): void {
+  assertValidId(id);
   const tmp = minutesPath(id) + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(minutes));
   fs.renameSync(tmp, minutesPath(id));

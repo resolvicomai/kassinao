@@ -124,7 +124,7 @@ export function startWebServer(): void {
   // brute-force/reconhecimento sem incomodar uso real.
   const webHits = new Map<string, { n: number; reset: number }>();
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (!/^\/(rec|auth|demo)\b/.test(req.path)) return next();
+    if (!/^\/(rec|auth|demo|conectar-ia)\b/.test(req.path)) return next();
     const now = Date.now();
     if (webHits.size > 5000) for (const [k, v] of webHits) if (v.reset < now) webHits.delete(k);
     const ip = req.ip ?? 'unknown';
