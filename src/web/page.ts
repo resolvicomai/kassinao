@@ -112,10 +112,14 @@ const SHELL_CSS = `
             border-radius: 999px; font-size: 14px; }
   .person img { width: 26px; height: 26px; border-radius: 50%; }
   .downloads { display: flex; flex-wrap: wrap; gap: 10px; }
-  a.btn { display: inline-flex; flex-direction: column; gap: 2px; text-decoration: none; background: #5865f2;
-          color: #fff; padding: 12px 18px; border-radius: 8px; font-size: 15px; font-weight: 600; }
-  a.btn small { font-weight: 400; font-size: 12px; opacity: .8; }
-  a.btn:hover { background: #4752c4; }
+  /* .btn cobre <a> E <button> (o connect usa <button class="btn"> — antes caía no botão cinza padrão) */
+  .btn { display: inline-flex; flex-direction: column; gap: 2px; text-decoration: none; background: #5865f2;
+         color: #fff; padding: 12px 18px; border-radius: 8px; font-size: 15px; font-weight: 600;
+         border: 0; cursor: pointer; font-family: inherit; line-height: 1.2; }
+  .btn small { font-weight: 400; font-size: 12px; opacity: .8; }
+  .btn:hover { background: #4752c4; }
+  .btn.secondary { background: #3a3c42; }
+  .btn.secondary:hover { background: #45474e; }
   .events { list-style: none; font-size: 14px; display: flex; flex-direction: column; gap: 4px;
             max-height: 220px; overflow-y: auto; }
   .events time { color: #949ba4; font-family: ui-monospace, monospace; margin-right: 8px; }
@@ -149,13 +153,22 @@ const SHELL_CSS = `
                   border-radius: 8px; font-size: 14px; cursor: pointer; }
   button.danger:hover { background: #da373c; color: #fff; }
   .topbar { max-width: 640px; width: 100%; display: flex; justify-content: space-between; align-items: center;
-            gap: 8px; margin-bottom: 12px; font-size: 13px; color: #949ba4; }
-  .topbar .user { display: inline-flex; align-items: center; gap: 8px; }
+            gap: 8px; margin-bottom: 16px; font-size: 13px; color: #949ba4; }
+  .topbar .brand { display: inline-flex; align-items: center; gap: 7px; font-weight: 800; font-size: 15px;
+                   color: #f2f3f5; text-decoration: none; }
+  .topbar .topnav-r { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
+  .topbar .tl { color: #b5bac1; text-decoration: none; }
+  .topbar .tl:hover { color: #f2f3f5; }
+  .topbar .user { display: inline-flex; align-items: center; gap: 6px; color: #dbdee1; }
   .topbar img { width: 22px; height: 22px; border-radius: 50%; }
   .langtoggle a { color: #949ba4; text-decoration: none; padding: 2px 4px; }
   .langtoggle a.on { color: #f2f3f5; font-weight: 700; }
   .langtoggle a:hover { color: #dbdee1; }
   .langtoggle span { opacity: .5; margin: 0 2px; }
+  .topfoot { max-width: 640px; width: 100%; margin-top: 30px; padding-top: 16px; border-top: 1px solid #3f4147;
+             font-size: 13px; color: #949ba4; text-align: center; }
+  .topfoot a { color: #b5bac1; text-decoration: none; }
+  .topfoot a:hover { color: #f2f3f5; }
   .note { background: #232428; border-left: 3px solid #f0b232; padding: 10px 14px; border-radius: 6px;
           font-size: 14px; margin-top: 14px; }
   footer { margin-top: 26px; font-size: 13px; color: #949ba4; }
@@ -166,7 +179,7 @@ const SHELL_CSS = `
     body { padding: 20px 10px; }
     .card { padding: 18px; }
     h1 { font-size: 19px; }
-    .downloads a.btn { flex: 1 1 auto; text-align: center; }
+    .downloads .btn { flex: 1 1 auto; text-align: center; align-items: center; }
   }
 `;
 
@@ -227,11 +240,18 @@ function shell(
   const lang = opts.lang === 'pt' ? 'pt' : 'en';
   // Toggle de idioma (fica salvo via cookie); links relativos preservam a rota atual.
   const langToggle = `<div class="langtoggle"><a href="?lang=en"${lang === 'en' ? ' class="on"' : ''}>EN</a><span>·</span><a href="?lang=pt"${lang === 'pt' ? ' class="on"' : ''}>PT</a></div>`;
-  const userbar = `<div class="topbar">${langToggle}${
-    opts.user
-      ? `<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</span>`
-      : ''
-  }</div>`;
+  const repoLabel = config.repoPublic ? 'GitHub' : 'npm';
+  // Cabeçalho de marca: dá contexto + saída (home) a TODA página do shell (demo, conectar-ia, gravações, erro).
+  const userbar = `<header class="topbar">
+    <a class="brand" href="/">🎙️ Kassinão</a>
+    <span class="topnav-r">
+      <a class="tl" href="/demo">Demo</a>
+      <a class="tl" href="${ghHref()}">${repoLabel}</a>
+      ${langToggle}
+      ${opts.user ? `<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</span>` : ''}
+    </span>
+  </header>`;
+  const foot = `<footer class="topfoot"><a href="/">🎙️ Kassinão</a> · MIT · open-source · <a href="${ghHref()}">${repoLabel}</a></footer>`;
   // Auto-refresh (enquanto transcrição/ata processam) via JS em vez de <meta refresh>,
   // pra NÃO recarregar e cortar o áudio enquanto a pessoa está ouvindo o player.
   const refresh = opts.refreshSeconds
@@ -250,6 +270,7 @@ ${opts.noindex ? '<meta name="robots" content="noindex">' : ''}
 <body>
 ${userbar}
 <div class="card">${body}</div>
+${foot}
 ${TZ_SCRIPT}
 ${refresh}
 </body>
@@ -347,9 +368,23 @@ export function recordingPage(
       ? `<footer>${p(l, 'expires', { date: datetime(meta.expiresAt, l) })}</footer>`
       : '';
 
+  // Demo é a vitrine: depois da prova, um CTA de conversão (fim do beco sem saída).
+  const demoCta = demo
+    ? `<div class="note" style="border-left-color:#5865f2;margin-top:28px">${
+        l === 'pt'
+          ? 'Curtiu? Essa é uma call real gravada pelo Kassinão — a ata e a transcrição saíram sozinhas. <strong>Rode o seu:</strong> é open-source e roda no seu próprio servidor.'
+          : 'Like what you see? This is a real call recorded by Kassinão — the minutes and transcript wrote themselves. <strong>Deploy your own:</strong> it is open-source and runs on your server.'
+      }</div>
+     <div class="downloads" style="margin-top:14px">
+       <a class="btn" href="${ghHref()}">${l === 'pt' ? '🚀 Rodar o meu Kassinão' : '🚀 Deploy your own'}</a>
+       <a class="btn secondary" href="/">${l === 'pt' ? '← Início' : '← Home'}</a>
+     </div>`
+    : '';
+  const title = demo ? `🔊 #${esc(meta.voiceChannelName)}` : `🎙️ ${p(l, 'recording')}`;
+
   return shell(
-    `${p(l, 'recording')} ${meta.id}`,
-    `<h1>🎙️ ${p(l, 'recording')} ${badge}</h1>
+    demo ? `#${meta.voiceChannelName} (demo)` : `${p(l, 'recording')} ${meta.id}`,
+    `<h1>${title} ${badge}</h1>
      ${demoNote}
      <dl class="grid">
        <dt>${p(l, 'server')}</dt><dd>${esc(meta.guildName)}</dd>
@@ -369,7 +404,8 @@ export function recordingPage(
      ${notes}
      ${events}
      ${deleteForm}
-     ${expires}`,
+     ${expires}
+     ${demoCta}`,
     {
       user: opts.user,
       lang: l,
@@ -478,6 +514,9 @@ export function messagePage(title: string, message: string, user?: WebUser, lang
 }
 
 const REPO_URL = 'https://github.com/resolvicomai/kassinao';
+const NPM_URL = 'https://www.npmjs.com/package/kassinao-mcp';
+// Enquanto o repo é privado, links "GitHub" apontam pro npm (público) pra não dar 404.
+const ghHref = (): string => (config.repoPublic ? REPO_URL : NPM_URL);
 
 // favicon inline (marca "K" em blurple) — data: URI permitido pela CSP (img-src data:), sem asset externo
 const FAVICON =
@@ -748,11 +787,7 @@ export function landingPage(lang: Locale): string {
 
   const langUrl = `${config.baseUrl}/?lang=${pt ? 'pt' : 'en'}`;
 
-  // Gate do GitHub: enquanto o repo é privado, TODO link pro GitHub daria 404 — então
-  // aponta pro pacote npm (público). Vira REPO_PUBLIC=true no servidor após abrir o repo.
-  const NPM_URL = 'https://www.npmjs.com/package/kassinao-mcp';
   const repoPublic = config.repoPublic;
-  const ghHref = repoPublic ? REPO_URL : NPM_URL;
   // "recibo" access.ts: link real só quando o repo é público; senão texto puro (sem 404)
   const accessReceipt = repoPublic
     ? `<a class="pill-link" href="${REPO_URL}/blob/main/src/web/access.ts">&lt;/&gt; checkAccess() · access.ts →</a>`
@@ -820,7 +855,7 @@ export function landingPage(lang: Locale): string {
     ${flow}
     <div class="ctarow">
       <a class="btn btn-primary" href="/demo">${T('▶️ Ver a demo ao vivo', '▶️ See the live demo')}</a>
-      <a class="btn btn-outline" href="${ghHref}">${T('Rodar no meu servidor →', 'Deploy your own →')}</a>
+      <a class="btn btn-outline" href="${ghHref()}">${T('Rodar no meu servidor →', 'Deploy your own →')}</a>
     </div>
     <div class="microline">${T('Sem login pra ver a demo', 'No login to see the demo')} · <b>${T('roda no seu servidor', 'runs on your box')}</b> · ${T('open-source, MIT', 'open-source, MIT')}</div>
 
@@ -936,7 +971,7 @@ export function landingPage(lang: Locale): string {
     <p class="lead" style="margin:14px auto 0">${T('Sobe no seu servidor em minutos, grava a primeira call e pergunta pra sua IA o que ficou combinado. Seu servidor, sua chave, seus dados.', 'Deploy it on your own server in minutes, record your first call, and ask your AI what everyone agreed to. Your server, your keys, your data.')}</p>
     <div class="ctarow">
       <a class="btn btn-primary" href="/demo">${T('▶️ Ver a demo ao vivo', '▶️ See the live demo')}</a>
-      <a class="btn btn-outline" href="${ghHref}">${T('Rodar no meu servidor →', 'Deploy your own →')}</a>
+      <a class="btn btn-outline" href="${ghHref()}">${T('Rodar no meu servidor →', 'Deploy your own →')}</a>
     </div>
   </div></section>`;
 
@@ -944,7 +979,7 @@ export function landingPage(lang: Locale): string {
     <a class="brand" href="/">🎙️ Kassinão</a>
     <div class="navlinks">
       <a href="/demo">${T('Demo', 'Demo')}</a>
-      <a href="${ghHref}">${repoPublic ? 'GitHub' : 'npm'}</a>
+      <a href="${ghHref()}">${repoPublic ? 'GitHub' : 'npm'}</a>
       <a class="btn btn-primary btn-sm" href="/demo">${T('Ver a demo', 'See the demo')}</a>
       ${langToggle}
     </div>
@@ -1097,8 +1132,8 @@ export function connectPage(opts: {
     ${revokedMsg}
     <p class="muted" style="margin-top:12px">${esc(
       T(
-        'Ligue o Kassinão no seu Claude Desktop ou Cursor para perguntar sobre as suas calls em linguagem natural.',
-        'Plug Kassinão into your Claude Desktop or Cursor to ask about your calls in natural language.',
+        'Ligue o Kassinão em qualquer assistente de IA (Claude, Cursor e outros) para perguntar sobre as suas calls em linguagem natural.',
+        'Plug Kassinão into any AI assistant (Claude, Cursor, and more) to ask about your calls in natural language.',
       ),
     )}</p>
     <ol class="muted" style="margin:12px 0 0 18px;line-height:1.9">
