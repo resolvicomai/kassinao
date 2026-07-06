@@ -50,10 +50,10 @@ Kassinão combines both **and sidesteps the hard part**: because every participa
 ## Features
 
 - **🎚️ Multi-track** — one lossless FLAC track per speaker, all sample-aligned.
-- **📝 AI transcription** with exact speaker names & timestamps. Engines: **Groq**, **OpenAI**, **Gemini**, or a **local** command (faster-whisper / whisper.cpp) for full privacy.
+- **📝 AI transcription** with exact speaker names & timestamps. Engines: **AssemblyAI**, **Groq**, **OpenAI**, **Gemini**, or a **local** command (faster-whisper / whisper.cpp) for full privacy. Real **VAD**: only speech is sent to the API (no cost on silence, no silence hallucinations), with automatic retry/resume on provider rate limits.
 - **📋 AI meeting minutes** — summary, decisions, action items (with owner/due), timestamped topics, and a **per-participant** breakdown.
 - **🔊 Recording web page** — audio player with **clickable timestamps**, downloads in **MP3 / FLAC / single mix / Audacity project**, transcript & minutes rendered inline — all behind **Discord login**.
-- **🔒 Real access control** — only call participants, people who can see the channel, the initiator, or admins can open a recording. A leaked link opens nothing.
+- **🔒 Real access control** — only people who were in the call (speaking **or muted**), people who can see the channel, the initiator, or admins can open a recording. A leaked link opens nothing.
 - **🎛️ Live panel** in the voice channel with **Stop** / **Add note** buttons and a `[RECORDING]` nickname indicator (visible consent).
 - **🔌 MCP connector** *(optional)* — ask your meetings from **Claude Desktop / Cursor**: time-window queries, cross-meeting **action items with deadlines**, full-text search — each user scoped to exactly what they can already see. See [`mcp/`](mcp/).
 - **🤖 Auto-record** — starts by itself when N people join a channel; stops when it empties.
@@ -89,12 +89,15 @@ Then **invite the bot** (step 1) and run **`/record`** in a Discord voice channe
 - **Direct IP (dev/test only — no HTTPS)**: uncomment `ports: ['8080:8080']` in `docker-compose.yml` and set `BASE_URL=http://YOUR_IP:8080`. ⚠️ Discord OAuth only accepts `https` (or `localhost`) redirects, so the login/download page won't work over a plain IP — use the tunnel (or any HTTPS proxy) for real use.
 
 ### 3. (Optional) Turn on transcription + minutes
-Both light up automatically once a Groq key is present (Groq runs the LLM too):
+Best quality for the money (AssemblyAI for speech, any big-context model via OpenRouter for the minutes):
 ```env
-TRANSCRIBE_PROVIDER=groq
-GROQ_API_KEY=gsk_...     # https://console.groq.com  (enable Zero Data Retention!)
+TRANSCRIBE_PROVIDER=assemblyai
+ASSEMBLYAI_API_KEY=...     # https://www.assemblyai.com — US$50 free credit
+GROQ_API_KEY=gsk_...       # optional fallback engine (https://console.groq.com)
+OPENROUTER_API_KEY=sk-or-...  # https://openrouter.ai — minutes LLM (default: google/gemini-2.5-flash)
 MINUTES_ENABLED=auto
 ```
+Zero-cost path: `TRANSCRIBE_PROVIDER=groq` with just a `GROQ_API_KEY` (free tier: 8 audio-hours/day; the minutes then run on Groq's free LLM in map-reduce for long calls).
 
 ## How it compares
 
@@ -113,12 +116,13 @@ MINUTES_ENABLED=auto
 
 | Provider | Cost (per audio hour, **per track**) | pt-BR quality | Privacy | Notes |
 |---|---|---|---|---|
-| **Groq** (`whisper-large-v3-turbo`) | ~US$0.04 | Excellent | Cloud (enable ZDR) | Best value; free tier often covers small teams |
+| **AssemblyAI** (`universal`) | ~US$0.21 (**US$50 free credit**) | Top-3 on the Open ASR Leaderboard | Cloud | Default pick; auto-falls back to Groq if a `GROQ_API_KEY` is set |
+| **Groq** (`whisper-large-v3`) | ~US$0.11 (free tier: 8 audio-h/day) | Excellent | Cloud (enable ZDR) | Best zero-cost option |
 | **OpenAI** (`whisper-1`) | ~US$0.36 | Excellent | Cloud | Timestamped segments |
 | **Gemini** (`gemini-2.x-flash`) | ~cents | Good | Cloud (paid tier only) | Free tier trains on your audio — avoid |
 | **Local** (`faster-whisper`) | Free | Good (`small`+) | 🔒 Never leaves your server | Slower without a GPU; see [`scripts/transcribe-local.py`](scripts/transcribe-local.py) |
 
-> 💡 Recording is **multi-track**, so cost scales with speakers: a 1-hour call with 6 people ≈ 6 audio-hours of transcription (silence in each track is skipped, so it's usually less). The AI minutes run once per meeting on Groq's LLM (same key), a few cents each.
+> 💡 Recording is **multi-track**, but only **speech** is sent (VAD trims the silence-padded tracks), so a 1-hour call costs ≈ the total spoken time — not hours × speakers. The AI minutes run once per meeting (OpenRouter or Groq), a few cents each at most.
 
 ## AI connector (MCP)
 
@@ -157,9 +161,10 @@ All options live in [`.env.example`](.env.example). Key ones:
 | `TUNNEL_TOKEN` | — | Cloudflare Tunnel token (recommended HTTPS path) |
 | `GUILD_ID` | — | Registers commands instantly in that server |
 | `RETENTION_DAYS` · `MAX_RECORDING_HOURS` | `7` · `6` | Retention & max length |
-| `TRANSCRIBE_PROVIDER` | `none` | `none` / `openai` / `groq` / `gemini` / `command` |
-| `GROQ_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` | — | Key for the chosen provider |
-| `MINUTES_ENABLED` | `auto` | AI minutes: `auto` (on when a Groq key exists) / `true` / `false` |
+| `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
+| `ASSEMBLYAI_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` | — | Key for the chosen provider (Groq key doubles as ASR fallback) |
+| `MINUTES_ENABLED` | `auto` | AI minutes: `auto` (on when an OpenRouter or Groq key exists) / `true` / `false` |
+| `MINUTES_PROVIDER` / `OPENROUTER_API_KEY` | `openrouter` when key set | Minutes LLM: `openrouter` (default `google/gemini-2.5-flash`) or `groq` |
 | `TZ` | `America/Sao_Paulo` | Timezone for dates (the web page uses the visitor's) |
 
 ## Security & privacy

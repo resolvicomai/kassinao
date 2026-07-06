@@ -10,14 +10,20 @@ export function ffmpegPath(): string {
 // num VPS de 1 vCPU pode legitimamente levar >10 min para virar MP3.
 const FFMPEG_TIMEOUT_MS = 30 * 60 * 1000;
 
-/** Roda o ffmpeg até o fim; rejeita com o stderr em caso de erro. Watchdog de 30 min. */
-export function runFfmpeg(args: string[], loglevel = 'error'): Promise<string> {
+/**
+ * Roda o ffmpeg até o fim; rejeita com o stderr em caso de erro. Watchdog de 30 min.
+ * `fullStderr`: capturar TUDO (até 8 MB) — obrigatório para quem PARSEIA o stderr
+ * (ex.: silencedetect emite uma linha por silêncio; numa faixa longa as primeiras
+ * linhas estouram a janela de 8 KB e o VAD "enxergaria" fala onde há silêncio).
+ */
+export function runFfmpeg(args: string[], loglevel = 'error', opts: { fullStderr?: boolean } = {}): Promise<string> {
+  const cap = opts.fullStderr ? 8 * 1024 * 1024 : 8192;
   return new Promise((resolve, reject) => {
     const proc = spawn(ffmpegPath(), ['-hide_banner', '-loglevel', loglevel, ...args], {
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     let stderr = '';
-    proc.stderr.on('data', (d) => (stderr = (stderr + d).slice(-8192)));
+    proc.stderr.on('data', (d) => (stderr = (stderr + d).slice(-cap)));
     const timeout = setTimeout(() => {
       proc.kill('SIGKILL');
       reject(new Error('ffmpeg excedeu o tempo limite (30 min) e foi morto'));

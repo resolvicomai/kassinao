@@ -69,4 +69,4 @@ Depois do primeiro uso, o token de refresh (rotacionado a cada renovação) fica
 | `who_said` | trechos ditos por alguém sobre um assunto, com contexto e link |
 | `get_meeting` | dossiê de uma reunião: metadados, ata, transcrição, notas e linha do tempo |
 
-Requer Node.js ≥ 20. Licença MIT.
+Requer Node.js ≥ 20. Licença AGPL-3.0.

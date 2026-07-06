@@ -1,22 +1,88 @@
 import { config } from '../config';
 import { cleanInline, cleanText, fenceUntrusted, neutralizeFences, UNTRUSTED_GUARD } from '../sanitize';
 import { MeetingMinutes, MinutesAction, MinutesPerson, MinutesTopic, RecordingMeta, TranscriptSegment } from '../store';
+import { fetchWithRetry } from './http';
 import { msToClock } from './transcribe';
 
-/** Teto de texto enviado ao LLM (~15k tokens). Calls muito longas são cortadas no meio. */
-const MAX_TRANSCRIPT_CHARS = 60000;
+/**
+ * Teto de texto enviado ao LLM por provider. OpenRouter (Gemini 2.5 Flash tem
+ * 1M de contexto): cabe qualquer call de 6h inteira. Groq free tier: o limite
+ * real é 12k TOKENS POR MINUTO (input+output contam juntos) — texto em pt rende
+ * ~2,3 chars/token, então o input precisa ficar bem abaixo disso; acima do teto
+ * a ata roda em MAP-REDUCE (resumos parciais → ata final) com pausa entre chamadas.
+ */
+const MAX_CHARS_OPENROUTER = 400_000;
+/**
+ * Groq free: o pre-check de TPM conta input + max_tokens JUNTOS. 12k chars ≈ 5,2k
+ * tokens de input + 4k de saída ≈ 9,2k < 12k TPM. Acima disso vai de map-reduce.
+ */
+const MAX_CHARS_GROQ_SINGLE = 12_000;
+/** Teto de tokens de SAÍDA no caminho Groq (input+output contam juntos no TPM). */
+const GROQ_MAX_TOKENS = 4096;
+/** Tamanho de cada bloco no map-reduce (Groq). */
+const GROQ_BLOCK_CHARS = 14_000;
+/** Pausa entre chamadas no map-reduce — deixa o TPM da Groq reabastecer. */
+const GROQ_BLOCK_PAUSE_MS = 65_000;
+/** Teto de cada nota parcial e do agregado no passo reduce (senão o reduce estoura o TPM). */
+const PARTIAL_NOTE_CHARS = 280;
+const PARTIAL_TOTAL_CHARS = 9_000;
 
-/** A Ata liga sozinha quando há GROQ_API_KEY (roda o LLM na Groq), salvo MINUTES_ENABLED=false. */
+/** A Ata liga sozinha quando há chave do provider escolhido, salvo MINUTES_ENABLED=false. */
 export function minutesEnabled(): boolean {
   if (config.minutesEnabled === 'false') return false;
-  if (!config.groqApiKey) return false;
+  const key = config.minutesProvider === 'openrouter' ? config.openrouterApiKey : config.groqApiKey;
+  if (!key) return false;
   return config.minutesEnabled === 'true' || config.minutesEnabled === 'auto';
 }
 
-/** Gera a ata a partir da transcrição via LLM da Groq. Lança em caso de falha. */
-export async function generateMinutes(meta: RecordingMeta, segments: TranscriptSegment[]): Promise<MeetingMinutes> {
-  const transcriptText = buildTranscriptText(meta, segments);
+/** Chamada de chat ao provider da ata (OpenRouter ou Groq), com retry ciente de 429. */
+async function llmChat(system: string, user: string, maxTokens: number): Promise<string> {
+  const openrouter = config.minutesProvider === 'openrouter';
+  const url = openrouter
+    ? 'https://openrouter.ai/api/v1/chat/completions'
+    : 'https://api.groq.com/openai/v1/chat/completions';
+  const key = openrouter ? config.openrouterApiKey : config.groqApiKey;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${key}`,
+  };
+  if (openrouter) {
+    headers['HTTP-Referer'] = config.baseUrl;
+    headers['X-Title'] = 'Kassinao';
+  }
+  const resp = await fetchWithRetry(
+    url,
+    {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: config.minutesModel,
+        temperature: 0.2,
+        max_tokens: maxTokens,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+    },
+    { attempts: 4, maxWaitMs: 90_000 },
+  );
+  const data = (await resp.json()) as {
+    choices?: { message?: { content?: string }; finish_reason?: string }[];
+  };
+  const choice = data.choices?.[0];
+  // resposta cortada por limite de tokens = JSON truncado; erro claro em vez de parse quebrado
+  if (choice?.finish_reason === 'length') {
+    throw new Error('LLM cortou a ata por limite de tokens — aumente MINUTES_MAX_TOKENS (call muito longa?)');
+  }
+  const content = choice?.message?.content ?? '';
+  if (!content.trim()) throw new Error('LLM devolveu resposta vazia');
+  return content;
+}
 
+/** Gera a ata a partir da transcrição via LLM (OpenRouter ou Groq). Lança em caso de falha. */
+export async function generateMinutes(meta: RecordingMeta, segments: TranscriptSegment[]): Promise<MeetingMinutes> {
   const system = [
     UNTRUSTED_GUARD,
     'Você é um assistente que gera ATA DE REUNIÃO em português do Brasil a partir de uma transcrição',
@@ -34,38 +100,63 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
     'Baseie-se APENAS no que está na transcrição. Não invente fatos, nomes ou números. Seja conciso e claro.',
   ].join('\n');
 
-  const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.groqApiKey}` },
-    body: JSON.stringify({
-      model: config.minutesModel,
-      temperature: 0.2,
-      max_tokens: config.minutesMaxTokens,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: transcriptText },
-      ],
-    }),
-  });
+  const { header, body } = buildTranscriptParts(meta, segments);
+  const openrouter = config.minutesProvider === 'openrouter';
+  const maxSingle = openrouter ? MAX_CHARS_OPENROUTER : MAX_CHARS_GROQ_SINGLE;
+  const outTokens = openrouter ? config.minutesMaxTokens : Math.min(config.minutesMaxTokens, GROQ_MAX_TOKENS);
 
-  if (!resp.ok) {
-    throw new Error(`Groq LLM HTTP ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
+  if (header.length + body.length <= maxSingle) {
+    return normalizeMinutes(await llmChat(system, fenceUntrusted(`${header}\n${body}`), outTokens));
   }
-  const data = (await resp.json()) as {
-    choices?: { message?: { content?: string }; finish_reason?: string }[];
-  };
-  const choice = data.choices?.[0];
-  // resposta cortada por limite de tokens = JSON truncado; erro claro em vez de parse quebrado
-  if (choice?.finish_reason === 'length') {
-    throw new Error('LLM cortou a ata por limite de tokens — aumente MINUTES_MAX_TOKENS (call muito longa?)');
+
+  if (openrouter) {
+    // acima de 400k chars (call absurda): corta o miolo — começo e fim carregam decisões
+    const half = Math.floor(MAX_CHARS_OPENROUTER / 2);
+    const cut = `${body.slice(0, half)}\n\n[... trecho do meio omitido por tamanho ...]\n\n${body.slice(-half)}`;
+    return normalizeMinutes(await llmChat(system, fenceUntrusted(`${header}\n${cut}`), outTokens));
   }
-  const content = choice?.message?.content ?? '';
-  if (!content.trim()) throw new Error('LLM devolveu resposta vazia');
-  return normalizeMinutes(content);
+
+  // ---- map-reduce (Groq free tier, TPM 12k): blocos → notas parciais → ata final ----
+  const blocks: string[] = [];
+  for (let i = 0; i < body.length; i += GROQ_BLOCK_CHARS) blocks.push(body.slice(i, i + GROQ_BLOCK_CHARS));
+
+  const mapSystem = [
+    UNTRUSTED_GUARD,
+    'Você resume um TRECHO de transcrição de reunião em português do Brasil (nomes e horários [hh:mm:ss] inclusos).',
+    'Responda SOMENTE JSON: {"notas": [string]} — fatos, decisões, tarefas (com responsável/prazo se ditos)',
+    'e tópicos com o horário em que apareceram. Máximo 12 notas, específicas e com nomes. Não invente nada.',
+  ].join('\n');
+
+  const partials: string[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const content = await llmChat(
+      mapSystem,
+      fenceUntrusted(`${header}\n[BLOCO ${i + 1}/${blocks.length}]\n${blocks[i]}`),
+      1024,
+    );
+    try {
+      const parsed = JSON.parse(content) as { notas?: unknown[] };
+      const notas = Array.isArray(parsed.notas) ? parsed.notas.map((n) => String(n)) : [content];
+      partials.push(...notas.map((n) => `[bloco ${i + 1}] ${n.slice(0, PARTIAL_NOTE_CHARS)}`));
+    } catch {
+      partials.push(`[bloco ${i + 1}] ${content.slice(0, 1500)}`);
+    }
+    if (i < blocks.length - 1) await new Promise((r) => setTimeout(r, GROQ_BLOCK_PAUSE_MS));
+  }
+
+  // reduce com teto: notas demais estourariam o mesmo TPM que o map-reduce contorna
+  let joined = partials.map((p) => `- ${p}`).join('\n');
+  if (joined.length > PARTIAL_TOTAL_CHARS) {
+    joined = `${joined.slice(0, PARTIAL_TOTAL_CHARS)}\n[... notas excedentes omitidas por tamanho ...]`;
+  }
+  await new Promise((r) => setTimeout(r, GROQ_BLOCK_PAUSE_MS));
+  const reduceUser = fenceUntrusted(
+    `${header}\nNOTAS PARCIAIS (extraídas em ordem cronológica da transcrição completa):\n${joined}`,
+  );
+  return normalizeMinutes(await llmChat(system, reduceUser, outTokens));
 }
 
-function buildTranscriptText(meta: RecordingMeta, segments: TranscriptSegment[]): string {
+function buildTranscriptParts(meta: RecordingMeta, segments: TranscriptSegment[]): { header: string; body: string } {
   const header = [
     `Reunião no canal: ${cleanInline(meta.voiceChannelName)}`,
     `Participantes: ${meta.participants.map((p) => cleanInline(p.name)).join(', ') || '—'}`,
@@ -82,15 +173,7 @@ function buildTranscriptText(meta: RecordingMeta, segments: TranscriptSegment[])
     .map((s) => `[${msToClock(s.startMs)}] ${cleanInline(s.speaker)}: ${cleanText(s.text)}`)
     .join('\n');
 
-  let full = `${header}\n${body}`;
-  if (full.length > MAX_TRANSCRIPT_CHARS) {
-    // mantém começo e fim, corta o miolo (o mais provável de ser redundante)
-    const half = Math.floor(MAX_TRANSCRIPT_CHARS / 2);
-    full = `${full.slice(0, half)}\n\n[... trecho do meio omitido por tamanho ...]\n\n${full.slice(-half)}`;
-  }
-  // envolve num bloco de dados-não-confiáveis com nonce (o LLM é instruído a
-  // tratar o interior como DADOS, nunca instruções — ver UNTRUSTED_GUARD)
-  return fenceUntrusted(full);
+  return { header, body };
 }
 
 /** Parse defensivo: o modelo pode variar chaves/tipos; coage tudo para o formato esperado. */

@@ -9,7 +9,7 @@ import { AccessIdentity } from './auth';
  * exige o gateway do Discord vivo, então o MCP passa exatamente por aqui.
  *
  * Regra:
- *  - iniciou a gravação OU participou (falou) → vê
+ *  - iniciou a gravação OU esteve na call (falando ou mutado) → vê
  *  - enxerga o canal de voz de origem → vê
  *  - tem "Gerenciar Servidor" → vê e apaga
  *  - quem iniciou também apaga
@@ -77,7 +77,9 @@ async function computeAccess(user: AccessIdentity, meta: RecordingMeta): Promise
 
   const isInitiator = !!meta.startedBy && meta.startedBy.id === user.id;
   const isParticipant = meta.participants.some((p) => p.id === user.id);
-  let view = isInitiator || isParticipant;
+  // presença basta: quem estava na call (mesmo mutado do início ao fim) vê a gravação
+  const wasPresent = meta.presence?.some((p) => p.id === user.id) ?? false;
+  let view = isInitiator || isParticipant || wasPresent;
   let del = isInitiator;
 
   const guild = client.guilds.cache.get(meta.guildId);

@@ -74,8 +74,8 @@ const P: Record<string, { pt: string; en: string }> = {
     en: 'A short, fictional excerpt just to set the tone. On a real recording the audio is full-length and the timestamps are clickable.',
   },
   cooking: {
-    pt: 'O arquivo é processado na hora — gravações longas podem levar alguns segundos.',
-    en: 'Files are processed on demand — long recordings may take a few seconds.',
+    pt: 'O player usa um mix pré-processado; os downloads são gerados na hora (gravações longas podem levar alguns segundos).',
+    en: 'The player uses a pre-processed mix; downloads are generated on demand (long recordings may take a few seconds).',
   },
   livenote: {
     pt: '🔴 Gravação em andamento: os downloads trazem o áudio <strong>até este momento</strong>. Esta página se atualiza sozinha a cada 30 segundos.',
@@ -88,6 +88,15 @@ const P: Record<string, { pt: string; en: string }> = {
     en: 'Delete this recording forever? There is no undo.',
   },
   expires: { pt: '⏳ Esta gravação expira em {date}.', en: '⏳ This recording expires on {date}.' },
+  presentAlso: { pt: 'Também estavam na call (sem falar)', en: 'Also in the call (did not speak)' },
+  transcriptPartial: {
+    pt: '⚠️ Transcrição parcial — ainda faltam: {names}. Vou tentar de novo sozinho (limite por hora do provedor).',
+    en: '⚠️ Partial transcript — still missing: {names}. I will retry automatically (provider hourly limit).',
+  },
+  transcriptPartialFinal: {
+    pt: '⚠️ Transcrição parcial — estas faixas não puderam ser transcritas: {names}.',
+    en: '⚠️ Partial transcript — these tracks could not be transcribed: {names}.',
+  },
 };
 
 function p(l: Locale, key: string, vars: Record<string, string> = {}): string {
@@ -128,6 +137,7 @@ const SHELL_CSS = `
   .events { list-style: none; font-size: 14px; display: flex; flex-direction: column; gap: 4px;
             max-height: 220px; overflow-y: auto; }
   .events time { color: #949ba4; font-family: ui-monospace, monospace; margin-right: 8px; }
+  .wall { color: #6d7178 !important; font-size: 12px; }
   .transcript { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto;
                 background: #232428; border-radius: 8px; padding: 14px; font-size: 14px; }
   .transcript p { line-height: 1.45; }
@@ -203,9 +213,23 @@ function datetime(ms: number, lang: Locale): string {
   return `<time data-ts="${ms}">${esc(fallback)}</time>`;
 }
 
+/** Hora do relógio (HH:MM) no fuso do servidor, reescrita pro fuso do navegador via data-fmt="clock". */
+function clockTime(ms: number, lang: Locale): string {
+  const dateLocale = lang === 'pt' ? 'pt-BR' : 'en-US';
+  const fallback = new Date(ms).toLocaleTimeString(dateLocale, {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: config.timezone,
+  });
+  return `<time class="wall" data-ts="${ms}" data-fmt="clock">${esc(fallback)}</time>`;
+}
+
 const TZ_SCRIPT = `<script>
 document.querySelectorAll('time[data-ts]').forEach(function(el){
-  try { el.textContent = new Date(+el.dataset.ts).toLocaleString(navigator.language, {dateStyle:'long', timeStyle:'short'}); } catch(e){}
+  try {
+    var opts = el.dataset.fmt === 'clock' ? {timeStyle:'short'} : {dateStyle:'long', timeStyle:'short'};
+    el.textContent = new Date(+el.dataset.ts).toLocaleString(navigator.language, opts);
+  } catch(e){}
 });
 // pular pro momento no player de áudio (no-op se não houver player, ex.: gravação ao vivo)
 window.kseek = function(ms){
@@ -256,7 +280,7 @@ function shell(
       ${opts.user ? `<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</span>` : ''}
     </span>
   </header>`;
-  const foot = `<footer class="topfoot"><a href="/">🎙️ Kassinão</a> · MIT · open-source · <a href="${ghHref()}">${repoLabel}</a></footer>`;
+  const foot = `<footer class="topfoot"><a href="/">🎙️ Kassinão</a> · AGPL-3.0 · open-source · <a href="${ghHref()}">${repoLabel}</a></footer>`;
   // Auto-refresh (enquanto transcrição/ata processam) via JS em vez de <meta refresh>,
   // pra NÃO recarregar e cortar o áudio enquanto a pessoa está ouvindo o player.
   const refresh = opts.refreshSeconds
@@ -312,6 +336,14 @@ export function recordingPage(
           .join('')}</div>`
       : `<p class="muted">${p(l, 'nobody')}</p>`;
 
+  // quem esteve na call mas nunca falou (presença ≠ faixa): aparece, com estilo discreto
+  const silentIds = new Set(meta.participants.map((pt) => pt.id));
+  const silent = (meta.presence ?? []).filter((pr) => !silentIds.has(pr.id));
+  const presentAlso =
+    silent.length > 0
+      ? `<p class="muted" style="margin-top:8px">👥 ${p(l, 'presentAlso')}: ${silent.map((pr) => esc(pr.name)).join(', ')}</p>`
+      : '';
+
   const downloads =
     !demo && meta.participants.length > 0
       ? `<div class="downloads">
@@ -326,7 +358,10 @@ export function recordingPage(
   const notes =
     meta.notes.length > 0
       ? `<h2>${p(l, 'notes')}</h2><ul class="notes">${meta.notes
-          .map((n) => `<li><time>${formatOffset(n.atMs)}</time><strong>${esc(n.author)}:</strong> ${esc(n.text)}</li>`)
+          .map(
+            (n) =>
+              `<li><time>${formatOffset(n.atMs)}</time>${clockTime(meta.startedAt + n.atMs, l)}<strong>${esc(n.author)}:</strong> ${esc(n.text)}</li>`,
+          )
           .join('')}</ul>`
       : '';
 
@@ -356,7 +391,10 @@ export function recordingPage(
   const events =
     meta.events.length > 0
       ? `<h2>${p(l, 'timeline')}</h2><ul class="events">${meta.events
-          .map((e) => `<li><time>${formatOffset(e.atMs)}</time>${esc(e.text)}</li>`)
+          .map(
+            (e) =>
+              `<li><time>${formatOffset(e.atMs)}</time>${clockTime(meta.startedAt + e.atMs, l)}${esc(e.text)}</li>`,
+          )
           .join('')}</ul>`
       : '';
 
@@ -401,6 +439,7 @@ export function recordingPage(
      ${liveNote}
      <h2>${p(l, 'participants')}</h2>
      ${people}
+     ${presentAlso}
      ${!demo && meta.participants.length > 0 ? `<h2>${p(l, 'downloads')}</h2>` : ''}
      ${downloads}
      ${player}
@@ -420,6 +459,8 @@ export function recordingPage(
         live ||
         meta.transcription?.status === 'pending' ||
         meta.transcription?.status === 'running' ||
+        // parcial só re-atualiza enquanto há rodada automática agendada
+        (meta.transcription?.status === 'partial' && meta.transcription.retryScheduled) ||
         meta.minutes?.status === 'pending' ||
         meta.minutes?.status === 'running'
           ? 30
@@ -495,6 +536,16 @@ function renderTranscription(
     return `${title}<p class="tstate">${p(l, 'transcriptError')}${esc(state.error ?? '?')}</p>`;
   if (!transcript || transcript.length === 0) return `${title}<p class="tstate">${p(l, 'transcriptEmpty')}</p>`;
 
+  // parcial: mostra o que já existe + aviso de quais faixas ainda faltam
+  const partialNote =
+    state.status === 'partial'
+      ? `<p class="tstate" style="margin-bottom:8px">${p(
+          l,
+          state.retryScheduled ? 'transcriptPartial' : 'transcriptPartialFinal',
+          { names: esc((state.error ?? '?').replace(/^faixas pendentes:\s*/i, '')) },
+        )}</p>`
+      : '';
+
   const body = transcript
     .map((s) => `<p>${tsLink(s.startMs, seekable)}<span class="who">${esc(s.speaker)}:</span> ${esc(s.text)}</p>`)
     .join('');
@@ -505,7 +556,7 @@ function renderTranscription(
       <a href="/rec/${meta.id}/transcricao.txt">${p(l, 'transcriptDownloadTxt')}</a>
     </div>`
     : '';
-  return `${title}<div class="transcript">${body}</div>${dl}`;
+  return `${title}${partialNote}<div class="transcript">${body}</div>${dl}`;
 }
 
 export function messagePage(title: string, message: string, user?: WebUser, lang?: Locale): string {
@@ -862,7 +913,7 @@ export function landingPage(lang: Locale): string {
       <a class="btn btn-primary" href="/demo">${T('▶️ Ver a demo ao vivo', '▶️ See the live demo')}</a>
       <a class="btn btn-outline" href="${ghHref()}">${T('Rodar no meu servidor →', 'Deploy your own →')}</a>
     </div>
-    <div class="microline">${T('Sem login pra ver a demo', 'No login to see the demo')} · <b>${T('roda no seu servidor', 'runs on your box')}</b> · ${T('open-source, MIT', 'open-source, MIT')}</div>
+    <div class="microline">${T('Sem login pra ver a demo', 'No login to see the demo')} · <b>${T('roda no seu servidor', 'runs on your box')}</b> · ${T('open-source, AGPL-3.0', 'open-source, AGPL-3.0')}</div>
 
     <div class="hero-split">
       <div class="panel panel-call">
@@ -909,9 +960,9 @@ export function landingPage(lang: Locale): string {
     <div class="receipts" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
       ${receipt('👁️', T('Acesso pela sua identidade do Discord', 'By your Discord identity'), T('Reconferido ao vivo a cada gravação — você iniciou, participou, enxerga o canal ou tem Gerenciar Servidor. Não existe modo "dono vê tudo".', 'Re-checked live per meeting — you started it, you were in it, you can see the channel, or you have Manage-Server. No "operator sees all" mode.') + `<br>${accessReceipt}`)}
       ${receipt('🔒', T('Read-only, revogável', 'Read-only, revocable'), T('O conector não grava, não apaga, não serve áudio. O token gira a cada uso, detecta reuso e trava em 503 (fail-closed). Revoga quando quiser (', 'The connector never writes, deletes, or serves audio. The token rotates each use, trips reuse-detection, and fails closed with a 503. Revoke anytime (') + `<code>/mcp revoke-all</code>).`)}
-      ${receipt('🖥️', T('Roda na sua máquina', 'Runs on your box'), T('Áudio e transcrição 100% local (faster-whisper) — a gravação nunca sai daí. Só a ata usa um LLM na nuvem (Groq/OpenAI/Gemini), ou você desliga a ata. Sem fingir que é offline.', "Audio and transcription can run 100% local (faster-whisper) — the recording never leaves your box. Only the AI minutes use a cloud LLM (Groq/OpenAI/Gemini), or you turn minutes off. We won't pretend otherwise."))}
+      ${receipt('🖥️', T('Roda na sua máquina', 'Runs on your box'), T('Áudio e transcrição 100% local (faster-whisper) — a gravação nunca sai daí. Só a ata usa um LLM na nuvem (OpenRouter ou Groq), ou você desliga a ata. Sem fingir que é offline.', "Audio and transcription can run 100% local (faster-whisper) — the recording never leaves your box. Only the AI minutes use a cloud LLM (OpenRouter or Groq), or you turn minutes off. We won't pretend otherwise."))}
     </div>
-    <div class="inj-banner"><span>🔓</span><span>${T('Tudo é open-source — o bot, a página web e o conector MCP. Licença MIT, no seu servidor. Não confia: lê o código.', "The whole thing is open-source — the bot, the web app, and the MCP connector. MIT-licensed, on your box. Don't trust it — read it.")} ${repoPublic ? `<a class="pill-link" href="${REPO_URL}">${REPO_URL.replace('https://', '')} →</a>` : `<a class="pill-link" href="${NPM_URL}">npm: kassinao-mcp →</a>`}</span></div>
+    <div class="inj-banner"><span>🔓</span><span>${T('Tudo é open-source — o bot, a página web e o conector MCP. Licença AGPL-3.0, no seu servidor. Não confia: lê o código.', "The whole thing is open-source — the bot, the web app, and the MCP connector. AGPL-licensed, on your box. Don't trust it — read it.")} ${repoPublic ? `<a class="pill-link" href="${REPO_URL}">${REPO_URL.replace('https://', '')} →</a>` : `<a class="pill-link" href="${NPM_URL}">npm: kassinao-mcp →</a>`}</span></div>
   </div></section>`;
 
   // ---- PROOF: real demo minutes ----
@@ -965,7 +1016,7 @@ export function landingPage(lang: Locale): string {
     </div>
     <div class="deploy-cards">
       <div class="dcard">🐳 <b>Docker Compose</b> · ${repoPublic ? `<a class="ts" href="https://render.com/deploy?repo=${REPO_URL}">🚀 Deploy to Render</a>` : '🚀 Deploy to Render'} · 🔒 Cloudflare Tunnel — 0 ${T('portas abertas', 'open ports')}</div>
-      <div class="dcard">${T('Custo, direto: a transcrição é BYO-key e multipista, então escala com o nº de pessoas — de centavos a um pouco mais por call. A ata roda uma vez, alguns centavos. Ou 100% local (faster-whisper) e some com o custo.', 'Cost, straight: transcription is bring-your-own-key and multi-track, so it scales with speakers — cents to a bit more per call. Minutes run once, a few cents. Or go 100% local (faster-whisper) and the bill disappears.')}</div>
+      <div class="dcard">${T('Custo, direto: a transcrição é BYO-key e só a FALA é enviada (VAD corta o silêncio) — o custo acompanha o tempo falado, não pessoas × horas; free tiers cobrem times pequenos. A ata roda uma vez, alguns centavos. Ou 100% local (faster-whisper) e some com o custo.', 'Cost, straight: transcription is bring-your-own-key and only SPEECH is sent (VAD trims silence) — cost tracks talk time, not people × hours; free tiers cover small teams. Minutes run once, a few cents. Or go 100% local (faster-whisper) and the bill disappears.')}</div>
     </div>
     <p class="microline" style="margin-top:18px">${craigLine}</p>
   </div></section>`;
@@ -991,7 +1042,7 @@ export function landingPage(lang: Locale): string {
   </div></div>`;
 
   const footer = `<footer><div class="wrap">
-    <span class="sig">${T('MIT · open-source · roda no seu servidor · EN / pt-BR', 'MIT · open-source · runs on your server · EN / pt-BR')}</span>
+    <span class="sig">${T('AGPL-3.0 · open-source · roda no seu servidor · EN / pt-BR', 'AGPL-3.0 · open-source · runs on your server · EN / pt-BR')}</span>
     <span class="sig">${repoPublic ? `<a href="${REPO_URL}" style="color:inherit">GitHub</a> · ` : ''}<a href="${NPM_URL}" style="color:inherit">npm: kassinao-mcp</a></span>
     ${langToggle}
   </div></footer>`;

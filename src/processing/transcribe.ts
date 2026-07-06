@@ -14,10 +14,13 @@ import {
   saveMinutes,
   saveTranscript,
   tracksDir,
+  transcriptReady,
   TranscriptSegment,
 } from '../store';
 import { runFfmpeg } from './ffmpeg';
+import { fetchWithRetry } from './http';
 import { generateMinutes, minutesEnabled } from './minutes';
+import { batchIntervals, detectSpeechIntervals, extractBatch, filterHallucinations, mapBatchTimeToTrack } from './vad';
 
 /** Segmento cru devolvido por um provider (tempos em segundos, relativos ao chunk). */
 interface RawSegment {
@@ -41,7 +44,12 @@ function chunkSeconds(): number {
 
 /** Piso do watchdog por chunk do provider 'command'; o teto real é proporcional à duração. */
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
-const MAX_TRANSCRIPTION_ATTEMPTS = 2;
+/** Rate limit por hora (Groq free) pode exigir várias rodadas — cada uma retoma só as faixas que faltam. */
+const MAX_TRANSCRIPTION_ATTEMPTS = 4;
+/** Espera entre rodadas quando sobraram faixas por rate limit (o limite da Groq é por hora). */
+const PARTIAL_RETRY_DELAY_MS = 12 * 60 * 1000;
+/** Espera máxima DENTRO de uma chamada quando o provedor pede "try again in Xm". */
+const ASR_MAX_WAIT_MS = 10 * 60 * 1000;
 
 /** PIDs (grupos) de comandos locais em voo — mortos no shutdown para não virarem órfãos. */
 const commandPids = new Set<number>();
@@ -70,13 +78,23 @@ export function killPendingTranscriptions(): void {
 }
 
 export function transcriptionEnabled(): boolean {
-  return ['openai', 'groq', 'gemini', 'command'].includes(config.transcribeProvider);
+  return ['assemblyai', 'openai', 'groq', 'gemini', 'command'].includes(config.transcribeProvider);
 }
 
 /** Valida a configuração no boot para o erro aparecer cedo, não na primeira call. */
 export function validateTranscriptionConfig(): string | undefined {
+  // Ata: valores/chaves inválidos falham no boot, não na primeira reunião.
+  if (!['openrouter', 'groq'].includes(config.minutesProvider))
+    return `MINUTES_PROVIDER desconhecido: ${config.minutesProvider} (use openrouter ou groq)`;
+  if (config.minutesEnabled === 'true') {
+    if (config.minutesProvider === 'openrouter' && !config.openrouterApiKey)
+      return 'MINUTES_ENABLED=true com MINUTES_PROVIDER=openrouter exige OPENROUTER_API_KEY';
+    if (config.minutesProvider === 'groq' && !config.groqApiKey)
+      return 'MINUTES_ENABLED=true com MINUTES_PROVIDER=groq exige GROQ_API_KEY';
+  }
   const p = config.transcribeProvider;
   if (p === 'none') return undefined;
+  if (p === 'assemblyai' && !config.assemblyaiApiKey) return 'TRANSCRIBE_PROVIDER=assemblyai exige ASSEMBLYAI_API_KEY';
   if (p === 'openai' && !config.openaiApiKey) return 'TRANSCRIBE_PROVIDER=openai exige OPENAI_API_KEY';
   if (p === 'groq' && !config.groqApiKey) return 'TRANSCRIBE_PROVIDER=groq exige GROQ_API_KEY';
   if (p === 'gemini' && !config.geminiApiKey) return 'TRANSCRIBE_PROVIDER=gemini exige GEMINI_API_KEY';
@@ -85,7 +103,8 @@ export function validateTranscriptionConfig(): string | undefined {
     (!config.transcribeCommand.includes('{input}') || !config.transcribeCommand.includes('{output}'))
   )
     return 'TRANSCRIBE_PROVIDER=command exige TRANSCRIBE_COMMAND com os placeholders {input} e {output}';
-  if (!['none', 'openai', 'groq', 'gemini', 'command'].includes(p)) return `TRANSCRIBE_PROVIDER desconhecido: ${p}`;
+  if (!['none', 'assemblyai', 'openai', 'groq', 'gemini', 'command'].includes(p))
+    return `TRANSCRIBE_PROVIDER desconhecido: ${p}`;
   return undefined;
 }
 
@@ -98,6 +117,9 @@ export function isTranscribing(recordingId: string): boolean {
   return queued.has(recordingId);
 }
 
+/** Rodadas máximas de transcrição por gravação (exportado p/ boot recovery e UI). */
+export { MAX_TRANSCRIPTION_ATTEMPTS };
+
 /**
  * Enfileira a transcrição de uma gravação finalizada. `onDone` é chamado
  * com o meta atualizado (status done ou error). Idempotente por gravação.
@@ -109,19 +131,29 @@ export function enqueueTranscription(recordingId: string, onDone?: (meta: Record
 
   const attempts = (meta.transcription?.attempts ?? 0) + 1;
   if (attempts > MAX_TRANSCRIPTION_ATTEMPTS) {
-    // ex.: áudio que derruba/pendura o motor — não trava a fila para sempre no mesmo item
+    // ex.: áudio que derruba/pendura o motor ou rate limit que não cede — não
+    // trava a fila para sempre no mesmo item. Se já há transcrição PARCIAL,
+    // ela é entregue como está (com aviso), em vez de virar erro total.
+    const partial = (meta.transcription?.doneTrackIds?.length ?? 0) > 0;
     meta.transcription = {
-      status: 'error',
+      ...meta.transcription,
+      status: partial ? 'partial' : 'error',
       provider: config.transcribeProvider,
-      error: 'desisti após 2 tentativas',
+      error: partial
+        ? (meta.transcription?.error ?? 'faixas faltando após várias tentativas')
+        : 'desisti após 4 tentativas',
       attempts,
+      retryScheduled: false,
+      finishedAt: Date.now(),
     };
     saveMeta(meta);
-    onDone?.(meta); // avisa no Discord em vez de falhar em silêncio
+    // entrega o que deu: a ata roda sobre a transcrição parcial (melhor que nada)
+    if (partial) enqueueMinutesOnly(recordingId, onDone);
+    else onDone?.(meta); // avisa no Discord em vez de falhar em silêncio
     return;
   }
   queued.add(recordingId);
-  meta.transcription = { status: 'pending', provider: config.transcribeProvider, attempts };
+  meta.transcription = { ...meta.transcription, status: 'pending', provider: config.transcribeProvider, attempts };
   saveMeta(meta);
 
   queue = queue
@@ -130,20 +162,47 @@ export function enqueueTranscription(recordingId: string, onDone?: (meta: Record
     .then(() => {
       queued.delete(recordingId);
       const fresh = readMeta(recordingId);
-      if (fresh && onDone) onDone(fresh);
+      if (!fresh) return;
+      const st = fresh.transcription?.status;
+      const tries = fresh.transcription?.attempts ?? 0;
+      // Sobraram faixas (rate limit por hora) ou falhou tudo (ex.: 429 que não
+      // cede): reagenda sozinho enquanto houver tentativa, e SÓ avisa no final.
+      if ((st === 'partial' || st === 'error') && tries < MAX_TRANSCRIPTION_ATTEMPTS) {
+        fresh.transcription = { status: st, ...fresh.transcription, retryScheduled: true };
+        saveMeta(fresh);
+        console.log(
+          `Transcrição de ${recordingId} ${st === 'partial' ? 'parcial' : 'falhou'} (${fresh.transcription.error ?? '?'}) — nova rodada em ${Math.round(PARTIAL_RETRY_DELAY_MS / 60000)} min.`,
+        );
+        const timer = setTimeout(() => enqueueTranscription(recordingId, onDone), PARTIAL_RETRY_DELAY_MS);
+        timer.unref?.();
+        return;
+      }
+      // Última rodada terminou parcial: é o resultado FINAL — gera a ata do que
+      // existe e avisa (sem isso a página ficaria em "processando" pra sempre).
+      if (st === 'partial') {
+        fresh.transcription = { status: st, ...fresh.transcription, retryScheduled: false };
+        saveMeta(fresh);
+        enqueueMinutesOnly(recordingId, onDone);
+        return;
+      }
+      if (onDone) onDone(fresh);
     });
 }
 
 /**
- * Retoma SÓ a ata (transcrição já pronta) — para recuperação após reinício entre
- * a transcrição e a ata. Idempotente: não roda se a ata já está pronta.
+ * Retoma SÓ a ata (transcrição já pronta ou parcial-final) — para recuperação
+ * após reinício entre a transcrição e a ata, e para gerar a ata do que existe
+ * quando faixas ficaram de fora após todas as tentativas. Idempotente.
  */
 export function enqueueMinutesOnly(recordingId: string, onDone?: (meta: RecordingMeta) => void): void {
   if (!minutesEnabled() || queued.has(recordingId)) return;
   const meta = readMeta(recordingId);
-  if (!meta || meta.transcription?.status !== 'done' || meta.minutes?.status === 'done') return;
+  if (!meta || !transcriptReady(meta) || meta.minutes?.status === 'done') return;
   const segments = readTranscript(recordingId);
-  if (!segments || segments.length === 0) return;
+  if (!segments || segments.length === 0) {
+    onDone?.(meta);
+    return;
+  }
 
   queued.add(recordingId);
   queue = queue
@@ -166,6 +225,11 @@ async function transcribeRecording(recordingId: string): Promise<void> {
     return;
   }
 
+  // Retomada por faixa: rodada anterior pode ter parado no rate limit por hora.
+  // Faixas já transcritas não são reenviadas (não gastam cota de novo).
+  const doneTrackIds = new Set(meta.transcription?.doneTrackIds ?? []);
+  const previous = doneTrackIds.size > 0 ? (readTranscript(recordingId) ?? []) : [];
+
   meta.transcription = { ...meta.transcription, status: 'running', provider: config.transcribeProvider };
   saveMeta(meta);
 
@@ -173,20 +237,36 @@ async function transcribeRecording(recordingId: string): Promise<void> {
   fs.mkdirSync(work, { recursive: true });
 
   try {
-    const all: TranscriptSegment[] = [];
+    const all: TranscriptSegment[] = [...previous];
     const failed: string[] = [];
 
     for (const participant of meta.participants) {
+      if (doneTrackIds.has(participant.id)) continue;
       const master = path.join(tracksDir(meta.id), participant.trackFile);
-      if (!fs.existsSync(master)) continue;
+      if (!fs.existsSync(master)) {
+        doneTrackIds.add(participant.id); // sem arquivo não há o que tentar de novo
+        continue;
+      }
       // duração REAL da faixa (não a nominal da sessão): -ss além do fim geraria
       // chunks-fantasma que quebram a transcrição. E uma faixa que falha não pode
       // derrubar as demais.
       const trackSec = await probeDurationSec(master);
-      if (trackSec <= 0) continue;
+      if (trackSec <= 0) {
+        doneTrackIds.add(participant.id);
+        continue;
+      }
       try {
         const segments = await transcribeTrack(master, participant, trackSec, work);
         all.push(...segments);
+        doneTrackIds.add(participant.id);
+        // checkpoint: se a PRÓXIMA faixa estourar o rate limit, esta não se perde
+        all.sort((a, b) => a.startMs - b.startMs);
+        saveTranscript(meta.id, all);
+        const cp = readMeta(meta.id);
+        if (cp) {
+          cp.transcription = { status: 'running', ...cp.transcription, doneTrackIds: [...doneTrackIds] };
+          saveMeta(cp);
+        }
       } catch (err) {
         console.error(`Transcrição da faixa de ${participant.name} (${meta.id}) falhou:`, (err as Error).message);
         failed.push(participant.name);
@@ -206,14 +286,18 @@ async function transcribeRecording(recordingId: string): Promise<void> {
     if (!fresh) return; // apagada no meio do caminho
     fresh.transcription = {
       ...fresh.transcription,
-      status: 'done',
+      // faixas faltando ≠ pronto: 'partial' faz o chamador reagendar outra rodada
+      status: failed.length > 0 ? 'partial' : 'done',
       provider: config.transcribeProvider,
+      doneTrackIds: [...doneTrackIds],
+      error: failed.length > 0 ? `faixas pendentes: ${failed.join(', ')}` : undefined,
       finishedAt: Date.now(),
     };
     saveMeta(fresh);
 
-    // Ata com IA (mesma fila serial) — falha aqui NÃO derruba a transcrição já entregue
-    if (all.length > 0 && minutesEnabled()) {
+    // Ata com IA (mesma fila serial) — falha aqui NÃO derruba a transcrição já entregue.
+    // Com faixas pendentes a ata espera a transcrição completar (senão sairia capenga).
+    if (failed.length === 0 && all.length > 0 && minutesEnabled()) {
       await generateMinutesStep(meta.id, all);
     }
   } catch (err) {
@@ -263,6 +347,80 @@ async function generateMinutesStep(recordingId: string, segments: TranscriptSegm
 }
 
 async function transcribeTrack(
+  masterFlac: string,
+  participant: Participant,
+  durationSec: number,
+  work: string,
+): Promise<TranscriptSegment[]> {
+  // VAD primeiro: as faixas são preenchidas com silêncio digital (sincronia), e
+  // silêncio na API = alucinação ("Legenda Adriana Zanotto") + cota desperdiçada
+  // (o rate limit da Groq é em SEGUNDOS DE ÁUDIO por hora). Só a fala viaja.
+  const intervals = await detectSpeechIntervals(masterFlac, durationSec);
+  if (intervals === undefined) {
+    // detecção falhou — caminho antigo (chunks de 20 min com filtro de silêncio grosseiro)
+    return transcribeTrackLegacy(masterFlac, participant, durationSec, work);
+  }
+  if (intervals.length === 0) return []; // ninguém falou nesta faixa — nada a enviar
+
+  const out: TranscriptSegment[] = [];
+  const batches = batchIntervals(intervals, chunkSeconds());
+
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    const batchFile = path.join(work, `batch-${participant.index}-${i}.mp3`);
+    await extractBatch(masterFlac, batch, batchFile);
+
+    // MP3 compactado ínfimo = só header/ruído residual — não gasta uma chamada
+    if (fs.statSync(batchFile).size < 1024) {
+      fs.rmSync(batchFile, { force: true });
+      continue;
+    }
+
+    let raw: RawSegment[];
+    try {
+      raw = await transcribeChunk(batchFile, work, batch.durationSec);
+    } catch (err) {
+      fs.rmSync(batchFile, { force: true });
+      // conteúdo bloqueado/incodificável de UM lote vira lacuna, não mata a faixa
+      if (err instanceof ChunkContentError) {
+        const first = batch.intervals[0];
+        const last = batch.intervals[batch.intervals.length - 1];
+        out.push({
+          startMs: Math.round(first.start * 1000),
+          endMs: Math.round(last.end * 1000),
+          speaker: participant.name,
+          text: '[trecho não transcrito]',
+        });
+        continue;
+      }
+      throw err; // erro sistêmico (rede/timeout/rate limit): propaga para marcar a faixa
+    }
+    fs.rmSync(batchFile, { force: true });
+
+    // modelo sem timestamps (start=end=0 num bloco único): ancora no lote inteiro
+    if (raw.length === 1 && raw[0].start === 0 && raw[0].end === 0) {
+      raw[0].end = batch.durationSec;
+    }
+
+    for (const seg of raw) {
+      const text = seg.text.trim();
+      if (!text) continue;
+      // tempos do ASR são relativos ao ÁUDIO COMPACTADO → mapeia de volta pra faixa real
+      const startSec = mapBatchTimeToTrack(batch, Math.max(0, seg.start));
+      const endSec = Math.max(startSec, mapBatchTimeToTrack(batch, Math.max(seg.start, seg.end), true));
+      out.push({
+        startMs: Math.round(startSec * 1000),
+        endMs: Math.round(endSec * 1000),
+        speaker: participant.name,
+        text,
+      });
+    }
+  }
+  return filterHallucinations(out);
+}
+
+/** Caminho antigo (sem VAD): chunks fixos de 20 min. Usado só se o silencedetect falhar. */
+async function transcribeTrackLegacy(
   masterFlac: string,
   participant: Participant,
   durationSec: number,
@@ -340,7 +498,7 @@ async function transcribeTrack(
       });
     }
   }
-  return out;
+  return filterHallucinations(out);
 }
 
 /** Duração real de um arquivo de áudio em segundos (0 se não der para medir). */
@@ -377,6 +535,20 @@ async function chunkHasAudio(file: string, size: number): Promise<boolean> {
 
 function transcribeChunk(file: string, work: string, chunkSec: number): Promise<RawSegment[]> {
   switch (config.transcribeProvider) {
+    case 'assemblyai':
+      // fallback: se a AssemblyAI falhar por questão SISTÊMICA (crédito no fim,
+      // 5xx, timeout) e houver GROQ_API_KEY, o mesmo chunk tenta no Whisper da
+      // Groq — a transcrição não pode morrer por causa de um provedor fora do ar
+      return assemblyaiTranscribe(file, chunkSec).catch((err) => {
+        if (err instanceof ChunkContentError || !config.groqApiKey) throw err;
+        console.warn(`AssemblyAI falhou (${(err as Error).message}) — tentando o mesmo chunk na Groq.`);
+        return whisperApi(
+          'https://api.groq.com/openai/v1/audio/transcriptions',
+          config.groqApiKey,
+          'whisper-large-v3',
+          file,
+        );
+      });
     case 'openai':
       return whisperApi(
         'https://api.openai.com/v1/audio/transcriptions',
@@ -388,7 +560,8 @@ function transcribeChunk(file: string, work: string, chunkSec: number): Promise<
       return whisperApi(
         'https://api.groq.com/openai/v1/audio/transcriptions',
         config.groqApiKey,
-        config.transcribeModel || 'whisper-large-v3-turbo',
+        // large-v3 completo: erra bem menos em pt-BR que o -turbo (mesma cota free)
+        config.transcribeModel || 'whisper-large-v3',
         file,
       );
     case 'gemini':
@@ -400,6 +573,79 @@ function transcribeChunk(file: string, work: string, chunkSec: number): Promise<
   }
 }
 
+// ---------- AssemblyAI (Universal — top-3 em pt-BR no Open ASR Leaderboard) ----------
+
+const AAI_BASE = 'https://api.assemblyai.com/v2';
+
+/**
+ * Fluxo da AssemblyAI: upload do arquivo → cria job de transcrição → poll até
+ * completar → busca as sentenças (viram nossos segmentos com timestamps).
+ * Language: usa os 2 primeiros caracteres de TRANSCRIBE_LANGUAGE ('pt' cobre
+ * pt-BR — é o grosso do treino deles em português).
+ */
+async function assemblyaiTranscribe(file: string, chunkSec: number): Promise<RawSegment[]> {
+  const auth = { Authorization: config.assemblyaiApiKey };
+
+  const up = await fetchWithRetry(
+    `${AAI_BASE}/upload`,
+    { method: 'POST', headers: { ...auth, 'Content-Type': 'application/octet-stream' }, body: fs.readFileSync(file) },
+    { attempts: 3 },
+  );
+  const { upload_url } = (await up.json()) as { upload_url?: string };
+  if (!upload_url) throw new Error('AssemblyAI upload não devolveu upload_url');
+
+  const create = await fetchWithRetry(
+    `${AAI_BASE}/transcript`,
+    {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        audio_url: upload_url,
+        language_code: config.transcribeLanguage.slice(0, 2) || 'pt',
+        speech_model: config.transcribeModel || 'universal',
+        punctuate: true,
+        format_text: true,
+      }),
+    },
+    { attempts: 3 },
+  );
+  const created = (await create.json()) as { id?: string; status?: string; error?: string };
+  if (!created.id) throw new Error(`AssemblyAI não criou o job: ${created.error ?? 'sem id'}`);
+
+  // poll proporcional à duração do áudio (piso 3 min) — eles transcrevem bem
+  // mais rápido que tempo real, mas fila deles pode segurar em pico
+  const deadline = Date.now() + Math.max(3 * 60_000, chunkSec * 1000);
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const st = await fetchWithRetry(`${AAI_BASE}/transcript/${created.id}`, { headers: auth }, { attempts: 3 });
+    const job = (await st.json()) as { status?: string; error?: string };
+    if (job.status === 'completed') break;
+    if (job.status === 'error') {
+      // erro de CONTEÚDO (áudio ilegível) vira lacuna; resto é sistêmico → fallback/retry.
+      // Cuidado pra NÃO classificar transiente como conteúdo (ex.: "unable to
+      // download audio" contém "audio" mas é transiente) — por isso termos estreitos.
+      const msg = job.error ?? 'erro desconhecido';
+      if (/corrupt|unsupported|decode|too short|duration/i.test(msg)) throw new ChunkContentError(`AssemblyAI: ${msg}`);
+      throw new Error(`AssemblyAI: ${msg}`);
+    }
+    if (Date.now() > deadline) throw new Error('AssemblyAI: transcrição não completou a tempo (poll timeout)');
+  }
+
+  const sent = await fetchWithRetry(
+    `${AAI_BASE}/transcript/${created.id}/sentences`,
+    { headers: auth },
+    { attempts: 3 },
+  );
+  const data = (await sent.json()) as { sentences?: { text?: string; start?: number; end?: number }[] };
+  return (data.sentences ?? [])
+    .filter((s) => typeof s.text === 'string' && s.text.trim())
+    .map((s) => ({
+      start: (Number(s.start) || 0) / 1000, // AssemblyAI usa ms; nosso RawSegment usa segundos
+      end: (Number(s.end) || 0) / 1000,
+      text: s.text as string,
+    }));
+}
+
 // ---------- OpenAI / Groq (API compatível) ----------
 
 async function whisperApi(url: string, apiKey: string, model: string, file: string): Promise<RawSegment[]> {
@@ -408,12 +654,21 @@ async function whisperApi(url: string, apiKey: string, model: string, file: stri
   form.append('model', model);
   form.append('language', config.transcribeLanguage);
   form.append('response_format', 'verbose_json');
+  // temperature 0 + prompt de contexto: menos alucinação e melhor grafia de jargão
+  form.append('temperature', '0');
+  if (config.transcribePrompt) form.append('prompt', config.transcribePrompt.slice(0, 800));
 
-  const resp = await fetchWithRetry(url, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
-  });
+  const resp = await fetchWithRetry(
+    url,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+    },
+    // 429 com "try again in 8m": espera de verdade (a fila é serial e roda em
+    // segundo plano) — melhor esperar que perder a faixa e gastar outra rodada
+    { attempts: 4, maxWaitMs: ASR_MAX_WAIT_MS },
+  );
   const data = (await resp.json()) as { segments?: { start: number; end: number; text: string }[]; text?: string };
   if (data.segments) return data.segments.map((s) => ({ start: s.start, end: s.end, text: s.text }));
   // modelos sem timestamps (ex.: gpt-4o-transcribe) devolvem só o texto
@@ -522,25 +777,6 @@ async function commandTranscribe(file: string, work: string, chunkSec: number): 
 }
 
 // ---------- util ----------
-
-async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {
-  let lastErr: Error | undefined;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const resp = await fetch(url, init);
-      if (resp.ok) return resp;
-      const body = (await resp.text()).slice(0, 300);
-      lastErr = new Error(`HTTP ${resp.status}: ${body}`);
-      // 4xx (menos 429) não vai melhorar com retry — break sai do loop e
-      // cai no throw final (um throw aqui seria engolido pelo próprio catch)
-      if (resp.status < 500 && resp.status !== 429) break;
-    } catch (err) {
-      lastErr = err as Error;
-    }
-    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
-  }
-  throw lastErr ?? new Error('falha de rede');
-}
 
 /** Render em Markdown: [hh:mm:ss] **Nome:** texto */
 export function transcriptToMarkdown(meta: RecordingMeta, segments: TranscriptSegment[]): string {

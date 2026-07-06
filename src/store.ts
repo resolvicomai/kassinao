@@ -25,6 +25,16 @@ export interface RecordingNote {
   text: string;
 }
 
+/** Presença na call (mesmo sem falar) — dá acesso à gravação e aparece na página. */
+export interface PresenceEntry {
+  id: string;
+  name: string;
+  /** Offset em ms desde o início da gravação em que a pessoa entrou. */
+  joinedAtMs: number;
+  /** Offset em ms em que saiu (ausente = ficou até o fim). */
+  leftAtMs?: number;
+}
+
 export interface TranscriptSegment {
   startMs: number;
   endMs: number;
@@ -33,12 +43,17 @@ export interface TranscriptSegment {
 }
 
 export interface TranscriptionState {
-  status: 'pending' | 'running' | 'done' | 'error' | 'disabled';
+  /** 'partial' = algumas faixas prontas, outras aguardando nova rodada (rate limit por hora). */
+  status: 'pending' | 'running' | 'done' | 'partial' | 'error' | 'disabled';
   provider?: string;
   error?: string;
   finishedAt?: number;
   /** Tentativas já feitas — evita re-travar a fila no mesmo áudio após reinícios. */
   attempts?: number;
+  /** Ids de participantes cujas faixas JÁ foram transcritas — a retomada pula essas (não regasta cota). */
+  doneTrackIds?: string[];
+  /** true = outra rodada automática está agendada; false/ausente com status 'partial' = resultado final. */
+  retryScheduled?: boolean;
 }
 
 export interface MinutesAction {
@@ -86,6 +101,8 @@ export interface RecordingMeta {
   endedAt?: number;
   status: 'recording' | 'done';
   participants: Participant[];
+  /** Quem esteve na call (falando ou não). Gravações antigas não têm este campo. */
+  presence?: PresenceEntry[];
   events: RecordingEvent[];
   notes: RecordingNote[];
   transcription?: TranscriptionState;
@@ -209,6 +226,15 @@ export function listGuildMetas(guildId: string, limit = 5): RecordingMeta[] {
 
 export function pageUrl(id: string): string {
   return `${config.baseUrl}/rec/${id}`;
+}
+
+/**
+ * Há transcrição utilizável? 'done' = completa; 'partial' = faltam faixas (rate
+ * limit por hora do provedor), mas o que existe já é exibível/pesquisável.
+ */
+export function transcriptReady(meta: RecordingMeta): boolean {
+  const s = meta.transcription?.status;
+  return s === 'done' || s === 'partial';
 }
 
 /**

@@ -15,10 +15,10 @@ Um gravador de voz multi-track para Discord, auto-hospedado, inspirado no [Craig
 ## ✨ Features
 
 - **🎚️ Multi-track sincronizado** — uma faixa FLAC (lossless) separada por falante, todas na mesma linha do tempo.
-- **📝 Transcrição automática** — com o nome de quem falou e horários. Motor plugável: **Groq**, **OpenAI**, **Gemini** ou **comando local** (faster-whisper/whisper.cpp) para privacidade total.
+- **📝 Transcrição automática** — com o nome de quem falou e horários. Motor plugável: **AssemblyAI**, **Groq**, **OpenAI**, **Gemini** ou **comando local** (faster-whisper/whisper.cpp) para privacidade total. **VAD de verdade**: só a fala vai pra API (sem custo com silêncio, sem alucinação de silêncio), com retomada automática se o provedor limitar.
 - **📋 Ata com IA** — resumo, decisões, itens de ação (com responsável/prazo), tópicos com horário e **um bloco por participante**. Gerada por LLM sobre a transcrição.
 - **🔊 Página web da gravação** — player de áudio com **horários clicáveis** (pula pro momento), downloads em **MP3 / FLAC / Mix único / projeto Audacity**, transcrição e ata renderizadas, tudo protegido por **login com Discord**.
-- **🔒 Acesso restrito de verdade** — só abre para quem **participou da call**, **enxerga o canal**, **iniciou** a gravação ou é **admin**. Link vazado não dá acesso a estranhos.
+- **🔒 Acesso restrito de verdade** — só abre para quem **estava na call** (falando ou mutado), **enxerga o canal**, **iniciou** a gravação ou é **admin**. Link vazado não dá acesso a estranhos.
 - **🎛️ Painel ao vivo** no chat do canal de voz — log de eventos, botões de **Parar** e **Nota**, indicador `[GRAVANDO]` no apelido do bot (consentimento visível).
 - **🗒️ Notas com timestamp** (`/nota` ou botão) — entram no painel, na transcrição, na ata e nos labels do projeto Audacity.
 - **🔌 Conector MCP** *(opcional)* — pergunte sobre suas reuniões pelo **Claude Desktop/Cursor**: janela de tempo, **itens de ação com prazo** cruzando reuniões, busca full-text — cada um só vê o que já poderia ver. Veja [`mcp/`](mcp/).
@@ -105,15 +105,18 @@ docker compose logs -f     # deve mostrar "Kassinão online como ..."
 As gravações ficam em `./recordings` (volume — sobrevivem a rebuilds). Rode `/gravar` num canal de voz e pronto.
 
 ### 5. *(Opcional)* Ligar transcrição + ata
-A transcrição e a ata ligam sozinhas quando há uma chave da Groq (a Groq roda os dois):
+Melhor qualidade em pt-BR (AssemblyAI para a voz; ata num modelo de contexto gigante via OpenRouter):
 ```env
-TRANSCRIBE_PROVIDER=groq
-GROQ_API_KEY=gsk_...        # crie em https://console.groq.com
-MINUTES_ENABLED=auto        # ata liga sozinha quando há GROQ_API_KEY
+TRANSCRIBE_PROVIDER=assemblyai
+ASSEMBLYAI_API_KEY=...        # https://www.assemblyai.com — US$50 de crédito grátis
+GROQ_API_KEY=gsk_...          # opcional: fallback da transcrição (https://console.groq.com)
+OPENROUTER_API_KEY=sk-or-...  # https://openrouter.ai — LLM da ata (padrão google/gemini-2.5-flash)
+MINUTES_ENABLED=auto
 ```
+Caminho 100% grátis: `TRANSCRIBE_PROVIDER=groq` só com a `GROQ_API_KEY` (free tier: 8h de áudio/dia; a ata roda no LLM free da Groq, em map-reduce nas calls longas).
 > 🔒 **Privacidade:** no painel da Groq, ligue o **Zero Data Retention (ZDR)** para o áudio não ser retido. Ou use o motor **local** (`TRANSCRIBE_PROVIDER=command`) para o áudio nunca sair do servidor.
 
-Custo de referência da transcrição (por hora de fala, por faixa): Groq ~US$0,04 · OpenAI ~US$0,36 · Gemini ~centavos. A ata custa centavos por reunião.
+Custo de referência da transcrição (por hora de FALA — o silêncio das faixas não é enviado): AssemblyAI ~US$0,21 (US$50 grátis) · Groq ~US$0,11 (free tier 8h/dia) · OpenAI ~US$0,36. A ata custa centavos por reunião.
 
 ---
 
@@ -134,14 +137,14 @@ Custo de referência da transcrição (por hora de fala, por faixa): Groq ~US$0,
 | `MP3_BITRATE` | `192k` | Bitrate dos MP3 |
 | `COOKIE_SECRET` | gerado | Segredo dos cookies de sessão |
 | `TZ` | `America/Sao_Paulo` | Fuso das datas (a página usa o do navegador) |
-| `TRANSCRIBE_PROVIDER` | `none` | `none` / `openai` / `groq` / `gemini` / `command` |
-| `TRANSCRIBE_MODEL` | por provider | Ex.: `whisper-large-v3-turbo` |
+| `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
+| `TRANSCRIBE_MODEL` | por provider | Ex.: `universal` (assemblyai), `whisper-large-v3` (groq) |
 | `TRANSCRIBE_LANGUAGE` | `pt` | Idioma falado nas calls |
 | `TRANSCRIBE_COMMAND` | — | Comando local com `{input}`/`{output}` (provider `command`) |
 | `TRANSCRIBE_TIMEOUT_FACTOR` | `5` | Watchdog do provider `command` |
-| `OPENAI_API_KEY` / `GROQ_API_KEY` / `GEMINI_API_KEY` | — | Chave do provider escolhido |
-| `MINUTES_ENABLED` | `auto` | Ata com IA: `auto` (liga com GROQ_API_KEY) / `true` / `false` |
-| `MINUTES_MODEL` | `llama-3.3-70b-versatile` | Modelo de LLM (Groq) para a ata |
+| `ASSEMBLYAI_API_KEY` / `OPENAI_API_KEY` / `GROQ_API_KEY` / `GEMINI_API_KEY` | — | Chave do provider escolhido (a da Groq também serve de fallback) |
+| `MINUTES_ENABLED` | `auto` | Ata com IA: `auto` (liga com OPENROUTER_API_KEY ou GROQ_API_KEY) / `true` / `false` |
+| `MINUTES_PROVIDER` / `OPENROUTER_API_KEY` | `openrouter` c/ chave | LLM da ata: `openrouter` (padrão `google/gemini-2.5-flash`) ou `groq` |
 | `MINUTES_MAX_TOKENS` | `8192` | Teto de tokens da ata |
 
 ### Transcrição local (privacidade total)

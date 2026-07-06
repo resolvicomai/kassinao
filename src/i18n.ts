@@ -135,7 +135,10 @@ const STRINGS: Strings = {
     pt: '▶️ Gravação iniciada automaticamente (auto-record)',
     en: '▶️ Recording started automatically (auto-record)',
   },
-  'event.joined': { pt: '🎤 {name} entrou na gravação', en: '🎤 {name} joined the recording' },
+  'event.joined': { pt: '🎤 {name} falou pela primeira vez', en: '🎤 {name} spoke for the first time' },
+  'event.present-initial': { pt: '👥 Na call: {names}', en: '👥 In the call: {names}' },
+  'event.voice-joined': { pt: '🔊 {name} entrou na call', en: '🔊 {name} joined the call' },
+  'event.voice-left': { pt: '🚪 {name} saiu da call', en: '🚪 {name} left the call' },
   'event.silence': { pt: '🔇 Ninguém fala há 5 minutos', en: '🔇 Nobody has spoken for 5 minutes' },
   'event.stopped-manual': { pt: '⏹️ {name} parou a gravação', en: '⏹️ {name} stopped the recording' },
   'event.stopped-tempo-maximo': {
@@ -172,6 +175,10 @@ const STRINGS: Strings = {
   'transcript.failed': {
     pt: '⚠️ Não consegui transcrever desta vez: {error}\nO áudio continua disponível na página, viu?',
     en: '⚠️ I couldn’t transcribe this time: {error}\nThe audio is still available on the page.',
+  },
+  'transcript.partial': {
+    pt: '📝 Transcrição pronta, mas **parcial** — não consegui transcrever: {names}. O resto já está na página 👉 {url}',
+    en: '📝 Transcript ready but **partial** — I could not transcribe: {names}. The rest is on the page 👉 {url}',
   },
   'minutes.ready': {
     pt: '📋 Prontinho! A **ata** e a **transcrição** já estão na página 👉 {url}',
@@ -264,6 +271,7 @@ const STRINGS: Strings = {
   'recordings.by-auto': { pt: 'auto-record', en: 'auto-record' },
   'recordings.badge-ready': { pt: '📋 ata pronta', en: '📋 minutes ready' },
   'recordings.badge-transcript': { pt: '📝 transcrição pronta', en: '📝 transcript ready' },
+  'recordings.badge-partial': { pt: '📝 transcrição parcial', en: '📝 partial transcript' },
   'recordings.badge-processing': { pt: '⏳ processando', en: '⏳ processing' },
   'recordings.badge-failed': { pt: '⚠️ transcrição falhou', en: '⚠️ transcription failed' },
   'recordings.badge-none': { pt: '🔇 sem transcrição', en: '🔇 no transcript' },
