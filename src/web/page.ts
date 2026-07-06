@@ -745,10 +745,6 @@ export function landingPage(lang: Locale): string {
   const ghHref = repoPublic ? REPO_URL : NPM_URL;
   const ghBtn = (cls: string): string =>
     `<a class="btn ${cls}" href="${ghHref}">${repoPublic ? '⭐ GitHub' : '📦 npm'}</a>`;
-  const auditable = T(
-    repoPublic ? 'No seu servidor, MIT open-source, auditável.' : 'No seu servidor, MIT open-source.',
-    repoPublic ? 'Self-hosted, MIT open-source, auditable.' : 'Self-hosted, MIT open-source.',
-  );
   // "recibo" access.ts: link real só quando o repo é público; senão texto puro (sem 404)
   const accessReceipt = repoPublic
     ? `<a class="pill-link" href="${REPO_URL}/blob/main/src/web/access.ts">&lt;/&gt; checkAccess() · access.ts →</a>`
@@ -775,7 +771,8 @@ export function landingPage(lang: Locale): string {
 
   const beam = `<svg class="beam" viewBox="0 0 40 60" aria-hidden="true"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5865f2" stop-opacity="0"/><stop offset="0.5" stop-color="#5865f2" stop-opacity=".9"/><stop offset="1" stop-color="#5865f2" stop-opacity="0"/></linearGradient></defs><line x1="20" y1="6" x2="20" y2="54" stroke="url(#bg)" stroke-width="2"/><path d="M15 48 L20 55 L25 48" fill="none" stroke="#5865f2" stroke-width="2" stroke-opacity=".8"/><circle class="d1" cx="20" cy="8" r="2.5" fill="#a9b0ff"/><circle class="d2" cx="20" cy="8" r="2.5" fill="#a9b0ff"/></svg>`;
 
-  const chatQuestion = T('o que ficou pendente essa semana?', "what's pending this week?");
+  const recTag = T('[GRAVANDO]', '[RECORDING]');
+  const chatQuestion = T('o que ficou pra essa semana?', "what's due this week?");
   const ansRow = (task: string, owner: string, due: string, ts: string): string =>
     `<div class="ans-row"><span class="sdot"></span><span class="tk">${task}</span><span class="ans-meta"><span class="pill pill-owner">${owner}</span><span class="pill pill-due">${due}</span><a class="ts" href="/demo">▶ ${ts}</a></span></div>`;
   const answerRows =
@@ -799,22 +796,22 @@ export function landingPage(lang: Locale): string {
     );
 
   const hero = `<section class="hero"><div class="wrap">
-    <div class="eyebrow">🎙️ <span>${T('O Craig, mas que lembra — e você pode perguntar.', 'Craig, but it remembers — and you can ask it questions.')}</span></div>
-    <h1>${T('Pare de ler transcrição.<br>Pergunte às suas reuniões.', 'Stop reading transcripts.<br>Ask your meetings.')}</h1>
+    <div class="eyebrow">🎙️ <span>${T('Open-source · mora no seu canal de voz do Discord', 'Open-source · lives in your Discord voice channel')}</span></div>
+    <h1>${T('Para de ler transcrição.<br>Pergunta pras suas calls.', 'Stop reading transcripts.<br>Ask your meetings.')}</h1>
     <p class="lead">${T(
-      'O Kassinão grava suas calls do Discord — uma faixa por pessoa — e responde de dentro do Claude ou do Cursor: pergunte "o que ficou pendente?" e receba a tarefa, o responsável e um link pro segundo exato. Gravação, transcrição, ata e player funcionam sozinhos — a IA é a parte que ninguém mais tem.',
-      'Kassinão records your Discord calls — one track per person — then answers from inside Claude or Cursor: ask "what\'s pending?" and get the task, the owner, and a link to the exact second. The recorder, transcript, minutes and player all work on their own — the AI is the part nobody else has.',
+      'A call acaba, o Kassinão grava faixa por faixa, transcreve cada pessoa e escreve a ata sozinho. Aí você pergunta do Claude ou do Cursor — "o que ficou pra essa semana?" — e ele responde com quem ficou de fazer, o prazo e o link pro segundo exato em que foi dito.',
+      'Kassinão records your Discord voice channel — one clean track per person — then turns every call into memory your AI can answer. Ask "what\'s due this week?" from Claude or Cursor and get the decision, the owner, and a link to the exact second.',
     )}</p>
     <div class="ctarow">
-      <a class="btn btn-primary" href="/demo">${T('▶️ Ver o exemplo ao vivo', '▶️ See the live example')}</a>
+      <a class="btn btn-primary" href="/demo">${T('▶️ Ver uma ata de verdade', '▶️ See a real call answered')}</a>
       ${connectBtn('btn-outline')}
       ${ghBtn('btn-ghost')}
     </div>
-    <div class="microline">${T('Sem login', 'No login')} · <b>${T('roda no seu servidor', 'runs on your server')}</b> · ${T('MIT open-source', 'MIT open-source')}</div>
+    <div class="microline">${T('Sem login pra ver a demo', 'No login for the demo')} · <b>${T('roda no seu servidor', 'runs on your box')}</b> · ${T('open-source, MIT', 'self-hosted, MIT')}</div>
 
     <div class="hero-split">
       <div class="panel panel-call">
-        <div class="dc-head"><span class="rec-dot"></span><span class="ch">🔊 product-sync</span><span class="rec-pill">[REC]</span></div>
+        <div class="dc-head"><span class="rec-dot"></span><span class="ch">🔊 product-sync</span><span class="rec-pill">${recTag}</span></div>
         ${speakers}
       </div>
       ${beam}
@@ -831,22 +828,35 @@ export function landingPage(lang: Locale): string {
     </div>
   </div></section>`;
 
-  // ---- ASK ANYTHING (5 tools) ----
+  // ---- ASK + TRUST (fundidos: o MCP é o valor E a história de privacidade) ----
   const qcard = (glow: boolean, q: string, tool: string, ans: string, badge?: string): string =>
     `<div class="qcard${glow ? ' glow' : ''}"><div class="qprompt"><span class="arrow">›</span><span>${q}</span></div>
       <div class="qtool"><span class="toolchip mono">🔌 ${tool}</span></div>
       <div class="qans">${ans}</div>${badge ? `<span class="qbadge">${badge}</span>` : ''}</div>`;
+  const receipt = (icon: string, title: string, body: string): string =>
+    `<div class="receipt"><div class="r-icon">${icon}</div><div class="r-title">${title}</div><div class="r-body">${body}</div></div>`;
   const askSection = `<section><div class="wrap">
-    <div class="kicker">${T('A parte que ninguém mais tem', 'The part nobody else has')}</div>
-    <h2>${T('Você pergunta em linguagem natural. Ele responde com prova.', 'You ask in plain language. It answers with proof.')}</h2>
-    <p class="lead">${T('Cinco ferramentas MCP, no formato da pergunta que você digitaria — sem sair do seu assistente.', 'Five MCP tools, framed as the question you actually type — without leaving your assistant.')}</p>
+    <div class="kicker">${T('O pulo do gato', 'The part nobody else ships')}</div>
+    <h2>${T('Suas calls viram memória que a sua IA responde.', 'You ask in plain language. It answers with a timestamp.')}</h2>
+    <p class="lead">${T(
+      'Gravar todo mundo faz — o diferencial é perguntar. O conector MCP (npx kassinao-mcp) liga suas calls no Claude Desktop ou no Cursor: você fala em português normal e ele puxa a decisão, quem ficou de fazer e o link pro minuto certo. Read-only, e só o que a SUA identidade do Discord já enxergava.',
+      "A transcript is a wall of text. Kassinão hands your AI a read-only MCP connector — five tools, phrased as the question you'd actually type, scoped to what your Discord identity can already see. From Claude Desktop, Cursor, anything that speaks MCP.",
+    )}</p>
     <div class="grid-cards">
-      ${qcard(true, T('⏳ O que ficou pendente essa semana?', "⏳ What's still pending this week?"), 'pending_actions', T('Rollback do onboarding — Rafael, qua · Load test — Mei, qua · E-mail de lançamento — Priya, qui', 'Onboarding rollback — Rafael, Wed · Load test — Mei, Wed EOD · Launch email — Priya, Thu'), T('cruza TODAS as calls', 'across ALL your calls'))}
-      ${qcard(false, T('🗣️ Quando o Rafael falou do pico de churn?', '🗣️ When did Rafael flag the churn spike?'), 'who_said', T('Investigação do pico de churn (onboarding) <a class="ts" href="/demo">▶ 16:10</a>', 'Churn spike investigation (onboarding) <a class="ts" href="/demo">▶ 16:10</a>'))}
-      ${qcard(false, T('🔎 Onde a gente decidiu subir o plano anual?', '🔎 Where did we decide to ship annual pricing?'), 'search_meetings', T('Decisão: subir o plano anual pra 100% — +18% de conversão a 20% de rollout <a class="ts" href="/demo">▶ 29:40</a>', 'Decision: ship annual pricing to 100% — +18% conversion at 20% rollout <a class="ts" href="/demo">▶ 29:40</a>'))}
-      ${qcard(false, T('📅 Lista as calls de 1 a 30 de junho', '📅 List the calls from June 1–30'), 'list_meetings', T('Janelas de data e "essa semana / semana passada" funcionam.', 'Date ranges and "this week / last week" windows both work.'))}
-      ${qcard(false, T('📄 Me dá o dossiê da product-sync', '📄 Give me the product-sync dossier'), 'get_meeting', T('Resumo + decisões + itens de ação + timeline.', 'Summary + decisions + action items + timeline.'))}
+      ${qcard(true, T('⏳ O que tá pendente, e quem ficou de fazer?', "⏳ What's still open, and who owns it?"), 'pending_actions', T('Rollback do onboarding — Rafael, qua · Load test — Mei, qua EOD · E-mail de lançamento — Priya, qui', 'Onboarding rollback — Rafael, Wed · Load test — Mei, Wed EOD · Launch email — Priya, Thu'), T('cruza TODAS as calls', 'across ALL your calls'))}
+      ${qcard(false, T('🗣️ Quem falou do pico de churn?', '🗣️ Who brought up the churn spike?'), 'who_said', T('Rafael, sobre o tour de onboarding <a class="ts" href="/demo">▶ 16:10</a>', 'Rafael, on the onboarding tour <a class="ts" href="/demo">▶ 16:10</a>'))}
+      ${qcard(false, T('🔎 Onde decidimos subir o preço anual?', '🔎 When did we decide to ship annual pricing?'), 'search_meetings', T('100% — +18% de conversão a 20% de rollout <a class="ts" href="/demo">▶ 29:40</a>', '100% — +18% conversion at 20% rollout <a class="ts" href="/demo">▶ 29:40</a>'))}
+      ${qcard(false, T('📅 O que rolou essa semana?', '📅 What happened this week?'), 'list_meetings', T('Todas as calls, da mais nova pra mais velha — e por janela de datas.', 'Every call on record, newest first — date ranges too.'))}
+      ${qcard(false, T('📄 Abre a ata inteira da product-sync', '📄 Give me the full product-sync'), 'get_meeting', T('Resumo + decisões + ações + timeline, saltando pra qualquer segundo.', 'Summary + decisions + actions + timeline, jump to any second.'))}
     </div>
+    <div class="kicker" style="margin-top:44px">${T('Sem pegadinha', 'Read the source, not the promise')}</div>
+    <h2>${T('Sua IA só vê as calls que você já veria. Nunca mais que isso.', 'Your AI sees the calls you could already see. Never more.')}</h2>
+    <div class="receipts" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+      ${receipt('👁️', T('Acesso pela sua identidade do Discord', 'By your Discord identity'), T('Reconferido ao vivo a cada gravação — você iniciou, participou, enxerga o canal ou tem Gerenciar Servidor. Não existe modo "dono vê tudo".', 'Re-checked live per meeting — you started it, you were in it, you can see the channel, or you have Manage-Server. No "operator sees all" mode.') + `<br>${accessReceipt}`)}
+      ${receipt('🔒', T('Read-only, revogável', 'Read-only, revocable'), T('O conector não grava, não apaga, não serve áudio. O token gira a cada uso, detecta reuso e trava em 503 (fail-closed). Revoga quando quiser (', 'The connector never writes, deletes, or serves audio. The token rotates each use, trips reuse-detection, and fails closed with a 503. Revoke anytime (') + `<code>/mcp revoke-all</code>).`)}
+      ${receipt('🖥️', T('Roda na sua máquina', 'Runs on your box'), T('Áudio e transcrição 100% local (faster-whisper) — a gravação nunca sai daí. Só a ata usa um LLM na nuvem (Groq/OpenAI/Gemini), ou você desliga a ata. Sem fingir que é offline.', "Audio and transcription can run 100% local (faster-whisper) — the recording never leaves your box. Only the AI minutes use a cloud LLM (Groq/OpenAI/Gemini), or you turn minutes off. We won't pretend otherwise."))}
+    </div>
+    <div class="inj-banner"><span>🔓</span><span>${T('Tudo é open-source — o bot, a página web e o conector MCP. Licença MIT, no seu servidor. Não confia: lê o código.', "The whole thing is open-source — the bot, the web app, and the MCP connector. MIT-licensed, on your box. Don't trust it — read it.")} ${repoPublic ? `<a class="pill-link" href="${REPO_URL}">${REPO_URL.replace('https://', '')} →</a>` : `<a class="pill-link" href="${NPM_URL}">npm: kassinao-mcp →</a>`}</span></div>
   </div></section>`;
 
   // ---- PROOF: real demo minutes ----
@@ -854,9 +864,9 @@ export function landingPage(lang: Locale): string {
   const mcAction = (task: string, meta: string, ts: string): string =>
     `<div class="mc-action"><a class="ts" href="/demo">${ts}</a><span class="task">${task}</span><span class="meta2">${meta}</span></div>`;
   const proofSection = `<section><div class="wrap">
-    <div class="kicker">${T('Prova antes da promessa', 'Proof before the claim')}</div>
-    <h2>${T('E o Kassinão escreveu esta ata sozinho.', 'And Kassinão wrote these minutes itself.')}</h2>
-    <p class="lead">${T('Ata gerada por IA do exemplo ao vivo — ninguém digitou. Um clique abre a gravação real (sem login).', 'AI-generated minutes from the live example — no one typed it. One click opens the real recording (no login).')}</p>
+    <div class="kicker">${T('Não é maquete', 'Not a mockup')}</div>
+    <h2>${T('Uma call de verdade, do começo ao fim.', 'Six people, 58 minutes, zero note-taking.')}</h2>
+    <p class="lead">${T('Sync de produto da Northwind, 6 pessoas, ~58 min. O Kassinão sozinho fechou as decisões e as ações com dono e prazo — cada item linka pro segundo em que rolou. Ninguém digitou isso. Abre e confere, sem login.', 'The actual output of the public demo — a real Northwind product-sync. Decisions with owners, action items with due dates, every line linked to the second it was said. Open it and pick it apart. No login.')}</p>
     <div class="minutes-card">
       <div class="mc-head"><span class="bc">🎙️ product-sync · Northwind (demo) · 👥 6 · 58:12</span><span class="mc-badge">${T('✅ FINALIZADA', '✅ FINISHED')}</span><span class="ai-pill">${T('gerado por IA', 'AI-generated')}</span></div>
       <div class="mc-h3">${T('RESUMO', 'SUMMARY')}</div>
@@ -879,52 +889,20 @@ export function landingPage(lang: Locale): string {
     <div class="ctarow"><a class="btn btn-primary" href="/demo">${T('▶️ Abrir a gravação inteira', '▶️ Open the whole recording')}</a></div>
   </div></section>`;
 
-  // ---- TRUST ----
-  const receipt = (icon: string, title: string, body: string): string =>
-    `<div class="receipt"><div class="r-icon">${icon}</div><div class="r-title">${title}</div><div class="r-body">${body}</div></div>`;
-  const trustSection = `<section><div class="wrap">
-    <div class="kicker">${T('Confiança com recibo, não com adjetivo', 'Receipts, not adjectives')}</div>
-    <h2>${T('Sua IA só vê as calls que você já veria. Nunca mais que isso.', 'Your AI only sees the calls you could already see. Never more.')}</h2>
-    <div class="receipts">
-      ${receipt('🔐', T('Acesso pela sua identidade', 'Access by your identity'), T('Reconferido ao vivo contra o Discord por reunião: você iniciou, participou, enxerga o canal ou tem Gerenciar Servidor. Não existe modo "operador vê tudo".', 'Re-checked live against Discord per meeting: you started it, you were in it, you can see the channel, or you have Manage-Server. There is no "operator sees everything" mode.') + `<br><span class="mono strike">// seeAll — ${T('não existe', 'does not exist')}</span><br>${accessReceipt}`)}
-      ${receipt('👁️', T('Somente leitura', 'Read-only'), T('O conector não grava, não apaga e não serve áudio. Cinco ferramentas, todas de leitura.', 'The connector never writes, never deletes, never serves audio. Five tools, all read-only.'))}
-      ${receipt('♻️', T('Token rotaciona a cada uso', 'Token rotates every use'), T('O refresh fica em ', 'The refresh token lives at ') + `<code>~/.config/kassinao-mcp/token.json</code> (<code>chmod 0600</code>)` + T('; um token roubado e reapresentado denuncia o reuso e mata a sessão. Fail-closed: sem verificar acesso, o MCP responde 503 — nunca um grant falso.', "; a replayed/stolen token trips reuse-detection and kills the session. Fail-closed: if access can't be verified the MCP returns 503 — never a false grant."))}
-      ${receipt('🧨', T('Revogue quando quiser', 'Revoke anytime'), T('Três formas: "Revogar todos" na web, ', 'Three ways: "Revoke all" on the web, ') + `<code>/mcp revoke-all</code>` + T(' no Discord, ou girar o ', ' in Discord, or rotate ') + `<code>MCP_SECRET</code>` + T(' como botão de pânico do admin.', ' as the admin panic button.'))}
-    </div>
-    <div class="inj-banner"><span>🛡️</span><span>${T('O conteúdo da reunião — transcrição, notas, até apelidos — é tratado como entrada não-confiável e higienizado antes de chegar em qualquer LLM (defesa contra prompt-injection).', 'Meeting content — transcript, notes, even display names — is treated as untrusted input and sanitized before it reaches any LLM (prompt-injection defense).')} ${auditable}</span></div>
-  </div></section>`;
-
-  // ---- CRAIG COMPARISON ----
-  const yes = `<span class="yes" role="img" aria-label="${T('Sim', 'Yes')}">✓</span>`;
-  const dash = `<span class="no">—<span class="visually-hidden"> ${T('Não', 'No')}</span></span>`;
-  const row = (feat: string, craig: string, us: string): string =>
-    `<tr><td class="feat">${feat}</td><td data-col="Craig">${craig}</td><td class="us" data-col="Kassinão">${us}</td></tr>`;
-  const craigSection = `<section><div class="wrap">
-    <div class="kicker">${T('Vindo do Craig?', 'Coming from Craig?')}</div>
-    <h2>${T('O Craig grava. O Kassinão lembra — e você pergunta.', 'Craig records. Kassinão remembers — and you ask.')}</h2>
-    <p class="lead">${T('Cada pessoa numa faixa própria: quem falou é sabido, não chutado por diarização — nunca embola crosstalk nem nome fora do inglês. Você mantém tudo que o Craig faz bem e ganha a camada que ele te manda comprar em outro lugar.', 'Every participant on their own track: who spoke is known, not guessed by diarization — it never garbles crosstalk or non-English names. You keep everything Craig does well and gain the layer Craig sends you elsewhere to buy.')}</p>
-    <div class="cmp-wrap"><table class="cmp">
-      <thead><tr><th scope="col">${T('Recurso', 'Feature')}</th><th scope="col">Craig</th><th class="us" scope="col">Kassinão</th></tr></thead>
-      <tbody>
-        ${row(T('Multipista — uma faixa por pessoa', 'Multi-track — one track per person'), yes, yes)}
-        ${row(T('Export MP3 · FLAC · Mix · Audacity', 'Export MP3 · FLAC · Mix · Audacity'), yes, yes)}
-        ${row(T('Transcrição por pessoa', 'Per-speaker transcript'), dash, yes)}
-        ${row(T('Ata de IA: decisões + responsáveis + prazos', 'AI minutes: decisions + owners + due dates'), dash, yes)}
-        ${row(T('Página web privada com player', 'Private per-recording web page with player'), dash, yes)}
-        ${row(T('Perguntar às reuniões pelo Claude/Cursor', 'Ask your meetings from Claude/Cursor'), dash, yes)}
-      </tbody>
-    </table></div>
-    <p class="microline">${T('Otter/Fireflies/Fathom têm IA, mas são SaaS fechado, não vivem num canal de voz do Discord e não rodam na sua máquina.', "Otter/Fireflies/Fathom have AI too, but they are closed SaaS, don't live in a Discord voice channel, and don't run on your box.")}</p>
-  </div></section>`;
+  // Craig sobrevive só como aside no setup (de-Craig: não é o eixo da landing)
+  const craigLine = T(
+    'Já grava com o Craig? O Kassinão é a camada de IA que ele manda você comprar em outro lugar.',
+    'Already recording with Craig? Kassinão is the memory layer he tells you to buy somewhere else.',
+  );
 
   // ---- SETUP + COST ----
   const cmd = `KASSINAO_URL=${config.baseUrl} npx -y kassinao-mcp exchange <code>`;
   const setupSection = `<section><div class="wrap">
-    <div class="kicker">${T('No ar em minutos', 'Live in minutes')}</div>
-    <h2>${T('No seu servidor — e honesto sobre o custo.', 'On your server — and honest about cost.')}</h2>
+    <div class="kicker">${T('Sobe em 3 passos', "Docker up, and it's yours")}</div>
+    <h2>${T('No ar em minutos, no seu servidor.', 'A Discord app, a container, your keys. Done.')}</h2>
     <div class="steps">
-      <div class="step"><div class="step-num">1</div><h3>${T('Suba o bot', 'Boot the bot')}</h3><p>${T('Docker Compose + um app do Discord, ou um blueprint Deploy-to-Render. HTTPS via Cloudflare Tunnel, sem abrir portas.', 'Docker Compose + a Discord app, or a Deploy-to-Render blueprint. HTTPS via Cloudflare Tunnel, no open ports.')}</p></div>
-      <div class="step"><div class="step-num">2</div><h3>${T('Grave', 'Record')}</h3><p>${T('/gravar num canal de voz, ou auto-grava quando 2+ pessoas entram — com o apelido [REC] e um painel ao vivo. Nunca secreto.', '/gravar in a voice channel, or auto-record when 2+ people join — with a [REC] nickname tag and a live in-channel panel. Never covert.')}</p></div>
+      <div class="step"><div class="step-num">1</div><h3>${T('Suba o bot', 'Boot the bot')}</h3><p>${T('Um app do Discord + Docker Compose, ou o blueprint Deploy-to-Render. HTTPS via Cloudflare Tunnel, sem abrir porta.', 'A Discord app + Docker Compose, or the Deploy-to-Render blueprint. HTTPS via Cloudflare Tunnel, no open ports.')}</p></div>
+      <div class="step"><div class="step-num">2</div><h3>${T('Grave', 'Record')}</h3><p>${T('Entra na call e /gravar, ou auto-grava quando 2+ pessoas entram — com ' + recTag + ' no apelido e um painel ao vivo. Consentimento visível, nunca secreto.', 'Join the voice channel and /gravar, or auto-record when 2+ people join — with a ' + recTag + ' nickname tag and a live panel. Visible consent, never covert.')}</p></div>
       <div class="step"><div class="step-num">3</div><h3>${T('Conecte', 'Connect')}</h3><p>${T('Abra /conectar-ia, entre com o Discord e rode o comando pra plugar o Claude ou o Cursor:', 'Open /conectar-ia, sign in with Discord, and run the command to connect Claude or Cursor:')}</p>
         <div class="terminal"><div class="term-bar"><i style="background:#da373c"></i><i style="background:#f0b232"></i><i style="background:#23a55a"></i><button class="cp mono" id="kcp" type="button">⧉ ${T('copiar', 'copy')}</button></div><div class="term-body mono" id="kcmd">${esc(cmd)}</div></div>
         <div class="term-note">${T('código válido ~5 min, uso único · ', 'code valid ~5 min, single use · ')}<span class="codechip">npx -y kassinao-mcp</span> · 5 ${T('ferramentas', 'tools')}</div>
@@ -932,72 +910,15 @@ export function landingPage(lang: Locale): string {
     </div>
     <div class="deploy-cards">
       <div class="dcard">🐳 <b>Docker Compose</b> · ${repoPublic ? `<a class="ts" href="https://render.com/deploy?repo=${REPO_URL}">🚀 Deploy to Render</a>` : '🚀 Deploy to Render'} · 🔒 Cloudflare Tunnel — 0 ${T('portas abertas', 'open ports')}</div>
-      <div class="dcard">${T('Custo, direto: transcrição é BYO-key e multipista, então escala com o nº de pessoas — de alguns centavos a um pouco mais por reunião — ou rode 100% local com faster-whisper (o áudio nunca sai da sua máquina). Ata: alguns centavos.', 'Cost, straight: transcription is bring-your-own-key and multi-track, so it scales with the number of speakers — a few cents to a bit more per meeting — or run it 100% local with faster-whisper (audio never leaves your box). Minutes: a few cents.')} <span class="codechip">[REC]</span></div>
+      <div class="dcard">${T('Custo, direto: a transcrição é BYO-key e multipista, então escala com o nº de pessoas — de centavos a um pouco mais por call. A ata roda uma vez, alguns centavos. Ou 100% local (faster-whisper) e some com o custo.', 'Cost, straight: transcription is bring-your-own-key and multi-track, so it scales with speakers — cents to a bit more per call. Minutes run once, a few cents. Or go 100% local (faster-whisper) and the bill disappears.')}</div>
     </div>
-  </div></section>`;
-
-  // ---- FEATURES ----
-  const feats: [string, string, string][] = [
-    [
-      '🎙️',
-      T('Multipista real — um arquivo por pessoa', 'True multi-track — one file per person'),
-      T('Quem falou é sabido, não chutado por diarização.', 'Who spoke is known, not guessed by diarization.'),
-    ],
-    [
-      '🤖',
-      T('Ata de IA: decisões + responsáveis + prazos', 'AI minutes: decisions + owners + due dates'),
-      T(
-        'Resumo, decisões e itens de ação na página da gravação.',
-        'A summary, decisions, and action items on the recording page.',
-      ),
-    ],
-    [
-      '▶️',
-      T('Horários clicáveis pro segundo exato', 'Clickable timestamps to the exact second'),
-      T('Toda linha dá deep-link pro momento no player.', 'Every line deep-links to that moment in the player.'),
-    ],
-    [
-      '🔌',
-      T('Pergunte pelo Claude ou Cursor', 'Ask from Claude or Cursor'),
-      T('5 ferramentas MCP em linguagem natural.', '5 MCP tools in natural language.'),
-    ],
-    [
-      '💾',
-      T('Quatro formatos de download', 'Four download formats'),
-      T('🎵 MP3 · 💎 FLAC · 🎧 Mix · 🎚️ Audacity.', '🎵 MP3 · 💎 FLAC · 🎧 Mix · 🎚️ Audacity.'),
-    ],
-    [
-      '🔴',
-      T('Auto-gravação com consentimento visível', 'Auto-record with visible consent'),
-      T('Painel ao vivo + apelido [REC]. Nunca secreto.', 'Live panel + [REC] nickname tag. Never covert.'),
-    ],
-    [
-      '🔒',
-      T('Página web privada por gravação', 'Private per-recording web page'),
-      T(
-        'Player, transcrição, ata e downloads — acesso pela sua identidade.',
-        'Player, transcript, minutes, downloads — scoped to your identity.',
-      ),
-    ],
-    [
-      '🌎',
-      T('Bilíngue de ponta a ponta (EN / pt-BR)', 'Bilingual end to end (EN / pt-BR)'),
-      T(
-        'Landing, ata e perguntas do MCP em inglês e português.',
-        'Landing, minutes, and MCP queries in English and Portuguese.',
-      ),
-    ],
-  ];
-  const featSection = `<section><div class="wrap">
-    <div class="kicker">${T('Tudo funciona sozinho — a IA é o bônus', 'Everything works standalone — the AI is the bonus')}</div>
-    <h2>${T('Um gravador completo. Mais uma memória que responde.', 'A complete recorder. Plus a memory that answers.')}</h2>
-    <div class="features">${feats.map(([ic, t, d]) => `<div class="feature"><div class="f-icon">${ic}</div><h3>${t}</h3><p>${d}</p></div>`).join('')}</div>
+    <p class="microline" style="margin-top:18px">${craigLine}</p>
   </div></section>`;
 
   // ---- FINAL CTA ----
   const finalSection = `<section class="final"><div class="wrap final-card">
-    <h2>${T('Prove sem instalar nada. Depois conecte a sua IA.', 'Prove it without installing anything. Then connect your AI.')}</h2>
-    <p class="lead" style="margin:14px auto 0">${T('Abra o exemplo ao vivo — uma product-sync real de ~58 min, 6 pessoas, transcrição por pessoa, ata com decisões e responsáveis, horários clicáveis. Sem login.', 'Open the live example — a real ~58-min product-sync, 6 people, per-speaker transcript, minutes with decisions and owners, clickable timestamps. No login.')}</p>
+    <h2>${T('Entra na call. Deixa o resto com a gente.', 'Your next call is worth remembering.')}</h2>
+    <p class="lead" style="margin:14px auto 0">${T('Um app do Discord, Docker e a sua chave. Abre a demo pra ver o que sai — ou já conecta sua IA e começa a perguntar.', 'Point it at a voice channel, hit /gravar, walk away. Next week, ask your AI what everyone agreed to. Your server, your keys, your data.')}</p>
     <div class="ctarow">
       <a class="btn btn-primary" href="/demo">${T('▶️ Ver o exemplo ao vivo', '▶️ See the live example')}</a>
       ${connectBtn('btn-outline')}
@@ -1054,10 +975,7 @@ ${topnav}
 ${hero}
 ${askSection}
 ${proofSection}
-${trustSection}
-${craigSection}
 ${setupSection}
-${featSection}
 ${finalSection}
 ${footer}
 ${copyScript}
@@ -1127,11 +1045,17 @@ export function connectPage(opts: {
       )}</p>
       <p class="muted" style="margin-top:12px">${esc(
         T(
-          'Cole no claude_desktop_config.json (Claude Desktop) ou no equivalente do Cursor:',
-          'Paste into claude_desktop_config.json (Claude Desktop) or the Cursor equivalent:',
+          '1) Copie o bloco abaixo. 2) Cole no arquivo de config do seu app. 3) Reinicie o app e pergunte.',
+          '1) Copy the block below. 2) Paste it into your app config file. 3) Restart the app and ask.',
         ),
       )}</p>
-      <div style="margin-top:12px"><button id="kcopy" class="btn" type="button" style="border:0;cursor:pointer;font:inherit">📋 ${esc(T('Copiar config', 'Copy config'))}</button></div>
+      <p class="muted" style="margin-top:10px">${esc(T('Onde fica esse arquivo:', 'Where that config file lives:'))}</p>
+      <ul class="muted" style="margin:6px 0 0 18px;font-size:13.5px;line-height:1.8">
+        <li>Claude Desktop · macOS: <span style="font-family:ui-monospace,monospace">~/Library/Application Support/Claude/claude_desktop_config.json</span></li>
+        <li>Claude Desktop · Windows: <span style="font-family:ui-monospace,monospace">%APPDATA%\\Claude\\claude_desktop_config.json</span></li>
+        <li>Cursor: <span style="font-family:ui-monospace,monospace">~/.cursor/mcp.json</span></li>
+      </ul>
+      <div style="margin-top:14px"><button id="kcopy" class="btn" type="button" style="border:0;cursor:pointer;font:inherit">📋 ${esc(T('Copiar config', 'Copy config'))}</button></div>
       <pre id="kcfg" style="background:#111;padding:14px;border-radius:8px;overflow-x:auto;white-space:pre;font-size:13px;margin-top:10px">${esc(cfg)}</pre>
       <p class="muted" style="margin-top:8px">${esc(
         T(
@@ -1159,16 +1083,26 @@ export function connectPage(opts: {
     ${revokedMsg}
     <p class="muted" style="margin-top:12px">${esc(
       T(
-        'Gere um token para plugar o Kassinão no seu assistente de IA. Cada token só enxerga as gravações que você já pode ver — e pode ser revogado quando quiser.',
-        'Generate a token to plug Kassinão into your AI assistant. Each token only sees recordings you can already see — and can be revoked anytime.',
+        'Ligue o Kassinão no seu Claude Desktop ou Cursor para perguntar sobre as suas calls em linguagem natural.',
+        'Plug Kassinão into your Claude Desktop or Cursor to ask about your calls in natural language.',
       ),
     )}</p>
-    <p class="muted" style="margin-top:8px">${esc(T('Conectores ativos', 'Active connectors'))}: ${count}</p>
+    <ol class="muted" style="margin:12px 0 0 18px;line-height:1.9">
+      <li>${esc(T('Clique em Gerar conexão — sai uma configuração pronta.', 'Click Generate connection — you get a ready-to-paste config.'))}</li>
+      <li>${esc(T('Cole no arquivo de config do seu app (a gente diz onde).', 'Paste it into your app config file (we tell you where).'))}</li>
+      <li>${esc(T('Reinicie o app e pergunte: "o que ficou pra essa semana?"', 'Restart the app and ask: "what\'s due this week?"'))}</li>
+    </ol>
+    <p class="muted" style="margin-top:12px">🔒 ${esc(
+      T(
+        'A conexão só enxerga as gravações que VOCÊ já pode ver — e você revoga quando quiser.',
+        'The connection only sees recordings YOU can already see — and you can revoke it anytime.',
+      ),
+    )} ${esc(T('Conexões ativas', 'Active connections'))}: ${count}</p>
     <div class="downloads" style="margin-top:18px">
-      <form method="post" action="/conectar-ia/gerar" style="display:inline"><button class="btn" type="submit" style="${btnStyle}">${esc(T('Gerar token de conexão', 'Generate connection token'))}</button></form>
+      <form method="post" action="/conectar-ia/gerar" style="display:inline"><button class="btn" type="submit" style="${btnStyle}">🔌 ${esc(T('Gerar conexão', 'Generate connection'))}</button></form>
       ${
         count > 0
-          ? `<form method="post" action="/conectar-ia/revogar" style="display:inline"><button class="btn" type="submit" style="${btnStyle};background:#5a2a2a">${esc(T('Revogar todos', 'Revoke all'))}</button></form>`
+          ? `<form method="post" action="/conectar-ia/revogar" style="display:inline"><button class="btn" type="submit" style="${btnStyle};background:#5a2a2a">${esc(T('Revogar todas', 'Revoke all'))}</button></form>`
           : ''
       }
     </div>`;
