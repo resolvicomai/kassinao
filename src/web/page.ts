@@ -537,6 +537,8 @@ const LANDING_CSS = `
   .btn-outline:hover { border-color: #5865f2; }
   .btn-ghost { background: transparent; color: #b5bac1; padding: 13px 10px; }
   .btn-ghost:hover { color: #f2f3f5; }
+  .btn-sm { padding: 8px 15px; font-size: 0.9rem; }
+  .lead b { color: #f2f3f5; font-weight: 700; }
   .microline { margin-top: 16px; font-size: 0.86rem; color: #949ba4; }
   .microline b { color: #b5bac1; font-weight: 600; }
   /* hero centrado com brilho + energia */
@@ -733,7 +735,6 @@ const LANDING_CSS = `
 export function landingPage(lang: Locale): string {
   const pt = lang === 'pt';
   const T = (ptStr: string, enStr: string): string => (pt ? ptStr : enStr);
-  const mcpOn = config.mcpEnabled;
   const metaTitle = T(
     'Kassinão — Pare de ler transcrição. Pergunte às suas reuniões.',
     'Kassinão — Stop reading transcripts. Ask your meetings.',
@@ -747,20 +748,11 @@ export function landingPage(lang: Locale): string {
 
   const langUrl = `${config.baseUrl}/?lang=${pt ? 'pt' : 'en'}`;
 
-  // secondary CTA só quando o MCP está ligado neste servidor (mesmo gate do produto)
-  const connectBtn = (cls: string): string =>
-    mcpOn
-      ? `<a class="btn ${cls}" href="/conectar-ia">${T('🔌 Conectar Claude/Cursor', '🔌 Connect Claude/Cursor')}</a>`
-      : '';
-
   // Gate do GitHub: enquanto o repo é privado, TODO link pro GitHub daria 404 — então
-  // o botão "GitHub" aponta pro pacote npm (público) e a afirmação "auditável" some.
-  // Vira o REPO_PUBLIC=true no servidor DEPOIS de tornar o repo público.
+  // aponta pro pacote npm (público). Vira REPO_PUBLIC=true no servidor após abrir o repo.
   const NPM_URL = 'https://www.npmjs.com/package/kassinao-mcp';
   const repoPublic = config.repoPublic;
   const ghHref = repoPublic ? REPO_URL : NPM_URL;
-  const ghBtn = (cls: string): string =>
-    `<a class="btn ${cls}" href="${ghHref}">${repoPublic ? '⭐ GitHub' : '📦 npm'}</a>`;
   // "recibo" access.ts: link real só quando o repo é público; senão texto puro (sem 404)
   const accessReceipt = repoPublic
     ? `<a class="pill-link" href="${REPO_URL}/blob/main/src/web/access.ts">&lt;/&gt; checkAccess() · access.ts →</a>`
@@ -816,22 +808,21 @@ export function landingPage(lang: Locale): string {
       <span class="arrow">→</span>
       <span class="chip">✍️ ${T('Transcreve por pessoa', 'One track per person')}</span>
       <span class="arrow">→</span>
-      <span class="chip">🤖 ${T('Pergunta no Claude/Cursor', 'Ask in Claude / Cursor')}</span>
+      <span class="chip">🤖 ${T('Pergunta pra sua IA', 'Ask in your AI')}</span>
     </div>`;
   const hero = `<section class="hero"><div class="wrap">
-    <div class="eyebrow">🎙️ <span>${T('Open-source · mora no seu canal de voz do Discord', 'Open-source · lives in your Discord voice channel')}</span></div>
-    <h1>${T('Para de ler transcrição.<br><span class="accent">Pergunta pras suas calls.</span>', 'Stop reading transcripts.<br><span class="accent">Ask your meetings.</span>')}</h1>
+    <div class="eyebrow">🎙️ <span>${T('Bot open-source pro seu Discord', 'Open-source bot for your Discord')}</span></div>
+    <h1>${T('Grava as calls do Discord.<br><span class="accent">Depois é só perguntar pra IA.</span>', 'Record your Discord calls.<br><span class="accent">Then just ask your AI.</span>')}</h1>
     <p class="lead">${T(
-      'O Kassinão grava seu canal de voz do Discord e transforma cada call em memória que a sua IA responde.',
-      'Kassinão records your Discord voice channel and turns every call into memory your AI can answer.',
+      'O Kassinão grava cada pessoa numa faixa, escreve a transcrição e a ata sozinho, e conecta em qualquer assistente de IA — Claude, Cursor e outros — pra você <b>só perguntar</b> o que foi decidido, em vez de ler.',
+      'Kassinão records each caller on their own track, writes the transcript and minutes for you, and plugs into any AI assistant — Claude, Cursor, and more — so you just <b>ask</b> what was decided instead of reading it.',
     )}</p>
     ${flow}
     <div class="ctarow">
-      <a class="btn btn-primary" href="/demo">${T('▶️ Ver uma ata de verdade', '▶️ See a real call answered')}</a>
-      ${connectBtn('btn-outline')}
-      ${ghBtn('btn-ghost')}
+      <a class="btn btn-primary" href="/demo">${T('▶️ Ver a demo ao vivo', '▶️ See the live demo')}</a>
+      <a class="btn btn-outline" href="${ghHref}">${T('Rodar no meu servidor →', 'Deploy your own →')}</a>
     </div>
-    <div class="microline">${T('Sem login pra ver a demo', 'No login for the demo')} · <b>${T('roda no seu servidor', 'runs on your box')}</b> · ${T('open-source, MIT', 'self-hosted, MIT')}</div>
+    <div class="microline">${T('Sem login pra ver a demo', 'No login to see the demo')} · <b>${T('roda no seu servidor', 'runs on your box')}</b> · ${T('open-source, MIT', 'open-source, MIT')}</div>
 
     <div class="hero-split">
       <div class="panel panel-call">
@@ -863,8 +854,8 @@ export function landingPage(lang: Locale): string {
     <div class="kicker">${T('O pulo do gato', 'The part nobody else ships')}</div>
     <h2>${T('Suas calls viram memória que a sua IA responde.', 'You ask in plain language. It answers with a timestamp.')}</h2>
     <p class="lead">${T(
-      'Gravar todo mundo faz — o diferencial é perguntar. O conector MCP (npx kassinao-mcp) liga suas calls no Claude Desktop ou no Cursor: você fala em português normal e ele puxa a decisão, quem ficou de fazer e o link pro minuto certo. Read-only, e só o que a SUA identidade do Discord já enxergava.',
-      "A transcript is a wall of text. Kassinão hands your AI a read-only MCP connector — five tools, phrased as the question you'd actually type, scoped to what your Discord identity can already see. From Claude Desktop, Cursor, anything that speaks MCP.",
+      'Gravar todo mundo faz — o diferencial é perguntar. O Kassinão se pluga na sua IA via <b>MCP</b> (o padrão aberto pra conectar ferramentas a assistentes de IA): você fala em português normal e ele puxa a decisão, quem ficou de fazer e o link pro minuto certo. Funciona no Claude, no Cursor e em qualquer cliente MCP — só leitura, e só o que a SUA identidade do Discord já enxergava.',
+      'A transcript is a wall of text. Instead, Kassinão plugs into your AI through <b>MCP</b> (the open standard for connecting tools to AI assistants): you ask in plain language and it pulls the decision, the owner, and a link to the exact second. Works in Claude, Cursor, and any MCP client — read-only, and only what your Discord identity can already see.',
     )}</p>
     <div class="grid-cards">
       ${qcard(true, T('⏳ O que tá pendente, e quem ficou de fazer?', "⏳ What's still open, and who owns it?"), 'pending_actions', T('Rollback do onboarding — Rafael, qua · Load test — Mei, qua EOD · E-mail de lançamento — Priya, qui', 'Onboarding rollback — Rafael, Wed · Load test — Mei, Wed EOD · Launch email — Priya, Thu'), T('cruza TODAS as calls', 'across ALL your calls'))}
@@ -941,28 +932,27 @@ export function landingPage(lang: Locale): string {
 
   // ---- FINAL CTA ----
   const finalSection = `<section class="final"><div class="wrap final-card">
-    <h2>${T('Entra na call. Deixa o resto com a gente.', 'Your next call is worth remembering.')}</h2>
-    <p class="lead" style="margin:14px auto 0">${T('Um app do Discord, Docker e a sua chave. Abre a demo pra ver o que sai — ou já conecta sua IA e começa a perguntar.', 'Point it at a voice channel, hit /gravar, walk away. Next week, ask your AI what everyone agreed to. Your server, your keys, your data.')}</p>
+    <h2>${T('Sua próxima call merece ser lembrada.', 'Your next call is worth remembering.')}</h2>
+    <p class="lead" style="margin:14px auto 0">${T('Sobe no seu servidor em minutos, grava a primeira call e pergunta pra sua IA o que ficou combinado. Seu servidor, sua chave, seus dados.', 'Deploy it on your own server in minutes, record your first call, and ask your AI what everyone agreed to. Your server, your keys, your data.')}</p>
     <div class="ctarow">
-      <a class="btn btn-primary" href="/demo">${T('▶️ Ver o exemplo ao vivo', '▶️ See the live example')}</a>
-      ${connectBtn('btn-outline')}
-      ${ghBtn('btn-ghost')}
+      <a class="btn btn-primary" href="/demo">${T('▶️ Ver a demo ao vivo', '▶️ See the live demo')}</a>
+      <a class="btn btn-outline" href="${ghHref}">${T('Rodar no meu servidor →', 'Deploy your own →')}</a>
     </div>
-    <div class="microline"><a class="codechip" href="${NPM_URL}">npm: kassinao-mcp</a></div>
   </div></section>`;
 
   const topnav = `<div class="topnav"><div class="wrap">
     <a class="brand" href="/">🎙️ Kassinão</a>
     <div class="navlinks">
-      <a href="/demo">${T('Exemplo', 'Demo')}</a>
-      ${mcpOn ? `<a href="/conectar-ia">${T('Conectar IA', 'Connect AI')}</a>` : ''}
+      <a href="/demo">${T('Demo', 'Demo')}</a>
       <a href="${ghHref}">${repoPublic ? 'GitHub' : 'npm'}</a>
+      <a class="btn btn-primary btn-sm" href="/demo">${T('Ver a demo', 'See the demo')}</a>
       ${langToggle}
     </div>
   </div></div>`;
 
   const footer = `<footer><div class="wrap">
     <span class="sig">${T('MIT · open-source · roda no seu servidor · EN / pt-BR', 'MIT · open-source · runs on your server · EN / pt-BR')}</span>
+    <span class="sig">${repoPublic ? `<a href="${REPO_URL}" style="color:inherit">GitHub</a> · ` : ''}<a href="${NPM_URL}" style="color:inherit">npm: kassinao-mcp</a></span>
     ${langToggle}
   </div></footer>`;
 
