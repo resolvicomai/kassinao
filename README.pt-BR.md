@@ -182,4 +182,13 @@ npm run build   # compila para dist/
 Issues e PRs são bem-vindos. Rode `npm run build` antes de abrir um PR.
 
 ## 📄 Licença
-[MIT](LICENSE) — use, modifique e compartilhe à vontade.
+[GNU AGPL-3.0-or-later](LICENSE) © 2026 Mauro Marques (resolvicomai).
+
+Software livre e de código aberto: você pode usar, estudar, modificar e
+compartilhar — mas se rodar uma versão modificada como serviço de rede (ex.:
+hospedar o bot para outras pessoas), a AGPL te obriga a oferecer o código-fonte
+correspondente a esses usuários. O comando `/sobre` do bot já linka este
+repositório para cumprir isso.
+
+Usa o [ffmpeg](https://ffmpeg.org/) (via `ffmpeg-static`, GPL/LGPL) como binário
+externo separado; a licença própria dele se aplica a esse binário.

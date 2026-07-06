@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+/*
+ * Kassinão MCP — conector local para clientes MCP.
+ * Copyright (C) 2026 Mauro Marques (resolvicomai)
+ * Software livre sob a GNU Affero General Public License v3 ou posterior.
+ * Veja <https://www.gnu.org/licenses/> para o texto completo.
+ */
 /**
  * Conector MCP do Kassinão (roda LOCAL, na máquina de quem usa Claude Desktop/Cursor).
  *

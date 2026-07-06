@@ -8,7 +8,7 @@ Record Discord voice calls with **one separate track per person**, then get an *
 
 **🌎 Language:** **English** · [Português (BR)](README.pt-BR.md)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![CI](https://github.com/resolvicomai/kassinao/actions/workflows/ci.yml/badge.svg)](https://github.com/resolvicomai/kassinao/actions/workflows/ci.yml)
 [![Made with TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)](https://www.typescriptlang.org/)
 [![Runs on Docker](https://img.shields.io/badge/Docker-ready-2496ed.svg)](https://www.docker.com/)
@@ -106,7 +106,7 @@ MINUTES_ENABLED=auto
 | Per-participant breakdown | ✅ | ❌ | ⚠️ |
 | Self-hosted / your data | ✅ | ⚠️ | ❌ |
 | Access gated by login (not "who has the link") | ✅ | ⚠️ | ✅ |
-| Open-source (MIT) | ✅ | ✅ | ❌ |
+| Open-source (AGPL-3.0) | ✅ | ✅ | ❌ |
 | Price | Free | Freemium | Paid |
 
 ## Transcription backends
@@ -202,7 +202,15 @@ PRs and issues welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code 
 
 ## License
 
-[MIT](LICENSE) © Mauro Marques. Use, modify and share freely.
+[GNU AGPL-3.0-or-later](LICENSE) © 2026 Mauro Marques (resolvicomai).
+
+Free and open source. You may use, study, modify and share it — but if you run a
+modified version as a network service (e.g. host the bot for others), the AGPL
+requires you to offer those users the corresponding source code. The bot's
+`/sobre` (`/about`) command links to this repository to satisfy that.
+
+Uses [ffmpeg](https://ffmpeg.org/) (via `ffmpeg-static`, GPL/LGPL) as a separate
+external binary; its own license applies to that binary.
 
 ---
 

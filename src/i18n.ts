@@ -178,6 +178,18 @@ const STRINGS: Strings = {
     en: '📋 All done! The **minutes** and **transcript** are on the page 👉 {url}',
   },
 
+  // sobre / about (autoria + licença + fonte — cumpre a AGPL §13)
+  'about.desc': {
+    pt: 'Gravador de voz self-hosted para Discord, com transcrição por IA e ata da reunião.',
+    en: 'Self-hosted Discord voice recorder with AI transcription and meeting minutes.',
+  },
+  'about.author': { pt: 'Autor', en: 'Author' },
+  'about.license': { pt: 'Licença', en: 'License' },
+  'about.source': { pt: 'Código-fonte', en: 'Source code' },
+  'about.footer': {
+    pt: 'Software livre sob AGPL-3.0 — você tem direito ao código-fonte desta versão.',
+    en: 'Free software under AGPL-3.0 — you are entitled to the source of this version.',
+  },
   // onboarding / ajuda
   'help.title': { pt: '🎙️ Kassinão — como usar', en: '🎙️ Kassinão — how to use' },
   'help.intro': {
