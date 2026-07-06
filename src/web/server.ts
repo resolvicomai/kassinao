@@ -239,6 +239,16 @@ export function startWebServer(): void {
     res.sendFile(f);
   });
 
+  // Cartão de social share (Open Graph / Twitter) da landing — asset estático.
+  app.get('/og.png', (_req, res) => {
+    const f = path.join(process.cwd(), 'docs', 'og.png');
+    if (!fs.existsSync(f)) {
+      res.status(404).send('sem og');
+      return;
+    }
+    res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(f);
+  });
+
   app.get('/auth/login', (req, res) => {
     beginLogin(res, String(req.query.next ?? '/'));
   });

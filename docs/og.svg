@@ -1,0 +1,62 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <radialGradient id="glow" cx="28%" cy="0%" r="80%">
+      <stop offset="0%" stop-color="#5865f2" stop-opacity="0.28"/>
+      <stop offset="55%" stop-color="#1e1f22" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#1e1f22"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+
+  <!-- brand -->
+  <g transform="translate(72,64)">
+    <circle cx="10" cy="8" r="8" fill="#da373c"/>
+    <text x="30" y="15" fill="#f2f3f5" font-size="30" font-weight="800">Kassinão</text>
+  </g>
+  <text x="72" y="150" fill="#949ba4" font-size="22" font-weight="600" letter-spacing="1">CRAIG, BUT IT REMEMBERS — AND YOU CAN ASK IT QUESTIONS</text>
+
+  <!-- headline -->
+  <text x="72" y="248" fill="#f2f3f5" font-size="76" font-weight="800" letter-spacing="-1">Stop reading transcripts.</text>
+  <text x="72" y="332" fill="#f2f3f5" font-size="76" font-weight="800" letter-spacing="-1">Ask your meetings.</text>
+
+  <!-- chat card -->
+  <g transform="translate(72,392)">
+    <rect width="1056" height="150" rx="14" fill="#2b2d31" stroke="#26282c"/>
+    <!-- user bubble -->
+    <rect x="708" y="18" width="330" height="34" rx="10" fill="#5865f2"/>
+    <text x="728" y="40" fill="#ffffff" font-size="17">what's pending this week?</text>
+    <!-- tool chip -->
+    <rect x="18" y="18" width="250" height="26" rx="5" fill="#232428"/>
+    <rect x="18" y="18" width="3" height="26" fill="#5865f2"/>
+    <text x="32" y="36" fill="#b5bac1" font-size="14" font-family="ui-monospace, Menlo, monospace">kassinao · pending_actions</text>
+    <!-- answer rows -->
+    <g font-size="16">
+      <circle cx="26" cy="70" r="4" fill="#f0b232"/>
+      <text x="42" y="75" fill="#dbdee1">Merge the onboarding rollback</text>
+      <rect x="350" y="61" width="78" height="24" rx="12" fill="#2b2d31" stroke="#3a3c42"/>
+      <text x="362" y="77" fill="#b5bac1" font-size="13">Rafael</text>
+      <rect x="438" y="61" width="58" height="24" rx="12" fill="#322a12" stroke="#46402a"/>
+      <text x="452" y="77" fill="#f0b232" font-size="13">Wed</text>
+      <text x="516" y="75" fill="#00a8fc" font-size="14" font-family="ui-monospace, Menlo, monospace">16:10</text>
+
+      <circle cx="26" cy="104" r="4" fill="#f0b232"/>
+      <text x="42" y="109" fill="#dbdee1">Run the load test against staging</text>
+      <rect x="350" y="95" width="60" height="24" rx="12" fill="#2b2d31" stroke="#3a3c42"/>
+      <text x="362" y="111" fill="#b5bac1" font-size="13">Mei</text>
+      <rect x="420" y="95" width="58" height="24" rx="12" fill="#322a12" stroke="#46402a"/>
+      <text x="434" y="111" fill="#f0b232" font-size="13">Wed</text>
+      <text x="498" y="109" fill="#00a8fc" font-size="14" font-family="ui-monospace, Menlo, monospace">5:20</text>
+
+      <circle cx="26" cy="138" r="4" fill="#f0b232"/>
+      <text x="42" y="143" fill="#dbdee1">Finalize launch email + changelog</text>
+      <rect x="350" y="129" width="70" height="24" rx="12" fill="#2b2d31" stroke="#3a3c42"/>
+      <text x="362" y="145" fill="#b5bac1" font-size="13">Priya</text>
+      <rect x="430" y="129" width="52" height="24" rx="12" fill="#322a12" stroke="#46402a"/>
+      <text x="444" y="145" fill="#f0b232" font-size="13">Thu</text>
+      <text x="502" y="143" fill="#00a8fc" font-size="14" font-family="ui-monospace, Menlo, monospace">55:30</text>
+    </g>
+  </g>
+
+  <!-- footer -->
+  <text x="72" y="590" fill="#80848e" font-size="20" font-weight="600">Self-hosted · open-source · Discord voice recorder + transcript + AI minutes + MCP</text>
+</svg>

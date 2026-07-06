@@ -476,26 +476,539 @@ export function messagePage(title: string, message: string, user?: WebUser, lang
   return shell(title, body, { user, lang, noindex: true });
 }
 
+const REPO_URL = 'https://github.com/resolvicomai/kassinao';
+
+// CSS da landing (vitrine pública). Documento próprio, full-width — NÃO usa o
+// .card estreito do shell(). Mesmos tokens de cor do Discord do SHELL_CSS.
+// Tudo self-contained (CSP: sem fonte/CSS/JS/imagem externa).
+const LANDING_CSS = `
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { max-width: 100%; overflow-x: hidden; }
+  body { background: #1e1f22; color: #dbdee1;
+         font-family: -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif; line-height: 1.55; }
+  a { color: inherit; }
+  .mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 20px; }
+  section { padding: clamp(44px, 8vw, 92px) 0; border-top: 1px solid #26282c; }
+  section.hero { border-top: 0; }
+  .center { text-align: center; }
+  h1 { font-size: clamp(2rem, 5.4vw, 3.2rem); line-height: 1.08; font-weight: 800; color: #f2f3f5;
+       letter-spacing: -0.01em; }
+  h2 { font-size: clamp(1.4rem, 3.6vw, 2.05rem); line-height: 1.15; font-weight: 800; color: #f2f3f5;
+       letter-spacing: -0.01em; }
+  .lead { font-size: clamp(1.02rem, 1.6vw, 1.16rem); color: #949ba4; margin-top: 14px; max-width: 46ch; }
+  .hero .lead { max-width: 52ch; }
+  .kicker { font-size: 0.78rem; text-transform: uppercase; letter-spacing: .06em; color: #949ba4;
+            margin-bottom: 10px; }
+  .eyebrow { display: inline-flex; align-items: center; gap: 8px; background: #232428; border: 1px solid #3a3c42;
+             color: #b5bac1; font-size: 0.82rem; padding: 6px 13px; border-radius: 999px; margin-bottom: 18px; }
+  .eyebrow b { color: #f2f3f5; font-weight: 700; }
+  /* topbar */
+  .topnav { position: sticky; top: 0; z-index: 20; background: rgba(30,31,34,.86);
+            backdrop-filter: saturate(140%) blur(8px); border-bottom: 1px solid #26282c; }
+  .topnav .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+                  height: 56px; }
+  .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 800; color: #f2f3f5;
+           text-decoration: none; font-size: 1.02rem; }
+  .navlinks { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
+  .navlinks a { color: #b5bac1; text-decoration: none; padding: 6px 8px; border-radius: 7px; }
+  .navlinks a:hover { color: #f2f3f5; background: #2b2d31; }
+  .langtoggle a { color: #949ba4; text-decoration: none; padding: 2px 3px; }
+  .langtoggle a.on { color: #f2f3f5; font-weight: 700; }
+  .langtoggle span { opacity: .4; margin: 0 2px; }
+  /* buttons */
+  .ctarow { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 26px; }
+  .center .ctarow { justify-content: center; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; font-weight: 700;
+         font-size: 1rem; padding: 13px 22px; border-radius: 10px; border: 1px solid transparent;
+         transition: background .15s, border-color .15s, transform .15s; }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: #5865f2; color: #fff; }
+  .btn-primary:hover { background: #4752c4; }
+  .btn-outline { background: #2b2d31; color: #f2f3f5; border-color: #3a3c42; }
+  .btn-outline:hover { border-color: #5865f2; }
+  .btn-ghost { background: transparent; color: #b5bac1; padding: 13px 10px; }
+  .btn-ghost:hover { color: #f2f3f5; }
+  .microline { margin-top: 16px; font-size: 0.86rem; color: #80848e; }
+  .microline b { color: #b5bac1; font-weight: 600; }
+  /* hero split */
+  .hero-split { display: flex; gap: 16px; margin-top: 40px; align-items: stretch;
+                background: #1a1b1e; border: 1px solid #26282c; border-radius: 16px; padding: 16px;
+                position: relative; overflow: hidden; }
+  .panel { border-radius: 12px; padding: 15px; min-width: 0; }
+  .panel-call { background: #232428; flex: 0 0 40%; }
+  .panel-chat { background: #2b2d31; flex: 1 1 60%; }
+  .dc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .dc-head .ch { color: #f2f3f5; font-weight: 700; font-size: 0.96rem; }
+  .rec-dot { width: 9px; height: 9px; border-radius: 50%; background: #da373c; flex: 0 0 auto;
+             animation: recpulse 1.7s ease-in-out infinite; }
+  .rec-pill { margin-left: auto; font-size: 0.66rem; font-weight: 800; letter-spacing: .05em;
+              color: #f0b232; background: #2b2d31; border: 1px solid #46402a; padding: 3px 8px; border-radius: 6px; }
+  .panel-chat .rec-pill { background: #232428; }
+  .spk { display: flex; align-items: center; gap: 9px; padding: 6px 0; }
+  .avatar { width: 27px; height: 27px; border-radius: 50%; flex: 0 0 auto; color: #fff; font-weight: 700;
+            font-size: 0.8rem; display: flex; align-items: center; justify-content: center; }
+  .spk .nm { color: #dbdee1; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wave { margin-left: auto; display: flex; align-items: flex-end; gap: 2px; height: 18px; flex: 0 0 auto; }
+  .wave i { width: 2px; background: #5865f2; border-radius: 2px; display: block; transform-origin: bottom;
+            height: 60%; }
+  .wave.live i { animation: wave 1.1s ease-in-out infinite; }
+  .wave.live i:nth-child(2){ animation-delay:.12s } .wave.live i:nth-child(3){ animation-delay:.24s }
+  .wave.live i:nth-child(4){ animation-delay:.36s } .wave.live i:nth-child(5){ animation-delay:.48s }
+  .wave i:nth-child(1){height:40%} .wave i:nth-child(2){height:75%} .wave i:nth-child(3){height:100%}
+  .wave i:nth-child(4){height:55%} .wave i:nth-child(5){height:80%} .wave i:nth-child(6){height:35%}
+  /* beam */
+  .beam { position: absolute; left: 40%; top: 50%; transform: translate(-6px,-50%); width: 40px; height: 60px;
+          pointer-events: none; opacity: .6; }
+  /* chat */
+  .chrome { display: flex; align-items: center; gap: 6px; padding-bottom: 10px; margin-bottom: 10px;
+            border-bottom: 1px solid #26282c; }
+  .chrome i { width: 8px; height: 8px; border-radius: 50%; display: block; }
+  .chrome .lbl { margin: 0 auto; color: #949ba4; font-size: 0.76rem; }
+  .bubble { border-radius: 12px; padding: 9px 13px; font-size: 0.9rem; max-width: 92%; }
+  .bubble-user { background: #5865f2; color: #fff; margin-left: auto; border-bottom-right-radius: 4px; }
+  .bubble-ai { background: #232428; color: #dbdee1; margin-top: 10px; border-bottom-left-radius: 4px; max-width: 100%; }
+  .toolchip { display: inline-flex; align-items: center; gap: 6px; font-size: 0.74rem; color: #b5bac1;
+              background: #2b2d31; border-left: 2px solid #5865f2; padding: 3px 9px; border-radius: 5px; }
+  .ans-head { color: #f2f3f5; font-weight: 700; font-size: 0.86rem; margin: 10px 0 8px; }
+  .ans-row { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 7px 0;
+             border-top: 1px solid #2b2d31; font-size: 0.85rem; animation: reveal .5s ease both; }
+  .ans-row:nth-child(2){animation-delay:.15s} .ans-row:nth-child(3){animation-delay:.3s} .ans-row:nth-child(4){animation-delay:.45s}
+  .sdot { width: 7px; height: 7px; border-radius: 50%; background: #f0b232; flex: 0 0 auto; }
+  .ans-row .tk { color: #dbdee1; flex: 1 1 60%; min-width: 0; }
+  .pill { font-size: 0.72rem; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .pill-owner { background: #2b2d31; color: #b5bac1; border: 1px solid #3a3c42; }
+  .pill-due { background: #322a12; color: #f0b232; border: 1px solid #46402a; }
+  .ts { color: #00a8fc; text-decoration: none; font-size: 0.8rem; white-space: nowrap; }
+  .ts:hover { text-decoration: underline; }
+  .ans-foot { color: #80848e; font-size: 0.72rem; margin-top: 10px; }
+  /* generic grids */
+  .grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 34px; }
+  .qcard { background: #2b2d31; border: 1px solid #26282c; border-radius: 12px; padding: 15px; }
+  .qcard.glow { border-color: #3a41a8; box-shadow: 0 0 0 1px #3a41a8 inset, 0 6px 20px rgba(88,101,242,.12); }
+  .qprompt { display: flex; gap: 8px; color: #f2f3f5; font-weight: 600; font-size: 0.95rem; }
+  .qprompt .arrow { color: #5865f2; font-weight: 800; }
+  .qtool { margin: 11px 0 9px; }
+  .qans { color: #b5bac1; font-size: 0.86rem; }
+  .qbadge { display: inline-block; margin-top: 10px; font-size: 0.68rem; letter-spacing:.04em; text-transform: uppercase;
+            color: #a9b0ff; background: #232a5c; border-radius: 6px; padding: 3px 8px; }
+  /* minutes proof */
+  .minutes-card { background: #232428; border-radius: 10px; padding: 18px 20px; border-left: 3px solid #5865f2;
+                  margin-top: 30px; }
+  .mc-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .mc-head .bc { color: #dbdee1; font-size: 0.9rem; font-weight: 600; }
+  .mc-badge { font-size: 0.7rem; font-weight: 800; color: #fff; background: #23a55a; padding: 3px 9px; border-radius: 999px; }
+  .ai-pill { margin-left: auto; font-size: 0.7rem; color: #a9b0ff; background: #232a5c; padding: 3px 9px; border-radius: 999px; }
+  .mc-h3 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: .05em; color: #949ba4; margin: 16px 0 7px; }
+  .mc-sum { color: #dbdee1; font-size: 0.93rem; }
+  .mc-ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; color: #dbdee1; font-size: 0.92rem; }
+  .mc-action { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 5px 0; font-size: 0.92rem; }
+  .mc-action .task { color: #dbdee1; }
+  .mc-action .meta2 { color: #949ba4; font-size: 0.8rem; }
+  /* receipts */
+  .receipts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 30px; }
+  .receipt { background: #2b2d31; border: 1px solid #26282c; border-radius: 12px; padding: 16px; }
+  .r-icon { width: 38px; height: 38px; border-radius: 9px; background: #232428; display: flex; align-items: center;
+            justify-content: center; font-size: 1.15rem; margin-bottom: 11px; }
+  .r-title { color: #f2f3f5; font-weight: 700; font-size: 0.98rem; margin-bottom: 5px; }
+  .r-body { color: #949ba4; font-size: 0.87rem; }
+  .r-body code, .codechip { font-family: ui-monospace, monospace; font-size: 0.82em; background: #232428; color: #b5bac1;
+            padding: 1px 6px; border-radius: 5px; }
+  .strike { text-decoration: line-through; color: #6d7178; }
+  .pill-link { display: inline-block; margin-top: 9px; font-family: ui-monospace, monospace; font-size: 0.78rem;
+               color: #a9b0ff; background: #232428; border: 1px solid #3a3c42; border-radius: 6px; padding: 3px 9px; text-decoration: none; }
+  .pill-link:hover { border-color: #5865f2; }
+  .inj-banner { margin-top: 16px; background: #232428; border-left: 3px solid #5865f2; border-radius: 8px;
+                padding: 13px 16px; color: #b5bac1; font-size: 0.87rem; display: flex; gap: 11px; align-items: flex-start; }
+  /* comparison table */
+  .cmp-wrap { overflow-x: auto; margin-top: 30px; border: 1px solid #26282c; border-radius: 12px; }
+  table.cmp { border-collapse: collapse; width: 100%; min-width: 460px; font-size: 0.9rem; }
+  table.cmp th, table.cmp td { padding: 12px 14px; text-align: left; border-bottom: 1px solid #26282c; }
+  table.cmp thead th { color: #949ba4; font-size: 0.78rem; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+  table.cmp th.us { color: #f2f3f5; }
+  table.cmp td.us { background: rgba(88,101,242,.07); }
+  table.cmp td.feat { color: #dbdee1; }
+  table.cmp .yes { color: #23a55a; font-weight: 700; }
+  table.cmp .no { color: #6d7178; }
+  table.cmp tbody tr:last-child td { border-bottom: 0; }
+  /* steps */
+  .steps { display: flex; gap: 16px; margin-top: 32px; }
+  .step { flex: 1; background: #2b2d31; border: 1px solid #26282c; border-radius: 12px; padding: 16px; min-width: 0; }
+  .step-num { width: 26px; height: 26px; border-radius: 50%; background: #5865f2; color: #fff; font-weight: 800;
+              font-size: 0.85rem; display: flex; align-items: center; justify-content: center; margin-bottom: 10px; }
+  .step h4 { color: #f2f3f5; font-size: 0.98rem; margin-bottom: 5px; }
+  .step p { color: #949ba4; font-size: 0.86rem; }
+  .terminal { margin-top: 12px; background: #1a1b1e; border: 1px solid #26282c; border-radius: 9px; overflow: hidden; }
+  .term-bar { display: flex; align-items: center; gap: 6px; padding: 8px 11px; border-bottom: 1px solid #26282c; }
+  .term-bar i { width: 8px; height: 8px; border-radius: 50%; display: block; }
+  .term-bar .cp { margin-left: auto; font-size: 0.72rem; color: #949ba4; background: none; border: 0; cursor: pointer; font-family: inherit; }
+  .term-body { padding: 12px; font-family: ui-monospace, monospace; font-size: 0.8rem; color: #b5bac1;
+               white-space: pre-wrap; word-break: break-word; }
+  .term-body .flag { color: #80848e; }
+  .term-note { color: #80848e; font-size: 0.78rem; margin-top: 8px; }
+  .deploy-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+  .dcard { background: #232428; border: 1px solid #26282c; border-radius: 12px; padding: 15px; color: #949ba4; font-size: 0.87rem; }
+  .dcard b { color: #dbdee1; }
+  /* features */
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-top: 32px; }
+  .feature { background: #2b2d31; border: 1px solid #26282c; border-radius: 12px; padding: 16px; }
+  .f-icon { font-size: 1.5rem; margin-bottom: 9px; }
+  .feature h4 { color: #f2f3f5; font-size: 0.96rem; margin-bottom: 5px; }
+  .feature p { color: #949ba4; font-size: 0.86rem; }
+  /* final cta */
+  .final { background: radial-gradient(120% 120% at 50% 0%, rgba(88,101,242,.22) 0%, rgba(30,31,34,0) 60%); }
+  .final-card { text-align: center; }
+  /* footer */
+  footer { border-top: 1px solid #26282c; padding: 26px 0; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+  .sig { color: #80848e; font-size: 0.82rem; }
+  /* animations */
+  @keyframes recpulse { 0%,100%{opacity:1; box-shadow:0 0 0 0 rgba(218,55,60,.5)} 50%{opacity:.55; box-shadow:0 0 0 5px rgba(218,55,60,0)} }
+  @keyframes wave { 0%,100%{transform:scaleY(.4)} 50%{transform:scaleY(1)} }
+  @keyframes beamdot { 0%{transform:translateY(0); opacity:0} 20%{opacity:1} 80%{opacity:1} 100%{transform:translateY(46px); opacity:0} }
+  @keyframes reveal { from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:none} }
+  .beam .d1 { animation: beamdot 2.2s linear infinite; } .beam .d2 { animation: beamdot 2.2s linear infinite 1.1s; }
+  @media (max-width: 760px) {
+    .hero-split { flex-direction: column; }
+    .panel-call { flex-basis: auto; } .panel-chat { flex-basis: auto; }
+    .beam { display: none; }
+    .wave i { animation: none !important; }
+    .steps { flex-direction: column; }
+    .receipts, .deploy-cards { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+`;
+
+/**
+ * Vitrine pública em "/". Documento próprio (full-width), fora do shell() estreito.
+ * Indexável, bilíngue (?lang=), self-contained sob a CSP. Direção fixada por um
+ * workflow multiagente (divergir→julgar→sintetizar) + teardown adversarial.
+ */
 export function landingPage(lang: Locale): string {
   const pt = lang === 'pt';
-  const text = pt
-    ? 'Gravador de voz do Discord, open source e auto-hospedado — uma faixa separada por pessoa, com transcrição e ata geradas por IA.'
-    : 'Open-source, self-hosted Discord voice recorder — one separate track per person, with AI-generated transcript and meeting minutes.';
-  const demoCta = pt ? '▶️ Ver o exemplo ao vivo' : '▶️ See the live example';
-  const repoCta = pt ? '⭐ Código no GitHub' : '⭐ Code on GitHub';
-  const mcpCta = pt ? '🔌 Conectar ao Claude/Cursor' : '🔌 Connect Claude/Cursor';
-  // CTA do conector de IA só quando ele está ligado neste servidor
-  const mcpButton = config.mcpEnabled
-    ? `\n      <a class="btn" href="/conectar-ia" style="background:#3a3c42">${mcpCta}</a>`
-    : '';
-  const body = `<h1>🎙️ Kassinão</h1>
-    <p class="muted" style="margin-top:12px">${text}</p>
-    <div class="downloads" style="margin-top:18px">
-      <a class="btn" href="/demo">${demoCta}</a>
-      <a class="btn" href="https://github.com/resolvicomai/kassinao" style="background:#3a3c42">${repoCta}</a>${mcpButton}
-    </div>`;
-  // landing é indexável (sem noindex) — é a vitrine pública
-  return shell('Kassinão', body, { lang });
+  const T = (ptStr: string, enStr: string): string => (pt ? ptStr : enStr);
+  const mcpOn = config.mcpEnabled;
+  const metaTitle = T(
+    'Kassinão — Pare de ler transcrição. Pergunte às suas reuniões.',
+    'Kassinão — Stop reading transcripts. Ask your meetings.',
+  );
+  const metaDesc = T(
+    'Gravador de voz do Discord, open-source e no seu servidor, que transforma cada call em memória que a sua IA responde. Pergunte "o que ficou pendente essa semana?" no Claude ou Cursor e receba a decisão, o responsável e um link pro segundo exato — gravação multipista, transcrição por pessoa e ata de IA. O Craig, mas que lembra.',
+    'Self-hosted, open-source Discord voice recorder that turns every call into memory your AI assistant can answer. Ask "what\'s pending this week?" from Claude or Cursor and get the decision, the owner, and a link to the exact second — multi-track recording, per-speaker transcript, AI minutes. Craig, but it remembers.',
+  );
+
+  const langToggle = `<div class="langtoggle"><a href="?lang=en"${!pt ? ' class="on"' : ''}>EN</a><span>·</span><a href="?lang=pt"${pt ? ' class="on"' : ''}>PT</a></div>`;
+
+  // secondary CTA só quando o MCP está ligado neste servidor (mesmo gate do produto)
+  const connectBtn = (cls: string): string =>
+    mcpOn
+      ? `<a class="btn ${cls}" href="/conectar-ia">${T('🔌 Conectar Claude/Cursor', '🔌 Connect Claude/Cursor')}</a>`
+      : '';
+
+  // ---- HERO ----
+  const avatars: [string, string][] = [
+    ['P', '#5865f2'],
+    ['R', '#23a55a'],
+    ['M', '#f0b232'],
+    ['T', '#00a8fc'],
+    ['J', '#eb459e'],
+    ['S', '#5865f2'],
+  ];
+  const names = ['Priya', 'Rafael', 'Mei', 'Tobias', 'James', 'Sofia'];
+  const wave = (live: boolean): string =>
+    `<span class="wave${live ? ' live' : ''}"><i></i><i></i><i></i><i></i><i></i><i></i></span>`;
+  const speakers = names
+    .map((n, i) => {
+      const [ini, bg] = avatars[i];
+      return `<div class="spk"><span class="avatar" style="background:${bg}">${ini}</span><span class="nm">${n}</span>${wave(i < 2)}</div>`;
+    })
+    .join('');
+
+  const beam = `<svg class="beam" viewBox="0 0 40 60" aria-hidden="true"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5865f2" stop-opacity="0"/><stop offset="0.5" stop-color="#5865f2" stop-opacity=".9"/><stop offset="1" stop-color="#5865f2" stop-opacity="0"/></linearGradient></defs><line x1="20" y1="6" x2="20" y2="54" stroke="url(#bg)" stroke-width="2"/><path d="M15 48 L20 55 L25 48" fill="none" stroke="#5865f2" stroke-width="2" stroke-opacity=".8"/><circle class="d1" cx="20" cy="8" r="2.5" fill="#a9b0ff"/><circle class="d2" cx="20" cy="8" r="2.5" fill="#a9b0ff"/></svg>`;
+
+  const chatQuestion = T('o que ficou pendente essa semana?', "what's pending this week?");
+  const ansRow = (task: string, owner: string, due: string, ts: string): string =>
+    `<div class="ans-row"><span class="sdot"></span><span class="tk">${task}</span><span class="pill pill-owner">${owner}</span><span class="pill pill-due">${due}</span><a class="ts" href="/demo">▶ ${ts}</a></div>`;
+  const answerRows =
+    ansRow(
+      T('Mergear o rollback do onboarding + feature-flag', 'Merge the onboarding rollback + feature-flag it'),
+      'Rafael',
+      T('qua', 'Wed'),
+      '16:10',
+    ) +
+    ansRow(
+      T('Rodar o load test no staging e compartilhar os números', 'Run the load test against staging + share numbers'),
+      'Mei',
+      T('qua', 'Wed EOD'),
+      '5:20',
+    ) +
+    ansRow(
+      T('Finalizar e-mail de lançamento + changelog', 'Finalize launch email + changelog'),
+      'Priya',
+      T('qui', 'Thu'),
+      '55:30',
+    );
+
+  const hero = `<section class="hero"><div class="wrap">
+    <div class="eyebrow">🎙️ <span>${T('O Craig, mas que lembra — e você pode perguntar.', 'Craig, but it remembers — and you can ask it questions.')}</span></div>
+    <h1>${T('Pare de ler transcrição.<br>Pergunte às suas reuniões.', 'Stop reading transcripts.<br>Ask your meetings.')}</h1>
+    <p class="lead">${T(
+      'O Kassinão grava suas calls do Discord — uma faixa por pessoa — e responde de dentro do Claude ou do Cursor: pergunte "o que ficou pendente?" e receba a tarefa, o responsável e um link pro segundo exato. Gravação, transcrição, ata e player funcionam sozinhos — a IA é a parte que ninguém mais tem.',
+      'Kassinão records your Discord calls — one track per person — then answers from inside Claude or Cursor: ask "what\'s pending?" and get the task, the owner, and a link to the exact second. The recorder, transcript, minutes and player all work on their own — the AI is the part nobody else has.',
+    )}</p>
+    <div class="ctarow">
+      <a class="btn btn-primary" href="/demo">${T('▶️ Ver o exemplo ao vivo', '▶️ See the live example')}</a>
+      ${connectBtn('btn-outline')}
+      <a class="btn btn-ghost" href="${REPO_URL}">${T('⭐ GitHub', '⭐ GitHub')}</a>
+    </div>
+    <div class="microline">${T('Sem login', 'No login')} · <b>${T('roda no seu servidor', 'runs on your server')}</b> · ${T('MIT open-source', 'MIT open-source')}</div>
+
+    <div class="hero-split">
+      <div class="panel panel-call">
+        <div class="dc-head"><span class="rec-dot"></span><span class="ch">🔊 product-sync</span><span class="rec-pill">[REC]</span></div>
+        ${speakers}
+      </div>
+      ${beam}
+      <div class="panel panel-chat">
+        <div class="chrome"><i style="background:#da373c"></i><i style="background:#f0b232"></i><i style="background:#23a55a"></i><span class="lbl mono">Claude · kassinao</span></div>
+        <div class="bubble bubble-user">${chatQuestion}</div>
+        <div class="bubble bubble-ai">
+          <span class="toolchip mono">🔌 kassinao · pending_actions</span>
+          <div class="ans-head">${T('3 pra essa semana', '3 due this week')}</div>
+          ${answerRows}
+          <div class="ans-foot mono">via kassinao-mcp · product-sync · 6 ${T('pessoas', 'speakers')}</div>
+        </div>
+      </div>
+    </div>
+  </div></section>`;
+
+  // ---- ASK ANYTHING (5 tools) ----
+  const qcard = (glow: boolean, q: string, tool: string, ans: string, badge?: string): string =>
+    `<div class="qcard${glow ? ' glow' : ''}"><div class="qprompt"><span class="arrow">›</span><span>${q}</span></div>
+      <div class="qtool"><span class="toolchip mono">🔌 ${tool}</span></div>
+      <div class="qans">${ans}</div>${badge ? `<span class="qbadge">${badge}</span>` : ''}</div>`;
+  const askSection = `<section><div class="wrap">
+    <div class="kicker">${T('A parte que ninguém mais tem', 'The part nobody else has')}</div>
+    <h2>${T('Você pergunta em linguagem natural. Ele responde com prova.', 'You ask in plain language. It answers with proof.')}</h2>
+    <p class="lead">${T('Cinco ferramentas MCP, no formato da pergunta que você digitaria — sem sair do seu assistente.', 'Five MCP tools, framed as the question you actually type — without leaving your assistant.')}</p>
+    <div class="grid-cards">
+      ${qcard(true, T('⏳ O que ficou pendente essa semana?', "⏳ What's still pending this week?"), 'pending_actions', T('Rollback do onboarding — Rafael, qua · Load test — Mei · E-mail de lançamento — Priya, qui', 'Onboarding rollback — Rafael, Wed · Load test — Mei · Launch email — Priya, Thu'), T('cruza TODAS as calls', 'across ALL your calls'))}
+      ${qcard(false, T('🗣️ Quando o Rafael falou do pico de churn?', '🗣️ When did Rafael flag the churn spike?'), 'who_said', T('Investigação do pico de churn (onboarding) <a class="ts" href="/demo">▶ 16:10</a>', 'Churn spike investigation (onboarding) <a class="ts" href="/demo">▶ 16:10</a>'))}
+      ${qcard(false, T('🔎 Onde a gente decidiu subir o plano anual?', '🔎 Where did we decide to ship annual pricing?'), 'search_meetings', T('Decisão: subir o plano anual pra 100% (+18% de conversão a 20%) <a class="ts" href="/demo">▶ 29:40</a>', 'Decision: ship annual pricing to 100% (was +18% conversion at 20%) <a class="ts" href="/demo">▶ 29:40</a>'))}
+      ${qcard(false, T('📅 Lista as calls de 1 a 30 de junho', '📅 List the calls from June 1–30'), 'list_meetings', T('Janelas de data e "essa semana / semana passada" funcionam.', 'Date ranges and "this week / last week" windows both work.'))}
+      ${qcard(false, T('📄 Me dá o dossiê da product-sync', '📄 Give me the product-sync dossier'), 'get_meeting', T('Resumo + decisões + itens de ação + timeline.', 'Summary + decisions + action items + timeline.'))}
+    </div>
+  </div></section>`;
+
+  // ---- PROOF: real demo minutes ----
+  const dec = (ptS: string, enS: string): string => `<li>${T(ptS, enS)}</li>`;
+  const mcAction = (task: string, meta: string, ts: string): string =>
+    `<div class="mc-action"><a class="ts" href="/demo">${ts}</a><span class="task">${task}</span><span class="meta2">${meta}</span></div>`;
+  const proofSection = `<section><div class="wrap">
+    <div class="kicker">${T('Prova antes da promessa', 'Proof before the claim')}</div>
+    <h2>${T('E o Kassinão escreveu esta ata sozinho.', 'And Kassinão wrote these minutes itself.')}</h2>
+    <p class="lead">${T('Ata gerada por IA do exemplo ao vivo — ninguém digitou. Um clique abre a gravação real (sem login).', 'AI-generated minutes from the live example — no one typed it. One click opens the real recording (no login).')}</p>
+    <div class="minutes-card">
+      <div class="mc-head"><span class="bc">🎙️ product-sync · Northwind (demo) · 👥 6 · 58:12</span><span class="mc-badge">${T('✅ FINALIZADA', '✅ FINISHED')}</span><span class="ai-pill">${T('gerado por IA', 'AI-generated')}</span></div>
+      <div class="mc-h3">${T('RESUMO', 'SUMMARY')}</div>
+      <p class="mc-sum">${T(
+        'O time revisou a prontidão do lançamento do dashboard v3, ligou o pico de churn ao novo fluxo de onboarding e aprovou o experimento de preço do plano anual.',
+        'The team reviewed v3 dashboard launch readiness, traced a churn spike to the new onboarding flow, and green-lit the annual pricing experiment.',
+      )}</p>
+      <div class="mc-h3">${T('DECISÕES', 'DECISIONS')}</div>
+      <ul class="mc-ul">
+        ${dec('Dashboard v3 lança na quinta que vem, condicionado à correção do onboarding + load test passando.', 'v3 dashboard launches next Thursday, gated on the onboarding fix + a passing load test.')}
+        ${dec('Reverter o tour obrigatório do novo onboarding (bate com o pico de churn).', "Roll back the new onboarding flow's mandatory tour (correlates with the churn spike).")}
+        ${dec('Subir o experimento de preço do plano anual pra 100% (era +18% de conversão a 20% de rollout).', 'Ship the annual-plan pricing experiment to 100% (was +18% conversion at 20% rollout).')}
+        ${dec('Abrir vaga pra um segundo engenheiro de infra/SRE.', 'Open a headcount for a second infra/SRE engineer.')}
+      </ul>
+      <div class="mc-h3">${T('ITENS DE AÇÃO', 'ACTION ITEMS')}</div>
+      ${mcAction(T('Mergear o rollback do onboarding + feature-flag', 'Merge the onboarding rollback + feature-flag it'), 'Rafael · ' + T('qua', 'Wed'), '16:10')}
+      ${mcAction(T('Rodar o load test no staging e compartilhar os números', 'Run the load test against staging and share numbers'), 'Mei · ' + T('qua', 'Wed EOD'), '5:20')}
+      ${mcAction(T('Finalizar e-mail de lançamento + changelog, agendar qui 9h', 'Finalize launch email + changelog, schedule for Thu 9am'), 'Priya · ' + T('qui', 'Thu'), '55:30')}
+    </div>
+    <div class="ctarow"><a class="btn btn-primary" href="/demo">${T('▶️ Abrir a gravação inteira', '▶️ Open the whole recording')}</a></div>
+  </div></section>`;
+
+  // ---- TRUST ----
+  const receipt = (icon: string, title: string, body: string): string =>
+    `<div class="receipt"><div class="r-icon">${icon}</div><div class="r-title">${title}</div><div class="r-body">${body}</div></div>`;
+  const trustSection = `<section><div class="wrap">
+    <div class="kicker">${T('Confiança com recibo, não com adjetivo', 'Receipts, not adjectives')}</div>
+    <h2>${T('Sua IA só vê as calls que você já veria. Nunca mais que isso.', 'Your AI only sees the calls you could already see. Never more.')}</h2>
+    <div class="receipts">
+      ${receipt('🔐', T('Acesso pela sua identidade', 'Access by your identity'), T('Reconferido ao vivo contra o Discord por reunião: você iniciou, participou, enxerga o canal ou tem Gerenciar Servidor. Não existe modo "operador vê tudo".', 'Re-checked live against Discord per meeting: you started it, you were in it, you can see the channel, or you have Manage-Server. There is no "operator sees everything" mode.') + `<br><span class="mono strike">// seeAll — ${T('não existe', 'does not exist')}</span><br><a class="pill-link" href="${REPO_URL}/blob/main/src/web/access.ts">&lt;/&gt; checkAccess() · access.ts →</a>`)}
+      ${receipt('👁️', T('Somente leitura', 'Read-only'), T('O conector não grava, não apaga e não serve áudio. Cinco ferramentas, todas de leitura.', 'The connector never writes, never deletes, never serves audio. Five tools, all read-only.'))}
+      ${receipt('♻️', T('Token rotaciona a cada uso', 'Token rotates every use'), T('O refresh fica em ', 'The refresh token lives at ') + `<code>~/.config/kassinao-mcp/token.json</code> (<code>chmod 0600</code>)` + T('; um token roubado e reapresentado denuncia o reuso e mata a sessão. Fail-closed: sem verificar acesso, o MCP responde 503 — nunca um grant falso.', "; a replayed/stolen token trips reuse-detection and kills the session. Fail-closed: if access can't be verified the MCP returns 503 — never a false grant."))}
+      ${receipt('🧨', T('Revogue quando quiser', 'Revoke anytime'), T('Três formas: "Revogar todos" na web, ', 'Three ways: "Revoke all" on the web, ') + `<code>/mcp revoke-all</code>` + T(' no Discord, ou girar o ', ' in Discord, or rotate ') + `<code>MCP_SECRET</code>` + T(' como botão de pânico do admin.', ' as the admin panic button.'))}
+    </div>
+    <div class="inj-banner"><span>🛡️</span><span>${T('O conteúdo da reunião — transcrição, notas, até apelidos — é tratado como entrada não-confiável e higienizado antes de chegar em qualquer LLM (defesa contra prompt-injection). No seu servidor, MIT open-source, auditável.', 'Meeting content — transcript, notes, even display names — is treated as untrusted input and sanitized before it reaches any LLM (prompt-injection defense). Self-hosted, MIT open-source, auditable.')}</span></div>
+  </div></section>`;
+
+  // ---- CRAIG COMPARISON ----
+  const yes = '<span class="yes">✅</span>';
+  const dash = '<span class="no">—</span>';
+  const row = (feat: string, craig: string, us: string): string =>
+    `<tr><td class="feat">${feat}</td><td>${craig}</td><td class="us">${us}</td></tr>`;
+  const craigSection = `<section><div class="wrap">
+    <div class="kicker">${T('Vindo do Craig?', 'Coming from Craig?')}</div>
+    <h2>${T('O Craig grava. O Kassinão lembra — e você pergunta.', 'Craig records. Kassinão remembers — and you ask.')}</h2>
+    <p class="lead">${T('Cada pessoa numa faixa própria: quem falou é sabido, não chutado por diarização — nunca embola crosstalk nem nome fora do inglês. Você mantém tudo que o Craig faz bem e ganha a camada que ele te manda comprar em outro lugar.', 'Every participant on their own track: who spoke is known, not guessed by diarization — it never garbles crosstalk or non-English names. You keep everything Craig does well and gain the layer Craig sends you elsewhere to buy.')}</p>
+    <div class="cmp-wrap"><table class="cmp">
+      <thead><tr><th>${T('Recurso', 'Feature')}</th><th>Craig</th><th class="us">Kassinão</th></tr></thead>
+      <tbody>
+        ${row(T('Multipista — uma faixa por pessoa', 'Multi-track — one track per person'), yes, yes)}
+        ${row(T('Export MP3 · FLAC · Mix · Audacity', 'Export MP3 · FLAC · Mix · Audacity'), yes, yes)}
+        ${row(T('Transcrição por pessoa', 'Per-speaker transcript'), dash, yes)}
+        ${row(T('Ata de IA: decisões + responsáveis + prazos', 'AI minutes: decisions + owners + due dates'), dash, yes)}
+        ${row(T('Página web privada com player', 'Private per-recording web page with player'), dash, yes)}
+        ${row(T('Perguntar às reuniões pelo Claude/Cursor', 'Ask your meetings from Claude/Cursor'), dash, yes)}
+      </tbody>
+    </table></div>
+    <p class="microline">${T('Otter/Fireflies/Fathom têm IA, mas são SaaS fechado, não vivem num canal de voz do Discord e não rodam na sua máquina.', "Otter/Fireflies/Fathom have AI too, but they are closed SaaS, don't live in a Discord voice channel, and don't run on your box.")}</p>
+  </div></section>`;
+
+  // ---- SETUP + COST ----
+  const cmd = `KASSINAO_URL=${config.baseUrl} npx -y kassinao-mcp exchange <code>`;
+  const setupSection = `<section><div class="wrap">
+    <div class="kicker">${T('No ar em minutos', 'Live in minutes')}</div>
+    <h2>${T('No seu servidor — e honesto sobre o custo.', 'On your server — and honest about cost.')}</h2>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><h4>${T('Suba o bot', 'Boot the bot')}</h4><p>${T('Docker Compose + um app do Discord, ou o blueprint Deploy-to-Render de um clique. HTTPS via Cloudflare Tunnel, sem abrir portas.', 'Docker Compose + a Discord app, or the one-click Deploy-to-Render blueprint. HTTPS via Cloudflare Tunnel, no open ports.')}</p></div>
+      <div class="step"><div class="step-num">2</div><h4>${T('Grave', 'Record')}</h4><p>${T('/gravar num canal de voz, ou auto-grava quando 2+ pessoas entram — com o apelido [REC] e um painel ao vivo. Nunca secreto.', '/gravar in a voice channel, or auto-record when 2+ people join — with a [REC] nickname tag and a live in-channel panel. Never covert.')}</p></div>
+      <div class="step"><div class="step-num">3</div><h4>${T('Conecte', 'Connect')}</h4><p>${T('Abra /conectar-ia, entre com o Discord e rode o comando pra plugar o Claude ou o Cursor:', 'Open /conectar-ia, sign in with Discord, and run the command to connect Claude or Cursor:')}</p>
+        <div class="terminal"><div class="term-bar"><i style="background:#da373c"></i><i style="background:#f0b232"></i><i style="background:#23a55a"></i><button class="cp mono" id="kcp" type="button">⧉ ${T('copiar', 'copy')}</button></div><div class="term-body mono" id="kcmd">${esc(cmd)}</div></div>
+        <div class="term-note">${T('código válido ~5 min, uso único · ', 'code valid ~5 min, single use · ')}<span class="codechip">npx -y kassinao-mcp</span> · 5 ${T('ferramentas', 'tools')}</div>
+      </div>
+    </div>
+    <div class="deploy-cards">
+      <div class="dcard">🐳 <b>Docker Compose</b> · 🚀 Deploy to Render · 🔒 Cloudflare Tunnel — 0 ${T('portas abertas', 'open ports')}</div>
+      <div class="dcard">${T('Custo, direto: transcrição é BYO-key e multipista, então escala com o nº de pessoas — de alguns centavos a um pouco mais por reunião — ou rode 100% local com faster-whisper (o áudio nunca sai da sua máquina). Ata: alguns centavos.', 'Cost, straight: transcription is bring-your-own-key and multi-track, so it scales with the number of speakers — a few cents to a bit more per meeting — or run it 100% local with faster-whisper (audio never leaves your box). Minutes: a few cents.')} <span class="codechip">[REC]</span></div>
+    </div>
+  </div></section>`;
+
+  // ---- FEATURES ----
+  const feats: [string, string, string][] = [
+    [
+      '🎙️',
+      T('Multipista real — um arquivo por pessoa', 'True multi-track — one file per person'),
+      T('Quem falou é sabido, não chutado por diarização.', 'Who spoke is known, not guessed by diarization.'),
+    ],
+    [
+      '🤖',
+      T('Ata de IA: decisões + responsáveis + prazos', 'AI minutes: decisions + owners + due dates'),
+      T(
+        'Resumo, decisões e itens de ação na página da gravação.',
+        'A summary, decisions, and action items on the recording page.',
+      ),
+    ],
+    [
+      '▶️',
+      T('Horários clicáveis pro segundo exato', 'Clickable timestamps to the exact second'),
+      T('Toda linha dá deep-link pro momento no player.', 'Every line deep-links to that moment in the player.'),
+    ],
+    [
+      '🔌',
+      T('Pergunte pelo Claude ou Cursor', 'Ask from Claude or Cursor'),
+      T('5 ferramentas MCP em linguagem natural.', '5 MCP tools in natural language.'),
+    ],
+    [
+      '💾',
+      T('Quatro formatos de download', 'Four download formats'),
+      T('🎵 MP3 · 💎 FLAC · 🎧 Mix · 🎚️ Audacity.', '🎵 MP3 · 💎 FLAC · 🎧 Mix · 🎚️ Audacity.'),
+    ],
+    [
+      '🔴',
+      T('Auto-gravação com consentimento visível', 'Auto-record with visible consent'),
+      T('Painel ao vivo + apelido [REC]. Nunca secreto.', 'Live panel + [REC] nickname tag. Never covert.'),
+    ],
+    [
+      '🔒',
+      T('Página web privada por gravação', 'Private per-recording web page'),
+      T(
+        'Player, transcrição, ata e downloads — acesso pela sua identidade.',
+        'Player, transcript, minutes, downloads — scoped to your identity.',
+      ),
+    ],
+    [
+      '🌎',
+      T('Bilíngue de ponta a ponta (EN / pt-BR)', 'Bilingual end to end (EN / pt-BR)'),
+      T(
+        'Landing, ata e perguntas do MCP em inglês e português.',
+        'Landing, minutes, and MCP queries in English and Portuguese.',
+      ),
+    ],
+  ];
+  const featSection = `<section><div class="wrap">
+    <div class="kicker">${T('Tudo funciona sozinho — a IA é o bônus', 'Everything works standalone — the AI is the bonus')}</div>
+    <h2>${T('Um gravador completo. Mais uma memória que responde.', 'A complete recorder. Plus a memory that answers.')}</h2>
+    <div class="features">${feats.map(([ic, t, d]) => `<div class="feature"><div class="f-icon">${ic}</div><h4>${t}</h4><p>${d}</p></div>`).join('')}</div>
+  </div></section>`;
+
+  // ---- FINAL CTA ----
+  const finalSection = `<section class="final"><div class="wrap final-card">
+    <h2>${T('Prove sem instalar nada. Depois conecte a sua IA.', 'Prove it without installing anything. Then connect your AI.')}</h2>
+    <p class="lead" style="margin:14px auto 0">${T('Abra o exemplo ao vivo — uma product-sync real de ~58 min, 6 pessoas, transcrição por pessoa, ata com decisões e responsáveis, horários clicáveis. Sem login.', 'Open the live example — a real ~58-min product-sync, 6 people, per-speaker transcript, minutes with decisions and owners, clickable timestamps. No login.')}</p>
+    <div class="ctarow">
+      <a class="btn btn-primary" href="/demo">${T('▶️ Ver o exemplo ao vivo', '▶️ See the live example')}</a>
+      ${connectBtn('btn-outline')}
+      <a class="btn btn-ghost" href="${REPO_URL}">⭐ GitHub</a>
+    </div>
+    <div class="microline"><span class="codechip">npm: kassinao-mcp</span></div>
+  </div></section>`;
+
+  const topnav = `<div class="topnav"><div class="wrap">
+    <a class="brand" href="/">🎙️ Kassinão</a>
+    <div class="navlinks">
+      <a href="/demo">${T('Exemplo', 'Demo')}</a>
+      ${mcpOn ? `<a href="/conectar-ia">${T('Conectar IA', 'Connect AI')}</a>` : ''}
+      <a href="${REPO_URL}">GitHub</a>
+      ${langToggle}
+    </div>
+  </div></div>`;
+
+  const footer = `<footer><div class="wrap">
+    <span class="sig">${T('MIT · open-source · roda no seu servidor · EN / pt-BR', 'MIT · open-source · runs on your server · EN / pt-BR')}</span>
+    ${langToggle}
+  </div></footer>`;
+
+  const copyScript = `<script>(function(){var b=document.getElementById('kcp');if(!b)return;b.addEventListener('click',function(){var t=(document.getElementById('kcmd').textContent)||'';navigator.clipboard.writeText(t).then(function(){var o=b.textContent;b.textContent='${T('copiado ✓', 'copied ✓')}';setTimeout(function(){b.textContent=o;},2000);});});})();</script>`;
+
+  return `<!doctype html>
+<html lang="${pt ? 'pt-BR' : 'en'}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(metaTitle)}</title>
+<meta name="description" content="${esc(metaDesc)}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="${esc(metaTitle)}">
+<meta property="og:description" content="${esc(metaDesc)}">
+<meta property="og:url" content="${esc(config.baseUrl)}/">
+<meta property="og:image" content="${esc(config.baseUrl)}/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(metaTitle)}">
+<meta name="twitter:description" content="${esc(metaDesc)}">
+<meta name="twitter:image" content="${esc(config.baseUrl)}/og.png">
+<style>${LANDING_CSS}</style>
+</head>
+<body>
+${topnav}
+${hero}
+${askSection}
+${proofSection}
+${trustSection}
+${craigSection}
+${setupSection}
+${featSection}
+${finalSection}
+${footer}
+${copyScript}
+</body>
+</html>`;
 }
 
 /**
