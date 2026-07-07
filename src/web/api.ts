@@ -12,6 +12,7 @@ import {
   readMinutes,
   readTranscript,
   RecordingMeta,
+  textExpiryOf,
   transcriptReady,
   TranscriptSegment,
 } from '../store';
@@ -121,7 +122,11 @@ function meetingSummary(m: RecordingMeta): Record<string, unknown> {
     hasMinutes: m.minutes?.status === 'done',
     /** Retenção em camadas: áudio pode já ter expirado (texto continua). */
     audioDeleted: m.audioDeleted ?? false,
-    textExpiresAtISO: m.textExpiresAt ? formatInTz(m.textExpiresAt) : null,
+    /** null = nunca expira (retenção ilimitada ou config atual sem data). */
+    textExpiresAtISO: (() => {
+      const exp = textExpiryOf(m);
+      return exp ? formatInTz(exp) : null;
+    })(),
     noteCount: m.notes.length,
   };
 }

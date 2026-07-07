@@ -241,6 +241,86 @@ export function pageUrl(id: string): string {
   return `${config.baseUrl}/rec/${id}`;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Quando o ÁUDIO desta gravação expira — respondido pela CONFIG ATUAL, não pelo
+ * `expiresAt` gravado no meta. Motivo: gravações feitas antes de o operador mudar
+ * pra retenção ilimitada carregam uma data de morte persistida; se ela mandasse,
+ * mudar RETENTION_DAYS pra 0 não salvaria o histórico existente.
+ * `undefined` = nunca expira (ou ainda está gravando).
+ */
+export function audioExpiryOf(meta: RecordingMeta): number | undefined {
+  if (config.audioRetentionUnlimited) return undefined;
+  if (meta.expiresAt) return meta.expiresAt;
+  return meta.endedAt ? meta.endedAt + config.retentionDays * DAY_MS : undefined;
+}
+
+/** Quando transcrição/ata/meta expiram (config atual manda). `undefined` = nunca. */
+export function textExpiryOf(meta: RecordingMeta): number | undefined {
+  if (config.textRetentionUnlimited) return undefined;
+  if (meta.textExpiresAt) return meta.textExpiresAt;
+  return meta.endedAt ? meta.endedAt + config.textRetentionDays * DAY_MS : undefined;
+}
+
+// ---------- tamanho em disco (pro painel de gestão do /gravacoes) ----------
+
+const sizeCache = new Map<string, { bytes: number; at: number }>();
+const SIZE_CACHE_TTL_MS = 60_000;
+
+function dirBytes(dir: string): number {
+  let total = 0;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    try {
+      if (e.isDirectory()) total += dirBytes(p);
+      else if (e.isFile()) total += fs.statSync(p).size;
+    } catch {
+      // apagado em paralelo
+    }
+  }
+  return total;
+}
+
+/**
+ * Bytes de ÁUDIO da gravação (masters em tracks/ + mixes/zips em cache/) — é o
+ * que a ação "liberar espaço" devolve ao disco. Cache de 60s por gravação:
+ * statSync recursivo é barato pra dezenas, mas o índice lista até 300.
+ */
+export function audioBytesOf(id: string): number {
+  if (!VALID_ID.test(id)) return 0;
+  const hit = sizeCache.get(id);
+  if (hit && Date.now() - hit.at < SIZE_CACHE_TTL_MS) return hit.bytes;
+  const bytes = dirBytes(tracksDir(id)) + dirBytes(cacheDir(id));
+  sizeCache.set(id, { bytes, at: Date.now() });
+  return bytes;
+}
+
+/** Invalida o cache de tamanho (chamar após apagar áudio/gravação). */
+export function forgetAudioBytes(id: string): void {
+  sizeCache.delete(id);
+}
+
+/**
+ * Apaga SÓ o áudio (tracks/ + cache/), mantendo meta/transcrição/ata/notas — a
+ * ação "liberar espaço" da retenção ilimitada: a memória fica, os gigas voltam.
+ * Mesmo efeito da expiração por retenção, só que manual.
+ */
+export function deleteAudioOnly(meta: RecordingMeta): void {
+  assertValidId(meta.id);
+  fs.rmSync(tracksDir(meta.id), { recursive: true, force: true });
+  fs.rmSync(cacheDir(meta.id), { recursive: true, force: true });
+  meta.audioDeleted = true;
+  saveMeta(meta);
+  forgetAudioBytes(meta.id);
+}
+
 /**
  * Há transcrição utilizável? 'done' = completa; 'partial' = faltam faixas (rate
  * limit por hora do provedor), mas o que existe já é exibível/pesquisável.
@@ -269,8 +349,9 @@ export function recoverInterruptedRecordings(): void {
     }
     meta.status = 'done';
     meta.endedAt = endedAt;
-    meta.expiresAt = endedAt + config.retentionDays * 24 * 60 * 60 * 1000;
-    meta.textExpiresAt = endedAt + config.textRetentionDays * 24 * 60 * 60 * 1000;
+    // retenção ilimitada: nada de data de morte no meta (delete é 100% manual)
+    if (!config.audioRetentionUnlimited) meta.expiresAt = endedAt + config.retentionDays * 24 * 60 * 60 * 1000;
+    if (!config.textRetentionUnlimited) meta.textExpiresAt = endedAt + config.textRetentionDays * 24 * 60 * 60 * 1000;
     meta.events.push({
       atMs: endedAt - meta.startedAt,
       text: t(

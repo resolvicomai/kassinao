@@ -53,6 +53,14 @@ const minutesProvider = (process.env.MINUTES_PROVIDER || (process.env.OPENROUTER
   .trim()
   .toLowerCase();
 
+// Retenção: RETENTION_DAYS=0 desliga a expiração (áudio E texto ficam até alguém
+// apagar manualmente). Áudio ilimitado FORÇA texto ilimitado — não faz sentido a
+// memória (transcrição/ata) morrer antes do áudio que ela resume.
+const retentionDays = Number(process.env.RETENTION_DAYS || 7);
+const audioRetentionUnlimited = retentionDays <= 0;
+const textRetentionDaysRaw = Number(process.env.TEXT_RETENTION_DAYS || 90);
+const textRetentionUnlimited = audioRetentionUnlimited || textRetentionDaysRaw <= 0;
+
 // Prompt de contexto do Whisper: o default em pt-BR só vale quando o idioma é pt
 // (um deploy em inglês não pode receber viés de português).
 const transcribeLanguage = process.env.TRANSCRIBE_LANGUAGE || 'pt';
@@ -73,14 +81,19 @@ export const config = {
   /** true quando o repo do GitHub está público — libera os links "GitHub"/access.ts e a afirmação "auditável" na landing. Padrão false pra nunca servir link 404. */
   repoPublic: process.env.REPO_PUBLIC === 'true',
   recordingsDir,
-  retentionDays: Number(process.env.RETENTION_DAYS || 7),
+  /** Dias até o ÁUDIO expirar. 0 = nunca (delete só manual). */
+  retentionDays,
+  /** true quando RETENTION_DAYS=0 — nada de áudio expira sozinho. */
+  audioRetentionUnlimited,
   /**
    * Retenção em camadas: o ÁUDIO expira em RETENTION_DAYS (pesado), mas
    * transcrição + ata + metadados vivem TEXT_RETENTION_DAYS (leve) — a memória
    * das reuniões (busca, MCP, /perguntar) não pode evaporar em 1 semana.
-   * Nunca menor que RETENTION_DAYS.
+   * Nunca menor que RETENTION_DAYS. 0 (ou RETENTION_DAYS=0) = nunca expira.
    */
-  textRetentionDays: Math.max(Number(process.env.TEXT_RETENTION_DAYS || 90), Number(process.env.RETENTION_DAYS || 7)),
+  textRetentionDays: Math.max(textRetentionDaysRaw, retentionDays),
+  /** true quando texto (transcrição/ata/meta) nunca expira sozinho. */
+  textRetentionUnlimited,
   maxRecordingHours: Number(process.env.MAX_RECORDING_HOURS || 6),
   mp3Bitrate: process.env.MP3_BITRATE || '192k',
   cookieSecret: loadCookieSecret(),
@@ -98,8 +111,17 @@ export const config = {
   transcribeProvider: (process.env.TRANSCRIBE_PROVIDER || 'none').toLowerCase(),
   transcribeModel: process.env.TRANSCRIBE_MODEL || '',
   transcribeLanguage,
-  /** Prompt de contexto pro Whisper (vocabulário/estilo) — reduz alucinação e melhora jargão. */
+  /** Prompt de contexto pro ASR (vocabulário/estilo) — reduz alucinação e melhora jargão. Whisper e Universal-3.5-Pro usam. */
   transcribePrompt: process.env.TRANSCRIBE_PROMPT ?? defaultTranscribePrompt,
+  /**
+   * Termos fixos do time (produtos, siglas, nomes) pro keyterms_prompt do
+   * Universal-3.5-Pro da AssemblyAI — separados por vírgula. Os nomes dos
+   * participantes de cada gravação entram sozinhos; isto é o vocabulário extra.
+   */
+  transcribeKeyterms: (process.env.TRANSCRIBE_KEYTERMS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
   transcribeCommand: process.env.TRANSCRIBE_COMMAND || '',
   /** Timeout do provider 'command' = max(10min, duração do chunk × este fator). */
   transcribeTimeoutFactor: Number(process.env.TRANSCRIBE_TIMEOUT_FACTOR || 5),

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
 import { isTranscribing } from './processing/transcribe';
-import { listMetas, deleteRecording, saveMeta } from './store';
+import { audioExpiryOf, deleteAudioOnly, forgetAudioBytes, listMetas, deleteRecording, saveMeta } from './store';
 import { hasActiveDownloads } from './web/tracker';
 
 /** Apaga gravações expiradas e diretórios órfãos. Roda a cada hora. */
@@ -19,27 +19,30 @@ export function startCleanupJob(): void {
       // Retenção em camadas: o texto (transcrição/ata/meta) vive mais que o áudio.
       // Gravações antigas sem textExpiresAt ganham CARÊNCIA de 7 dias a partir de
       // agora (persistida) — um upgrade não pode apagar histórico na primeira hora.
-      let textExpiresAt = meta.textExpiresAt;
-      if (!textExpiresAt) {
-        const computed = meta.endedAt ? meta.endedAt + config.textRetentionDays * 24 * 60 * 60 * 1000 : undefined;
-        textExpiresAt = computed !== undefined ? Math.max(computed, now + 7 * 24 * 60 * 60 * 1000) : undefined;
-        if (textExpiresAt) {
-          meta.textExpiresAt = textExpiresAt;
-          saveMeta(meta);
+      // Modo ILIMITADO: expurgo desligado por completo (delete é 100% manual);
+      // a data de morte gravada no meta é ignorada de propósito — a config atual manda.
+      if (!config.textRetentionUnlimited) {
+        let textExpiresAt = meta.textExpiresAt;
+        if (!textExpiresAt) {
+          const computed = meta.endedAt ? meta.endedAt + config.textRetentionDays * 24 * 60 * 60 * 1000 : undefined;
+          textExpiresAt = computed !== undefined ? Math.max(computed, now + 7 * 24 * 60 * 60 * 1000) : undefined;
+          if (textExpiresAt) {
+            meta.textExpiresAt = textExpiresAt;
+            saveMeta(meta);
+          }
+        }
+
+        if (textExpiresAt && textExpiresAt < now) {
+          deleteRecording(meta.id);
+          forgetAudioBytes(meta.id);
+          removed++;
+          continue;
         }
       }
-
-      if (textExpiresAt && textExpiresAt < now) {
-        deleteRecording(meta.id);
-        removed++;
-        continue;
-      }
-      if (meta.expiresAt && meta.expiresAt < now && !meta.audioDeleted) {
+      const audioExpiresAt = audioExpiryOf(meta);
+      if (audioExpiresAt && audioExpiresAt < now && !meta.audioDeleted) {
         // só o áudio expira: some faixas e cache, ficam meta + transcrição + ata
-        fs.rmSync(path.join(config.recordingsDir, meta.id, 'tracks'), { recursive: true, force: true });
-        fs.rmSync(path.join(config.recordingsDir, meta.id, 'cache'), { recursive: true, force: true });
-        meta.audioDeleted = true;
-        saveMeta(meta);
+        deleteAudioOnly(meta);
         trimmed++;
         continue;
       }

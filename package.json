@@ -1,6 +1,6 @@
 {
   "name": "kassinao",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Self-hosted Discord voice recorder with per-speaker AI transcription and meeting minutes.",
   "license": "AGPL-3.0-or-later",
   "author": "Mauro Marques (resolvicomai)",

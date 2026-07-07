@@ -60,7 +60,7 @@ Kassinão combines both **and sidesteps the hard part**: because every participa
 - **🎛️ Live panel** in the voice channel with **Stop** / **Add note** / **📌 Mark moment** buttons (one click stamps the timestamp, no typing) and a `[RECORDING]` nickname indicator (visible consent).
 - **🔌 MCP connector** *(optional)* — ask your meetings from **Claude Desktop / Cursor**: time-window queries, cross-meeting **action items with deadlines**, full-text search — each user scoped to exactly what they can already see. See [`mcp/`](mcp/).
 - **🤖 Auto-record** — starts by itself when N people join a channel; stops when it empties.
-- **⏳ Tiered retention** — `RETENTION_DAYS` expires only the **audio**; transcript, minutes and notes live `TEXT_RETENTION_DAYS` (default 90), so search, `/ask` and the MCP connector keep working after the audio is gone.
+- **⏳ Retention your way** — tiered by default: `RETENTION_DAYS` expires only the **audio**; transcript, minutes and notes live `TEXT_RETENTION_DAYS` (default 90), so search, `/ask` and the MCP connector keep working after the audio is gone. Or set `RETENTION_DAYS=0` for **unlimited**: nothing expires, and the `/gravacoes` web index becomes a storage manager — per-recording disk size (owner only), sort by largest, **"free up space"** (delete just the audio, keep the memory) and delete-all actions.
 - **❓ Built-in onboarding** — `/help` with interactive topic buttons; DM the bot and it replies with the guide too.
 - **🌎 Bilingual** (pt-BR / English), **HTTPS via Cloudflare Tunnel** (no open ports), auto-stop, retention/expiry, crash recovery and graceful shutdown.
 
@@ -171,8 +171,8 @@ All options live in [`.env.example`](.env.example). Key ones:
 | `REPO_PUBLIC` | `false` | `true` shows the GitHub/source links and the "auditable" claim on the landing page |
 | `TUNNEL_TOKEN` | — | Cloudflare Tunnel token (recommended HTTPS path; also set `COMPOSE_PROFILES=tunnel`) |
 | `GUILD_ID` | — | Registers commands instantly in that server |
-| `RETENTION_DAYS` · `MAX_RECORDING_HOURS` | `7` · `6` | Audio retention & max length |
-| `TEXT_RETENTION_DAYS` | `90` | How long transcript/minutes/notes outlive the audio (never below `RETENTION_DAYS`) |
+| `RETENTION_DAYS` · `MAX_RECORDING_HOURS` | `7` · `6` | Audio retention & max length (`0` = unlimited: nothing expires, manual delete only) |
+| `TEXT_RETENTION_DAYS` | `90` | How long transcript/minutes/notes outlive the audio (never below `RETENTION_DAYS`; `0` = forever) |
 | `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
 | `ASSEMBLYAI_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` | — | Key for the chosen provider (Groq key doubles as ASR fallback) |
 | `MINUTES_ENABLED` | `auto` | AI minutes: `auto` (on when an OpenRouter or Groq key exists) / `true` / `false` |
