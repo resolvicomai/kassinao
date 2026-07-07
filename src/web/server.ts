@@ -9,12 +9,21 @@ import { cook, CookBusyError, CookFormat, COOK_FORMATS } from '../processing/coo
 import { isTranscribing, transcriptToMarkdown } from '../processing/transcribe';
 import { minutesToMarkdown } from '../processing/minutes';
 import { sessionManager } from '../recorder/manager';
-import { deleteRecording, readMeta, readMinutes, readTranscript, RecordingMeta, transcriptReady } from '../store';
+import {
+  deleteRecording,
+  listMetas,
+  readMeta,
+  readMinutes,
+  readTranscript,
+  RecordingMeta,
+  transcriptReady,
+} from '../store';
 import { checkAccess } from './access';
 import { mountMcpApi } from './api';
 import { beginLogin, finishLogin, getWebUser, signMcpRefresh, WebUser } from './auth';
 import { countUserSessions, createSession, revokeUser } from './mcpTokens';
-import { connectPage, landingPage, messagePage, recordingPage } from './page';
+import { connectPage, landingPage, messagePage, recordingPage, recordingsIndexPage } from './page';
+import { searchRecordings } from './search';
 import { beginDownload, endDownload, hasActiveDownloads } from './tracker';
 
 /** Idioma da página pelo Accept-Language do navegador (pt-BR ou inglês). */
@@ -124,7 +133,7 @@ export function startWebServer(): void {
   // brute-force/reconhecimento sem incomodar uso real.
   const webHits = new Map<string, { n: number; reset: number }>();
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (!/^\/(rec|auth|demo|conectar-ia)\b/.test(req.path)) return next();
+    if (!/^\/(rec|auth|demo|conectar-ia|gravacoes)\b/.test(req.path)) return next();
     const now = Date.now();
     if (webHits.size > 5000) for (const [k, v] of webHits) if (v.reset < now) webHits.delete(k);
     const ip = req.ip ?? 'unknown';
@@ -274,6 +283,38 @@ export function startWebServer(): void {
     }
   });
 
+  /** Índice "minhas gravações": tudo que ESTA pessoa pode abrir, em todos os guilds. */
+  app.get('/gravacoes', async (req, res) => {
+    const l = pageLang(req);
+    const user = getWebUser(req);
+    if (!user) {
+      beginLogin(res, req.originalUrl || '/gravacoes'); // preserva ?q= da busca
+      return;
+    }
+    if (notReady(res, l, user)) return;
+    const q = String(req.query.q ?? '')
+      .trim()
+      .slice(0, 100);
+    // mesma regra da página individual (checkAccess) aplicada meta a meta —
+    // o cache de membership (45s) segura o custo pra listas de um time pequeno
+    const all = listMetas()
+      .filter((m) => !m.demo)
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .slice(0, 300);
+    const accessible: RecordingMeta[] = [];
+    for (const m of all) {
+      try {
+        if ((await checkAccess(user, m)).view) accessible.push(m);
+      } catch {
+        // transitório: melhor omitir do índice do que travar a página
+      }
+    }
+    // busca lê transcript.json (síncrono) — limita às 100 mais recentes pra não
+    // segurar o event loop (que também recebe o áudio das gravações ao vivo)
+    const hits = q ? searchRecordings(accessible.slice(0, 100), q) : undefined;
+    res.type('html').send(recordingsIndexPage(accessible, { user, lang: l, q, hits }));
+  });
+
   app.get('/rec/:id', async (req, res) => {
     const l = pageLang(req);
     // login ANTES de checar existência: não vaza quais IDs existem a quem não logou
@@ -334,6 +375,11 @@ export function startWebServer(): void {
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
     if (live) {
       res.status(409).send('gravação em andamento');
+      return;
+    }
+    // retenção em camadas: o áudio pode já ter expirado (texto continua na página)
+    if (meta.audioDeleted) {
+      res.status(410).send('o áudio desta gravação expirou');
       return;
     }
     // marca ANTES do cook (que pode levar minutos): delete/cleanup não apagam no meio
@@ -469,6 +515,10 @@ export function startWebServer(): void {
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
     if (live) {
       res.status(409).send('gravação em andamento — baixe depois de encerrar');
+      return;
+    }
+    if (meta.audioDeleted) {
+      res.status(410).send('o áudio desta gravação expirou (a transcrição e a ata continuam na página)');
       return;
     }
     // marca ANTES do cook: o processamento (minutos, em gravações longas) já

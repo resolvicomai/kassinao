@@ -32,6 +32,7 @@ export type StopReason = 'manual' | 'tempo-maximo' | 'canal-vazio' | 'desconecta
 
 export const STOP_BUTTON_ID = 'kassinao_stop';
 export const NOTE_BUTTON_ID = 'kassinao_note';
+export const MARK_BUTTON_ID = 'kassinao_mark';
 export const MAX_NOTE_LENGTH = 500;
 
 const SILENCE_WARN_MS = 5 * 60 * 1000;
@@ -575,6 +576,11 @@ export class RecordingSession {
           .setEmoji('⏹️')
           .setStyle(ButtonStyle.Danger),
         new ButtonBuilder()
+          .setCustomId(MARK_BUTTON_ID)
+          .setLabel(t(l, 'panel.btn-mark'))
+          .setEmoji('📌')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
           .setCustomId(NOTE_BUTTON_ID)
           .setLabel(t(l, 'panel.btn-note'))
           .setEmoji('📝')
@@ -651,6 +657,7 @@ export class RecordingSession {
     this.meta.status = 'done';
     this.meta.endedAt = endedAt;
     this.meta.expiresAt = endedAt + config.retentionDays * 24 * 60 * 60 * 1000;
+    this.meta.textExpiresAt = endedAt + config.textRetentionDays * 24 * 60 * 60 * 1000;
     const eventKey = `event.stopped-${reason}` as const;
     this.addEvent(
       reason === 'manual'

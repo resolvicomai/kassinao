@@ -5,6 +5,7 @@ import { formatDuration, formatOffset } from '../recorder/RecordingSession';
 import { MeetingMinutes, RecordingMeta, TranscriptSegment } from '../store';
 import { shortError } from '../util';
 import type { WebUser } from './auth';
+import type { WebSearchHit } from './search';
 
 function esc(s: string): string {
   return s
@@ -113,6 +114,14 @@ const P: Record<string, { pt: string; en: string }> = {
     pt: '● falou · ● entrou · ● saiu · ● nota · ● tópico — clique pra pular',
     en: '● spoke · ● joined · ● left · ● note · ● topic — click to jump',
   },
+  audioExpired: {
+    pt: '🔇 O áudio desta gravação expirou (retenção). A transcrição, a ata e as notas continuam aqui.',
+    en: '🔇 The audio of this recording has expired (retention). Transcript, minutes and notes remain here.',
+  },
+  textExpires: {
+    pt: '⏳ Transcrição e ata expiram em {date}. O áudio já expirou.',
+    en: '⏳ Transcript and minutes expire on {date}. The audio has already expired.',
+  },
 };
 
 function p(l: Locale, key: string, vars: Record<string, string> = {}): string {
@@ -201,6 +210,23 @@ const SHELL_CSS = `
   .tllegend { font-size: 11.5px; color: #6d7178; margin-bottom: 6px; }
   .evlist summary { cursor: pointer; font-size: 13px; color: #949ba4; margin: 6px 0; }
   .minutes .lead { font-size: 15.5px; line-height: 1.55; color: #f2f3f5; }
+  /* índice de gravações */
+  .isearch { display: flex; gap: 8px; margin: 14px 0 4px; }
+  .isearch input { flex: 1; background: #1e1f22; border: 1px solid #3f4147; color: #dbdee1;
+                   border-radius: 8px; padding: 10px 12px; font-size: 14px; }
+  .isearch input:focus { outline: none; border-color: #5865f2; }
+  .isearch .btn { flex-direction: row; align-items: center; padding: 10px 16px; }
+  .rlist { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+  .rcard { display: block; background: #232428; border: 1px solid #3f4147; border-radius: 10px;
+           padding: 12px 14px; text-decoration: none; color: #dbdee1; }
+  .rcard:hover { border-color: #5865f2; }
+  .rcard .rrow1 { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+  .rcard .rrow2 { color: #949ba4; font-size: 13px; margin-top: 4px; }
+  .wb { font-size: 11.5px; background: #2b2d31; border-radius: 999px; padding: 2px 9px; color: #949ba4; }
+  .wb.ok { color: #3dbf7a; } .wb.warn { color: #f0b232; } .wb.live { color: #fff; background: #da373c; }
+  .hits { list-style: none; display: flex; flex-direction: column; gap: 10px; font-size: 14px; margin-top: 8px; }
+  .hits a { color: #00a8fc; text-decoration: none; }
+  .hits a:hover { text-decoration: underline; }
   .transcript time { color: #949ba4; font-family: ui-monospace, monospace; font-size: 12px; margin-right: 6px; }
   .tstate { font-size: 14px; color: #949ba4; }
   details.tech { margin-top: 6px; font-size: 12px; color: #6d7178; }
@@ -298,13 +324,19 @@ document.querySelectorAll('time[data-ts]').forEach(function(el){
     el.textContent = new Date(+el.dataset.ts).toLocaleString(navigator.language, opts);
   } catch(e){}
 });
-// pular pro momento no player de áudio (no-op se não houver player, ex.: gravação ao vivo)
-// o player é sticky no topo — não precisa (nem deve) sequestrar o scroll do leitor
+// pular pro momento no player de áudio; sem player (ex.: áudio expirado),
+// rola até o trecho correspondente da transcrição — o deep link continua útil
 window.kseek = function(ms){
   var p = document.getElementById('kplayer');
-  if (!p) return;
-  p.currentTime = Math.max(0, ms/1000);
-  p.play().catch(function(){});
+  if (p) {
+    p.currentTime = Math.max(0, ms/1000);
+    p.play().catch(function(){});
+    return;
+  }
+  var paras = document.querySelectorAll('.transcript p[data-s]');
+  for (var i = 0; i < paras.length; i++) {
+    if (+paras[i].dataset.s >= ms) { paras[i].scrollIntoView({block:'center', behavior:'smooth'}); return; }
+  }
 };
 // deep link do MCP/transcrição: #t=<segundos> pula pro momento ao abrir (e ao trocar o hash).
 // preload=none: se os metadados ainda não carregaram, espera loadedmetadata antes de buscar.
@@ -341,6 +373,7 @@ function shell(
   const userbar = `<header class="topbar">
     <a class="brand" href="/">🎙️ Kassinão</a>
     <span class="topnav-r">
+      ${opts.user ? `<a class="tl" href="/gravacoes">${lang === 'pt' ? '📼 Gravações' : '📼 Recordings'}</a>` : ''}
       <a class="tl" href="/demo">Demo</a>
       <a class="tl" href="${ghHref()}">${repoLabel}</a>
       ${langToggle}
@@ -434,6 +467,7 @@ export function recordingPage(
       : '';
 
   // ---------- player (sticky + velocidade + seguir) ----------
+  const audioGone = !!meta.audioDeleted;
   let player = '';
   if (demo) {
     player = `<h2>${p(l, 'sampleAudio')}</h2>
@@ -441,6 +475,8 @@ export function recordingPage(
          <audio preload="none" controls src="/demo/audio"></audio>
          <div class="hint">${p(l, 'sampleNote')}</div>
        </div>`;
+  } else if (audioGone) {
+    player = `<div class="note" style="border-left-color:#6d7178;margin-top:14px">${p(l, 'audioExpired')}</div>`;
   } else if (!live && meta.participants.length > 0) {
     player = `<div class="playerwrap">
          <audio id="kplayer" preload="none" controls src="/rec/${meta.id}/audio"></audio>
@@ -477,7 +513,7 @@ export function recordingPage(
 
   // ---------- exportar (uso raro → rebaixado pra baixo, estilo secundário) ----------
   const downloads =
-    !demo && meta.participants.length > 0
+    !demo && !audioGone && meta.participants.length > 0
       ? `<h2 id="exportar">${p(l, 'downloads')}</h2>
         <div class="downloads">
           <a class="btn secondary" href="/rec/${meta.id}/download/mp3">🎵 MP3 <small>${p(l, 'mp3sub')}</small></a>
@@ -498,7 +534,15 @@ export function recordingPage(
 
   const pageFoot = !demo
     ? `<footer>${
-        meta.expiresAt && !live ? `${p(l, 'expires', { date: datetime(meta.expiresAt, l) })} · ` : ''
+        !live
+          ? audioGone
+            ? meta.textExpiresAt
+              ? `${p(l, 'textExpires', { date: datetime(meta.textExpiresAt, l) })} · `
+              : ''
+            : meta.expiresAt
+              ? `${p(l, 'expires', { date: datetime(meta.expiresAt, l) })} · `
+              : ''
+          : ''
       }ID <code>${esc(meta.id)}</code></footer>`
     : '';
 
@@ -824,6 +868,106 @@ function renderTranscription(
 function techDetails(error: string | undefined, l: Locale): string {
   if (!error) return '';
   return `<details class="tech"><summary>${l === 'pt' ? 'detalhes técnicos' : 'technical details'}</summary><code>${esc(error)}</code></details>`;
+}
+
+/** Selo de estado pra lista de gravações (espelho do badge do /gravacoes no Discord). */
+function webBadge(m: RecordingMeta, l: Locale): string {
+  const pt = l === 'pt';
+  if (m.status === 'recording') return `<span class="wb live">🔴 ${pt ? 'ao vivo' : 'live'}</span>`;
+  if (m.minutes?.status === 'done') return `<span class="wb ok">📋 ${pt ? 'ata pronta' : 'minutes ready'}</span>`;
+  const ts = m.transcription?.status;
+  if (ts === 'partial' && !m.transcription?.retryScheduled)
+    return `<span class="wb warn">📝 ${pt ? 'transcrição parcial' : 'partial transcript'}</span>`;
+  if (ts === 'pending' || ts === 'running' || ((ts === 'partial' || ts === 'error') && m.transcription?.retryScheduled))
+    return `<span class="wb">⏳ ${pt ? 'processando' : 'processing'}</span>`;
+  if (ts === 'done') return `<span class="wb ok">📝 ${pt ? 'transcrição pronta' : 'transcript ready'}</span>`;
+  if (ts === 'error') return `<span class="wb warn">⚠️ ${pt ? 'transcrição falhou' : 'transcription failed'}</span>`;
+  return `<span class="wb">🔇 ${pt ? 'sem transcrição' : 'no transcript'}</span>`;
+}
+
+/** Índice web "minhas gravações": tudo que a pessoa pode acessar + busca. */
+export function recordingsIndexPage(
+  metas: RecordingMeta[],
+  opts: { user: WebUser; lang: Locale; q?: string; hits?: WebSearchHit[] },
+): string {
+  const l = opts.lang;
+  const pt = l === 'pt';
+  const q = opts.q ?? '';
+
+  const searchForm = `<form class="isearch" method="get" action="/gravacoes">
+      <input name="q" type="search" value="${esc(q)}" placeholder="${pt ? 'Buscar em transcrições, atas e notas…' : 'Search transcripts, minutes and notes…'}" autocomplete="off">
+      <button class="btn" type="submit">🔎 ${pt ? 'Buscar' : 'Search'}</button>
+    </form>`;
+
+  let hitsHtml = '';
+  if (q) {
+    const hits = opts.hits ?? [];
+    hitsHtml =
+      hits.length === 0
+        ? `<p class="muted" style="margin:14px 0">${pt ? 'Nada encontrado para' : 'Nothing found for'} “${esc(q)}”.</p>`
+        : `<h2>${pt ? 'Resultados' : 'Results'} (${hits.length})</h2>
+           <ul class="hits">${hits
+             .map((h) => {
+               const link =
+                 h.atMs !== undefined ? `/rec/${h.metaId}#t=${Math.floor(h.atMs / 1000)}` : `/rec/${h.metaId}`;
+               const icon = h.kind === 'minutes' ? '📋' : h.kind === 'note' ? '📝' : '💬';
+               const when = h.atMs !== undefined ? ` <span class="ts">${msToClock(h.atMs)}</span>` : '';
+               return `<li>${icon} <a href="${link}"><strong>#${esc(h.channelName)}</strong></a> · ${datetime(h.startedAt, l)}${when}<br>
+                 <span class="muted">${h.speaker ? `<strong>${esc(h.speaker)}:</strong> ` : ''}${esc(h.snippet)}</span></li>`;
+             })
+             .join('')}</ul>`;
+  }
+
+  const channels = [...new Set(metas.map((m) => m.voiceChannelName))];
+  const chips =
+    channels.length > 1
+      ? `<div class="fchips" style="margin:10px 0 2px">${channels
+          .map((c) => `<button type="button" class="fchip" data-ch="${esc(c)}">#${esc(c)}</button>`)
+          .join('')}</div>`
+      : '';
+
+  const cards =
+    metas.length === 0
+      ? `<p class="muted" style="margin-top:16px">${
+          pt
+            ? 'Nenhuma gravação acessível ainda. Grave uma call com /gravar no Discord!'
+            : 'No accessible recordings yet. Record a call with /record on Discord!'
+        }</p>`
+      : `<div class="rlist">${metas
+          .map((m) => {
+            const dur = m.endedAt ? formatDuration(m.endedAt - m.startedAt) : pt ? 'ao vivo' : 'live';
+            return `<a class="rcard" href="/rec/${m.id}" data-ch="${esc(m.voiceChannelName)}">
+              <div class="rrow1"><strong>#${esc(m.voiceChannelName)}</strong> ${webBadge(m, l)}</div>
+              <div class="rrow2">${datetime(m.startedAt, l)} · ${dur} · 🎙️ ${m.participants.length}${
+                m.audioDeleted ? ` · <span class="muted">🔇 ${pt ? 'áudio expirado' : 'audio expired'}</span>` : ''
+              }</div>
+            </a>`;
+          })
+          .join('')}</div>
+        <script>
+        document.querySelectorAll('.fchip[data-ch]').forEach(function(c){
+          c.addEventListener('click', function(){
+            c.classList.toggle('off');
+            var off = {};
+            document.querySelectorAll('.fchip.off').forEach(function(x){ off[x.dataset.ch] = true; });
+            var any = document.querySelectorAll('.fchip.off').length > 0;
+            document.querySelectorAll('.rcard').forEach(function(r){
+              r.style.display = any && off[r.dataset.ch] ? 'none' : '';
+            });
+          });
+        });
+        </script>`;
+
+  return shell(
+    pt ? 'Minhas gravações' : 'My recordings',
+    `<h1>📼 ${pt ? 'Minhas gravações' : 'My recordings'}</h1>
+     <p class="subline">${pt ? 'Tudo que você pode acessar, em todos os servidores.' : 'Everything you can access, across servers.'}</p>
+     ${searchForm}
+     ${hitsHtml}
+     ${chips}
+     ${cards}`,
+    { user: opts.user, lang: l, noindex: true },
+  );
 }
 
 export function messagePage(title: string, message: string, user?: WebUser, lang?: Locale): string {
@@ -1172,8 +1316,8 @@ export function landingPage(lang: Locale): string {
     <div class="eyebrow">🎙️ <span>${T('Bot open-source pro seu Discord', 'Open-source bot for your Discord')}</span></div>
     <h1>${T('Grava as calls do Discord.<br><span class="accent">Depois é só perguntar pra IA.</span>', 'Record your Discord calls.<br><span class="accent">Then just ask your AI.</span>')}</h1>
     <p class="lead">${T(
-      'O Kassinão grava cada pessoa numa faixa, escreve a transcrição e a ata sozinho, e conecta em qualquer assistente de IA — Claude, Cursor e outros — pra você <b>só perguntar</b> o que foi decidido, em vez de ler.',
-      'Kassinão records each caller on their own track, writes the transcript and minutes for you, and plugs into any AI assistant — Claude, Cursor, and more — so you just <b>ask</b> what was decided instead of reading it.',
+      'O Kassinão grava cada pessoa numa faixa, escreve a transcrição e a ata sozinho, e deixa você <b>perguntar</b> o que foi decidido — com /perguntar no próprio Discord ou em qualquer assistente de IA (Claude, Cursor e outros).',
+      'Kassinão records each caller on their own track, writes the transcript and minutes for you, and lets you <b>ask</b> what was decided — with /ask right in Discord, or from any AI assistant (Claude, Cursor, and more).',
     )}</p>
     ${flow}
     <div class="ctarow">
