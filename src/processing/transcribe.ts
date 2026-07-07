@@ -246,6 +246,9 @@ async function transcribeRecording(recordingId: string): Promise<void> {
   const work = path.join(cacheDir(meta.id), `transcribe-${crypto.randomBytes(4).toString('hex')}`);
   fs.mkdirSync(work, { recursive: true });
 
+  // contexto da gravação pro Universal-3.5-Pro (nomes → keyterms); fila serial garante 1 por vez
+  setAaiRecordingContext(meta);
+
   try {
     const all: TranscriptSegment[] = [...previous];
     const failed: string[] = [];
@@ -331,6 +334,7 @@ async function transcribeRecording(recordingId: string): Promise<void> {
     }
     throw err;
   } finally {
+    setAaiRecordingContext(undefined);
     fs.rmSync(work, { recursive: true, force: true });
   }
 }
@@ -590,9 +594,39 @@ function transcribeChunk(file: string, work: string, chunkSec: number): Promise<
   }
 }
 
-// ---------- AssemblyAI (Universal — top-3 em pt-BR no Open ASR Leaderboard) ----------
+// ---------- AssemblyAI (Universal-3.5-Pro — top-3 em pt-BR no Open ASR Leaderboard) ----------
 
 const AAI_BASE = 'https://api.assemblyai.com/v2';
+
+/**
+ * Contexto POR GRAVAÇÃO pro Universal-3.5-Pro: prompt contextual + keyterms.
+ * Nomes de quem estava na call viram keyterms → a grafia exata ("Kaio" vs "Caio")
+ * chega certa na transcrição e, por consequência, na ata e no /perguntar.
+ * A fila de transcrição é SERIAL (uma gravação por vez), então uma variável de
+ * módulo é segura — setada no início de transcribeRecording e limpa no finally.
+ */
+let aaiKeyterms: string[] = [];
+
+/** Monta os keyterms da gravação: participantes (falando ou não) + servidor/canal + vocabulário fixo (env). */
+export function buildAaiKeyterms(meta: RecordingMeta): string[] {
+  const terms = new Set<string>();
+  for (const p of meta.participants) terms.add(p.name);
+  for (const p of meta.presence ?? []) terms.add(p.name);
+  terms.add(meta.guildName);
+  terms.add(meta.voiceChannelName);
+  for (const t of config.transcribeKeyterms) terms.add(t);
+  // limite da API: 1000 termos / 6 palavras por termo — teto defensivo bem menor
+  // (a tokenização interna come capacidade; nomes + jargão cabem folgados em 200)
+  return [...terms]
+    .map((s) => s.replace(/[\r\n\t]+/g, ' ').trim())
+    .filter((s) => s.length > 1 && s.split(/\s+/).length <= 6)
+    .slice(0, 200);
+}
+
+/** Define/limpa o contexto de keyterms da gravação em transcrição (fila serial). */
+export function setAaiRecordingContext(meta: RecordingMeta | undefined): void {
+  aaiKeyterms = meta ? buildAaiKeyterms(meta) : [];
+}
 
 /**
  * Fluxo da AssemblyAI: upload do arquivo → cria job de transcrição → poll até
@@ -611,24 +645,47 @@ async function assemblyaiTranscribe(file: string, chunkSec: number): Promise<Raw
   const { upload_url } = (await up.json()) as { upload_url?: string };
   if (!upload_url) throw new Error('AssemblyAI upload não devolveu upload_url');
 
-  const create = await fetchWithRetry(
-    `${AAI_BASE}/transcript`,
-    {
-      method: 'POST',
-      headers: { ...auth, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        audio_url: upload_url,
-        language_code: config.transcribeLanguage.slice(0, 2) || 'pt',
-        // API atual usa speech_modelS (lista em ordem de preferência); o antigo
-        // speech_model singular foi descontinuado em 2026
-        speech_models: config.transcribeModel ? [config.transcribeModel] : ['universal-3-5-pro', 'universal-2'],
-        punctuate: true,
-        format_text: true,
-      }),
-    },
-    { attempts: 3 },
-  );
-  const created = (await create.json()) as { id?: string; status?: string; error?: string };
+  const models = config.transcribeModel ? [config.transcribeModel] : ['universal-3-5-pro', 'universal-2'];
+  const baseBody: Record<string, unknown> = {
+    audio_url: upload_url,
+    language_code: config.transcribeLanguage.slice(0, 2) || 'pt',
+    // API atual usa speech_modelS (lista em ordem de preferência); o antigo
+    // speech_model singular foi descontinuado em 2026
+    speech_models: models,
+    punctuate: true,
+    format_text: true,
+  };
+  // prompt contextual + keyterms: recursos do Universal-3.5-Pro (o "hard stuff":
+  // nomes próprios, jargão). Só entram quando ele está na lista de preferência.
+  const extras: Record<string, unknown> = {};
+  if (models.includes('universal-3-5-pro')) {
+    if (config.transcribePrompt) extras.prompt = config.transcribePrompt.slice(0, 800);
+    if (aaiKeyterms.length > 0) extras.keyterms_prompt = aaiKeyterms;
+  }
+
+  const createJob = async (body: Record<string, unknown>) => {
+    const create = await fetchWithRetry(
+      `${AAI_BASE}/transcript`,
+      { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+      { attempts: 3 },
+    );
+    return (await create.json()) as { id?: string; status?: string; error?: string };
+  };
+
+  let created: { id?: string; status?: string; error?: string };
+  try {
+    created = await createJob({ ...baseBody, ...extras });
+  } catch (err) {
+    // 400 citando prompt/keyterms (ex.: roteou pra modelo sem suporte): degrada
+    // graciosamente pro job básico em vez de perder o chunk
+    const msg = (err as Error).message ?? '';
+    if (Object.keys(extras).length > 0 && /HTTP 4\d\d/.test(msg) && /prompt|keyterm/i.test(msg)) {
+      console.warn(`AssemblyAI recusou prompt/keyterms (${msg.slice(0, 120)}) — reenviando sem eles.`);
+      created = await createJob(baseBody);
+    } else {
+      throw err;
+    }
+  }
   if (!created.id) throw new Error(`AssemblyAI não criou o job: ${created.error ?? 'sem id'}`);
 
   // poll proporcional à duração do áudio (piso 3 min, teto 30 min — os lotes têm

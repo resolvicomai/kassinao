@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-07-07
+
+### Added
+- **Unlimited retention** — `RETENTION_DAYS=0` turns expiry off entirely (audio AND text; unlimited audio forces unlimited text). Expiry is now answered by the *current* config, not by the death date stored in each recording — flipping to unlimited retroactively saves existing recordings. `TEXT_RETENTION_DAYS=0` keeps text forever while audio still expires.
+- **Recordings manager (`/gravacoes` v2)** — the web index went from "list" to "management": totals header (count, audio bytes on disk, free disk — disk info visible **only to `OWNER_IDS`**), sort by recent/oldest/largest (largest is owner-only), enriched cards (who started, notes count, relative age, per-recording disk size for the owner) and inline actions for whoever can delete.
+- **"Free up space" action** — deletes only the audio (tracks + cache) and keeps transcript, minutes and notes; the perfect pair for unlimited retention (the memory stays, the gigabytes come back). Guarded like delete (initiator/admin, blocked while live/downloading/transcribing, idempotent) — new `POST /rec/:id/liberar-audio`.
+- **AssemblyAI Universal-3.5-Pro prompting** — recordings transcribed with the new model now send a contextual `prompt` (`TRANSCRIBE_PROMPT`) and per-recording `keyterms_prompt`: the exact names of everyone in the call (speaking or muted) plus server/channel and the optional fixed team vocabulary `TRANSCRIBE_KEYTERMS` — proper spelling of names and jargon in the transcript, minutes and `/ask`. Gracefully degrades (retries without extras) if the API routes to a model without support.
+
+### Changed
+- Retention copy across DM/panel/help/page/landing/README is conditional: unlimited mode says "kept until someone deletes it" instead of promising an expiry that will never come.
+- Deleting from the index returns to the index (with a confirmation flash) instead of a dead-end page.
+
 ## [1.2.0] — 2026-07-06
 
 ### Added

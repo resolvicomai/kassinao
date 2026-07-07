@@ -91,6 +91,10 @@ const STRINGS: Strings = {
     pt: 'Durou **{duration}** • Participaram: {participants}\n\n📥 **[Abrir a gravação]({url})** — áudio, transcrição e ata\n⏳ Disponível até {expires}',
     en: 'Lasted **{duration}** • Participants: {participants}\n\n📥 **[Open the recording]({url})** — audio, transcript and minutes\n⏳ Available until {expires}',
   },
+  'panel.desc-done-unlimited': {
+    pt: 'Durou **{duration}** • Participaram: {participants}\n\n📥 **[Abrir a gravação]({url})** — áudio, transcrição e ata\n♾️ Fica guardada até alguém apagar',
+    en: 'Lasted **{duration}** • Participants: {participants}\n\n📥 **[Open the recording]({url})** — audio, transcript and minutes\n♾️ Kept until someone deletes it',
+  },
   'panel.no-participants': { pt: 'ninguém falou 🤷', en: 'nobody spoke 🤷' },
   'panel.field-id': { pt: 'ID', en: 'ID' },
   'panel.field-limit': { pt: 'Limite', en: 'Limit' },
@@ -107,10 +111,18 @@ const STRINGS: Strings = {
     pt: 'Comecei a gravar **{channel}** em **{guild}**. 👍\n\n📥 **[Página da gravação]({url})** — dá pra baixar até durante a call.\n⏱️ Gravo por até **{hours}h** • fica disponível por **{expiresDays} dias** depois de terminar.\n🔒 Só quem participou ou enxerga o canal abre o link.',
     en: 'I started recording **{channel}** in **{guild}**. 👍\n\n📥 **[Recording page]({url})** — you can download even during the call.\n⏱️ I record for up to **{hours}h** • it stays available for **{expiresDays} days** after it ends.\n🔒 Only participants or people who can see the channel can open the link.',
   },
+  'dm.desc-start-unlimited': {
+    pt: 'Comecei a gravar **{channel}** em **{guild}**. 👍\n\n📥 **[Página da gravação]({url})** — dá pra baixar até durante a call.\n⏱️ Gravo por até **{hours}h** • a gravação **fica guardada até alguém apagar**.\n🔒 Só quem participou ou enxerga o canal abre o link.',
+    en: 'I started recording **{channel}** in **{guild}**. 👍\n\n📥 **[Recording page]({url})** — you can download even during the call.\n⏱️ I record for up to **{hours}h** • the recording is **kept until someone deletes it**.\n🔒 Only participants or people who can see the channel can open the link.',
+  },
   'dm.title-stop': { pt: '✅ Gravação encerrada', en: '✅ Recording finished' },
   'dm.desc-stop': {
     pt: 'Fechei a gravação de **{channel}** — durou **{duration}**. ✅\n\n📥 **[Abrir a gravação]({url})** — áudio, transcrição e ata em ~1 min.\n⏳ Disponível até {expires}.',
     en: 'I wrapped up the **{channel}** recording — it lasted **{duration}**. ✅\n\n📥 **[Open the recording]({url})** — audio, transcript and minutes in ~1 min.\n⏳ Available until {expires}.',
+  },
+  'dm.desc-stop-unlimited': {
+    pt: 'Fechei a gravação de **{channel}** — durou **{duration}**. ✅\n\n📥 **[Abrir a gravação]({url})** — áudio, transcrição e ata em ~1 min.\n♾️ Fica guardada até alguém apagar.',
+    en: 'I wrapped up the **{channel}** recording — it lasted **{duration}**. ✅\n\n📥 **[Open the recording]({url})** — audio, transcript and minutes in ~1 min.\n♾️ Kept until someone deletes it.',
   },
   'dm.desc-stop-empty': {
     pt: 'Fechei a gravação de **{channel}** — mas ninguém falou, então não gerei transcrição nem ata. Se foi engano, é só gravar de novo. 🙂',
@@ -293,12 +305,29 @@ const STRINGS: Strings = {
     en: '💬 **Ask your meetings**\n• **/ask** "what did we decide about the deploy?" — I answer **only to you**, with `[hh:mm:ss]` citations that jump to the exact second of audio. The `days:` option changes the window (default 30).\n• I only use meetings **you can access** — same rule as the page.\n• On the **web**: the index at {url}/gravacoes lists everything you can open, with **search** across transcripts, minutes and notes.\n• In your **AI assistant** (Claude, Cursor…): MCP connector at {url}/conectar-ia — pending actions across meetings, who said what, time-window search.',
   },
   'help.topic-downloads': {
-    pt: '📥 **Downloads e ata** (na página da gravação)\n• **MP3** — uma faixa por pessoa (ZIP). Leve, abre em qualquer player.\n• **FLAC** — uma faixa por pessoa (ZIP), **sem perda** de qualidade; arquivos grandes, ideal pra edição/arquivo.\n• **Mix** — todo mundo junto num **MP3 único**; o player da página usa ele (com velocidade 1×/1.5×/2×).\n• **Audacity** — projeto (`.lof` + labels) que abre no Audacity com as faixas **já alinhadas** e suas notas marcadas.\n• **📝 Transcrição** (.md/.txt) — nome de quem falou, busca, filtro por pessoa e horários clicáveis.\n• **📋 Ata** — resumo, decisões, itens de ação (responsável/prazo) e o que cada um trouxe.\nTudo protegido por login. O **áudio expira em {days} dias**; transcrição, ata e notas ficam bem mais (retenção em camadas) — a busca e o /perguntar continuam funcionando.',
-    en: '📥 **Downloads & minutes** (on the recording page)\n• **MP3** — one track per person (ZIP). Light, plays anywhere.\n• **FLAC** — one track per person (ZIP), **lossless**; big files, best for editing/archiving.\n• **Mix** — everyone together in a **single MP3**; the page player uses it (with 1×/1.5×/2× speed).\n• **Audacity** — a project (`.lof` + labels) that opens in Audacity with tracks **already aligned** and your notes marked.\n• **📝 Transcript** (.md/.txt) — speaker names, search, per-person filter and clickable timestamps.\n• **📋 Minutes** — summary, decisions, action items (owner/due) and per-person points.\nAll login-protected. The **audio expires in {days} days**; transcript, minutes and notes live much longer (tiered retention) — search and /ask keep working.',
+    pt: '📥 **Downloads e ata** (na página da gravação)\n• **MP3** — uma faixa por pessoa (ZIP). Leve, abre em qualquer player.\n• **FLAC** — uma faixa por pessoa (ZIP), **sem perda** de qualidade; arquivos grandes, ideal pra edição/arquivo.\n• **Mix** — todo mundo junto num **MP3 único**; o player da página usa ele (com velocidade 1×/1.5×/2×).\n• **Audacity** — projeto (`.lof` + labels) que abre no Audacity com as faixas **já alinhadas** e suas notas marcadas.\n• **📝 Transcrição** (.md/.txt) — nome de quem falou, busca, filtro por pessoa e horários clicáveis.\n• **📋 Ata** — resumo, decisões, itens de ação (responsável/prazo) e o que cada um trouxe.\nTudo protegido por login. {retention} — a busca e o /perguntar continuam funcionando.',
+    en: '📥 **Downloads & minutes** (on the recording page)\n• **MP3** — one track per person (ZIP). Light, plays anywhere.\n• **FLAC** — one track per person (ZIP), **lossless**; big files, best for editing/archiving.\n• **Mix** — everyone together in a **single MP3**; the page player uses it (with 1×/1.5×/2× speed).\n• **Audacity** — a project (`.lof` + labels) that opens in Audacity with tracks **already aligned** and your notes marked.\n• **📝 Transcript** (.md/.txt) — speaker names, search, per-person filter and clickable timestamps.\n• **📋 Minutes** — summary, decisions, action items (owner/due) and per-person points.\nAll login-protected. {retention} — search and /ask keep working.',
   },
   'help.topic-privacy': {
-    pt: '🔒 **Privacidade e acesso**\n• As gravações só abrem com **login no Discord**.\n• Só acessa quem **estava na call** (mesmo mutado o tempo todo), **enxerga o canal**, **iniciou** ou é **admin**. Link vazado não abre pra estranhos.\n• A gravação é **visível**: eu entro na call e fico como `[GRAVANDO]` — ninguém é gravado sem ver.\n• Em canais **restritos**, me libere no canal (**Ver Canal + Conectar**) pra eu entrar.\n• O **áudio expira em {days} dias** (transcrição e ata vivem mais); dá pra apagar tudo pela página (quem iniciou ou admin).',
-    en: '🔒 **Privacy & access**\n• Recordings only open with **Discord login**.\n• Access only for whoever **was in the call** (even muted the whole time), **can see the channel**, **started it** or is an **admin**. A leaked link opens nothing.\n• Recording is **visible**: I join the call and show as `[RECORDING]` — nobody is recorded unknowingly.\n• In **restricted** channels, grant me access (**View Channel + Connect**) so I can join.\n• The **audio expires in {days} days** (transcript and minutes live longer); everything can be deleted from the page (starter or admin).',
+    pt: '🔒 **Privacidade e acesso**\n• As gravações só abrem com **login no Discord**.\n• Só acessa quem **estava na call** (mesmo mutado o tempo todo), **enxerga o canal**, **iniciou** ou é **admin**. Link vazado não abre pra estranhos.\n• A gravação é **visível**: eu entro na call e fico como `[GRAVANDO]` — ninguém é gravado sem ver.\n• Em canais **restritos**, me libere no canal (**Ver Canal + Conectar**) pra eu entrar.\n• {retentionPrivacy}; dá pra apagar tudo pela página (quem iniciou ou admin).',
+    en: '🔒 **Privacy & access**\n• Recordings only open with **Discord login**.\n• Access only for whoever **was in the call** (even muted the whole time), **can see the channel**, **started it** or is an **admin**. A leaked link opens nothing.\n• Recording is **visible**: I join the call and show as `[RECORDING]` — nobody is recorded unknowingly.\n• In **restricted** channels, grant me access (**View Channel + Connect**) so I can join.\n• {retentionPrivacy}; everything can be deleted from the page (starter or admin).',
+  },
+  // frases de retenção intercambiáveis pros tópicos do /ajuda (config atual manda)
+  'help.retention-limited': {
+    pt: 'O **áudio expira em {days} dias**; transcrição, ata e notas ficam bem mais (retenção em camadas)',
+    en: 'The **audio expires in {days} days**; transcript, minutes and notes live much longer (tiered retention)',
+  },
+  'help.retention-unlimited': {
+    pt: '**Nada expira sozinho** — tudo fica guardado até alguém apagar (dá pra liberar só o áudio na página, mantendo transcrição e ata)',
+    en: '**Nothing expires on its own** — everything is kept until someone deletes it (you can free just the audio on the page, keeping transcript and minutes)',
+  },
+  'help.retention-privacy-limited': {
+    pt: 'O **áudio expira em {days} dias** (transcrição e ata vivem mais)',
+    en: 'The **audio expires in {days} days** (transcript and minutes live longer)',
+  },
+  'help.retention-privacy-unlimited': {
+    pt: '**Nada expira sozinho** — as gravações ficam até serem apagadas',
+    en: '**Nothing expires on its own** — recordings stay until deleted',
   },
   'help.topic-auto': {
     pt: '🤖 **Auto-record** (só admin)\n**/autorecord ligar canal:#daily minimo:2** — começo a gravar sozinho quando **2+** pessoas entram, e **paro quando o canal esvazia** (ou cai abaixo do mínimo).\nSe a reunião passar do limite de **{hours}h**, eu encerro e **recomeço** pra cobrir o resto.\n**/autorecord desligar canal:#daily** — desliga. • **/autorecord ver** — mostra o que está configurado.',

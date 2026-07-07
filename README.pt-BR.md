@@ -28,7 +28,7 @@ Um gravador de voz multi-track para Discord, auto-hospedado, inspirado no [Craig
 - **🗒️ Notas com timestamp** (`/nota` ou botão) — entram no painel, na transcrição, na ata e nos labels do projeto Audacity.
 - **🔌 Conector MCP** *(opcional)* — pergunte sobre suas reuniões pelo **Claude Desktop/Cursor**: janela de tempo, **itens de ação com prazo** cruzando reuniões, busca full-text — cada um só vê o que já poderia ver. Veja [`mcp/`](mcp/).
 - **🤖 Auto-record** — começa a gravar sozinho quando N pessoas entram num canal e para quando esvazia.
-- **⏳ Retenção em camadas** — o `RETENTION_DAYS` expira só o **áudio**; transcrição, ata e notas vivem `TEXT_RETENTION_DAYS` (padrão 90 dias) — a busca, o `/perguntar` e o conector MCP continuam funcionando depois que o áudio se foi.
+- **⏳ Retenção do seu jeito** — em camadas por padrão: o `RETENTION_DAYS` expira só o **áudio**; transcrição, ata e notas vivem `TEXT_RETENTION_DAYS` (padrão 90 dias) — a busca, o `/perguntar` e o conector MCP continuam funcionando depois que o áudio se foi. Ou use `RETENTION_DAYS=0` pra retenção **ilimitada**: nada expira, e o índice web `/gravacoes` vira uma central de gestão — tamanho em disco por gravação (só o dono), ordenação por maiores, **"liberar espaço"** (apaga só o áudio, a memória fica) e apagar tudo.
 - **❓ Onboarding embutido** — `/ajuda` com botões interativos por tópico; mandar DM ao bot também responde o guia.
 - **🌎 Bilíngue** (pt-BR / inglês, pelo idioma de cada usuário) e **cadeado HTTPS** via Cloudflare Tunnel (sem abrir portas).
 - Robustez: aviso de silêncio, parada automática (limite de horas / canal vazio / desconexão), expiração automática, recuperação pós-reinício e shutdown gracioso.
@@ -142,8 +142,8 @@ Custo de referência da transcrição (por hora de FALA — o silêncio das faix
 | `TUNNEL_TOKEN` | — | Token do Cloudflare Tunnel (Opção A; defina também `COMPOSE_PROFILES=tunnel`) |
 | `PORT` | `8080` | Porta do servidor web |
 | `RECORDINGS_DIR` | `./recordings` | Onde salvar as gravações |
-| `RETENTION_DAYS` | `7` | Dias até o **áudio** da gravação expirar |
-| `TEXT_RETENTION_DAYS` | `90` | Quanto tempo transcrição/ata/notas sobrevivem ao áudio (nunca menor que `RETENTION_DAYS`) |
+| `RETENTION_DAYS` | `7` | Dias até o **áudio** da gravação expirar (`0` = ilimitado: nada expira, apagar é só manual) |
+| `TEXT_RETENTION_DAYS` | `90` | Quanto tempo transcrição/ata/notas sobrevivem ao áudio (nunca menor que `RETENTION_DAYS`; `0` = pra sempre) |
 | `MAX_RECORDING_HOURS` | `6` | Duração máxima por gravação |
 | `MP3_BITRATE` | `192k` | Bitrate dos MP3 |
 | `COOKIE_SECRET` | gerado | Segredo dos cookies de sessão |

@@ -64,6 +64,7 @@ import {
 } from './processing/transcribe';
 import { safeName } from './sanitize';
 import {
+  audioExpiryOf,
   listGuildMetas,
   listMetas,
   pageUrl,
@@ -958,8 +959,20 @@ async function handleHelpButton(interaction: ButtonInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
   const key = interaction.customId.split(':')[1];
   const topic = HELP_TOPICS[key]?.topic;
-  // passa os valores REAIS de config pros tópicos (limite de horas, retenção, url)
-  const vars = { hours: config.maxRecordingHours, days: config.retentionDays, url: config.baseUrl };
+  // passa os valores REAIS de config pros tópicos (limite de horas, retenção, url).
+  // A frase de retenção muda inteira quando RETENTION_DAYS=0 (nada expira sozinho).
+  const days = config.retentionDays;
+  const vars = {
+    hours: config.maxRecordingHours,
+    days,
+    url: config.baseUrl,
+    retention: t(l, config.audioRetentionUnlimited ? 'help.retention-unlimited' : 'help.retention-limited', { days }),
+    retentionPrivacy: t(
+      l,
+      config.audioRetentionUnlimited ? 'help.retention-privacy-unlimited' : 'help.retention-privacy-limited',
+      { days },
+    ),
+  };
   await interaction.reply({ content: topic ? t(l, topic, vars) : t(l, 'help.intro'), ephemeral: true });
 }
 
@@ -1045,7 +1058,9 @@ async function handleGravacoes(interaction: ChatInputCommandInteraction): Promis
     const badge = recordingBadge(m, l);
     const who = m.startedBy ? `👤 ${safeName(m.startedBy.name)}` : `🤖 ${t(l, 'recordings.by-auto')}`;
     const dur = m.endedAt ? formatDuration(m.endedAt - m.startedAt) : `🔴 ${t(l, 'recordings.live')}`;
-    const expires = m.expiresAt && m.status !== 'recording' ? ` • ⏳ <t:${Math.floor(m.expiresAt / 1000)}:R>` : '';
+    // expiração pela CONFIG ATUAL (retenção ilimitada = sem ⏳, mesmo em meta antigo com data gravada)
+    const exp = audioExpiryOf(m);
+    const expires = exp && m.status !== 'recording' ? ` • ⏳ <t:${Math.floor(exp / 1000)}:R>` : '';
     return `**#${safeName(m.voiceChannelName)}** — ${when} • ${dur} • ${who} • 🎙️ ${m.participants.length} • ${badge}${expires}\n[${t(l, 'recordings.open')}](${pageUrl(m.id)})`;
   });
   let content = `**${t(l, 'recordings.title')}**\n${lines.join('\n')}`;

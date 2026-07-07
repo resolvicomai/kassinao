@@ -302,7 +302,7 @@ export class RecordingSession {
             .setColor(0xed4245)
             .setTitle(t(l, 'dm.title-start'))
             .setDescription(
-              t(l, 'dm.desc-start', {
+              t(l, config.audioRetentionUnlimited ? 'dm.desc-start-unlimited' : 'dm.desc-start', {
                 channel: `#${safeName(this.voiceChannel.name)}`,
                 guild: safeName(this.guild.name),
                 url: this.pageUrl,
@@ -326,7 +326,7 @@ export class RecordingSession {
     const empty = this.meta.participants.length === 0;
     const desc = empty
       ? t(l, 'dm.desc-stop-empty', { channel: `#${safeName(this.voiceChannel.name)}` })
-      : t(l, 'dm.desc-stop', {
+      : t(l, config.audioRetentionUnlimited ? 'dm.desc-stop-unlimited' : 'dm.desc-stop', {
           channel: `#${safeName(this.voiceChannel.name)}`,
           duration: formatDuration(endedAt - this.startedAt),
           url: this.pageUrl,
@@ -536,7 +536,7 @@ export class RecordingSession {
       const endedAt = this.meta.endedAt ?? Date.now();
       embed.setDescription(
         safeSlice(
-          t(l, 'panel.desc-done', {
+          t(l, config.audioRetentionUnlimited ? 'panel.desc-done-unlimited' : 'panel.desc-done', {
             duration: formatDuration(endedAt - this.startedAt),
             participants: joinNames(this.participantNames, l) || t(l, 'panel.no-participants'),
             url: this.pageUrl,
@@ -666,8 +666,10 @@ export class RecordingSession {
 
     this.meta.status = 'done';
     this.meta.endedAt = endedAt;
-    this.meta.expiresAt = endedAt + config.retentionDays * 24 * 60 * 60 * 1000;
-    this.meta.textExpiresAt = endedAt + config.textRetentionDays * 24 * 60 * 60 * 1000;
+    // retenção ilimitada: sem data de morte no meta — apagar é decisão humana
+    if (!config.audioRetentionUnlimited) this.meta.expiresAt = endedAt + config.retentionDays * 24 * 60 * 60 * 1000;
+    if (!config.textRetentionUnlimited)
+      this.meta.textExpiresAt = endedAt + config.textRetentionDays * 24 * 60 * 60 * 1000;
     const eventKey = `event.stopped-${reason}` as const;
     this.addEvent(
       reason === 'manual'

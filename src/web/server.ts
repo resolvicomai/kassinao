@@ -9,8 +9,12 @@ import { cook, CookBusyError, CookFormat, COOK_FORMATS } from '../processing/coo
 import { isTranscribing, transcriptToMarkdown } from '../processing/transcribe';
 import { minutesToMarkdown } from '../processing/minutes';
 import { sessionManager } from '../recorder/manager';
+import { cleanInline } from '../sanitize';
 import {
+  audioBytesOf,
+  deleteAudioOnly,
   deleteRecording,
+  forgetAudioBytes,
   listMetas,
   readMeta,
   readMinutes,
@@ -22,7 +26,15 @@ import { checkAccess } from './access';
 import { mountMcpApi } from './api';
 import { beginLogin, finishLogin, getWebUser, signMcpRefresh, WebUser } from './auth';
 import { countUserSessions, createSession, revokeUser } from './mcpTokens';
-import { connectPage, landingPage, messagePage, recordingPage, recordingsIndexPage } from './page';
+import {
+  connectPage,
+  landingPage,
+  messagePage,
+  recordingPage,
+  RecordingIndexItem,
+  recordingsIndexPage,
+  RecordingsSort,
+} from './page';
 import { searchRecordings } from './search';
 import { beginDownload, endDownload, hasActiveDownloads } from './tracker';
 
@@ -76,6 +88,28 @@ const MSG = {
   deleted: {
     pt: 'Pronto — os arquivos foram removidos para sempre. 🗑️',
     en: 'Done — the files were removed forever. 🗑️',
+  },
+  freedFlash: {
+    pt: '🔇 Espaço liberado — o áudio foi apagado; transcrição, ata e notas continuam.',
+    en: '🔇 Space freed — the audio was deleted; transcript, minutes and notes remain.',
+  },
+  deletedFlash: { pt: '🗑️ Gravação apagada para sempre.', en: '🗑️ Recording deleted forever.' },
+  freeDeniedTitle: { pt: 'Sem permissão', en: 'No permission' },
+  freeDenied: {
+    pt: 'Só quem iniciou a gravação ou administra o servidor pode liberar o espaço dela.',
+    en: 'Only whoever started the recording or a server manager can free its space.',
+  },
+  freeLiveTitle: { pt: 'Gravação em andamento', en: 'Recording in progress' },
+  freeLive: { pt: 'Pare a gravação antes de liberar o espaço.', en: 'Stop the recording before freeing space.' },
+  freeBusyTitle: { pt: 'Em uso agora', en: 'Busy right now' },
+  freeBusy: {
+    pt: 'Alguém está baixando ou a transcrição ainda está rodando. Tente de novo em instantes.',
+    en: 'Someone is downloading or the transcription is still running. Try again in a moment.',
+  },
+  freeGoneTitle: { pt: 'Áudio já liberado', en: 'Audio already released' },
+  freeGone: {
+    pt: 'O áudio desta gravação já tinha sido liberado — nada a fazer.',
+    en: 'The audio of this recording was already released — nothing to do.',
   },
   startingTitle: { pt: 'Iniciando…', en: 'Starting up…' },
   starting: {
@@ -283,7 +317,8 @@ export function startWebServer(): void {
     }
   });
 
-  /** Índice "minhas gravações": tudo que ESTA pessoa pode abrir, em todos os guilds. */
+  /** Índice "minhas gravações": tudo que ESTA pessoa pode abrir, em todos os guilds —
+   *  agora um painel de GESTÃO: totais de disco (só OWNER_IDS), ordenação e ações inline. */
   app.get('/gravacoes', async (req, res) => {
     const l = pageLang(req);
     const q = String(req.query.q ?? '')
@@ -302,18 +337,40 @@ export function startWebServer(): void {
       .filter((m) => !m.demo)
       .sort((a, b) => b.startedAt - a.startedAt)
       .slice(0, 300);
-    const accessible: RecordingMeta[] = [];
+    // tamanho em disco é infra, não conteúdo: só o dono da VPS (OWNER_IDS) vê —
+    // "quanto custa cada gravação" não é da conta de quem só participou da call
+    const owner = config.ownerIds.includes(user.id);
+    const items: RecordingIndexItem[] = [];
     for (const m of all) {
       try {
-        if ((await checkAccess(user, m)).view) accessible.push(m);
+        const access = await checkAccess(user, m);
+        if (access.view)
+          items.push({ meta: m, canDelete: access.delete, audioBytes: owner ? audioBytesOf(m.id) : undefined });
       } catch {
         // transitório: melhor omitir do índice do que travar a página
       }
     }
+    // ordenação server-side; "maiores" precisa dos bytes, então é só pro dono
+    const sortQ = String(req.query.sort ?? 'recent');
+    const sort: RecordingsSort = sortQ === 'oldest' ? 'oldest' : sortQ === 'largest' && owner ? 'largest' : 'recent';
+    if (sort === 'oldest') items.sort((a, b) => a.meta.startedAt - b.meta.startedAt);
+    else if (sort === 'largest') items.sort((a, b) => (b.audioBytes ?? 0) - (a.audioBytes ?? 0));
     // busca lê transcript.json (síncrono) — limita às 100 mais recentes pra não
     // segurar o event loop (que também recebe o áudio das gravações ao vivo)
-    const hits = q ? searchRecordings(accessible.slice(0, 100), q) : undefined;
-    res.type('html').send(recordingsIndexPage(accessible, { user, lang: l, q, hits }));
+    const hits = q ? searchRecordings(items.map((i) => i.meta).slice(0, 100), q) : undefined;
+    const flash = req.query.freed === '1' ? MSG.freedFlash[l] : req.query.deleted === '1' ? MSG.deletedFlash[l] : '';
+    res.type('html').send(
+      recordingsIndexPage(items, {
+        user,
+        lang: l,
+        q,
+        hits,
+        owner,
+        freeDiskMB: owner ? freeMB() : undefined,
+        sort,
+        flash,
+      }),
+    );
   });
 
   app.get('/rec/:id', async (req, res) => {
@@ -546,6 +603,61 @@ export function startWebServer(): void {
     }
   });
 
+  /**
+   * "Liberar espaço": apaga SÓ o áudio (tracks + cache), mantém transcrição/ata/notas.
+   * O par da retenção ilimitada — a memória fica, os gigas voltam. Mesmas guardas do
+   * delete (permissão, ao-vivo, download/transcrição em andamento).
+   */
+  app.post('/rec/:id/liberar-audio', async (req, res) => {
+    const l = pageLang(req);
+    const user = getWebUser(req);
+    if (!user) {
+      beginLogin(res, `/rec/${req.params.id}`);
+      return;
+    }
+    if (notReady(res, l, user)) return;
+    const meta = readMeta(req.params.id);
+    if (!meta) {
+      res
+        .status(404)
+        .type('html')
+        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      return;
+    }
+    const access = await checkAccess(user, meta);
+    if (!access.delete) {
+      res
+        .status(403)
+        .type('html')
+        .send(messagePage(MSG.freeDeniedTitle[l], MSG.freeDenied[l], user, l));
+      return;
+    }
+    if (meta.status === 'recording') {
+      res
+        .status(409)
+        .type('html')
+        .send(messagePage(MSG.freeLiveTitle[l], MSG.freeLive[l], user, l));
+      return;
+    }
+    if (hasActiveDownloads(meta.id) || isTranscribing(meta.id)) {
+      res
+        .status(409)
+        .type('html')
+        .send(messagePage(MSG.freeBusyTitle[l], MSG.freeBusy[l], user, l));
+      return;
+    }
+    if (meta.audioDeleted) {
+      // idempotente: dois cliques/abas não viram erro assustador
+      res.type('html').send(messagePage(MSG.freeGoneTitle[l], MSG.freeGone[l], user, l));
+      return;
+    }
+    deleteAudioOnly(meta);
+    // cleanInline: nome vem do Discord (controlado pelo usuário) — sem quebra de
+    // linha/ANSI forjando entradas de log (log injection)
+    console.log(`Áudio da gravação ${meta.id} liberado por ${cleanInline(user.name)} (${user.id}).`);
+    res.redirect(req.query.back === 'index' ? '/gravacoes?freed=1' : `/rec/${meta.id}`);
+  });
+
   app.post('/rec/:id/delete', async (req, res) => {
     const l = pageLang(req);
     const user = getWebUser(req);
@@ -585,7 +697,13 @@ export function startWebServer(): void {
       return;
     }
     deleteRecording(meta.id);
-    console.log(`Gravação ${meta.id} apagada por ${user.name} (${user.id}).`);
+    forgetAudioBytes(meta.id);
+    console.log(`Gravação ${meta.id} apagada por ${cleanInline(user.name)} (${user.id}).`);
+    // veio do índice de gestão → volta pra lá (com flash); da página → mensagem clássica
+    if (req.query.back === 'index') {
+      res.redirect('/gravacoes?deleted=1');
+      return;
+    }
     res.type('html').send(messagePage(MSG.deletedTitle[l], MSG.deleted[l], user, l));
   });
 

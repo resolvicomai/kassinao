@@ -2,7 +2,7 @@ import { config } from '../config';
 import { Locale } from '../i18n';
 import { msToClock } from '../processing/transcribe';
 import { formatDuration, formatOffset } from '../recorder/RecordingSession';
-import { MeetingMinutes, RecordingMeta, TranscriptSegment } from '../store';
+import { audioExpiryOf, MeetingMinutes, RecordingMeta, textExpiryOf, TranscriptSegment } from '../store';
 import { shortError } from '../util';
 import type { WebUser } from './auth';
 import type { WebSearchHit } from './search';
@@ -116,13 +116,38 @@ const P: Record<string, { pt: string; en: string }> = {
   tlLeft: { pt: 'saiu', en: 'left' },
   tlHint: { pt: 'clique pra pular no áudio', en: 'click to jump in the audio' },
   audioExpired: {
-    pt: '🔇 O áudio desta gravação expirou (retenção). A transcrição, a ata e as notas continuam aqui.',
-    en: '🔇 The audio of this recording has expired (retention). Transcript, minutes and notes remain here.',
+    pt: '🔇 O áudio desta gravação foi liberado (expirou ou alguém liberou o espaço). A transcrição, a ata e as notas continuam aqui.',
+    en: '🔇 The audio of this recording was released (it expired or someone freed the space). Transcript, minutes and notes remain here.',
   },
   textExpires: {
     pt: '⏳ Transcrição e ata expiram em {date}. O áudio já expirou.',
     en: '⏳ Transcript and minutes expire on {date}. The audio has already expired.',
   },
+  keptForever: { pt: '♾️ Guardada até alguém apagar', en: '♾️ Kept until someone deletes it' },
+  textKeptForever: {
+    pt: '♾️ Transcrição, ata e notas ficam até alguém apagar (o áudio já foi liberado)',
+    en: '♾️ Transcript, minutes and notes stay until someone deletes them (audio already released)',
+  },
+  // índice /gravacoes v2 (gestão)
+  ixOpen: { pt: 'abrir', en: 'open' },
+  ixSort: { pt: 'ordenar:', en: 'sort:' },
+  ixSortRecent: { pt: 'recentes', en: 'recent' },
+  ixSortOldest: { pt: 'antigas', en: 'oldest' },
+  ixSortLargest: { pt: 'maiores', en: 'largest' },
+  ixAudioOnDisk: { pt: 'de áudio no disco', en: 'of audio on disk' },
+  ixFree: { pt: 'livres no servidor', en: 'free on the server' },
+  ixRecordings: { pt: 'gravações', en: 'recordings' },
+  ixRecording1: { pt: 'gravação', en: 'recording' },
+  ixNotes: { pt: 'notas', en: 'notes' },
+  ixFreeSpace: { pt: '🔇 Liberar espaço', en: '🔇 Free up space' },
+  ixFreeSpaceConfirm: {
+    pt: 'Apagar SÓ o áudio desta gravação (faixas e mix)? Transcrição, ata e notas ficam. Não tem volta.',
+    en: 'Delete ONLY the audio of this recording (tracks and mix)? Transcript, minutes and notes stay. No undo.',
+  },
+  ixDelete: { pt: '🗑️ Apagar tudo', en: '🗑️ Delete all' },
+  ixAudioFreed: { pt: '🔇 áudio liberado', en: '🔇 audio released' },
+  ixByAuto: { pt: 'auto-record', en: 'auto-record' },
+  ixLive: { pt: 'ao vivo', en: 'live' },
 };
 
 function p(l: Locale, key: string, vars: Record<string, string> = {}): string {
@@ -247,11 +272,24 @@ const SHELL_CSS = `
   .isearch input:focus { outline: none; border-color: #5865f2; }
   .isearch .btn { flex-direction: row; align-items: center; padding: 10px 16px; }
   .rlist { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
-  .rcard { display: block; background: #101012; border: 1px solid rgba(255,255,255,.13); border-radius: 10px;
-           padding: 12px 14px; text-decoration: none; color: #c9c7c5; }
+  .rcard { background: #101012; border: 1px solid rgba(255,255,255,.13); border-radius: 10px; }
   .rcard:hover { border-color: #5865f2; }
+  .rcard .rlink { display: block; padding: 12px 14px; text-decoration: none; color: #c9c7c5; }
   .rcard .rrow1 { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
   .rcard .rrow2 { color: #8a888c; font-size: 13px; margin-top: 4px; }
+  .rstats { margin-top: 14px; font-size: 13.5px; color: #8a888c; }
+  .rstats strong { color: #f1eeec; }
+  .rsorts { margin-top: 6px; font-size: 12.5px; color: #6d7178; }
+  .rsorts a { color: #00a8fc; text-decoration: none; }
+  .rsorts a:hover { text-decoration: underline; }
+  .rsorts .sorton { color: #f1eeec; font-weight: 600; }
+  .ractions { display: flex; gap: 8px; padding: 0 14px 10px; }
+  .ractions form { margin: 0; }
+  .rbtn { background: none; border: 1px solid rgba(255,255,255,.22); color: #8a888c; border-radius: 7px;
+          padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  .rbtn:hover { border-color: #f1eeec; color: #f1eeec; }
+  .rbtn.danger { border-color: rgba(218,55,60,.5); color: #da373c; }
+  .rbtn.danger:hover { background: #da373c; border-color: #da373c; color: #fff; }
   .wb { font-size: 11.5px; background: #17171a; border-radius: 999px; padding: 2px 9px; color: #8a888c; }
   .wb.ok { color: #3dbf7a; } .wb.warn { color: #f0b232; } .wb.live { color: #fff; background: #da373c; }
   .hits { list-style: none; display: flex; flex-direction: column; gap: 10px; font-size: 14px; margin-top: 8px; }
@@ -562,19 +600,19 @@ export function recordingPage(
        </form>`
       : '';
 
-  const pageFoot = !demo
-    ? `<footer>${
-        !live
-          ? audioGone
-            ? meta.textExpiresAt
-              ? `${p(l, 'textExpires', { date: datetime(meta.textExpiresAt, l) })} · `
-              : ''
-            : meta.expiresAt
-              ? `${p(l, 'expires', { date: datetime(meta.expiresAt, l) })} · `
-              : ''
-          : ''
-      }ID <code>${esc(meta.id)}</code></footer>`
-    : '';
+  // rodapé: a config ATUAL decide a mensagem de expiração (ilimitada = "até alguém apagar")
+  const audioExp = audioExpiryOf(meta);
+  const textExp = textExpiryOf(meta);
+  const footNote = live
+    ? ''
+    : audioGone
+      ? textExp
+        ? `${p(l, 'textExpires', { date: datetime(textExp, l) })} · `
+        : `${p(l, 'textKeptForever')} · `
+      : audioExp
+        ? `${p(l, 'expires', { date: datetime(audioExp, l) })} · `
+        : `${p(l, 'keptForever')} · `;
+  const pageFoot = !demo ? `<footer>${footNote}ID <code>${esc(meta.id)}</code></footer>` : '';
 
   // Demo é a vitrine: depois da prova, um CTA de conversão (fim do beco sem saída).
   const demoCta = demo
@@ -953,14 +991,61 @@ function webBadge(m: RecordingMeta, l: Locale): string {
   return `<span class="wb">🔇 ${pt ? 'sem transcrição' : 'no transcript'}</span>`;
 }
 
-/** Índice web "minhas gravações": tudo que a pessoa pode acessar + busca. */
+/** Bytes → "1,2 GB" / "340 MB" (pt usa vírgula decimal). */
+function formatBytes(bytes: number, l: Locale): string {
+  const gb = bytes / (1024 * 1024 * 1024);
+  const mb = bytes / (1024 * 1024);
+  const dec = (n: number) => (l === 'pt' ? n.toFixed(1).replace('.', ',') : n.toFixed(1));
+  if (gb >= 1) return `${dec(gb)} GB`;
+  if (mb >= 1) return `${Math.round(mb)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/** "há 3 dias" / "3 days ago" — idade aproximada pra decidir o que apagar. */
+function relativeAge(ts: number, l: Locale): string {
+  const pt = l === 'pt';
+  const min = Math.max(0, Math.round((Date.now() - ts) / 60_000));
+  if (min < 60) return pt ? `há ${min} min` : `${min} min ago`;
+  const h = Math.round(min / 60);
+  if (h < 48) return pt ? `há ${h}h` : `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 60) return pt ? `há ${d} dias` : `${d} days ago`;
+  const mo = Math.round(d / 30);
+  return pt ? `há ${mo} meses` : `${mo} months ago`;
+}
+
+/** Item do índice v2: meta + o que ESTA pessoa pode fazer + custo em disco (só dono vê). */
+export interface RecordingIndexItem {
+  meta: RecordingMeta;
+  canDelete: boolean;
+  /** Bytes de áudio no disco — presente só quando o viewer é dono do servidor (OWNER_IDS). */
+  audioBytes?: number;
+}
+
+export type RecordingsSort = 'recent' | 'oldest' | 'largest';
+
+/** Índice web "minhas gravações": gestão completa — busca, totais, ordenação e ações. */
 export function recordingsIndexPage(
-  metas: RecordingMeta[],
-  opts: { user: WebUser; lang: Locale; q?: string; hits?: WebSearchHit[] },
+  items: RecordingIndexItem[],
+  opts: {
+    user: WebUser;
+    lang: Locale;
+    q?: string;
+    hits?: WebSearchHit[];
+    /** Dono da VPS (OWNER_IDS): vê tamanhos em disco e ordenação por tamanho. */
+    owner?: boolean;
+    /** MB livres no volume das gravações (só com owner=true). */
+    freeDiskMB?: number;
+    sort?: RecordingsSort;
+    /** Flash pós-ação (?freed=1 / ?deleted=1). */
+    flash?: string;
+  },
 ): string {
   const l = opts.lang;
   const pt = l === 'pt';
   const q = opts.q ?? '';
+  const sort: RecordingsSort = opts.sort ?? 'recent';
+  const metas = items.map((i) => i.meta);
 
   const searchForm = `<form class="isearch" method="get" action="/gravacoes">
       <input name="q" type="search" value="${esc(q)}" placeholder="${pt ? 'Buscar em transcrições, atas e notas…' : 'Search transcripts, minutes and notes…'}" autocomplete="off">
@@ -986,6 +1071,31 @@ export function recordingsIndexPage(
              .join('')}</ul>`;
   }
 
+  // cabeçalho de gestão: quantas gravações, quanto de áudio no disco, quanto sobra
+  const totalAudio = items.reduce((sum, i) => sum + (i.audioBytes ?? 0), 0);
+  const nLabel = items.length === 1 ? p(l, 'ixRecording1') : p(l, 'ixRecordings');
+  const statsParts = [`<strong>${items.length}</strong> ${nLabel}`];
+  if (opts.owner) {
+    statsParts.push(`💾 <strong>${formatBytes(totalAudio, l)}</strong> ${p(l, 'ixAudioOnDisk')}`);
+    if (opts.freeDiskMB !== undefined && opts.freeDiskMB !== Infinity)
+      statsParts.push(`📀 <strong>${formatBytes(opts.freeDiskMB * 1024 * 1024, l)}</strong> ${p(l, 'ixFree')}`);
+  }
+  const stats = items.length > 0 ? `<div class="rstats">${statsParts.join(' · ')}</div>` : '';
+
+  // ordenação por link (server-side): recentes / antigas / maiores (esta só pro dono)
+  const sortLink = (s: RecordingsSort, label: string) =>
+    s === sort
+      ? `<span class="sorton">${label}</span>`
+      : `<a href="/gravacoes?sort=${s}${q ? `&q=${encodeURIComponent(q)}` : ''}">${label}</a>`;
+  const sorts =
+    items.length > 1
+      ? `<div class="rsorts">${p(l, 'ixSort')} ${sortLink('recent', p(l, 'ixSortRecent'))} · ${sortLink('oldest', p(l, 'ixSortOldest'))}${
+          opts.owner ? ` · ${sortLink('largest', p(l, 'ixSortLargest'))}` : ''
+        }</div>`
+      : '';
+
+  const flash = opts.flash ? `<div class="note" style="margin-top:12px">${esc(opts.flash)}</div>` : '';
+
   const channels = [...new Set(metas.map((m) => m.voiceChannelName))];
   const chips =
     channels.length > 1
@@ -995,21 +1105,46 @@ export function recordingsIndexPage(
       : '';
 
   const cards =
-    metas.length === 0
+    items.length === 0
       ? `<p class="muted" style="margin-top:16px">${
           pt
             ? 'Nenhuma gravação acessível ainda. Grave uma call com /gravar no Discord!'
             : 'No accessible recordings yet. Record a call with /record on Discord!'
         }</p>`
-      : `<div class="rlist">${metas
-          .map((m) => {
-            const dur = m.endedAt ? formatDuration(m.endedAt - m.startedAt) : pt ? 'ao vivo' : 'live';
-            return `<a class="rcard" href="/rec/${m.id}" data-ch="${esc(m.voiceChannelName)}">
-              <div class="rrow1"><strong>#${esc(m.voiceChannelName)}</strong> ${webBadge(m, l)}</div>
-              <div class="rrow2">${datetime(m.startedAt, l)} · ${dur} · 🎙️ ${m.participants.length}${
-                m.audioDeleted ? ` · <span class="muted">🔇 ${pt ? 'áudio expirado' : 'audio expired'}</span>` : ''
-              }</div>
-            </a>`;
+      : `<div class="rlist">${items
+          .map(({ meta: m, canDelete, audioBytes }) => {
+            const live = m.status === 'recording';
+            const dur = m.endedAt ? formatDuration(m.endedAt - m.startedAt) : p(l, 'ixLive');
+            const who = m.startedBy ? `👤 ${esc(m.startedBy.name)}` : `🤖 ${p(l, 'ixByAuto')}`;
+            // defesa em profundidade: tamanho SÓ com owner=true, mesmo se bytes vazarem no item
+            const size =
+              opts.owner && audioBytes !== undefined && audioBytes > 0 && !m.audioDeleted
+                ? ` · 💾 ${formatBytes(audioBytes, l)}`
+                : '';
+            const notes = m.notes.length > 0 ? ` · 📝 ${m.notes.length} ${p(l, 'ixNotes')}` : '';
+            const freed = m.audioDeleted ? ` · <span class="muted">${p(l, 'ixAudioFreed')}</span>` : '';
+            // ações só pra quem pode apagar (iniciador/admin) e nunca no meio de
+            // gravação ao vivo — o servidor revalida tudo de novo no POST
+            const actions =
+              canDelete && !live
+                ? `<div class="ractions">
+                    ${
+                      !m.audioDeleted
+                        ? `<form method="post" action="/rec/${m.id}/liberar-audio?back=index" onsubmit="return confirm('${p(l, 'ixFreeSpaceConfirm')}')">
+                             <button type="submit" class="rbtn">${p(l, 'ixFreeSpace')}</button></form>`
+                        : ''
+                    }
+                    <form method="post" action="/rec/${m.id}/delete?back=index" onsubmit="return confirm('${p(l, 'delconfirm')}')">
+                      <button type="submit" class="rbtn danger">${p(l, 'ixDelete')}</button></form>
+                  </div>`
+                : '';
+            return `<div class="rcard" data-ch="${esc(m.voiceChannelName)}">
+              <a class="rlink" href="/rec/${m.id}">
+                <div class="rrow1"><strong>#${esc(m.voiceChannelName)}</strong> ${webBadge(m, l)}</div>
+                <div class="rrow2">${datetime(m.startedAt, l)} <span class="muted">(${relativeAge(m.startedAt, l)})</span> · ${dur} · ${who} · 🎙️ ${m.participants.length}${size}${notes}${freed}</div>
+              </a>
+              ${actions}
+            </div>`;
           })
           .join('')}</div>
         <script>
@@ -1032,6 +1167,9 @@ export function recordingsIndexPage(
      <p class="subline">${pt ? 'Tudo que você pode acessar, em todos os servidores.' : 'Everything you can access, across servers.'}</p>
      ${searchForm}
      ${hitsHtml}
+     ${flash}
+     ${stats}
+     ${sorts}
      ${chips}
      ${cards}`,
     { user: opts.user, lang: l, noindex: true },
@@ -1306,9 +1444,9 @@ export function landingPage(lang: Locale): string {
   const hero = `<section class="hero">
     <div class="hgrid">
       <div>
-        <div class="badge"><b>v1.2.0</b><span>${T(
-          '/perguntar · índice web com busca · retenção em camadas',
-          '/ask · web index with search · tiered retention',
+        <div class="badge"><b>v1.3.0</b><span>${T(
+          'retenção ilimitada · central de gravações · keyterms na transcrição',
+          'unlimited retention · recordings manager · transcript keyterms',
         )}</span></div>
         <h1>${T('Grava as calls do Discord. Depois é só perguntar.', 'Record your Discord calls. Then just ask.')}</h1>
         <p class="sub">${T(
@@ -1356,8 +1494,8 @@ export function landingPage(lang: Locale): string {
         'Summary, decisions and action items (owner + due) posted to Discord and the page — nobody has to ask.',
       )}</li>
       <li><strong>${T('Pergunte às suas reuniões.', 'Ask your meetings.')}</strong> ${T(
-        '/perguntar no Discord, busca full-text na web e conector MCP pro seu assistente — o áudio expira, o texto fica (retenção em camadas).',
-        '/ask in Discord, full-text web search, and an MCP connector for your assistant — audio expires, text stays (tiered retention).',
+        '/perguntar no Discord, busca full-text na web e conector MCP pro seu assistente — o texto fica pesquisável pelo tempo que você escolher (até pra sempre).',
+        '/ask in Discord, full-text web search, and an MCP connector for your assistant — text stays searchable for as long as you choose (even forever).',
       )}</li>
       <li><strong>${T('Acesso que tranca de verdade.', 'Access control that actually locks.')}</strong> ${T(
         'Login com Discord: só abre pra quem estava na call (mesmo mutado), enxerga o canal, iniciou ou é admin. Link vazado não abre nada.',
@@ -1464,8 +1602,8 @@ export function landingPage(lang: Locale): string {
         `<strong>Every access is re-checked against Discord</strong> on every visit — the whole rule fits in one file: ${accessReceipt}`,
       )}</li>
       <li>${T(
-        '<strong>Retenção em camadas:</strong> o áudio (pesado, sensível) expira em dias; transcrição e ata vivem o quanto você configurar.',
-        '<strong>Tiered retention:</strong> audio (heavy, sensitive) expires in days; transcript and minutes live as long as you configure.',
+        '<strong>Retenção do seu jeito:</strong> em camadas (o áudio pesado expira em dias, o texto vive mais) ou ilimitada (nada expira; você libera espaço apagando só o áudio, a memória fica).',
+        '<strong>Retention your way:</strong> tiered (heavy audio expires in days, text lives longer) or unlimited (nothing expires; free space by deleting just the audio, the memory stays).',
       )}</li>
       <li>${T(
         '<strong>Open source sob AGPL-3.0</strong> — quem hospedar uma versão modificada é obrigado a abrir o código também.',
