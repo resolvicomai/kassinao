@@ -97,6 +97,7 @@ export class RecordingSession {
       voiceChannelId: this.voiceChannel.id,
       voiceChannelName: this.voiceChannel.name,
       startedBy: opts.startedBy,
+      locale: this.locale,
       startedAt: this.startedAt,
       status: 'recording',
       participants: [],
@@ -654,9 +655,14 @@ export class RecordingSession {
     } catch {
       // conexão já destruída
     }
-    await this.restoreNickname();
 
+    // O ÁUDIO PRIMEIRO: fechar os FLACs é a única etapa que perde dados se o
+    // processo for morto (SIGKILL após o grace do Docker). REST do Discord
+    // (apelido/painel) vem depois, cada um com teto — um rate-limit pendurado
+    // não pode segurar o shutdown até o SIGKILL.
     await Promise.all([...this.tracks.values()].map(StopTrack(endedAt)));
+
+    await withTimeout(this.restoreNickname(), 5_000);
 
     this.meta.status = 'done';
     this.meta.endedAt = endedAt;
@@ -672,43 +678,54 @@ export class RecordingSession {
     saveMeta(this.meta);
 
     // edição final do painel, sem throttle; se o painel sumiu, manda mensagem nova
-    // para o resumo (com o link) nunca se perder
-    try {
-      const payload = this.buildPanelPayload();
-      if (this.panelMessage) {
-        await this.panelMessage.edit(payload);
-      } else if (this.voiceChannel.isTextBased()) {
-        await this.voiceChannel.send(payload);
-      }
-    } catch {
-      try {
-        if (this.voiceChannel.isTextBased()) await this.voiceChannel.send(this.buildPanelPayload());
-      } catch {
-        // sem permissão — o link continua acessível via /gravacoes
-      }
-    }
-
-    // O edit do painel é INVISÍVEL (a mensagem fica lá em cima no histórico):
-    // uma call que termina precisa de uma mensagem NOVA com o link, senão o
-    // time acha que a gravação se perdeu. Curta, sem embed — o painel é a fonte.
-    if (this.meta.participants.length > 0 && this.panelMessage) {
-      try {
-        if (this.voiceChannel.isTextBased()) {
-          await this.voiceChannel.send(
-            t(this.locale, 'record.stopped-link', {
-              duration: formatDuration(endedAt - this.startedAt),
-              url: this.pageUrl,
-            }),
-          );
+    // para o resumo (com o link) nunca se perder. Com teto: REST pendurado num
+    // shutdown não pode atrasar o processo até o SIGKILL.
+    await withTimeout(
+      (async () => {
+        try {
+          const payload = this.buildPanelPayload();
+          if (this.panelMessage) {
+            await this.panelMessage.edit(payload);
+          } else if (this.voiceChannel.isTextBased()) {
+            await this.voiceChannel.send(payload);
+          }
+        } catch {
+          try {
+            if (this.voiceChannel.isTextBased()) await this.voiceChannel.send(this.buildPanelPayload());
+          } catch {
+            // sem permissão — o link continua acessível via /gravacoes
+          }
         }
-      } catch {
-        // sem permissão — painel/DM/gravacoes cobrem
-      }
-    }
+
+        // O edit do painel é INVISÍVEL (a mensagem fica lá em cima no histórico):
+        // uma call que termina precisa de uma mensagem NOVA com o link, senão o
+        // time acha que a gravação se perdeu. Curta, sem embed — o painel é a fonte.
+        if (this.meta.participants.length > 0 && this.panelMessage) {
+          try {
+            if (this.voiceChannel.isTextBased()) {
+              await this.voiceChannel.send(
+                t(this.locale, 'record.stopped-link', {
+                  duration: formatDuration(endedAt - this.startedAt),
+                  url: this.pageUrl,
+                }),
+              );
+            }
+          } catch {
+            // sem permissão — painel/DM/gravacoes cobrem
+          }
+        }
+      })(),
+      10_000,
+    );
 
     this.sendStopDM();
     return this.meta;
   }
+}
+
+/** Promise com teto: resolve no que vier primeiro (a operação ou o timeout). */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | void> {
+  return Promise.race([p, new Promise<void>((r) => setTimeout(r, ms))]);
 }
 
 function StopTrack(endedAt: number) {

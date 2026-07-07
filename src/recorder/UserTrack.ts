@@ -122,7 +122,11 @@ export class UserTrack {
     if (this.closed) return;
     this.closed = true;
     const target = Math.floor(((sessionEndMs - this.sessionStartMs) * SAMPLE_RATE) / 1000);
-    const deficit = target - this.logicalSamples;
+    // Silêncio de CAUDA capado em 60s: quem falou na hora 1 de uma call de 6h
+    // teria ~4 GB de zeros pra encodar aqui (15s+ de CPU por faixa) — estoura o
+    // grace do Docker no shutdown e trava o /parar. A cauda só equaliza duração;
+    // o mix usa duration=longest e o alinhamento é pelo INÍCIO, nada quebra.
+    const deficit = Math.min(target - this.logicalSamples, 60 * SAMPLE_RATE);
     if (deficit > 0) {
       this.logicalSamples += deficit;
       const fill = async () => {
@@ -146,7 +150,9 @@ export class UserTrack {
         console.warn(`ffmpeg da faixa ${this.userId} demorou para fechar — master pode estar incompleto.`);
         this.proc.kill('SIGKILL');
         resolve();
-      }, 60_000);
+        // 20s: precisa caber DENTRO do stop_grace_period do Docker (30s), senão
+        // o SIGKILL externo derruba o node antes de os outros FLACs fecharem
+      }, 20_000);
       this.proc.once('close', () => {
         clearTimeout(timeout);
         resolve();

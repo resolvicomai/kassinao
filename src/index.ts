@@ -69,6 +69,7 @@ import {
   pageUrl,
   readMeta,
   readMinutes,
+  readTranscript,
   RecordingMeta,
   recoverInterruptedRecordings,
   saveMeta,
@@ -403,6 +404,11 @@ function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
   endedSessions.add(session.id);
   if (endedSessions.size > 500) endedSessions.clear(); // teto de memória; ids são únicos
 
+  // Em SHUTDOWN nada de trabalho novo: nem rearme de auto-record (dispararia uma
+  // sessão-fantasma que morre no exit), nem cook/transcrição (queimaria attempts).
+  // O boot recovery cobre tudo do zero.
+  if (shuttingDown) return;
+
   const channelId = session.voiceChannel.id;
   // Limite de horas com a reunião ainda rolando: rearma para recomeçar sozinha
   // e cobrir o resto (o Craig simplesmente para). Idem se o bot foi arrastado
@@ -439,8 +445,11 @@ async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise
   const state = meta.transcription;
   if (!state || (state.status !== 'done' && state.status !== 'partial' && state.status !== 'error')) return;
   const minutesDone = meta.minutes?.status === 'done';
-  const text =
-    state.status === 'done'
+  // gravação curtinha sem fala detectada: não prometer "transcrição pronta!"
+  const emptyDone = state.status === 'done' && (readTranscript(meta.id)?.length ?? 0) === 0;
+  const text = emptyDone
+    ? t(locale, 'transcript.empty-note', { url: pageUrl(meta.id) })
+    : state.status === 'done'
       ? minutesDone
         ? t(locale, 'minutes.ready', { url: pageUrl(meta.id) }) // ata + transcrição prontas
         : t(locale, 'transcript.ready', { url: pageUrl(meta.id) })
@@ -460,26 +469,46 @@ async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise
   // canal de destino configurável (/config ata-canal); fallback = chat do canal de voz
   const cfg = guildConfigStore.get(meta.guildId);
   const targetId = (minutesDone && cfg.minutesChannelId) || meta.voiceChannelId;
+  let delivered = false;
   try {
     const channel = (await client.channels.fetch(targetId)) as TextBasedChannel | null;
     // defesa em profundidade: NUNCA postar ata fora do servidor da gravação
     // (channels.fetch é global; um guildconfig.json corrompido não pode vazar ata)
     const sameGuild = channel && 'guildId' in channel && channel.guildId === meta.guildId;
-    if (channel && sameGuild && 'send' in channel) await channel.send({ content: text, embeds });
-    else if (!sameGuild) throw new Error('canal de outro servidor');
+    if (channel && sameGuild && 'send' in channel) {
+      await channel.send({ content: text, embeds });
+      delivered = true;
+    } else if (!sameGuild) throw new Error('canal de outro servidor');
   } catch {
     // sem acesso ao canal configurado — tenta o chat do canal de voz como fallback
     if (targetId !== meta.voiceChannelId) {
       try {
         const vc = (await client.channels.fetch(meta.voiceChannelId)) as TextBasedChannel | null;
-        if (vc && 'send' in vc) await vc.send({ content: text, embeds });
+        if (vc && 'send' in vc) {
+          await vc.send({ content: text, embeds });
+          delivered = true;
+        }
       } catch {
         // a página continua mostrando tudo
       }
     }
   }
   if (meta.startedBy) {
-    client.users.send(meta.startedBy.id, { content: text, embeds }).catch(() => {});
+    try {
+      await client.users.send(meta.startedBy.id, { content: text, embeds });
+      delivered = true;
+    } catch {
+      // DM fechada — canal cobre
+    }
+  }
+  // Marca o aviso como entregue SÓ se algum send funcionou — falha transiente
+  // de rede não pode significar "o link nunca chega"; o boot re-tenta.
+  if (delivered) {
+    const fresh = readMeta(meta.id);
+    if (fresh && !fresh.notifiedAt) {
+      fresh.notifiedAt = Date.now();
+      saveMeta(fresh);
+    }
   }
   // webhook do operador (env) — integrações self-hosted (n8n → Notion/Jira...).
   // Dedupe persistido SÓ após sucesso: falha de rede num deploy não pode
@@ -1023,6 +1052,7 @@ async function handleGravacoes(interaction: ChatInputCommandInteraction): Promis
   if (all.length > metas.length) content += `\n${t(l, 'recordings.more', { n: all.length - metas.length })}`;
   // o índice web mostra TODAS (com busca) — aqui só cabem 5
   content += `\n${t(l, 'recordings.web', { url: `${config.baseUrl}/gravacoes` })}`;
+  content = safeSlice(content, 2000); // nomes de canal markdown-pesados estouram o limite do Discord
   await interaction.reply({ content, ephemeral: true });
 }
 
@@ -1108,7 +1138,10 @@ async function handleAutorecord(interaction: ChatInputCommandInteraction): Promi
       });
     });
     await interaction.reply({
-      content: `**${t(l, 'autorecord.view-title')}**\n${lines.join('\n')}\n${t(l, 'autorecord.view-hint')}`,
+      content: safeSlice(
+        `**${t(l, 'autorecord.view-title')}**\n${lines.join('\n')}\n${t(l, 'autorecord.view-hint')}`,
+        2000,
+      ),
       ephemeral: true,
     });
   }
@@ -1180,7 +1213,9 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
 
   if (!guildBusy(guild.id) && rule && humans >= rule.minimum && isArmed(guild.id, channelId)) {
     setArmed(guild.id, channelId, false);
-    const locale = localeOf(guild.preferredLocale);
+    // preferredLocale só é real em servidores Community (nos demais é sempre en-US);
+    // pro auto-record, DEFAULT_LOCALE do operador é um sinal muito melhor
+    const locale: Locale = guild.preferredLocale?.toLowerCase().startsWith('pt') ? 'pt' : config.defaultLocale;
     try {
       await startSession({ guild, voiceChannel: channel, startedBy: null, locale, auto: true });
     } catch (err) {
@@ -1213,25 +1248,33 @@ client.once(Events.ClientReady, async () => {
     const recent = (meta.endedAt ?? 0) > Date.now() - 24 * 60 * 60 * 1000;
     const st = meta.transcription?.status;
     const tries = meta.transcription?.attempts ?? 0;
+    // idioma da sessão persiste no meta — o recovery não pode chutar 'pt' num guild en
+    const loc: Locale = meta.locale === 'en' ? 'en' : meta.locale === 'pt' ? 'pt' : config.defaultLocale;
     if (st === 'pending' || st === 'running' || (st === undefined && recent)) {
-      enqueueTranscription(meta.id, (m) => notifyTranscription(m, 'pt'));
+      enqueueTranscription(meta.id, (m) => notifyTranscription(m, loc));
     } else if (st === 'partial' && tries < MAX_TRANSCRIPTION_ATTEMPTS) {
       // rodada agendada morreu com o reinício — retoma só as faixas que faltam
-      enqueueTranscription(meta.id, (m) => notifyTranscription(m, 'pt'));
+      enqueueTranscription(meta.id, (m) => notifyTranscription(m, loc));
     } else if (st === 'error' && tries < MAX_TRANSCRIPTION_ATTEMPTS && recent) {
       // erro com tentativas sobrando (ex.: 429 em cadeia + deploy no meio):
       // sem isso a gravação ficaria em erro pra sempre, em silêncio
-      enqueueTranscription(meta.id, (m) => notifyTranscription(m, 'pt'));
+      enqueueTranscription(meta.id, (m) => notifyTranscription(m, loc));
     } else if (st === 'done' || st === 'partial') {
-      // Retoma SÓ a ata que ficou pela metade num reinício. generateMinutesStep
-      // grava 'running' como 1º passo, então interrupção real deixa pending/running —
-      // 'undefined' significaria "nunca tentou" (não fazer backfill em massa no 1º deploy).
       const ms = meta.minutes?.status;
       if (ms === 'pending' || ms === 'running') {
+        // Retoma SÓ a ata que ficou pela metade num reinício. generateMinutesStep
+        // grava 'running' como 1º passo, então interrupção real deixa pending/running.
         enqueueMinutesOnly(meta.id, (m) => {
           // só avisa se a ata retomada REALMENTE ficou pronta (não re-notifica a transcrição)
-          if (m.minutes?.status === 'done') notifyTranscription(m, 'pt');
+          if (m.minutes?.status === 'done') notifyTranscription(m, loc);
         });
+      } else if (
+        !meta.notifiedAt &&
+        (meta.minutes?.finishedAt ?? meta.transcription?.finishedAt ?? 0) > Date.now() - 30 * 60 * 1000
+      ) {
+        // terminou tudo mas o processo morreu ANTES do aviso (janela de 30min:
+        // metas antigas do upgrade não têm notifiedAt e JÁ foram avisadas — não spamear)
+        void notifyTranscription(meta, loc);
       }
     }
   }
