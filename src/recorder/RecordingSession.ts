@@ -368,6 +368,10 @@ export class RecordingSession {
   private onSpeakingStart(userId: string): void {
     if (this.stopping) return;
 
+    // Bots não viram faixa: um bot de música "falando" 2h consumiria transcrição
+    // e poluiria a ata. (Cache basta: membros de canal de voz estão no cache.)
+    if (this.guild.members.cache.get(userId)?.user.bot) return;
+
     // Teto de faixas: cada falante = 1 ffmpeg contínuo. Num VPS pequeno, uma sala
     // gigante esgotaria CPU/processos. Novos falantes além do teto não são gravados
     // (os já em gravação continuam) — avisa uma vez no painel.
