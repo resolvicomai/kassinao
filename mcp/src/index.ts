@@ -135,7 +135,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'list_meetings',
     description:
-      'List recorded meetings in a time window (defaults to the last 30 days). Only meetings the user can access are returned. Use for "what meetings happened between X and Y" / "list this week\'s calls".',
+      'List recorded meetings in a time window (defaults to the last 30 days). Only meetings the user can access are returned. Each item carries transcriptStatus ("partial" = some speakers not transcribed yet), presentSilent (people in the call who never spoke) and audioDeleted (tiered retention: audio expired, text remains). Use for "what meetings happened between X and Y" / "list this week\'s calls".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -153,7 +153,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'pending_actions',
     description:
-      'Aggregate action items (task + owner + deadline) across meetings, bucketed by deadline: overdue, dueSoon, later, noDeadline, unparseable. Use for "what is pending this week" / "my open action items". assignee="me" matches the token owner.',
+      'Aggregate action items (task + owner + deadline) across meetings, bucketed by deadline: overdue, dueSoon, later, noDeadline, unparseable. Items include transcriptStatus — minutes built from a partial transcript may be missing actions. Use for "what is pending this week" / "my open action items". assignee="me" matches the token owner.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -168,7 +168,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'search_meetings',
     description:
-      'Full-text search across transcripts, minutes and notes of accessible meetings, with deep links to the exact moment. Use for "find where we discussed X".',
+      'Full-text search across transcripts, minutes and notes of accessible meetings, accent-insensitive, with deep links to the exact second. Use for "find where we discussed X".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -186,7 +186,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'who_said',
     description:
-      'Find transcript segments matching a query, with speaker, timestamp, surrounding context and a deep link. Use for "when did Ana talk about budget".',
+      'Find transcript segments matching a query (accent-insensitive), with speaker, timestamp, surrounding context and a deep link. transcriptStatus="partial" means some speakers are not transcribed yet — absence of a match is not proof nobody said it. Use for "when did Ana talk about budget".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -205,7 +205,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'get_meeting',
     description:
-      'Full dossier of one meeting: metadata, minutes (summary/decisions/actions/topics/per-participant), transcript, notes and a merged timeline. include is a CSV of meta,minutes,transcript,notes,timeline.',
+      'Full dossier of one meeting: metadata, minutes (summary/decisions/actions/topics/per-participant), transcript, notes and a merged timeline. Check transcriptStatus: "partial" = transcript incomplete (pending speakers). include is a CSV of meta,minutes,transcript,notes,timeline.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -258,7 +258,7 @@ async function runExchange(code: string): Promise<void> {
 // ---------- servidor MCP ----------
 
 async function runServer(): Promise<void> {
-  const server = new Server({ name: 'kassinao', version: '1.0.0' }, { capabilities: { tools: {} } });
+  const server = new Server({ name: 'kassinao', version: '1.0.1' }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),

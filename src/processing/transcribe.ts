@@ -807,6 +807,11 @@ export function transcriptToMarkdown(meta: RecordingMeta, segments: TranscriptSe
     `Gravação \`${meta.id}\` • ${meta.participants.map((p) => cleanInline(p.name)).join(', ')}`,
     '',
   ];
+  // quem arquiva o .md precisa SABER que está incompleto (faixas fora por rate limit)
+  if (meta.transcription?.status === 'partial') {
+    const missing = (meta.transcription.pendingTracks ?? []).map((n) => cleanInline(n)).join(', ');
+    lines.push(`> ⚠️ **Transcrição parcial** — faixas não transcritas: ${missing || '?'}.`, '');
+  }
   for (const seg of segments) {
     // fala/apelido são entrada adversarial: limpa controle/ANSI e neutraliza fences
     lines.push(
