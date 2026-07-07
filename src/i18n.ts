@@ -260,6 +260,11 @@ const STRINGS: Strings = {
     en: '**/record** — joins your voice channel and starts recording\n**/stop** — ends it and generates the link with audio, transcript and minutes\n**/ask** — ask your meetings; the AI answers only to you, with the exact minute\n**/note** — note at the current time (or 📌 *Mark moment* on the panel, no typing)\n**/status** — shows the recording in progress\n**/recordings** — your recordings + link to the searchable web index\n**/autorecord** — (admin) records automatically when people join a channel\n**/config** — (admin) channel where the minutes get posted\n**/about** — author, license and source code',
   },
   'help.flow': { pt: 'Passo a passo', en: 'Quick start' },
+  'help.perms': { pt: 'Permissões', en: 'Permissions' },
+  'help.perms-body': {
+    pt: '• **Gravar**: qualquer membro. **Parar/anotar**: quem enxerga o canal gravado.\n• **Ver uma gravação** (web): quem **estava na call** (mesmo mutado), enxerga o canal, iniciou ou é admin — re-checado no Discord a cada visita.\n• **Apagar**: quem iniciou ou admin. **/autorecord** e **/config**: exigem *Gerenciar Servidor*.\n• **/perguntar** e a busca só usam reuniões que **você** pode abrir.',
+    en: '• **Record**: any member. **Stop/annotate**: whoever can see the recorded channel.\n• **Open a recording** (web): whoever **was in the call** (even muted), can see the channel, started it, or is an admin — re-checked against Discord on every visit.\n• **Delete**: starter or admin. **/autorecord** and **/config**: require *Manage Server*.\n• **/ask** and search only use meetings **you** can open.',
+  },
   'help.flow-body': {
     pt: '1. Entre num canal de voz e use **/gravar**\n2. Conversem normalmente (📌 marca momentos importantes)\n3. Use **/parar** — a ata resumida chega no canal e o link completo por DM\n4. Depois, é só **/perguntar** ("o que decidimos sobre X?") ou buscar no índice web',
     en: '1. Join a voice channel and use **/record**\n2. Talk normally (📌 marks the important moments)\n3. Use **/stop** — the minutes summary lands in the channel, the full link via DM\n4. Later, just **/ask** ("what did we decide about X?") or search the web index',

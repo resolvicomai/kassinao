@@ -892,6 +892,7 @@ function buildHelpEmbed(l: Locale): EmbedBuilder {
     .addFields(
       { name: t(l, 'help.commands'), value: t(l, 'help.cmd-list') },
       { name: t(l, 'help.flow'), value: t(l, 'help.flow-body') },
+      { name: t(l, 'help.perms'), value: t(l, 'help.perms-body') },
     );
   // só mostra o conector de IA quando ele está ligado neste servidor
   if (config.mcpEnabled) {
