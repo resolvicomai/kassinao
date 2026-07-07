@@ -9,6 +9,7 @@ import { cook, CookBusyError, CookFormat, COOK_FORMATS } from '../processing/coo
 import { isTranscribing, transcriptToMarkdown } from '../processing/transcribe';
 import { minutesToMarkdown } from '../processing/minutes';
 import { sessionManager } from '../recorder/manager';
+import { cleanInline } from '../sanitize';
 import {
   audioBytesOf,
   deleteAudioOnly,
@@ -651,7 +652,9 @@ export function startWebServer(): void {
       return;
     }
     deleteAudioOnly(meta);
-    console.log(`Áudio da gravação ${meta.id} liberado por ${user.name} (${user.id}).`);
+    // cleanInline: nome vem do Discord (controlado pelo usuário) — sem quebra de
+    // linha/ANSI forjando entradas de log (log injection)
+    console.log(`Áudio da gravação ${meta.id} liberado por ${cleanInline(user.name)} (${user.id}).`);
     res.redirect(req.query.back === 'index' ? '/gravacoes?freed=1' : `/rec/${meta.id}`);
   });
 
@@ -695,7 +698,7 @@ export function startWebServer(): void {
     }
     deleteRecording(meta.id);
     forgetAudioBytes(meta.id);
-    console.log(`Gravação ${meta.id} apagada por ${user.name} (${user.id}).`);
+    console.log(`Gravação ${meta.id} apagada por ${cleanInline(user.name)} (${user.id}).`);
     // veio do índice de gestão → volta pra lá (com flash); da página → mensagem clássica
     if (req.query.back === 'index') {
       res.redirect('/gravacoes?deleted=1');
