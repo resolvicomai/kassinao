@@ -878,6 +878,7 @@ async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<voi
 const HELP_BUTTON_PREFIX = 'kassinao_help';
 const HELP_TOPICS: Record<string, { btn: string; topic: string }> = {
   record: { btn: 'help.btn-record', topic: 'help.topic-record' },
+  ask: { btn: 'help.btn-ask', topic: 'help.topic-ask' },
   downloads: { btn: 'help.btn-downloads', topic: 'help.topic-downloads' },
   privacy: { btn: 'help.btn-privacy', topic: 'help.topic-privacy' },
   auto: { btn: 'help.btn-auto', topic: 'help.topic-auto' },
@@ -921,8 +922,8 @@ async function handleHelpButton(interaction: ButtonInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
   const key = interaction.customId.split(':')[1];
   const topic = HELP_TOPICS[key]?.topic;
-  // passa os valores REAIS de config pros tópicos (limite de horas, retenção)
-  const vars = { hours: config.maxRecordingHours, days: config.retentionDays };
+  // passa os valores REAIS de config pros tópicos (limite de horas, retenção, url)
+  const vars = { hours: config.maxRecordingHours, days: config.retentionDays, url: config.baseUrl };
   await interaction.reply({ content: topic ? t(l, topic, vars) : t(l, 'help.intro'), ephemeral: true });
 }
 
