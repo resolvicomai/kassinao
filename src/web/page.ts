@@ -990,482 +990,457 @@ const FAVICON =
   "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%235865F2'/%3E%3Ctext%20x='16'%20y='23'%20font-size='19'%20font-weight='bold'%20text-anchor='middle'%20fill='white'%20font-family='sans-serif'%3EK%3C/text%3E%3C/svg%3E";
 
 // CSS da landing (vitrine pública). Documento próprio, full-width — NÃO usa o
-// .card estreito do shell(). Mesmos tokens de cor do Discord do SHELL_CSS.
-// Tudo self-contained (CSP: sem fonte/CSS/JS/imagem externa).
+// .card do shell(). Estética dev-tool: tudo monospace, quase acromático, bordas
+// de 1px como único divisor, um accent usado com parcimônia. Self-contained
+// (CSP: sem fonte/CSS/JS/imagem externa); respeita prefers-reduced-motion.
 const LANDING_CSS = `
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; margin: 0; }
-  /* clip (não hidden): impede scroll horizontal SEM virar container de scroll, senão quebra o position:sticky do topnav */
-  html, body { max-width: 100%; overflow-x: clip; }
-  body { background: #1e1f22; color: #dbdee1;
-         font-family: -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif; line-height: 1.55; }
-  a { color: inherit; }
-  .mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; }
-  .wrap { max-width: 960px; margin: 0 auto; padding: 0 20px; }
-  section { padding: clamp(44px, 8vw, 92px) 0; border-top: 1px solid #26282c; }
-  section.hero { border-top: 0; }
-  .center { text-align: center; }
-  h1 { font-size: clamp(2rem, 5.4vw, 3.2rem); line-height: 1.08; font-weight: 800; color: #f2f3f5;
-       letter-spacing: -0.01em; }
-  h2 { font-size: clamp(1.4rem, 3.6vw, 2.05rem); line-height: 1.15; font-weight: 800; color: #f2f3f5;
-       letter-spacing: -0.01em; }
-  .lead { font-size: clamp(1.02rem, 1.6vw, 1.16rem); color: #949ba4; margin-top: 14px; max-width: 46ch; }
-  .hero .lead { max-width: 52ch; }
-  .kicker { font-size: 0.78rem; text-transform: uppercase; letter-spacing: .06em; color: #949ba4;
-            margin-bottom: 10px; }
-  .eyebrow { display: inline-flex; align-items: center; gap: 8px; background: #232428; border: 1px solid #3a3c42;
-             color: #b5bac1; font-size: 0.82rem; padding: 6px 13px; border-radius: 999px; margin-bottom: 18px; }
-  .eyebrow b { color: #f2f3f5; font-weight: 700; }
-  /* topbar */
-  .topnav { position: sticky; top: 0; z-index: 20; background: rgba(30,31,34,.86);
-            -webkit-backdrop-filter: saturate(140%) blur(8px);
-            backdrop-filter: saturate(140%) blur(8px); border-bottom: 1px solid #26282c; }
-  .topnav .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-                  height: 56px; }
-  .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 800; color: #f2f3f5;
-           text-decoration: none; font-size: 1.02rem; }
-  .navlinks { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
-  .navlinks a { color: #b5bac1; text-decoration: none; padding: 6px 8px; border-radius: 7px; }
-  .navlinks a:hover { color: #f2f3f5; background: #2b2d31; }
-  .langtoggle a { color: #949ba4; text-decoration: none; padding: 2px 3px; }
-  .langtoggle a.on { color: #f2f3f5; font-weight: 700; }
-  .langtoggle span { opacity: .4; margin: 0 2px; }
-  /* buttons */
-  .ctarow { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 26px; }
-  .center .ctarow { justify-content: center; }
-  .btn { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; font-weight: 700;
-         font-size: 1rem; padding: 13px 22px; border-radius: 10px; border: 1px solid transparent;
-         transition: background .15s, border-color .15s, transform .15s; }
-  .btn:hover { transform: translateY(-1px); }
-  .btn-primary { background: #5865f2; color: #fff; }
-  .btn-primary:hover { background: #4752c4; }
-  .btn-outline { background: #2b2d31; color: #f2f3f5; border-color: #3a3c42; }
-  .btn-outline:hover { border-color: #5865f2; }
-  .btn-ghost { background: transparent; color: #b5bac1; padding: 13px 10px; }
-  .btn-ghost:hover { color: #f2f3f5; }
-  .btn-sm { padding: 8px 15px; font-size: 0.9rem; }
-  .lead b { color: #f2f3f5; font-weight: 700; }
-  .microline { margin-top: 16px; font-size: 0.86rem; color: #949ba4; }
-  .microline b { color: #b5bac1; font-weight: 600; }
-  /* hero centrado com brilho + energia */
-  section.hero { position: relative; overflow: hidden; text-align: center; padding-top: clamp(40px, 7vw, 76px); }
-  section.hero::before { content: ''; position: absolute; left: 50%; top: -160px; width: 900px; height: 620px;
-    transform: translateX(-50%); pointer-events: none; z-index: 0;
-    background: radial-gradient(50% 50% at 50% 40%, rgba(88,101,242,.30), rgba(88,101,242,0) 72%); }
-  section.hero .wrap { position: relative; z-index: 1; }
-  section.hero .eyebrow { background: rgba(88,101,242,.12); border-color: rgba(88,101,242,.4); color: #c7ccf5; }
-  .hero .lead { max-width: 40ch; margin-left: auto; margin-right: auto; color: #b5bac1; font-size: clamp(1.05rem, 1.8vw, 1.28rem); }
-  .hero .ctarow { justify-content: center; }
-  .accent { background: linear-gradient(92deg, #9aa4ff, #5865f2); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .flow { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 24px; }
-  .flow .chip { display: inline-flex; align-items: center; gap: 8px; background: #232428; border: 1px solid #30333a;
-    border-radius: 999px; padding: 9px 15px; font-size: 0.9rem; color: #dbdee1; font-weight: 600; }
-  .flow .arrow { color: #5865f2; font-weight: 800; align-self: center; }
-  .hero .hero-split { max-width: 860px; margin-left: auto; margin-right: auto; text-align: left;
-    border-color: #33374a; box-shadow: 0 24px 70px rgba(88,101,242,.18), 0 10px 34px rgba(0,0,0,.5); }
-  /* hero split */
-  .hero-split { display: flex; gap: 16px; margin-top: 40px; align-items: stretch;
-                background: #1a1b1e; border: 1px solid #26282c; border-radius: 16px; padding: 16px;
-                position: relative; overflow: hidden; }
-  .panel { border-radius: 12px; padding: 15px; min-width: 0; }
-  .panel-call { background: #232428; flex: 0 0 40%; }
-  .panel-chat { background: #2b2d31; flex: 1 1 60%; }
-  .dc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-  .dc-head .ch { color: #f2f3f5; font-weight: 700; font-size: 0.96rem; }
-  .rec-dot { width: 9px; height: 9px; border-radius: 50%; background: #da373c; flex: 0 0 auto;
-             animation: recpulse 1.7s ease-in-out infinite; }
-  .rec-pill { margin-left: auto; font-size: 0.66rem; font-weight: 800; letter-spacing: .05em;
-              color: #f0b232; background: #2b2d31; border: 1px solid #46402a; padding: 3px 8px; border-radius: 6px; }
-  .panel-chat .rec-pill { background: #232428; }
-  .spk { display: flex; align-items: center; gap: 9px; padding: 6px 0; }
-  .avatar { width: 27px; height: 27px; border-radius: 50%; flex: 0 0 auto; color: #fff; font-weight: 700;
-            font-size: 0.8rem; display: flex; align-items: center; justify-content: center; }
-  .spk .nm { color: #dbdee1; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .wave { margin-left: auto; display: flex; align-items: flex-end; gap: 2px; height: 18px; flex: 0 0 auto; }
-  .wave i { width: 2px; background: #5865f2; border-radius: 2px; display: block; transform-origin: bottom;
-            height: 60%; }
-  .wave.live i { animation: wave 1.1s ease-in-out infinite; }
-  .wave.live i:nth-child(2){ animation-delay:.12s } .wave.live i:nth-child(3){ animation-delay:.24s }
-  .wave.live i:nth-child(4){ animation-delay:.36s } .wave.live i:nth-child(5){ animation-delay:.48s }
-  .wave i:nth-child(1){height:40%} .wave i:nth-child(2){height:75%} .wave i:nth-child(3){height:100%}
-  .wave i:nth-child(4){height:55%} .wave i:nth-child(5){height:80%} .wave i:nth-child(6){height:35%}
-  /* beam */
-  .beam { position: absolute; left: 40%; top: 50%; transform: translate(-6px,-50%); width: 40px; height: 60px;
-          pointer-events: none; opacity: .6; }
-  /* chat */
-  .chrome { display: flex; align-items: center; gap: 6px; padding-bottom: 10px; margin-bottom: 10px;
-            border-bottom: 1px solid #26282c; }
-  .chrome i { width: 8px; height: 8px; border-radius: 50%; display: block; }
-  .chrome .lbl { margin: 0 auto; color: #949ba4; font-size: 0.76rem; }
-  .bubble { border-radius: 12px; padding: 9px 13px; font-size: 0.9rem; max-width: 92%; }
-  .bubble-user { background: #5865f2; color: #fff; margin-left: auto; border-bottom-right-radius: 4px; }
-  .bubble-ai { background: #232428; color: #dbdee1; margin-top: 10px; border-bottom-left-radius: 4px; max-width: 100%; }
-  .toolchip { display: inline-flex; align-items: center; gap: 6px; font-size: 0.74rem; color: #b5bac1;
-              background: #2b2d31; border-left: 2px solid #5865f2; padding: 3px 9px; border-radius: 5px; }
-  .ans-head { color: #f2f3f5; font-weight: 700; font-size: 0.86rem; margin: 10px 0 8px; }
-  .ans-row { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 7px 0;
-             border-top: 1px solid #2b2d31; font-size: 0.85rem; animation: reveal .5s ease both; }
-  .ans-row:nth-child(2){animation-delay:.15s} .ans-row:nth-child(3){animation-delay:.3s} .ans-row:nth-child(4){animation-delay:.45s}
-  .sdot { width: 7px; height: 7px; border-radius: 50%; background: #f0b232; flex: 0 0 auto; }
-  .ans-row .tk { color: #dbdee1; flex: 1 1 60%; min-width: 0; }
-  .ans-meta { display: flex; align-items: center; gap: 7px; margin-left: auto; flex-wrap: nowrap; }
-  .pill { font-size: 0.72rem; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
-  .pill-owner { background: #2b2d31; color: #b5bac1; border: 1px solid #3a3c42; }
-  .pill-due { background: #322a12; color: #f0b232; border: 1px solid #46402a; }
-  .ts { color: #00a8fc; text-decoration: none; font-size: 0.8rem; white-space: nowrap; }
-  .ts:hover { text-decoration: underline; }
-  .ans-foot { color: #949ba4; font-size: 0.72rem; margin-top: 10px; }
-  /* generic grids */
-  .grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 34px; }
-  .qcard { background: #2b2d31; border: 1px solid #26282c; border-radius: 12px; padding: 15px; }
-  .qcard.glow { border-color: #3a41a8; box-shadow: 0 0 0 1px #3a41a8 inset, 0 6px 20px rgba(88,101,242,.12); }
-  .qprompt { display: flex; gap: 8px; color: #f2f3f5; font-weight: 600; font-size: 0.95rem; }
-  .qprompt .arrow { color: #5865f2; font-weight: 800; }
-  .qtool { margin: 11px 0 9px; }
-  .qans { color: #b5bac1; font-size: 0.86rem; }
-  .qbadge { display: inline-block; margin-top: 10px; font-size: 0.68rem; letter-spacing:.04em; text-transform: uppercase;
-            color: #a9b0ff; background: #232a5c; border-radius: 6px; padding: 3px 8px; }
-  /* minutes proof */
-  .minutes-card { background: #232428; border-radius: 10px; padding: 18px 20px; border-left: 3px solid #5865f2;
-                  margin-top: 30px; }
-  .mc-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 4px; }
-  .mc-head .bc { color: #dbdee1; font-size: 0.9rem; font-weight: 600; }
-  .mc-badge { font-size: 0.7rem; font-weight: 800; color: #fff; background: #23a55a; padding: 3px 9px; border-radius: 999px; }
-  .ai-pill { margin-left: auto; font-size: 0.7rem; color: #a9b0ff; background: #232a5c; padding: 3px 9px; border-radius: 999px; }
-  .mc-h3 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: .05em; color: #949ba4; margin: 16px 0 7px; }
-  .mc-sum { color: #dbdee1; font-size: 0.93rem; }
-  .mc-ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; color: #dbdee1; font-size: 0.92rem; }
-  .mc-action { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 5px 0; font-size: 0.92rem; }
-  .mc-action .task { color: #dbdee1; }
-  .mc-action .meta2 { color: #949ba4; font-size: 0.8rem; }
-  /* receipts */
-  .receipts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 30px; }
-  .receipt { background: #2b2d31; border: 1px solid #26282c; border-radius: 12px; padding: 16px; }
-  .r-icon { width: 38px; height: 38px; border-radius: 9px; background: #232428; display: flex; align-items: center;
-            justify-content: center; font-size: 1.15rem; margin-bottom: 11px; }
-  .r-title { color: #f2f3f5; font-weight: 700; font-size: 0.98rem; margin-bottom: 5px; }
-  .r-body { color: #949ba4; font-size: 0.87rem; }
-  .r-body code, .codechip { font-family: ui-monospace, monospace; font-size: 0.82em; background: #232428; color: #b5bac1;
-            padding: 1px 6px; border-radius: 5px; }
-  .strike { text-decoration: line-through; color: #6d7178; }
-  .pill-link { display: inline-block; margin-top: 9px; font-family: ui-monospace, monospace; font-size: 0.78rem;
-               color: #a9b0ff; background: #232428; border: 1px solid #3a3c42; border-radius: 6px; padding: 3px 9px; text-decoration: none; }
-  .pill-link:hover { border-color: #5865f2; }
-  .inj-banner { margin-top: 16px; background: #232428; border-left: 3px solid #5865f2; border-radius: 8px;
-                padding: 13px 16px; color: #b5bac1; font-size: 0.87rem; display: flex; gap: 11px; align-items: flex-start; }
-  /* comparison table */
-  .cmp-wrap { overflow-x: auto; margin-top: 30px; border: 1px solid #26282c; border-radius: 12px; }
-  table.cmp { border-collapse: collapse; width: 100%; min-width: 460px; font-size: 0.9rem; }
-  table.cmp th, table.cmp td { padding: 12px 14px; text-align: left; border-bottom: 1px solid #26282c; }
-  table.cmp thead th { color: #949ba4; font-size: 0.78rem; text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
-  table.cmp th.us { color: #f2f3f5; }
-  table.cmp td.us { background: rgba(88,101,242,.07); }
-  table.cmp td.feat { color: #dbdee1; }
-  table.cmp .yes { color: #23a55a; font-weight: 700; }
-  table.cmp .no { color: #6d7178; }
-  table.cmp tbody tr:last-child td { border-bottom: 0; }
-  /* steps */
-  .steps { display: flex; gap: 16px; margin-top: 32px; }
-  .step { flex: 1; background: #2b2d31; border: 1px solid #26282c; border-radius: 12px; padding: 16px; min-width: 0; }
-  .step-num { width: 26px; height: 26px; border-radius: 50%; background: #5865f2; color: #fff; font-weight: 800;
-              font-size: 0.85rem; display: flex; align-items: center; justify-content: center; margin-bottom: 10px; }
-  .step h3 { color: #f2f3f5; font-size: 0.98rem; margin-bottom: 5px; }
-  .step p { color: #949ba4; font-size: 0.86rem; }
-  .terminal { margin-top: 12px; background: #1a1b1e; border: 1px solid #26282c; border-radius: 9px; overflow: hidden; }
-  .term-bar { display: flex; align-items: center; gap: 6px; padding: 8px 11px; border-bottom: 1px solid #26282c; }
-  .term-bar i { width: 8px; height: 8px; border-radius: 50%; display: block; }
-  .term-bar .cp { margin-left: auto; font-size: 0.72rem; color: #949ba4; background: none; border: 0; cursor: pointer; font-family: inherit; }
-  .term-body { padding: 12px; font-family: ui-monospace, monospace; font-size: 0.8rem; color: #b5bac1;
-               white-space: pre-wrap; word-break: break-word; }
-  .term-body .flag { color: #949ba4; }
-  .term-note { color: #949ba4; font-size: 0.78rem; margin-top: 8px; }
-  .deploy-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
-  .dcard { background: #232428; border: 1px solid #26282c; border-radius: 12px; padding: 15px; color: #949ba4; font-size: 0.87rem; }
-  .dcard b { color: #dbdee1; }
-  /* features */
-  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-top: 32px; }
-  .feature { background: #2b2d31; border: 1px solid #26282c; border-radius: 12px; padding: 16px; }
-  .f-icon { font-size: 1.5rem; margin-bottom: 9px; }
-  .feature h3 { color: #f2f3f5; font-size: 0.96rem; margin-bottom: 5px; }
-  .feature p { color: #949ba4; font-size: 0.86rem; }
-  /* final cta */
-  .final { background: radial-gradient(120% 120% at 50% 0%, rgba(88,101,242,.22) 0%, rgba(30,31,34,0) 60%); }
-  .final-card { text-align: center; }
-  /* footer */
-  footer { border-top: 1px solid #26282c; padding: 26px 0; }
-  footer .wrap { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
-  .sig { color: #949ba4; font-size: 0.82rem; }
-  .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
-                     clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-  a:focus-visible, button:focus-visible, .btn:focus-visible, .cp:focus-visible {
-    outline: 2px solid #a9b0ff; outline-offset: 2px; border-radius: 4px; }
-  /* animations */
-  @keyframes recpulse { 0%,100%{opacity:1; box-shadow:0 0 0 0 rgba(218,55,60,.5)} 50%{opacity:.55; box-shadow:0 0 0 5px rgba(218,55,60,0)} }
-  @keyframes wave { 0%,100%{transform:scaleY(.4)} 50%{transform:scaleY(1)} }
-  @keyframes beamdot { 0%{transform:translateY(0); opacity:0} 20%{opacity:1} 80%{opacity:1} 100%{transform:translateY(46px); opacity:0} }
-  @keyframes reveal { from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:none} }
-  .beam .d1 { animation: beamdot 2.2s linear infinite; } .beam .d2 { animation: beamdot 2.2s linear infinite 1.1s; }
-  @media (max-width: 760px) {
-    .hero-split { flex-direction: column; }
-    .panel-call { flex-basis: auto; } .panel-chat { flex-basis: auto; }
-    .beam { display: none; }
-    .wave i { animation: none !important; }
-    .steps { flex-direction: column; }
-    .receipts, .deploy-cards { grid-template-columns: 1fr; }
-    /* nav cabe em 375px: some com os links de texto (estão no herói/rodapé), fica marca + EN·PT */
-    .topnav .wrap { gap: 8px; }
-    .navlinks { gap: 4px; }
-    .navlinks > a { display: none; }
+  :root {
+    color-scheme: dark;
+    --bg: #101012;
+    --bg-weak: #17171a;
+    --bg-hover: #1e1e22;
+    --bg-strong: #f1eeec;
+    --bg-strong-hover: #dfdcda;
+    --text: #b6b4b2;
+    --text-weak: #78767a;
+    --text-strong: #f1eeec;
+    --text-inverted: #131316;
+    --border: rgba(255,255,255,.13);
+    --border-strong: rgba(255,255,255,.22);
+    --accent: #5865f2;
+    --accent-soft: rgba(88,101,242,.16);
+    --ok: #3fbf7a;
+    --warn: #e0b34c;
+    --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
   }
-  @media (max-width: 640px) {
-    /* tabela vs Craig vira cards empilhados: a coluna Kassinão aparece SEM scroll horizontal */
-    .cmp-wrap { overflow-x: visible; border: 0; }
-    table.cmp { min-width: 0; }
-    table.cmp thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-    table.cmp tr { display: block; border: 1px solid #26282c; border-radius: 10px; margin-bottom: 10px; padding: 4px 0; }
-    table.cmp td { display: flex; justify-content: space-between; gap: 12px; border: 0; padding: 8px 14px; }
-    table.cmp td.feat { font-weight: 700; color: #f2f3f5; border-bottom: 1px solid #26282c; }
-    table.cmp td.us { background: none; }
-    table.cmp td:not(.feat)::before { content: attr(data-col); color: #949ba4; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  ::selection { background: var(--accent-soft); color: var(--text-strong); }
+  html { -webkit-text-size-adjust: 100%; }
+  body { background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 15px;
+         line-height: 1.9; -webkit-font-smoothing: antialiased; }
+  a { color: var(--text-strong); text-decoration: underline; text-underline-offset: 4px;
+      text-decoration-thickness: 1px; text-decoration-color: var(--border-strong); }
+  a:hover { text-decoration-color: var(--text-strong); }
+  strong { color: var(--text-strong); font-weight: 600; }
+  .container { max-width: 1020px; margin: 0 auto; border-left: 1px solid var(--border);
+               border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  section { border-top: 1px solid var(--border); padding: 56px 56px; }
+  @media (max-width: 1040px) { .container { border-left: 0; border-right: 0; } }
+  @media (max-width: 700px) { section { padding: 36px 20px; } body { font-size: 14px; } }
+
+  /* ---------- topo ---------- */
+  .top { position: sticky; top: 0; z-index: 10; background: var(--bg);
+         border-bottom: 1px solid var(--border); }
+  .top-in { max-width: 1020px; margin: 0 auto; display: flex; align-items: center;
+            justify-content: space-between; gap: 10px; padding: 0 56px; height: 64px;
+            border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+  @media (max-width: 1040px) { .top-in { border-left: 0; border-right: 0; } }
+  @media (max-width: 700px) { .top-in { padding: 0 20px; } }
+  .brand { display: inline-flex; align-items: baseline; gap: 2px; font-weight: 700;
+           color: var(--text-strong); text-decoration: none; font-size: 16px; letter-spacing: .02em; }
+  .brand .cur { color: var(--accent); animation: blink 1.2s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .brand .cur { animation: none; } }
+  .nav { display: flex; align-items: center; gap: 22px; font-size: 13.5px; }
+  .nav a { color: var(--text); text-decoration: none; }
+  .nav a:hover { color: var(--text-strong); text-decoration: underline; text-underline-offset: 4px; }
+  .nav .lt a { color: var(--text-weak); padding: 0 2px; }
+  .nav .lt a.on { color: var(--text-strong); font-weight: 700; }
+  .nav .lt span { color: var(--text-weak); opacity: .5; }
+  .btnp, .nav a.btnp { display: inline-flex; align-items: center; gap: 10px; background: var(--bg-strong);
+          color: var(--text-inverted); text-decoration: none; font-weight: 600; font-size: 13.5px;
+          padding: 8px 14px 8px 16px; border-radius: 4px; white-space: nowrap; }
+  .btnp:hover, .nav a.btnp:hover { background: var(--bg-strong-hover); color: var(--text-inverted); text-decoration: none; }
+  @media (max-width: 700px) {
+    .nav .hidesm { display: none; }
+    .top-in { height: auto; min-height: 56px; padding: 8px 20px; flex-wrap: wrap; }
+    .nav { gap: 14px; }
+    .btnp, .nav a.btnp { padding: 6px 10px; font-size: 12.5px; gap: 6px; }
   }
-  @media (prefers-reduced-motion: reduce) {
-    * { animation: none !important; transition: none !important; }
-  }
+
+  /* ---------- herói ---------- */
+  .hero h1 { color: var(--text-strong); font-size: 36px; line-height: 1.25; font-weight: 700;
+             letter-spacing: -.01em; max-width: 21ch; }
+  @media (max-width: 700px) { .hero h1 { font-size: 26px; } }
+  .hero .sub { margin-top: 18px; max-width: 62ch; }
+  .badge { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 26px;
+           font-size: 13px; color: var(--text-weak); }
+  .badge b { background: var(--bg-strong); color: var(--text-inverted); font-weight: 700;
+             padding: 2px 8px; font-size: 12px; }
+  .badge a { color: var(--text); }
+  .installer { margin-top: 30px; border: 1px solid var(--border); border-radius: 6px;
+               background: var(--bg-weak); max-width: 720px; }
+  .installer .tab { display: flex; align-items: center; justify-content: space-between;
+                    padding: 10px 16px; border-bottom: 1px solid var(--border);
+                    color: var(--text-weak); font-size: 12.5px; }
+  .installer pre { padding: 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.8;
+                   font-family: var(--mono); }
+  .installer .pr { color: var(--text-weak); user-select: none; }
+  .installer .hl { color: var(--text-strong); font-weight: 600; }
+  .cp { background: none; border: 1px solid var(--border); color: var(--text-weak);
+        font-family: var(--mono); font-size: 12px; padding: 3px 10px; border-radius: 4px;
+        cursor: pointer; }
+  .cp:hover { color: var(--text-strong); border-color: var(--border-strong); }
+  .cp.ok { color: var(--ok); border-color: var(--ok); }
+
+  /* ---------- terminal (a prova) ---------- */
+  .term-wrap { padding: 0; }
+  .term { font-size: 13.5px; line-height: 2.05; padding: 34px 56px; overflow-x: auto; }
+  @media (max-width: 700px) { .term { padding: 24px 20px; font-size: 12.5px; } }
+  .term .ln { white-space: pre-wrap; }
+  .term .p { color: var(--accent); user-select: none; }
+  .term .c { color: var(--text-strong); font-weight: 600; }
+  .term .ok { color: var(--ok); }
+  .term .dim { color: var(--text-weak); }
+  .term .ans { color: var(--text-strong); }
+  .term .ts { color: var(--accent); text-decoration: none; }
+  .term .ts:hover { text-decoration: underline; }
+  .term .cursor { display: inline-block; width: 8px; height: 15px; background: var(--text-strong);
+                  vertical-align: -2px; animation: blink 1.2s steps(1) infinite; }
+  @media (prefers-reduced-motion: reduce) { .term .cursor { animation: none; } }
+  .term-cap { border-top: 1px solid var(--border); padding: 12px 56px; font-size: 12.5px;
+              color: var(--text-weak); }
+  @media (max-width: 700px) { .term-cap { padding: 12px 20px; } }
+
+  /* ---------- listas [*] ---------- */
+  h3 { color: var(--text-strong); font-size: 16px; font-weight: 700; margin-bottom: 18px; }
+  .stars { list-style: none; }
+  .stars li { padding-left: 34px; position: relative; margin-bottom: 10px; }
+  .stars li::before { content: '[*]'; position: absolute; left: 0; color: var(--text-weak); }
+  .more { margin-top: 22px; font-size: 13.5px; }
+
+  /* ---------- figuras ---------- */
+  .figs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; margin-top: 30px; }
+  @media (max-width: 700px) { .figs { grid-template-columns: 1fr; } }
+  .figs figure { border: 1px solid var(--border); padding: 18px; border-radius: 6px; background: var(--bg-weak); }
+  .figs svg { width: 100%; height: 96px; display: block; }
+  .figs figcaption { margin-top: 12px; font-size: 12.5px; color: var(--text-weak); line-height: 1.6; }
+  .figs figcaption b { color: var(--text); font-weight: 600; }
+
+  /* ---------- perguntar ---------- */
+  .qa { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-weak);
+        padding: 18px 20px; margin-top: 26px; max-width: 720px; font-size: 13.5px; line-height: 2; }
+  .qa .q { color: var(--text-strong); }
+  .qa .p { color: var(--accent); }
+
+  /* ---------- tabela ---------- */
+  table { border-collapse: collapse; width: 100%; margin-top: 24px; font-size: 13.5px; }
+  th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
+  th { color: var(--text-strong); font-weight: 600; background: var(--bg-weak); }
+  td:first-child { color: var(--text); }
+  .yes { color: var(--ok); } .no { color: var(--text-weak); } .half { color: var(--warn); }
+
+  /* ---------- passos ---------- */
+  .steps { counter-reset: st; margin-top: 8px; }
+  .step { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-weak);
+          padding: 18px 20px; margin-top: 18px; max-width: 760px; }
+  .step .st-t { color: var(--text-strong); font-weight: 600; margin-bottom: 6px; }
+  .step .st-t::before { counter-increment: st; content: counter(st, decimal-leading-zero) '  ';
+                        color: var(--text-weak); font-weight: 400; }
+  .step pre { margin-top: 10px; overflow-x: auto; font-size: 13px; line-height: 1.8;
+              border-top: 1px solid var(--border); padding-top: 12px; }
+  .step .pr { color: var(--text-weak); user-select: none; }
+  .step p { font-size: 13.5px; line-height: 1.8; }
+
+  /* ---------- rodapé ---------- */
+  .cells { display: flex; border-top: 1px solid var(--border); }
+  .cells a { flex: 1; text-align: center; padding: 22px 8px; text-decoration: none;
+             color: var(--text); font-size: 13.5px; border-left: 1px solid var(--border); }
+  .cells a:first-child { border-left: 0; }
+  .cells a:hover { background: var(--bg-weak); color: var(--text-strong); }
+  .cells .k { color: var(--text-weak); }
+  @media (max-width: 700px) { .cells { flex-wrap: wrap; } .cells a { flex: 1 1 50%; border-top: 1px solid var(--border); margin-top: -1px; } }
+  .legal { max-width: 1020px; margin: 0 auto; padding: 26px 20px 40px; text-align: center;
+           color: var(--text-weak); font-size: 12.5px; }
+  .legal a { color: var(--text-weak); }
 `;
 
-/**
- * Vitrine pública em "/". Documento próprio (full-width), fora do shell() estreito.
- * Indexável, bilíngue (?lang=), self-contained sob a CSP. Direção fixada por um
- * workflow multiagente (divergir→julgar→sintetizar) + teardown adversarial.
- */
 export function landingPage(lang: Locale): string {
   const pt = lang === 'pt';
   const T = (ptStr: string, enStr: string): string => (pt ? ptStr : enStr);
   const metaTitle = T(
-    'Kassinão — Pare de ler transcrição. Pergunte às suas reuniões.',
-    'Kassinão — Stop reading transcripts. Ask your meetings.',
+    'Kassinão — Grava as calls do Discord. Depois é só perguntar.',
+    'Kassinão — Record your Discord calls. Then just ask.',
   );
   const metaDesc = T(
-    'Gravador de voz do Discord, open-source e no seu servidor, que transforma cada call em memória que a sua IA responde. Pergunte "o que ficou pendente essa semana?" no Claude ou Cursor e receba a decisão, o responsável e um link pro segundo exato — gravação multipista, transcrição por pessoa e ata de IA. O Craig, mas que lembra.',
-    'Self-hosted, open-source Discord voice recorder that turns every call into memory your AI assistant can answer. Ask "what\'s pending this week?" from Claude or Cursor and get the decision, the owner, and a link to the exact second — multi-track recording, per-speaker transcript, AI minutes. Craig, but it remembers.',
+    'Gravador de voz do Discord, open-source e self-hosted: uma faixa por pessoa, transcrição com nome exato de quem falou, ata por IA e memória que responde — /perguntar no Discord, busca na web ou qualquer assistente com MCP.',
+    'Open-source, self-hosted Discord voice recorder: one track per speaker, transcripts with exact speaker names, AI minutes, and memory that answers — /ask in Discord, web search, or any MCP-capable AI assistant.',
   );
-
-  const langToggle = `<div class="langtoggle"><a href="?lang=en"${!pt ? ' class="on"' : ''}>EN</a><span>·</span><a href="?lang=pt"${pt ? ' class="on"' : ''}>PT</a></div>`;
 
   const langUrl = `${config.baseUrl}/?lang=${pt ? 'pt' : 'en'}`;
-
   const repoPublic = config.repoPublic;
-  // "recibo" access.ts: link real só quando o repo é público; senão texto puro (sem 404)
-  const accessReceipt = repoPublic
-    ? `<a class="pill-link" href="${REPO_URL}/blob/main/src/web/access.ts">&lt;/&gt; checkAccess() · access.ts →</a>`
-    : `<span class="pill-link">&lt;/&gt; checkAccess() · src/web/access.ts</span>`;
+  const codeHref = repoPublic ? REPO_URL : NPM_URL;
+  const codeLabel = repoPublic ? 'GitHub' : 'npm';
 
-  // ---- HERO ----
-  const avatars: [string, string][] = [
-    ['P', '#5865f2'],
-    ['R', '#23a55a'],
-    ['M', '#f0b232'],
-    ['T', '#00a8fc'],
-    ['J', '#eb459e'],
-    ['S', '#5865f2'],
-  ];
-  const names = ['Priya', 'Rafael', 'Mei', 'Tobias', 'James', 'Sofia'];
-  const wave = (live: boolean): string =>
-    `<span class="wave${live ? ' live' : ''}"><i></i><i></i><i></i><i></i><i></i><i></i></span>`;
-  const speakers = names
-    .map((n, i) => {
-      const [ini, bg] = avatars[i];
-      return `<div class="spk"><span class="avatar" style="background:${bg}">${ini}</span><span class="nm">${n}</span>${wave(i < 2)}</div>`;
+  // ---------- topo ----------
+  const topnav = `<header class="top"><div class="top-in">
+    <a class="brand" href="/">kassinao<span class="cur">▌</span></a>
+    <nav class="nav">
+      <a href="/demo">${T('demo', 'demo')}</a>
+      <a href="${codeHref}" class="hidesm">${codeLabel.toLowerCase()}</a>
+      ${repoPublic ? `<a href="${REPO_URL}/blob/main/CHANGELOG.md" class="hidesm">changelog</a>` : ''}
+      <span class="lt"><a href="?lang=en"${pt ? '' : ' class="on"'}>EN</a><span>·</span><a href="?lang=pt"${pt ? ' class="on"' : ''}>PT</a></span>
+      <a class="btnp" href="#deploy">${T('rodar o meu', 'deploy')} <span class="ar">↓</span></a>
+    </nav>
+  </div></header>`;
+
+  // ---------- herói ----------
+  const installCmd = repoPublic
+    ? `git clone ${REPO_URL}.git && cd kassinao\ncp .env.example .env   ${T('# token do bot + chaves de IA', '# bot token + AI keys')}\ndocker compose up -d`
+    : `npx -y kassinao-mcp   ${T('# conector de IA (o bot é self-hosted)', '# AI connector (the bot is self-hosted)')}`;
+  const hero = `<section class="hero">
+    <div class="badge"><b>v1.2.0</b><span>${T(
+      '/perguntar no Discord · índice web com busca · retenção em camadas',
+      '/ask in Discord · web index with search · tiered retention',
+    )}</span></div>
+    <h1>${T('Grava as calls do Discord. Depois é só perguntar.', 'Record your Discord calls. Then just ask.')}</h1>
+    <p class="sub">${T(
+      'Uma faixa de áudio por pessoa — a transcrição sai com o <strong>nome exato de quem falou</strong>, sem diarização por chute. A ata (resumo, decisões, ações) se escreve sozinha. E as reuniões viram memória que responde: no Discord, na web ou no seu assistente de IA.',
+      'One audio track per speaker — transcripts carry the <strong>exact name of who said what</strong>, no diarization guesswork. Minutes (summary, decisions, action items) write themselves. Your meetings become memory that answers: in Discord, on the web, or in your AI assistant.',
+    )}</p>
+    <div class="installer">
+      <div class="tab"><span>${T('self-hosted · docker', 'self-hosted · docker')}</span>
+        <button class="cp" type="button" data-copy="kcmd">${T('copiar', 'copy')}</button></div>
+      <pre id="kcmd">${installCmd
+        .split('\n')
+        .map((l) => `<span class="pr">$ </span>${l.replace(/(#.*)$/, '<span class="pr">$1</span>')}`)
+        .join('\n')}</pre>
+    </div>
+  </section>`;
+
+  // ---------- terminal: o produto em 20 linhas ----------
+  const term = `<section class="term-wrap">
+    <div class="term" role="img" aria-label="${T('Sessão de exemplo do Kassinão', 'Kassinão example session')}">
+<div class="ln"><span class="p">discord&gt;</span> <span class="c">/${T('gravar', 'record')}</span></div>
+<div class="ln"><span class="dim">●</span> ${T('gravando <span class="c">#daily</span> — uma faixa FLAC por pessoa, painel com', 'recording <span class="c">#daily</span> — one FLAC track per person, panel with')} <span class="dim">[⏹ ${T('parar', 'stop')}] [📌 ${T('marcar', 'mark')}] [📝 ${T('nota', 'note')}]</span></div>
+<div class="ln">&nbsp;</div>
+<div class="ln"><span class="p">discord&gt;</span> <span class="c">/${T('parar', 'stop')}</span></div>
+<div class="ln"><span class="ok">✓</span> ${T('transcrição — 5 pessoas, nome exato em cada fala', 'transcript — 5 people, exact name on every line')} <span class="dim">(${T('só a fala vai pra API: VAD corta o silêncio', 'only speech hits the API: VAD trims silence')})</span></div>
+<div class="ln"><span class="ok">✓</span> ${T('ata — resumo · decisões · ações com responsável e prazo', 'minutes — summary · decisions · action items with owner & due')}</div>
+<div class="ln"><span class="ok">✓</span> ${T('postada no canal + página com player, busca e karaokê da transcrição', 'posted to the channel + page with player, search and transcript follow-along')}</div>
+<div class="ln">&nbsp;</div>
+<div class="ln"><span class="p">discord&gt;</span> <span class="c">/${T('perguntar', 'ask')}</span> ${T('o que decidimos sobre o rollback do onboarding?', 'what did we decide about the onboarding rollback?')}</div>
+<div class="ln"><span class="ans">${T(
+    'Rafael assumiu dar merge no rollback com feature-flag até quarta',
+    'Rafael took merging the rollback behind a feature-flag by Wednesday',
+  )} — <a class="ts" href="/demo">[16:10]</a></span></div>
+<div class="ln"><span class="dim">${T(
+    '· só busca nas reuniões que VOCÊ pode acessar · citação clicável pro segundo exato',
+    '· answers only from meetings YOU can access · citation jumps to the exact second',
+  )}</span></div>
+<div class="ln">&nbsp;</div>
+<div class="ln"><span class="p">discord&gt;</span> <span class="cursor"></span></div>
+    </div>
+    <div class="term-cap">${T(
+      'Sessão real de exemplo — veja a página que o time recebe na',
+      'Real example session — see the page your team gets on the',
+    )} <a href="/demo">${T('demo ao vivo →', 'live demo →')}</a></div>
+  </section>`;
+
+  // ---------- o que é ----------
+  const what = `<section>
+    <h3>${T('O que é o Kassinão?', 'What is Kassinão?')}</h3>
+    <ul class="stars">
+      <li><strong>${T('Multipista de verdade.', 'True multi-track.')}</strong> ${T(
+        'Cada pessoa vira um FLAC alinhado — atribuição perfeita de quem falou, exportável pra MP3, mix ou projeto Audacity.',
+        'Every speaker becomes an aligned FLAC — perfect attribution, exportable to MP3, a single mix, or an Audacity project.',
+      )}</li>
+      <li><strong>${T('Transcrição que não alucina.', 'Transcripts that do not hallucinate.')}</strong> ${T(
+        'VAD corta o silêncio antes da API (AssemblyAI, Groq, OpenAI, Gemini ou 100% local) e o custo acompanha o tempo falado, não pessoas × horas.',
+        'VAD trims silence before the API (AssemblyAI, Groq, OpenAI, Gemini, or 100% local) and cost tracks talk time — not people × hours.',
+      )}</li>
+      <li><strong>${T('Ata por IA no canal.', 'AI minutes in the channel.')}</strong> ${T(
+        'Resumo, decisões e ações (com responsável e prazo) postados no Discord e na página — sem ninguém pedir.',
+        'Summary, decisions and action items (owner + due) posted to Discord and the page — nobody has to ask.',
+      )}</li>
+      <li><strong>${T('Memória que responde.', 'Memory that answers.')}</strong> ${T(
+        '/perguntar no Discord, busca full-text na web e conector MCP pro seu assistente — o áudio expira, o texto fica (retenção em camadas).',
+        '/ask in Discord, full-text web search, and an MCP connector for your assistant — audio expires, text stays (tiered retention).',
+      )}</li>
+      <li><strong>${T('Acesso que fecha de verdade.', 'Access control that actually closes.')}</strong> ${T(
+        'Login com Discord: só abre pra quem estava na call (mesmo mutado), enxerga o canal, iniciou ou é admin. Link vazado não abre nada.',
+        'Discord login: opens only for people who were in the call (even muted), can see the channel, started it, or are admins. A leaked link opens nothing.',
+      )}</li>
+    </ul>
+    <p class="more"><a href="${repoPublic ? `${REPO_URL}#readme` : NPM_URL}">${T('Leia o README →', 'Read the README →')}</a></p>
+  </section>`;
+
+  // ---------- figuras ----------
+  const lanes = [22, 46, 70]
+    .map(
+      (y, i) =>
+        `<rect x="4" y="${y - 7}" width="192" height="14" fill="none" stroke="rgba(255,255,255,.14)"/>` +
+        [8, 30, 58, 92, 118, 150, 172]
+          .filter((_, j) => (j + i) % 3 !== 0)
+          .map(
+            (x) =>
+              `<rect x="${x}" y="${y - 5}" width="${10 + ((x * (i + 2)) % 16)}" height="10" fill="rgba(255,255,255,.34)"/>`,
+          )
+          .join(''),
+    )
+    .join('');
+  const vad = [4, 22, 34, 58, 76, 96, 110, 128, 152, 170, 184]
+    .map((x, i) => {
+      const h = [8, 30, 6, 38, 10, 44, 8, 34, 6, 26, 8][i];
+      const speech = h > 12;
+      return `<rect x="${x}" y="${48 - h / 2}" width="8" height="${h}" fill="${speech ? 'rgba(255,255,255,.42)' : 'rgba(255,255,255,.12)'}"/>${speech ? '' : `<line x1="${x - 1}" y1="58" x2="${x + 9}" y2="58" stroke="rgba(255,255,255,.2)" stroke-dasharray="2 2"/>`}`;
     })
     .join('');
-
-  const beam = `<svg class="beam" viewBox="0 0 40 60" aria-hidden="true"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5865f2" stop-opacity="0"/><stop offset="0.5" stop-color="#5865f2" stop-opacity=".9"/><stop offset="1" stop-color="#5865f2" stop-opacity="0"/></linearGradient></defs><line x1="20" y1="6" x2="20" y2="54" stroke="url(#bg)" stroke-width="2"/><path d="M15 48 L20 55 L25 48" fill="none" stroke="#5865f2" stroke-width="2" stroke-opacity=".8"/><circle class="d1" cx="20" cy="8" r="2.5" fill="#a9b0ff"/><circle class="d2" cx="20" cy="8" r="2.5" fill="#a9b0ff"/></svg>`;
-
-  const recTag = T('[GRAVANDO]', '[RECORDING]');
-  const chatQuestion = T('o que ficou pra essa semana?', "what's due this week?");
-  const ansRow = (task: string, owner: string, due: string, ts: string): string =>
-    `<div class="ans-row"><span class="sdot"></span><span class="tk">${task}</span><span class="ans-meta"><span class="pill pill-owner">${owner}</span><span class="pill pill-due">${due}</span><a class="ts" href="/demo">▶ ${ts}</a></span></div>`;
-  const answerRows =
-    ansRow(
-      T('Dar merge no rollback do onboarding + feature-flag', 'Merge the onboarding rollback + feature-flag it'),
-      'Rafael',
-      T('qua', 'Wed'),
-      '16:10',
-    ) +
-    ansRow(
-      T('Rodar o load test no staging e compartilhar os números', 'Run the load test against staging + share numbers'),
-      'Mei',
-      T('qua', 'Wed EOD'),
-      '5:20',
-    ) +
-    ansRow(
-      T('Finalizar e-mail de lançamento + changelog', 'Finalize launch email + changelog'),
-      'Priya',
-      T('qui', 'Thu'),
-      '55:30',
-    );
-
-  const flow = `<div class="flow">
-      <span class="chip">🎙️ ${T('Grava a call', 'Record the call')}</span>
-      <span class="arrow">→</span>
-      <span class="chip">✍️ ${T('Transcreve por pessoa', 'One track per person')}</span>
-      <span class="arrow">→</span>
-      <span class="chip">🤖 ${T('Pergunta pra sua IA', 'Ask in your AI')}</span>
-    </div>`;
-  const hero = `<section class="hero"><div class="wrap">
-    <div class="eyebrow">🎙️ <span>${T('Bot open-source pro seu Discord', 'Open-source bot for your Discord')}</span></div>
-    <h1>${T('Grava as calls do Discord.<br><span class="accent">Depois é só perguntar pra IA.</span>', 'Record your Discord calls.<br><span class="accent">Then just ask your AI.</span>')}</h1>
-    <p class="lead">${T(
-      'O Kassinão grava cada pessoa numa faixa, escreve a transcrição e a ata sozinho, e deixa você <b>perguntar</b> o que foi decidido — com /perguntar no próprio Discord ou em qualquer assistente de IA (Claude, Cursor e outros).',
-      'Kassinão records each caller on their own track, writes the transcript and minutes for you, and lets you <b>ask</b> what was decided — with /ask right in Discord, or from any AI assistant (Claude, Cursor, and more).',
-    )}</p>
-    ${flow}
-    <div class="ctarow">
-      <a class="btn btn-primary" href="/demo">${T('▶️ Ver a demo ao vivo', '▶️ See the live demo')}</a>
-      <a class="btn btn-outline" href="${ghHref()}">${T('Rodar no meu servidor →', 'Deploy your own →')}</a>
+  const marks = [14, 38, 52, 90, 108, 146, 178]
+    .map(
+      (x, i) =>
+        `<rect x="${x}" y="${i % 2 ? 36 : 30}" width="5" height="${i % 2 ? 24 : 36}" fill="rgba(255,255,255,${i % 3 ? '.32' : '.5'})"/>`,
+    )
+    .join('');
+  const figs = `<section>
+    <h3>${T('Como ele acerta o que os outros chutam', 'How it gets right what others guess')}</h3>
+    <div class="figs">
+      <figure><svg viewBox="0 0 200 96" aria-hidden="true">${lanes}</svg>
+        <figcaption><b>Fig 1.</b> ${T(
+          'Uma faixa por pessoa, alinhadas na amostra — diarização não é chute, é arquitetura.',
+          'One track per speaker, sample-aligned — diarization is not a guess, it is architecture.',
+        )}</figcaption></figure>
+      <figure><svg viewBox="0 0 200 96" aria-hidden="true">${vad}</svg>
+        <figcaption><b>Fig 2.</b> ${T(
+          'Só a fala é enviada à API (VAD): sem alucinação de silêncio, sem pagar por hora vazia.',
+          'Only speech is sent to the API (VAD): no silence hallucinations, no paying for empty hours.',
+        )}</figcaption></figure>
+      <figure><svg viewBox="0 0 200 96" aria-hidden="true"><line x1="4" y1="66" x2="196" y2="66" stroke="rgba(255,255,255,.2)"/>${marks}</svg>
+        <figcaption><b>Fig 3.</b> ${T(
+          'Tudo tem timestamp clicável: ata, busca e respostas pulam pro segundo exato do áudio.',
+          'Everything carries a clickable timestamp: minutes, search and answers jump to the exact second.',
+        )}</figcaption></figure>
     </div>
-    <div class="microline">${T('Sem login pra ver a demo', 'No login to see the demo')} · <b>${T('roda no seu servidor', 'runs on your box')}</b> · ${T('open-source, AGPL-3.0', 'open-source, AGPL-3.0')}</div>
+  </section>`;
 
-    <div class="hero-split">
-      <div class="panel panel-call">
-        <div class="dc-head"><span class="rec-dot"></span><span class="ch">🔊 product-sync</span><span class="rec-pill">${recTag}</span></div>
-        ${speakers}
-      </div>
-      ${beam}
-      <div class="panel panel-chat">
-        <div class="chrome"><i style="background:#da373c"></i><i style="background:#f0b232"></i><i style="background:#23a55a"></i><span class="lbl mono">Claude · kassinao</span></div>
-        <div class="bubble bubble-user">${chatQuestion}</div>
-        <div class="bubble bubble-ai">
-          <span class="toolchip mono">🔌 kassinao · pending_actions</span>
-          <div class="ans-head">${T('3 pra essa semana', '3 due this week')}</div>
-          ${answerRows}
-          <div class="ans-foot mono">via kassinao-mcp · product-sync · 6 ${T('pessoas', 'speakers')}</div>
-        </div>
-      </div>
+  // ---------- perguntar em 3 lugares ----------
+  const ask = `<section>
+    <h3>${T('Pergunte de onde você já trabalha', 'Ask from wherever you already work')}</h3>
+    <ul class="stars">
+      <li><strong>Discord</strong> — <span class="dim">/${T('perguntar', 'ask')}</span> ${T(
+        'responde na hora, só pra você, com citações. Zero setup pro time.',
+        'answers on the spot, only to you, with citations. Zero setup for the team.',
+      )}</li>
+      <li><strong>Web</strong> — ${T(
+        'índice de todas as suas gravações com busca em transcrições, atas e notas.',
+        'an index of everything you can access, with search across transcripts, minutes and notes.',
+      )}</li>
+      <li><strong>${T('Seu assistente de IA', 'Your AI assistant')}</strong> — ${T(
+        'conector MCP (padrão aberto) pra Claude, Cursor e o que vier: ações pendentes entre reuniões, quem disse o quê, busca por período.',
+        'MCP connector (open standard) for Claude, Cursor and whatever comes next: pending actions across meetings, who said what, time-window search.',
+      )}</li>
+    </ul>
+    <div class="qa">
+      <div><span class="p">claude&gt;</span> <span class="q">${T(
+        'o que ficou pendente das reuniões dessa semana?',
+        'what is still pending from this week’s meetings?',
+      )}</span></div>
+      <div>${T(
+        '3 itens: load test no staging (<strong>Mei</strong>, qua) · e-mail de lançamento (<strong>Priya</strong>, qui) · rollback do onboarding (<strong>Rafael</strong>, qua)',
+        '3 items: staging load test (<strong>Mei</strong>, Wed) · launch email (<strong>Priya</strong>, Thu) · onboarding rollback (<strong>Rafael</strong>, Wed)',
+      )} <span class="dim">— product-sync</span> <a class="ts" href="/demo">[5:20]</a></div>
     </div>
-  </div></section>`;
+  </section>`;
 
-  // ---- ASK + TRUST (fundidos: o MCP é o valor E a história de privacidade) ----
-  const qcard = (glow: boolean, q: string, tool: string, ans: string, badge?: string): string =>
-    `<div class="qcard${glow ? ' glow' : ''}"><div class="qprompt"><span class="arrow">›</span><span>${q}</span></div>
-      <div class="qtool"><span class="toolchip mono">🔌 ${tool}</span></div>
-      <div class="qans">${ans}</div>${badge ? `<span class="qbadge">${badge}</span>` : ''}</div>`;
-  const receipt = (icon: string, title: string, body: string): string =>
-    `<div class="receipt"><div class="r-icon">${icon}</div><div class="r-title">${title}</div><div class="r-body">${body}</div></div>`;
-  const askSection = `<section><div class="wrap">
-    <div class="kicker">${T('O pulo do gato', 'The part nobody else ships')}</div>
-    <h2>${T('Suas calls viram memória que a sua IA responde.', 'You ask in plain language. It answers with a timestamp.')}</h2>
-    <p class="lead">${T(
-      'Gravar todo mundo faz — o diferencial é perguntar. O Kassinão se pluga na sua IA via <b>MCP</b> (o padrão aberto pra conectar ferramentas a assistentes de IA): você fala em português normal e ele puxa a decisão, quem ficou de fazer e o link pro minuto certo. Funciona no Claude, no Cursor e em qualquer cliente MCP — só leitura, e só o que a SUA identidade do Discord já enxergava.',
-      'A transcript is a wall of text. Instead, Kassinão plugs into your AI through <b>MCP</b> (the open standard for connecting tools to AI assistants): you ask in plain language and it pulls the decision, the owner, and a link to the exact second. Works in Claude, Cursor, and any MCP client — read-only, and only what your Discord identity can already see.',
-    )}</p>
-    <div class="grid-cards">
-      ${qcard(true, T('⏳ O que tá pendente, e quem ficou de fazer?', "⏳ What's still open, and who owns it?"), 'pending_actions', T('Rollback do onboarding — Rafael, qua · Load test — Mei, qua EOD · E-mail de lançamento — Priya, qui', 'Onboarding rollback — Rafael, Wed · Load test — Mei, Wed EOD · Launch email — Priya, Thu'), T('cruza TODAS as calls', 'across ALL your calls'))}
-      ${qcard(false, T('🗣️ Quem falou do pico de churn?', '🗣️ Who brought up the churn spike?'), 'who_said', T('Rafael, sobre o tour de onboarding <a class="ts" href="/demo">▶ 16:10</a>', 'Rafael, on the onboarding tour <a class="ts" href="/demo">▶ 16:10</a>'))}
-      ${qcard(false, T('🔎 Onde decidimos subir o preço anual?', '🔎 When did we decide to ship annual pricing?'), 'search_meetings', T('100% — +18% de conversão a 20% de rollout <a class="ts" href="/demo">▶ 29:40</a>', '100% — +18% conversion at 20% rollout <a class="ts" href="/demo">▶ 29:40</a>'))}
-      ${qcard(false, T('📅 O que rolou essa semana?', '📅 What happened this week?'), 'list_meetings', T('Todas as calls, da mais nova pra mais velha — e por janela de datas.', 'Every call on record, newest first — date ranges too.'))}
-      ${qcard(false, T('📄 Abre a ata inteira da product-sync', '📄 Give me the full product-sync'), 'get_meeting', T('Resumo + decisões + ações + timeline, saltando pra qualquer segundo.', 'Summary + decisions + actions + timeline, jump to any second.'))}
-    </div>
-    <div class="kicker" style="margin-top:44px">${T('Sem pegadinha', 'Read the source, not the promise')}</div>
-    <h2>${T('Sua IA só vê as calls que você já veria. Nunca mais que isso.', 'Your AI sees the calls you could already see. Never more.')}</h2>
-    <div class="receipts" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
-      ${receipt('👁️', T('Acesso pela sua identidade do Discord', 'By your Discord identity'), T('Reconferido ao vivo a cada gravação — você iniciou, participou, enxerga o canal ou tem Gerenciar Servidor. Não existe modo "dono vê tudo".', 'Re-checked live per meeting — you started it, you were in it, you can see the channel, or you have Manage-Server. No "operator sees all" mode.') + `<br>${accessReceipt}`)}
-      ${receipt('🔒', T('Read-only, revogável', 'Read-only, revocable'), T('O conector não grava, não apaga, não serve áudio. O token gira a cada uso, detecta reuso e trava em 503 (fail-closed). Revoga quando quiser (', 'The connector never writes, deletes, or serves audio. The token rotates each use, trips reuse-detection, and fails closed with a 503. Revoke anytime (') + `<code>/mcp revoke-all</code>).`)}
-      ${receipt('🖥️', T('Roda na sua máquina', 'Runs on your box'), T('Áudio e transcrição 100% local (faster-whisper) — a gravação nunca sai daí. Só a ata usa um LLM na nuvem (OpenRouter ou Groq), ou você desliga a ata. Sem fingir que é offline.', "Audio and transcription can run 100% local (faster-whisper) — the recording never leaves your box. Only the AI minutes use a cloud LLM (OpenRouter or Groq), or you turn minutes off. We won't pretend otherwise."))}
-    </div>
-    <div class="inj-banner"><span>🔓</span><span>${T('Tudo é open-source — o bot, a página web e o conector MCP. Licença AGPL-3.0, no seu servidor. Não confia: lê o código.', "The whole thing is open-source — the bot, the web app, and the MCP connector. AGPL-licensed, on your box. Don't trust it — read it.")} ${repoPublic ? `<a class="pill-link" href="${REPO_URL}">${REPO_URL.replace('https://', '')} →</a>` : `<a class="pill-link" href="${NPM_URL}">npm: kassinao-mcp →</a>`}</span></div>
-  </div></section>`;
+  // ---------- privacidade ----------
+  const accessReceipt = repoPublic
+    ? `<a href="${REPO_URL}/blob/main/src/web/access.ts">src/web/access.ts →</a>`
+    : `<span>src/web/access.ts</span>`;
+  const privacy = `<section>
+    <h3>${T('Privacidade não é promessa, é arquitetura', 'Privacy is architecture, not a promise')}</h3>
+    <ul class="stars">
+      <li>${T(
+        '<strong>Roda no SEU servidor.</strong> Áudio e transcrição podem ser 100% locais (faster-whisper); a ata usa um LLM na nuvem (OpenRouter ou Groq) — ou você a desliga.',
+        '<strong>Runs on YOUR server.</strong> Audio and transcription can be 100% local (faster-whisper); minutes use a cloud LLM (OpenRouter or Groq) — or you turn them off.',
+      )}</li>
+      <li>${T(
+        '<strong>Consentimento visível:</strong> apelido [GRAVANDO] + painel no canal enquanto grava.',
+        '<strong>Visible consent:</strong> a [RECORDING] nickname + a panel in the channel while recording.',
+      )}</li>
+      <li>${T(
+        `<strong>Cada acesso é re-checado no Discord</strong> a cada visita — a regra inteira cabe num arquivo: ${accessReceipt}`,
+        `<strong>Every access is re-checked against Discord</strong> on every visit — the whole rule fits in one file: ${accessReceipt}`,
+      )}</li>
+      <li>${T(
+        '<strong>Retenção em camadas:</strong> o áudio (pesado, sensível) expira em dias; transcrição e ata vivem o quanto você configurar.',
+        '<strong>Tiered retention:</strong> audio (heavy, sensitive) expires in days; transcript and minutes live as long as you configure.',
+      )}</li>
+      <li>${T(
+        '<strong>Open source sob AGPL-3.0</strong> — quem hospedar uma versão modificada é obrigado a abrir o código também.',
+        '<strong>Open source under AGPL-3.0</strong> — anyone hosting a modified version must open their code too.',
+      )}</li>
+    </ul>
+  </section>`;
 
-  // ---- PROOF: real demo minutes ----
-  const dec = (ptS: string, enS: string): string => `<li>${T(ptS, enS)}</li>`;
-  const mcAction = (task: string, meta: string, ts: string): string =>
-    `<div class="mc-action"><a class="ts" href="/demo">${ts}</a><span class="task">${task}</span><span class="meta2">${meta}</span></div>`;
-  const proofSection = `<section><div class="wrap">
-    <div class="kicker">${T('Não é maquete', 'Not a mockup')}</div>
-    <h2>${T('Uma call de verdade, do começo ao fim.', 'Six people, 58 minutes, zero note-taking.')}</h2>
-    <p class="lead">${T('Sync de produto da Northwind, 6 pessoas, ~58 min. O Kassinão sozinho fechou as decisões e as ações com dono e prazo — cada item linka pro segundo em que rolou. Ninguém digitou isso. Abre e confere, sem login.', 'The actual output of the public demo — a real Northwind product-sync. Decisions with owners, action items with due dates, every line linked to the second it was said. Open it and pick it apart. No login.')}</p>
-    <div class="minutes-card">
-      <div class="mc-head"><span class="bc">🎙️ product-sync · Northwind (demo) · 👥 6 · 58:12</span><span class="mc-badge">${T('✅ FINALIZADA', '✅ FINISHED')}</span><span class="ai-pill">${T('gerado por IA', 'AI-generated')}</span></div>
-      <div class="mc-h3">${T('RESUMO', 'SUMMARY')}</div>
-      <p class="mc-sum">${T(
-        'O time revisou a prontidão do lançamento do dashboard v3, ligou o pico de churn ao novo fluxo de onboarding e aprovou o experimento de preço do plano anual.',
-        'The team reviewed v3 dashboard launch readiness, traced a churn spike to the new onboarding flow, and green-lit the annual pricing experiment.',
-      )}</p>
-      <div class="mc-h3">${T('DECISÕES', 'DECISIONS')}</div>
-      <ul class="mc-ul">
-        ${dec('Dashboard v3 lança na quinta que vem, condicionado à correção do onboarding + load test passando.', 'v3 dashboard launches next Thursday, gated on the onboarding fix + a passing load test.')}
-        ${dec('Reverter o tour obrigatório do novo onboarding (bate com o pico de churn).', "Roll back the new onboarding flow's mandatory tour (correlates with the churn spike).")}
-        ${dec('Subir o experimento de preço do plano anual pra 100% (era +18% de conversão a 20% de rollout).', 'Ship the annual-plan pricing experiment to 100% (was +18% conversion at 20% rollout).')}
-        ${dec('Abrir vaga pra um segundo engenheiro de infra/SRE.', 'Open a headcount for a second infra/SRE engineer.')}
-      </ul>
-      <div class="mc-h3">${T('ITENS DE AÇÃO', 'ACTION ITEMS')}</div>
-      ${mcAction(T('Dar merge no rollback do onboarding + feature-flag', 'Merge the onboarding rollback + feature-flag it'), 'Rafael · ' + T('qua', 'Wed'), '16:10')}
-      ${mcAction(T('Rodar o load test no staging e compartilhar os números', 'Run the load test against staging and share numbers'), 'Mei · ' + T('qua', 'Wed EOD'), '5:20')}
-      ${mcAction(T('Finalizar e-mail de lançamento + changelog, agendar qui 9h', 'Finalize launch email + changelog, schedule for Thu 9am'), 'Priya · ' + T('qui', 'Thu'), '55:30')}
-    </div>
-    <div class="ctarow"><a class="btn btn-primary" href="/demo">${T('▶️ Abrir a gravação inteira', '▶️ Open the whole recording')}</a></div>
-  </div></section>`;
+  // ---------- comparação ----------
+  const compare = `<section>
+    <h3>${T('Craig grava. Otter resume. O Kassinão lembra.', 'Craig records. Otter summarizes. Kassinão remembers.')}</h3>
+    <table>
+      <tr><th></th><th>Kassinão</th><th>Craig</th><th>Otter/Fireflies</th></tr>
+      <tr><td>${T('Multipista (1 faixa/pessoa)', 'Multi-track (1 file/speaker)')}</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">—</td></tr>
+      <tr><td>${T('Quem falou = exato', 'Speaker attribution = exact')}</td><td class="yes">✓</td><td class="yes">✓</td><td class="half">${T('chute (IA)', 'guessed (AI)')}</td></tr>
+      <tr><td>${T('Ata por IA (decisões + ações)', 'AI minutes (decisions + actions)')}</td><td class="yes">✓</td><td class="no">—</td><td class="yes">✓</td></tr>
+      <tr><td>${T('Perguntar às reuniões (Discord/web/MCP)', 'Ask your meetings (Discord/web/MCP)')}</td><td class="yes">✓</td><td class="no">—</td><td class="half">${T('só no app deles', 'their app only')}</td></tr>
+      <tr><td>${T('Seus dados, seu servidor', 'Your data, your server')}</td><td class="yes">✓</td><td class="half">${T('parcial', 'partial')}</td><td class="no">—</td></tr>
+      <tr><td>${T('Preço', 'Price')}</td><td class="yes">${T('grátis (AGPL)', 'free (AGPL)')}</td><td>freemium</td><td>${T('pago', 'paid')}</td></tr>
+    </table>
+  </section>`;
 
-  // Craig sobrevive só como aside no setup (de-Craig: não é o eixo da landing)
-  const craigLine = T(
-    'Já grava com o Craig? O Kassinão é a camada de IA que ele manda você comprar em outro lugar.',
-    'Already recording with Craig? Kassinão is the memory layer he tells you to buy somewhere else.',
-  );
-
-  // ---- SETUP + COST ----
-  const cmd = `KASSINAO_URL=${config.baseUrl} npx -y kassinao-mcp exchange <code>`;
-  const setupSection = `<section><div class="wrap">
-    <div class="kicker">${T('Sobe em 3 passos', "Docker up, and it's yours")}</div>
-    <h2>${T('No ar em minutos, no seu servidor.', 'A Discord app, a container, your keys. Done.')}</h2>
+  // ---------- deploy ----------
+  const deploy = `<section id="deploy">
+    <h3>${T('Rode o seu em 3 passos', 'Deploy yours in 3 steps')}</h3>
     <div class="steps">
-      <div class="step"><div class="step-num">1</div><h3>${T('Suba o bot', 'Boot the bot')}</h3><p>${T('Um app do Discord + Docker Compose, ou o blueprint Deploy-to-Render. HTTPS via Cloudflare Tunnel, sem abrir porta.', 'A Discord app + Docker Compose, or the Deploy-to-Render blueprint. HTTPS via Cloudflare Tunnel, no open ports.')}</p></div>
-      <div class="step"><div class="step-num">2</div><h3>${T('Grave', 'Record')}</h3><p>${T('Entra na call e /gravar, ou auto-grava quando 2+ pessoas entram — com ' + recTag + ' no apelido e um painel ao vivo. Consentimento visível, nunca secreto.', 'Join the voice channel and /gravar, or auto-record when 2+ people join — with a ' + recTag + ' nickname tag and a live panel. Visible consent, never covert.')}</p></div>
-      <div class="step"><div class="step-num">3</div><h3>${T('Conecte', 'Connect')}</h3><p>${T('Abra /conectar-ia, entre com o Discord e rode o comando pra plugar o Claude ou o Cursor:', 'Open /conectar-ia, sign in with Discord, and run the command to connect Claude or Cursor:')}</p>
-        <div class="terminal"><div class="term-bar"><i style="background:#da373c"></i><i style="background:#f0b232"></i><i style="background:#23a55a"></i><button class="cp mono" id="kcp" type="button">⧉ ${T('copiar', 'copy')}</button></div><div class="term-body mono" id="kcmd">${esc(cmd)}</div></div>
-        <div class="term-note">${T('código válido ~5 min, uso único · ', 'code valid ~5 min, single use · ')}<span class="codechip">npx -y kassinao-mcp</span> · 5 ${T('ferramentas', 'tools')}</div>
-      </div>
+      <div class="step"><div class="st-t">${T('Crie o app no Discord', 'Create the Discord app')}</div>
+        <p>${T(
+          'Developer Portal → New Application → Bot. Copie token, application id e client secret. (~1 minuto)',
+          'Developer Portal → New Application → Bot. Copy the token, application id and client secret. (~1 minute)',
+        )}</p></div>
+      <div class="step"><div class="st-t">${T('Suba com Docker', 'Bring it up with Docker')}</div>
+        <pre><span class="pr">$ </span>git clone ${repoPublic ? `${REPO_URL}.git` : 'https://github.com/resolvicomai/kassinao.git'} && cd kassinao
+<span class="pr">$ </span>cp .env.example .env && $EDITOR .env
+<span class="pr">$ </span>docker compose up -d</pre>
+        <p>${T(
+          'HTTPS sem abrir porta: Cloudflare Tunnel (TUNNEL_TOKEN + COMPOSE_PROFILES=tunnel). Ou 1-clique no Render.',
+          'HTTPS without opening ports: Cloudflare Tunnel (TUNNEL_TOKEN + COMPOSE_PROFILES=tunnel). Or 1-click on Render.',
+        )}</p></div>
+      <div class="step"><div class="st-t">${T('Ligue a IA (opcional)', 'Turn on the AI (optional)')}</div>
+        <pre><span class="pr"># </span>TRANSCRIBE_PROVIDER=assemblyai   <span class="pr">${T('# ou groq (free tier) / local', '# or groq (free tier) / local')}</span>
+<span class="pr"># </span>OPENROUTER_API_KEY=sk-or-...     <span class="pr">${T('# ata + /perguntar (~centavos/reunião)', '# minutes + /ask (~cents/meeting)')}</span></pre>
+        <p>${T(
+          'Depois /gravar num canal de voz — o resto acontece sozinho.',
+          'Then /record in a voice channel — everything else just happens.',
+        )}</p></div>
     </div>
-    <div class="deploy-cards">
-      <div class="dcard">🐳 <b>Docker Compose</b> · ${repoPublic ? `<a class="ts" href="https://render.com/deploy?repo=${REPO_URL}">🚀 Deploy to Render</a>` : '🚀 Deploy to Render'} · 🔒 Cloudflare Tunnel — 0 ${T('portas abertas', 'open ports')}</div>
-      <div class="dcard">${T('Custo, direto: a transcrição é BYO-key e só a FALA é enviada (VAD corta o silêncio) — o custo acompanha o tempo falado, não pessoas × horas; free tiers cobrem times pequenos. A ata roda uma vez, alguns centavos. Ou 100% local (faster-whisper) e some com o custo.', 'Cost, straight: transcription is bring-your-own-key and only SPEECH is sent (VAD trims silence) — cost tracks talk time, not people × hours; free tiers cover small teams. Minutes run once, a few cents. Or go 100% local (faster-whisper) and the bill disappears.')}</div>
-    </div>
-    <p class="microline" style="margin-top:18px">${craigLine}</p>
-  </div></section>`;
+  </section>`;
 
-  // ---- FINAL CTA ----
-  const finalSection = `<section class="final"><div class="wrap final-card">
-    <h2>${T('Sua próxima call merece ser lembrada.', 'Your next call is worth remembering.')}</h2>
-    <p class="lead" style="margin:14px auto 0">${T('Sobe no seu servidor em minutos, grava a primeira call e pergunta pra sua IA o que ficou combinado. Seu servidor, sua chave, seus dados.', 'Deploy it on your own server in minutes, record your first call, and ask your AI what everyone agreed to. Your server, your keys, your data.')}</p>
-    <div class="ctarow">
-      <a class="btn btn-primary" href="/demo">${T('▶️ Ver a demo ao vivo', '▶️ See the live demo')}</a>
-      <a class="btn btn-outline" href="${ghHref()}">${T('Rodar no meu servidor →', 'Deploy your own →')}</a>
-    </div>
-  </div></section>`;
+  // ---------- rodapé ----------
+  const footer = `<div class="cells">
+    <a href="${codeHref}">${codeLabel} <span class="k">[AGPL]</span></a>
+    <a href="${NPM_URL}">npm <span class="k">[kassinao-mcp]</span></a>
+    <a href="/demo">${T('demo ao vivo', 'live demo')}</a>
+    <a href="/gravacoes">${T('minhas gravações', 'my recordings')}</a>
+    <a href="/conectar-ia">${T('conectar IA', 'connect AI')}</a>
+  </div>`;
 
-  const topnav = `<div class="topnav"><div class="wrap">
-    <a class="brand" href="/">🎙️ Kassinão</a>
-    <div class="navlinks">
-      <a href="/demo">${T('Demo', 'Demo')}</a>
-      <a href="${ghHref()}">${repoPublic ? 'GitHub' : 'npm'}</a>
-      <a class="btn btn-primary btn-sm" href="/demo">${T('Ver a demo', 'See the demo')}</a>
-      ${langToggle}
-    </div>
-  </div></div>`;
-
-  const footer = `<footer><div class="wrap">
-    <span class="sig">${T('AGPL-3.0 · open-source · roda no seu servidor · EN / pt-BR', 'AGPL-3.0 · open-source · runs on your server · EN / pt-BR')}</span>
-    <span class="sig">${repoPublic ? `<a href="${REPO_URL}" style="color:inherit">GitHub</a> · ` : ''}<a href="${NPM_URL}" style="color:inherit">npm: kassinao-mcp</a></span>
-    ${langToggle}
-  </div></footer>`;
-
-  const copyScript = `<script>(function(){var b=document.getElementById('kcp');if(!b)return;b.addEventListener('click',function(){var t=(document.getElementById('kcmd').textContent)||'';navigator.clipboard.writeText(t).then(function(){var o=b.textContent;b.textContent='${T('copiado ✓', 'copied ✓')}';setTimeout(function(){b.textContent=o;},2000);});});})();</script>`;
+  const copyScript = `<script>(function(){
+    document.querySelectorAll('.cp[data-copy]').forEach(function(b){
+      b.addEventListener('click', function(){
+        var el = document.getElementById(b.dataset.copy);
+        if (!el) return;
+        navigator.clipboard.writeText(el.textContent.replace(/^\\$ /gm, '')).then(function(){
+          var o = b.textContent; b.textContent = '${T('copiado ✓', 'copied ✓')}'; b.classList.add('ok');
+          setTimeout(function(){ b.textContent = o; b.classList.remove('ok'); }, 2000);
+        });
+      });
+    });
+  })();</script>`;
 
   return `<!doctype html>
 <html lang="${pt ? 'pt-BR' : 'en'}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#1e1f22">
+<meta name="theme-color" content="#101012">
 <link rel="icon" href="${FAVICON}">
 <title>${esc(metaTitle)}</title>
 <meta name="description" content="${esc(metaDesc)}">
@@ -1488,12 +1463,18 @@ export function landingPage(lang: Locale): string {
 </head>
 <body>
 ${topnav}
+<div class="container">
 ${hero}
-${askSection}
-${proofSection}
-${setupSection}
-${finalSection}
+${term}
+${what}
+${figs}
+${ask}
+${privacy}
+${compare}
+${deploy}
 ${footer}
+</div>
+<div class="legal">© 2026 resolvicomai · AGPL-3.0-or-later · <a href="/demo">demo</a> · <a href="${codeHref}">${codeLabel}</a></div>
 ${copyScript}
 </body>
 </html>`;
