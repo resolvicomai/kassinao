@@ -112,14 +112,14 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
   const outTokens = openrouter ? config.minutesMaxTokens : Math.min(config.minutesMaxTokens, GROQ_MAX_TOKENS);
 
   if (header.length + body.length <= maxSingle) {
-    return normalizeMinutes(await llmChat(system, fenceUntrusted(`${header}\n${body}`), outTokens));
+    return await minutesWithRetry(system, fenceUntrusted(`${header}\n${body}`), outTokens);
   }
 
   if (openrouter) {
     // acima de 400k chars (call absurda): corta o miolo — começo e fim carregam decisões
     const half = Math.floor(MAX_CHARS_OPENROUTER / 2);
     const cut = `${body.slice(0, half)}\n\n[... trecho do meio omitido por tamanho ...]\n\n${body.slice(-half)}`;
-    return normalizeMinutes(await llmChat(system, fenceUntrusted(`${header}\n${cut}`), outTokens));
+    return await minutesWithRetry(system, fenceUntrusted(`${header}\n${cut}`), outTokens);
   }
 
   // ---- map-reduce (Groq free tier, TPM 12k): blocos → notas parciais → ata final ----
@@ -168,7 +168,25 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
   const reduceUser = fenceUntrusted(
     `${header}\nNOTAS PARCIAIS (extraídas em ordem cronológica da transcrição completa):\n${joined}`,
   );
-  return normalizeMinutes(await llmChat(system, reduceUser, outTokens));
+  return await minutesWithRetry(system, reduceUser, outTokens);
+}
+
+/**
+ * Uma ata com retry de FORMATO: modelos (especialmente com reasoning) às vezes
+ * respondem prosa apesar do response_format. Na falha de parse, tenta 1x com
+ * lembrete explícito — e loga o começo da resposta pra diagnóstico.
+ */
+async function minutesWithRetry(system: string, user: string, maxTokens: number): Promise<MeetingMinutes> {
+  const first = await llmChat(system, user, maxTokens);
+  try {
+    return normalizeMinutes(first);
+  } catch (err) {
+    console.warn(
+      `Ata: resposta fora do formato (${(err as Error).message}) — início: ${JSON.stringify(first.slice(0, 200))}. Tentando de novo com lembrete.`,
+    );
+    const reminded = `${system}\nLEMBRETE FINAL: responda APENAS o objeto JSON, começando com { e terminando com }. Nada de texto fora do JSON, nada de markdown.`;
+    return normalizeMinutes(await llmChat(reminded, user, maxTokens));
+  }
 }
 
 function buildTranscriptParts(meta: RecordingMeta, segments: TranscriptSegment[]): { header: string; body: string } {
