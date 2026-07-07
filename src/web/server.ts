@@ -356,12 +356,7 @@ export function startWebServer(): void {
     else if (sort === 'largest') items.sort((a, b) => (b.audioBytes ?? 0) - (a.audioBytes ?? 0));
     // busca lê transcript.json (síncrono) — limita às 100 mais recentes pra não
     // segurar o event loop (que também recebe o áudio das gravações ao vivo)
-    const hits = q
-      ? searchRecordings(
-          items.map((i) => i.meta).slice(0, 100),
-          q,
-        )
-      : undefined;
+    const hits = q ? searchRecordings(items.map((i) => i.meta).slice(0, 100), q) : undefined;
     const flash = req.query.freed === '1' ? MSG.freedFlash[l] : req.query.deleted === '1' ? MSG.deletedFlash[l] : '';
     res.type('html').send(
       recordingsIndexPage(items, {
