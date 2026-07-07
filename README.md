@@ -123,7 +123,7 @@ Zero-cost path: `TRANSCRIBE_PROVIDER=groq` with just a `GROQ_API_KEY` (free tier
 
 | Provider | Cost (per audio hour, **per track**) | pt-BR quality | Privacy | Notes |
 |---|---|---|---|---|
-| **AssemblyAI** (`universal`) | ~US$0.21 (**US$50 free credit**) | Top-3 on the Open ASR Leaderboard | Cloud | Default pick; auto-falls back to Groq if a `GROQ_API_KEY` is set |
+| **AssemblyAI** (`universal-3-5-pro`) | ~US$0.21 (**US$50 free credit**) | Top-3 on the Open ASR Leaderboard | Cloud | Default pick; auto-falls back to Groq if a `GROQ_API_KEY` is set |
 | **Groq** (`whisper-large-v3`) | ~US$0.11 (free tier: 8 audio-h/day) | Excellent | Cloud (enable ZDR) | Best zero-cost option |
 | **OpenAI** (`whisper-1`) | ~US$0.36 | Excellent | Cloud | Timestamped segments |
 | **Gemini** (`gemini-2.0-flash`, default) | ~cents | Good | Cloud (paid tier only) | Free tier trains on your audio — avoid |

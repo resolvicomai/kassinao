@@ -604,7 +604,9 @@ async function assemblyaiTranscribe(file: string, chunkSec: number): Promise<Raw
       body: JSON.stringify({
         audio_url: upload_url,
         language_code: config.transcribeLanguage.slice(0, 2) || 'pt',
-        speech_model: config.transcribeModel || 'universal',
+        // API atual usa speech_modelS (lista em ordem de preferência); o antigo
+        // speech_model singular foi descontinuado em 2026
+        speech_models: config.transcribeModel ? [config.transcribeModel] : ['universal-3-5-pro', 'universal-2'],
         punctuate: true,
         format_text: true,
       }),
