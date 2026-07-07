@@ -2,9 +2,9 @@
 
 # Kassinão 🎙️
 
-### Self-hosted Discord recorder with per-speaker AI notes
+### Record your Discord calls. Then just ask.
 
-Record Discord voice calls with **one separate track per person**, then get an **AI transcript** and **meeting minutes** (summary, decisions, action items) — automatically, with **perfect speaker attribution** and no AI guessing who said what.
+Self-hosted recorder for Discord voice calls: **one separate track per person**, an **AI transcript** with **perfect speaker attribution** (no AI guessing who said what) and **meeting minutes** — then your meetings become memory that answers, via **/ask in Discord**, web search, or any MCP-capable AI assistant.
 
 **🌎 Language:** **English** · [Português (BR)](README.pt-BR.md)
 
@@ -53,8 +53,8 @@ Kassinão combines both **and sidesteps the hard part**: because every participa
 - **📝 AI transcription** with exact speaker names & timestamps. Engines: **AssemblyAI**, **Groq**, **OpenAI**, **Gemini**, or a **local** command (faster-whisper / whisper.cpp) for full privacy. Real **VAD**: only speech is sent to the API (no cost on silence, no silence hallucinations), with automatic retry/resume on provider rate limits.
 - **📋 AI meeting minutes** — summary, decisions, action items (with owner/due), timestamped topics, and a **per-participant** breakdown.
 - **🔊 Meeting page** — sticky audio player with **1×/1.5×/2× speed**, transcript grouped by speaker with **per-speaker colors**, in-page **search/filter**, karaoke-style follow-along, clickable timeline bar, one-click copy of action items, downloads in **MP3 / FLAC / single mix / Audacity project** — all behind **Discord login**.
-- **🗂️ Web index with full-text search** — `/gravacoes` lists every recording you can access across servers, with channel filter and search inside transcripts, minutes and notes — results deep-link to the exact minute.
-- **💬 `/ask` inside Discord** — ask your meetings a question right in Discord; the AI answers (ephemeral, only you see it) from the transcripts *you* can access, with `[hh:mm:ss]` citations linking to the exact moment. Optional `days:` window (default 30). Needs AI minutes enabled (OpenRouter or Groq key).
+- **🗂️ Web index with full-text search** — `/gravacoes` lists every recording you can access across servers, with channel filter and search inside transcripts, minutes and notes — results deep-link to the exact second.
+- **💬 `/ask` inside Discord** — ask your meetings a question right in Discord; the AI answers (ephemeral, only you see it) from the transcripts *you* can access, with `[hh:mm:ss]` citations linking to the exact second. Optional `days:` window (default 30). Needs AI minutes enabled (OpenRouter or Groq key).
 - **📤 Minutes posted to Discord** — when the minutes are ready, the bot posts a summary embed (summary + decisions + action items) to a channel admins pick via `/config minutes-channel` (defaults to the voice channel's chat); an optional `MINUTES_WEBHOOK_URL` fires a JSON webhook per meeting for self-hosted integrations (n8n → Notion/Jira…).
 - **🔒 Real access control** — only people who were in the call (speaking **or muted**), people who can see the channel, the initiator, or admins can open a recording. A leaked link opens nothing.
 - **🎛️ Live panel** in the voice channel with **Stop** / **Add note** / **📌 Mark moment** buttons (one click stamps the timestamp, no typing) and a `[RECORDING]` nickname indicator (visible consent).
@@ -137,7 +137,7 @@ Zero-cost path: `TRANSCRIBE_PROVIDER=groq` with just a `GROQ_API_KEY` (free tier
 
 - *"What's pending this week, and who owns it?"* — aggregates action items with deadlines across meetings.
 - *"List the calls in this channel between June 1 and 30."* — time-window queries (timezone-aware).
-- *"When did Ana talk about the budget? Give me the link."* — search with deep links to the exact moment.
+- *"When did Ana talk about the budget? Give me the link."* — search with deep links to the exact second.
 
 **Security by design:** the connector runs locally and only carries a **personal token**; the bot applies the *same* access check as the web page, meeting by meeting — each person sees only what they'd see on the site. Read-only, no audio, revocable. Meeting text is wrapped as untrusted data (prompt-injection defense).
 
