@@ -147,7 +147,7 @@ Custo de referência da transcrição (por hora de FALA — o silêncio das faix
 | `COOKIE_SECRET` | gerado | Segredo dos cookies de sessão |
 | `TZ` | `America/Sao_Paulo` | Fuso das datas (a página usa o do navegador) |
 | `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
-| `TRANSCRIBE_MODEL` | por provider | Ex.: `universal` (assemblyai), `whisper-large-v3` (groq) |
+| `TRANSCRIBE_MODEL` | por provider | Ex.: `universal-3-5-pro` (assemblyai), `whisper-large-v3` (groq) |
 | `TRANSCRIBE_LANGUAGE` | `pt` | Idioma falado nas calls |
 | `TRANSCRIBE_COMMAND` | — | Comando local com `{input}`/`{output}` (provider `command`) |
 | `TRANSCRIBE_TIMEOUT_FACTOR` | `5` | Watchdog do provider `command` |
