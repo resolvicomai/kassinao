@@ -97,6 +97,7 @@ const STRINGS: Strings = {
   'panel.field-events': { pt: 'Eventos', en: 'Events' },
   'panel.btn-stop': { pt: 'Parar gravação', en: 'Stop recording' },
   'panel.btn-note': { pt: 'Adicionar nota', en: 'Add a note' },
+  'panel.btn-mark': { pt: 'Marcar momento', en: 'Mark moment' },
   'panel.btn-page': { pt: 'Página da gravação', en: 'Recording page' },
   'panel.footer': { pt: 'Kassinão 🎙️', en: 'Kassinão 🎙️' },
 
@@ -127,6 +128,53 @@ const STRINGS: Strings = {
   'note.no-access': {
     pt: '🔒 Só quem enxerga o canal **{channel}** pode anotar nesta gravação.',
     en: '🔒 Only people who can see **{channel}** can add notes to this recording.',
+  },
+  'note.mark-text': { pt: '📌 momento marcado', en: '📌 moment marked' },
+  'note.marked': {
+    pt: '📌 Momento **{offset}** marcado! Ele vira um marcador na página e entra na ata.',
+    en: '📌 Moment **{offset}** marked! It becomes a marker on the page and feeds the minutes.',
+  },
+
+  // /config (por servidor)
+  'config.no-permission': {
+    pt: '🔒 Configurar o Kassinão exige a permissão **Gerenciar Servidor**.',
+    en: '🔒 Configuring Kassinão requires the **Manage Server** permission.',
+  },
+  'config.title': { pt: '⚙️ Configuração deste servidor', en: '⚙️ This server’s configuration' },
+  'config.minutes-channel-set': {
+    pt: '✅ A ata resumida de cada reunião será postada em {channel} (além do chat do canal de voz pro aviso).',
+    en: '✅ The minutes summary of each meeting will be posted in {channel}.',
+  },
+  'config.minutes-channel-cleared': {
+    pt: '✅ Canal de ata removido — a ata volta a ser postada só no chat do canal de voz.',
+    en: '✅ Minutes channel cleared — summaries go back to the voice channel chat only.',
+  },
+  'config.view-minutes-channel': { pt: '📋 Canal da ata: {channel}', en: '📋 Minutes channel: {channel}' },
+  'config.view-minutes-channel-none': {
+    pt: '📋 Canal da ata: *(não configurado — vai pro chat do canal de voz)*',
+    en: '📋 Minutes channel: *(not set — goes to the voice channel chat)*',
+  },
+
+  // /perguntar (RAG nas reuniões)
+  'ask.disabled': {
+    pt: '🤖 O /perguntar precisa da ata por IA habilitada (OPENROUTER_API_KEY ou GROQ_API_KEY no servidor do bot).',
+    en: '🤖 /ask needs AI minutes enabled (OPENROUTER_API_KEY or GROQ_API_KEY on the bot server).',
+  },
+  'ask.no-meetings': {
+    pt: '🔇 Não encontrei nenhuma reunião transcrita que você possa acessar nos últimos {days} dias.',
+    en: '🔇 I found no transcribed meetings you can access in the last {days} days.',
+  },
+  'ask.busy': {
+    pt: '⏳ Calma aí — ainda estou respondendo sua pergunta anterior.',
+    en: '⏳ Hold on — I am still answering your previous question.',
+  },
+  'ask.error': {
+    pt: '⚠️ Não consegui responder agora: {error}',
+    en: '⚠️ I could not answer right now: {error}',
+  },
+  'ask.footer': {
+    pt: '-# Baseado em {n} reunião(ões) que você pode acessar. Confira na fonte: os links pulam pro minuto exato.',
+    en: '-# Based on {n} meeting(s) you can access. Verify at the source: links jump to the exact minute.',
   },
 
   // eventos do log
@@ -184,6 +232,9 @@ const STRINGS: Strings = {
     pt: '📋 Prontinho! A **ata** e a **transcrição** já estão na página 👉 {url}',
     en: '📋 All done! The **minutes** and **transcript** are on the page 👉 {url}',
   },
+  'minutes.embed-title': { pt: 'Ata — #{channel}', en: 'Minutes — #{channel}' },
+  'minutes.embed-decisions': { pt: '✅ Decisões', en: '✅ Decisions' },
+  'minutes.embed-actions': { pt: '📌 Itens de ação', en: '📌 Action items' },
 
   // sobre / about (autoria + licença + fonte — cumpre a AGPL §13)
   'about.desc': {
@@ -276,6 +327,10 @@ const STRINGS: Strings = {
   'recordings.badge-failed': { pt: '⚠️ transcrição falhou', en: '⚠️ transcription failed' },
   'recordings.badge-none': { pt: '🔇 sem transcrição', en: '🔇 no transcript' },
   'recordings.more': { pt: '_… e mais {n} mais antiga(s)._', en: '_… and {n} older one(s)._' },
+  'recordings.web': {
+    pt: '🌐 Todas as suas gravações (com busca): {url}',
+    en: '🌐 All your recordings (with search): {url}',
+  },
 
   // /autorecord
   'autorecord.no-permission': {

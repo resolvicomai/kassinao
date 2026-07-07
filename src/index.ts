@@ -32,7 +32,10 @@ import {
   VoiceBasedChannel,
 } from 'discord.js';
 import { config } from './config';
-import { shortError } from './util';
+import { answerQuestion } from './ask';
+import { guildConfigStore } from './guildConfig';
+import { minutesEnabled } from './processing/minutes';
+import { safeSlice, shortError } from './util';
 import { startCleanupJob } from './cleanup';
 import { freeMB } from './disk';
 import { client } from './discord/client';
@@ -45,6 +48,7 @@ import { cook } from './processing/cook';
 import {
   formatDuration,
   formatOffset,
+  MARK_BUTTON_ID,
   MAX_NOTE_LENGTH,
   NOTE_BUTTON_ID,
   RecordingSession,
@@ -64,9 +68,11 @@ import {
   listMetas,
   pageUrl,
   readMeta,
+  readMinutes,
   RecordingMeta,
   recoverInterruptedRecordings,
   saveMeta,
+  transcriptReady,
 } from './store';
 import { forgetMember } from './web/access';
 import { createExchangeCode, revokeUser } from './web/mcpTokens';
@@ -206,7 +212,74 @@ function buildCommands() {
     .setDescription('ℹ️ Sobre o Kassinão: autor, licença e código-fonte');
   localized(sobre, 'about', 'ℹ️ About Kassinão: author, license and source code');
 
-  const cmds = [gravar, parar, nota, status, ajuda, gravacoes, autorecord, sobre];
+  const perguntar = new SlashCommandBuilder()
+    .setName('perguntar')
+    .setDescription('🤖 Pergunte às suas reuniões — a IA responde com base nas transcrições que você pode ver')
+    .addStringOption((o) => {
+      o.setName('pergunta')
+        .setDescription('O que você quer saber? (ex.: o que decidimos sobre o deploy?)')
+        .setMaxLength(300)
+        .setRequired(true);
+      o.setNameLocalizations({ 'en-US': 'question', 'en-GB': 'question' });
+      o.setDescriptionLocalizations({
+        'en-US': 'What do you want to know? (e.g.: what did we decide about the deploy?)',
+        'en-GB': 'What do you want to know? (e.g.: what did we decide about the deploy?)',
+      });
+      return o;
+    })
+    .addIntegerOption((o) => {
+      o.setName('dias')
+        .setDescription('Janela de busca em dias (padrão: 30)')
+        .setMinValue(1)
+        .setMaxValue(365)
+        .setRequired(false);
+      o.setNameLocalizations({ 'en-US': 'days', 'en-GB': 'days' });
+      o.setDescriptionLocalizations({
+        'en-US': 'Search window in days (default: 30)',
+        'en-GB': 'Search window in days (default: 30)',
+      });
+      return o;
+    });
+  localized(perguntar, 'ask', '🤖 Ask your meetings — AI answers from the transcripts you can access');
+
+  const configCmd = new SlashCommandBuilder()
+    .setName('config')
+    .setDescription('⚙️ Configurações do Kassinão neste servidor (admin)')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addSubcommand((sc) => {
+      sc.setName('ata-canal')
+        .setDescription('Define (ou limpa) o canal onde a ata resumida é postada')
+        .addChannelOption((o) => {
+          o.setName('canal')
+            .setDescription('Canal de texto (vazio = limpar)')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(false);
+          o.setNameLocalizations({ 'en-US': 'channel', 'en-GB': 'channel' });
+          o.setDescriptionLocalizations({
+            'en-US': 'Text channel (empty = clear)',
+            'en-GB': 'Text channel (empty = clear)',
+          });
+          return o;
+        });
+      sc.setNameLocalizations({ 'en-US': 'minutes-channel', 'en-GB': 'minutes-channel' });
+      sc.setDescriptionLocalizations({
+        'en-US': 'Set (or clear) the channel where the minutes summary is posted',
+        'en-GB': 'Set (or clear) the channel where the minutes summary is posted',
+      });
+      return sc;
+    })
+    .addSubcommand((sc) => {
+      sc.setName('ver').setDescription('Mostra a configuração atual');
+      sc.setNameLocalizations({ 'en-US': 'view', 'en-GB': 'view' });
+      sc.setDescriptionLocalizations({
+        'en-US': 'Show the current configuration',
+        'en-GB': 'Show the current configuration',
+      });
+      return sc;
+    });
+  localized(configCmd, 'config', '⚙️ Kassinão settings for this server (admin)');
+
+  const cmds = [gravar, parar, nota, status, ajuda, gravacoes, autorecord, perguntar, configCmd, sobre];
 
   // /mcp só existe quando o conector de IA está habilitado (MCP_SECRET definido).
   if (config.mcpEnabled) {
@@ -365,9 +438,10 @@ function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
 async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise<void> {
   const state = meta.transcription;
   if (!state || (state.status !== 'done' && state.status !== 'partial' && state.status !== 'error')) return;
+  const minutesDone = meta.minutes?.status === 'done';
   const text =
     state.status === 'done'
-      ? meta.minutes?.status === 'done'
+      ? minutesDone
         ? t(locale, 'minutes.ready', { url: pageUrl(meta.id) }) // ata + transcrição prontas
         : t(locale, 'transcript.ready', { url: pageUrl(meta.id) })
       : state.status === 'partial'
@@ -378,14 +452,212 @@ async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise
             url: pageUrl(meta.id),
           })
         : t(locale, 'transcript.failed', { error: shortError(state.error, locale) });
+
+  // A ata visível SEM login é o momento "uau": resumo + decisões + ações direto
+  // no Discord (o link continua sendo a fonte completa).
+  const embeds = minutesDone ? buildMinutesEmbed(meta, locale) : [];
+
+  // canal de destino configurável (/config ata-canal); fallback = chat do canal de voz
+  const cfg = guildConfigStore.get(meta.guildId);
+  const targetId = (minutesDone && cfg.minutesChannelId) || meta.voiceChannelId;
   try {
-    const channel = (await client.channels.fetch(meta.voiceChannelId)) as TextBasedChannel | null;
-    if (channel && 'send' in channel) await channel.send(text);
+    const channel = (await client.channels.fetch(targetId)) as TextBasedChannel | null;
+    // defesa em profundidade: NUNCA postar ata fora do servidor da gravação
+    // (channels.fetch é global; um guildconfig.json corrompido não pode vazar ata)
+    const sameGuild = channel && 'guildId' in channel && channel.guildId === meta.guildId;
+    if (channel && sameGuild && 'send' in channel) await channel.send({ content: text, embeds });
+    else if (!sameGuild) throw new Error('canal de outro servidor');
   } catch {
-    // sem acesso ao canal — a página continua mostrando a transcrição
+    // sem acesso ao canal configurado — tenta o chat do canal de voz como fallback
+    if (targetId !== meta.voiceChannelId) {
+      try {
+        const vc = (await client.channels.fetch(meta.voiceChannelId)) as TextBasedChannel | null;
+        if (vc && 'send' in vc) await vc.send({ content: text, embeds });
+      } catch {
+        // a página continua mostrando tudo
+      }
+    }
   }
   if (meta.startedBy) {
-    client.users.send(meta.startedBy.id, text).catch(() => {});
+    client.users.send(meta.startedBy.id, { content: text, embeds }).catch(() => {});
+  }
+  // webhook do operador (env) — integrações self-hosted (n8n → Notion/Jira...).
+  // Dedupe persistido: o resume pós-reinício re-chama o notify e não pode
+  // disparar o mesmo POST duas vezes.
+  if (minutesDone && config.minutesWebhookUrl) {
+    const fresh = readMeta(meta.id);
+    if (fresh && !fresh.webhookSentAt) {
+      fresh.webhookSentAt = Date.now();
+      saveMeta(fresh);
+      postMinutesWebhook(meta).catch((err) =>
+        console.warn(`Webhook da ata (${meta.id}) falhou:`, (err as Error).message),
+      );
+    }
+  }
+}
+
+/** Embed com o essencial da ata (resumo + decisões + ações), truncado com folga. */
+function buildMinutesEmbed(meta: RecordingMeta, locale: Locale): EmbedBuilder[] {
+  const minutes = readMinutes(meta.id);
+  if (!minutes) return [];
+  const embed = new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(safeSlice(`📋 ${t(locale, 'minutes.embed-title', { channel: safeName(meta.voiceChannelName) })}`, 256))
+    .setURL(pageUrl(meta.id));
+  if (minutes.resumo) embed.setDescription(safeSlice(safeName(minutes.resumo), 2000));
+  if (minutes.decisoes.length > 0) {
+    embed.addFields({
+      name: t(locale, 'minutes.embed-decisions'),
+      value: safeSlice(
+        minutes.decisoes
+          .slice(0, 5)
+          .map((d) => `• ${safeName(d)}`)
+          .join('\n'),
+        1024,
+      ),
+    });
+  }
+  if (minutes.acoes.length > 0) {
+    embed.addFields({
+      name: t(locale, 'minutes.embed-actions'),
+      value: safeSlice(
+        minutes.acoes
+          .slice(0, 8)
+          .map((a) => {
+            const extra = [a.responsavel && safeName(a.responsavel), a.prazo && safeName(a.prazo)]
+              .filter(Boolean)
+              .join(' — ');
+            return `☐ ${safeName(a.tarefa)}${extra ? ` *(${extra})*` : ''}`;
+          })
+          .join('\n'),
+        1024,
+      ),
+    });
+  }
+  return [embed];
+}
+
+/** POST da ata pro webhook do operador (JSON estruturado, não formato Discord). */
+async function postMinutesWebhook(meta: RecordingMeta): Promise<void> {
+  const minutes = readMinutes(meta.id);
+  if (!minutes) return;
+  await fetch(config.minutesWebhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      event: 'minutes.ready',
+      recordingId: meta.id,
+      url: pageUrl(meta.id),
+      guildName: meta.guildName,
+      channelName: meta.voiceChannelName,
+      startedAt: meta.startedAt,
+      endedAt: meta.endedAt,
+      participants: meta.participants.map((p) => p.name),
+      minutes,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+}
+
+// ---------- /config (por servidor, admin) ----------
+
+async function handleConfig(interaction: ChatInputCommandInteraction): Promise<void> {
+  const l = localeOf(interaction.locale);
+  if (!interaction.guild) {
+    await interaction.reply({ content: t(l, 'err.guild-only'), ephemeral: true });
+    return;
+  }
+  const member = interaction.member as GuildMember;
+  if (!member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+    await interaction.reply({ content: t(l, 'config.no-permission'), ephemeral: true });
+    return;
+  }
+  const sub = interaction.options.getSubcommand();
+  if (sub === 'ata-canal') {
+    const channel = interaction.options.getChannel('canal');
+    if (channel) {
+      guildConfigStore.set(interaction.guild.id, { minutesChannelId: channel.id, updatedBy: interaction.user.id });
+      await interaction.reply({
+        content: t(l, 'config.minutes-channel-set', { channel: `<#${channel.id}>` }),
+        ephemeral: true,
+      });
+    } else {
+      guildConfigStore.set(interaction.guild.id, { minutesChannelId: undefined, updatedBy: interaction.user.id });
+      await interaction.reply({ content: t(l, 'config.minutes-channel-cleared'), ephemeral: true });
+    }
+    return;
+  }
+  // ver
+  const cfg = guildConfigStore.get(interaction.guild.id);
+  const lines = [
+    `**${t(l, 'config.title')}**`,
+    cfg.minutesChannelId
+      ? t(l, 'config.view-minutes-channel', { channel: `<#${cfg.minutesChannelId}>` })
+      : t(l, 'config.view-minutes-channel-none'),
+  ];
+  await interaction.reply({ content: lines.join('\n'), ephemeral: true });
+}
+
+// ---------- /perguntar (RAG nas reuniões, dentro do Discord) ----------
+
+/** Uma pergunta por pessoa por vez (chamada de LLM custa tempo/dinheiro). */
+const asking = new Set<string>();
+/** Teto GLOBAL de perguntas simultâneas + orçamento por pessoa/hora (LLM não é grátis). */
+const MAX_CONCURRENT_ASKS = 2;
+const MAX_ASKS_PER_HOUR = 10;
+const askHistory = new Map<string, number[]>();
+
+function askBudgetOk(userId: string): boolean {
+  const now = Date.now();
+  const hist = (askHistory.get(userId) ?? []).filter((ts) => now - ts < 60 * 60 * 1000);
+  if (hist.length >= MAX_ASKS_PER_HOUR) return false;
+  hist.push(now);
+  askHistory.set(userId, hist);
+  if (askHistory.size > 500) askHistory.clear(); // teto de memória
+  return true;
+}
+
+async function handlePerguntar(interaction: ChatInputCommandInteraction): Promise<void> {
+  const l = localeOf(interaction.locale);
+  if (!interaction.guild) {
+    await interaction.reply({ content: t(l, 'err.guild-only'), ephemeral: true });
+    return;
+  }
+  if (!minutesEnabled()) {
+    await interaction.reply({ content: t(l, 'ask.disabled'), ephemeral: true });
+    return;
+  }
+  if (asking.has(interaction.user.id) || asking.size >= MAX_CONCURRENT_ASKS || !askBudgetOk(interaction.user.id)) {
+    await interaction.reply({ content: t(l, 'ask.busy'), ephemeral: true });
+    return;
+  }
+  const question = interaction.options.getString('pergunta', true);
+  const days = interaction.options.getInteger('dias') ?? 30;
+  await interaction.deferReply({ ephemeral: true });
+  asking.add(interaction.user.id);
+  try {
+    const member = interaction.member as GuildMember;
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    // MESMA regra de acesso da web: só reuniões que essa pessoa pode abrir
+    const metas = listGuildMetas(interaction.guild.id, 100)
+      .filter((m) => m.status === 'done' && m.startedAt >= cutoff)
+      .filter((m) => memberCanAccessRecording(member, m, interaction.guild!))
+      .filter((m) => transcriptReady(m));
+    if (metas.length === 0) {
+      await interaction.editReply(t(l, 'ask.no-meetings', { days }));
+      return;
+    }
+    const result = await answerQuestion(question, metas, l);
+    if (!result.answer) {
+      await interaction.editReply(t(l, 'ask.no-meetings', { days }));
+      return;
+    }
+    await interaction.editReply(`${result.answer}\n\n${t(l, 'ask.footer', { n: result.meetingsUsed })}`);
+  } catch (err) {
+    console.error('Erro no /perguntar:', err);
+    await interaction.editReply(t(l, 'ask.error', { error: shortError((err as Error).message, l) })).catch(() => {});
+  } finally {
+    asking.delete(interaction.user.id);
   }
 }
 
@@ -517,6 +789,34 @@ async function handleNota(interaction: ChatInputCommandInteraction): Promise<voi
     interaction.options.getString('texto', true),
   );
   await interaction.reply({ content: t(l, added ? 'note.added' : 'note.discarded', { offset }), ephemeral: true });
+}
+
+/** 📌 de um toque: marca o momento SEM modal/digitação — a fricção mata o bookmark. */
+async function handleMarkButton(interaction: ButtonInteraction): Promise<void> {
+  const l = localeOf(interaction.locale);
+  const session = interaction.guild ? sessionManager.get(interaction.guild.id) : undefined;
+  if (!session) {
+    await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
+    return;
+  }
+  if (!canAnnotate(session, interaction.member as GuildMember)) {
+    await interaction.reply({
+      content: t(l, 'note.no-access', { channel: `#${session.voiceChannel.name}` }),
+      ephemeral: true,
+    });
+    return;
+  }
+  const atMs = session.durationMs;
+  const member = interaction.member as GuildMember | null;
+  const added = session.addNote(
+    (member && 'displayName' in member ? member.displayName : null) ?? interaction.user.username,
+    t(session.locale, 'note.mark-text'),
+    atMs,
+  );
+  await interaction.reply({
+    content: t(l, added ? 'note.marked' : 'note.discarded', { offset: formatOffset(atMs) }),
+    ephemeral: true,
+  });
 }
 
 async function handleNoteButton(interaction: ButtonInteraction): Promise<void> {
@@ -713,6 +1013,8 @@ async function handleGravacoes(interaction: ChatInputCommandInteraction): Promis
   });
   let content = `**${t(l, 'recordings.title')}**\n${lines.join('\n')}`;
   if (all.length > metas.length) content += `\n${t(l, 'recordings.more', { n: all.length - metas.length })}`;
+  // o índice web mostra TODAS (com busca) — aqui só cabem 5
+  content += `\n${t(l, 'recordings.web', { url: `${config.baseUrl}/gravacoes` })}`;
   await interaction.reply({ content, ephemeral: true });
 }
 
@@ -952,6 +1254,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
         case 'autorecord':
           await handleAutorecord(interaction);
           break;
+        case 'perguntar':
+          await handlePerguntar(interaction);
+          break;
+        case 'config':
+          await handleConfig(interaction);
+          break;
         case 'mcp':
           await handleMcp(interaction);
           break;
@@ -963,6 +1271,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await handleParar(interaction);
     } else if (interaction.isButton() && interaction.customId === NOTE_BUTTON_ID) {
       await handleNoteButton(interaction);
+    } else if (interaction.isButton() && interaction.customId === MARK_BUTTON_ID) {
+      await handleMarkButton(interaction);
     } else if (interaction.isButton() && interaction.customId.startsWith(`${HELP_BUTTON_PREFIX}:`)) {
       await handleHelpButton(interaction);
     } else if (interaction.isModalSubmit() && interaction.customId.startsWith(`${NOTE_MODAL_ID}:`)) {

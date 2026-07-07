@@ -52,11 +52,15 @@ Kassinão combines both **and sidesteps the hard part**: because every participa
 - **🎚️ Multi-track** — one lossless FLAC track per speaker, all sample-aligned.
 - **📝 AI transcription** with exact speaker names & timestamps. Engines: **AssemblyAI**, **Groq**, **OpenAI**, **Gemini**, or a **local** command (faster-whisper / whisper.cpp) for full privacy. Real **VAD**: only speech is sent to the API (no cost on silence, no silence hallucinations), with automatic retry/resume on provider rate limits.
 - **📋 AI meeting minutes** — summary, decisions, action items (with owner/due), timestamped topics, and a **per-participant** breakdown.
-- **🔊 Recording web page** — audio player with **clickable timestamps**, downloads in **MP3 / FLAC / single mix / Audacity project**, transcript & minutes rendered inline — all behind **Discord login**.
+- **🔊 Meeting page** — sticky audio player with **1×/1.5×/2× speed**, transcript grouped by speaker with **per-speaker colors**, in-page **search/filter**, karaoke-style follow-along, clickable timeline bar, one-click copy of action items, downloads in **MP3 / FLAC / single mix / Audacity project** — all behind **Discord login**.
+- **🗂️ Web index with full-text search** — `/gravacoes` lists every recording you can access across servers, with channel filter and search inside transcripts, minutes and notes — results deep-link to the exact minute.
+- **💬 `/ask` inside Discord** — ask your meetings a question right in Discord; the AI answers (ephemeral, only you see it) from the transcripts *you* can access, with `[hh:mm:ss]` citations linking to the exact moment. Optional `days:` window (default 30). Needs AI minutes enabled (OpenRouter or Groq key).
+- **📤 Minutes posted to Discord** — when the minutes are ready, the bot posts a summary embed (summary + decisions + action items) to a channel admins pick via `/config minutes-channel` (defaults to the voice channel's chat); an optional `MINUTES_WEBHOOK_URL` fires a JSON webhook per meeting for self-hosted integrations (n8n → Notion/Jira…).
 - **🔒 Real access control** — only people who were in the call (speaking **or muted**), people who can see the channel, the initiator, or admins can open a recording. A leaked link opens nothing.
-- **🎛️ Live panel** in the voice channel with **Stop** / **Add note** buttons and a `[RECORDING]` nickname indicator (visible consent).
+- **🎛️ Live panel** in the voice channel with **Stop** / **Add note** / **📌 Mark moment** buttons (one click stamps the timestamp, no typing) and a `[RECORDING]` nickname indicator (visible consent).
 - **🔌 MCP connector** *(optional)* — ask your meetings from **Claude Desktop / Cursor**: time-window queries, cross-meeting **action items with deadlines**, full-text search — each user scoped to exactly what they can already see. See [`mcp/`](mcp/).
 - **🤖 Auto-record** — starts by itself when N people join a channel; stops when it empties.
+- **⏳ Tiered retention** — `RETENTION_DAYS` expires only the **audio**; transcript, minutes and notes live `TEXT_RETENTION_DAYS` (default 90), so search, `/ask` and the MCP connector keep working after the audio is gone.
 - **❓ Built-in onboarding** — `/help` with interactive topic buttons; DM the bot and it replies with the guide too.
 - **🌎 Bilingual** (pt-BR / English), **HTTPS via Cloudflare Tunnel** (no open ports), auto-stop, retention/expiry, crash recovery and graceful shutdown.
 
@@ -137,7 +141,7 @@ Zero-cost path: `TRANSCRIBE_PROVIDER=groq` with just a `GROQ_API_KEY` (free tier
 
 **Security by design:** the connector runs locally and only carries a **personal token**; the bot applies the *same* access check as the web page, meeting by meeting — each person sees only what they'd see on the site. Read-only, no audio, revocable. Meeting text is wrapped as untrusted data (prompt-injection defense).
 
-Turn it on by setting `MCP_SECRET` (a strong secret, **≠** `COOKIE_SECRET`). Users self-serve at `/conectar-ia`. Client package & full docs: [`mcp/`](mcp/).
+Turn it on by setting `MCP_SECRET` (a strong secret, **≠** `COOKIE_SECRET`). Users self-serve at `/conectar-ia`. Client package & full docs: [`mcp/`](mcp/). For the basic "what did we decide?" case you don't even need MCP — the `/ask` command answers right inside Discord.
 
 ## Commands
 
@@ -147,12 +151,14 @@ Turn it on by setting `MCP_SECRET` (a strong secret, **≠** `COOKIE_SECRET`). U
 | `/stop` | `/parar` | End it and generate the link with audio, transcript and minutes |
 | `/note <text>` | `/nota <texto>` | Mark a note at the current time (or the 📝 panel button) |
 | `/status` | `/status` | Current recording status |
-| `/recordings` | `/gravacoes` | Your latest recordings, with links (filtered by access) |
+| `/recordings` | `/gravacoes` | Your latest recordings, with links (filtered by access) — also links to the web index with full-text search |
+| `/ask <question> [days]` | `/perguntar <pergunta> [dias]` | Ask your meetings — AI answers (only you see it) with timestamped citations, from transcripts you can access |
+| `/config minutes-channel/view` | `/config ata-canal/ver` | Admin: pick the text channel where the minutes summary is posted (default: the voice channel's chat) |
 | `/help` | `/ajuda` | Interactive guide (also replies in DMs) |
 | `/autorecord on/off/view` | `/autorecord ligar/desligar/ver` | Automatic recording per channel (admin) |
 | `/mcp new` | `/mcp novo` | Owner-only: generate an AI-connector code (members self-serve at `/conectar-ia` on the web) |
 
-Anyone can record and stop. `/autorecord` requires **Manage Server**. Deleting a recording (from its page) is limited to the initiator or admins.
+Anyone can record and stop. `/autorecord` and `/config` require **Manage Server**. Deleting a recording (from its page) is limited to the initiator or admins.
 
 ## Configuration
 
@@ -165,11 +171,13 @@ All options live in [`.env.example`](.env.example). Key ones:
 | `REPO_PUBLIC` | `false` | `true` shows the GitHub/source links and the "auditable" claim on the landing page |
 | `TUNNEL_TOKEN` | — | Cloudflare Tunnel token (recommended HTTPS path; also set `COMPOSE_PROFILES=tunnel`) |
 | `GUILD_ID` | — | Registers commands instantly in that server |
-| `RETENTION_DAYS` · `MAX_RECORDING_HOURS` | `7` · `6` | Retention & max length |
+| `RETENTION_DAYS` · `MAX_RECORDING_HOURS` | `7` · `6` | Audio retention & max length |
+| `TEXT_RETENTION_DAYS` | `90` | How long transcript/minutes/notes outlive the audio (never below `RETENTION_DAYS`) |
 | `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
 | `ASSEMBLYAI_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` | — | Key for the chosen provider (Groq key doubles as ASR fallback) |
 | `MINUTES_ENABLED` | `auto` | AI minutes: `auto` (on when an OpenRouter or Groq key exists) / `true` / `false` |
 | `MINUTES_PROVIDER` / `OPENROUTER_API_KEY` | `openrouter` when key set | Minutes LLM: `openrouter` (default `google/gemini-2.5-flash`) or `groq` |
+| `MINUTES_WEBHOOK_URL` | — | POSTs a JSON (`minutes.ready`) per meeting to your integration; env-only by design (no SSRF via Discord) |
 | `TZ` | `America/Sao_Paulo` | Timezone for dates (the web page uses the visitor's) |
 
 ## Security & privacy

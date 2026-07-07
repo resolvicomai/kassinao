@@ -17,12 +17,16 @@ Um gravador de voz multi-track para Discord, auto-hospedado, inspirado no [Craig
 - **🎚️ Multi-track sincronizado** — uma faixa FLAC (lossless) separada por falante, todas na mesma linha do tempo.
 - **📝 Transcrição automática** — com o nome de quem falou e horários. Motor plugável: **AssemblyAI**, **Groq**, **OpenAI**, **Gemini** ou **comando local** (faster-whisper/whisper.cpp) para privacidade total. **VAD de verdade**: só a fala vai pra API (sem custo com silêncio, sem alucinação de silêncio), com retomada automática se o provedor limitar.
 - **📋 Ata com IA** — resumo, decisões, itens de ação (com responsável/prazo), tópicos com horário e **um bloco por participante**. Gerada por LLM sobre a transcrição.
-- **🔊 Página web da gravação** — player de áudio com **horários clicáveis** (pula pro momento), downloads em **MP3 / FLAC / Mix único / projeto Audacity**, transcrição e ata renderizadas, tudo protegido por **login com Discord**.
+- **🔊 Página web da gravação** — player fixo com **velocidade 1×/1.5×/2×**, transcrição agrupada por falante com **cores por pessoa**, **busca/filtro** dentro da transcrição, acompanhamento estilo karaokê, barra do tempo clicável, copiar itens de ação com um clique, downloads em **MP3 / FLAC / Mix único / projeto Audacity** — tudo protegido por **login com Discord**.
+- **🗂️ Índice web com busca** — `/gravacoes` na web lista tudo que você pode acessar em todos os servidores, com filtro por canal e **busca full-text** em transcrições, atas e notas — cada resultado linka pro minuto exato.
+- **💬 `/perguntar` no próprio Discord** — pergunte às suas reuniões sem sair do Discord; a IA responde (efêmero, só você vê) usando apenas as transcrições que VOCÊ pode acessar, com citações `[hh:mm:ss]` pro minuto certo. Opção `dias:` (janela, padrão 30). Requer a ata por IA habilitada (chave OpenRouter ou Groq).
+- **📤 Ata resumida no Discord** — quando a ata fica pronta, o bot posta um embed com resumo, decisões e itens de ação direto no Discord (sem precisar de login); o admin escolhe o canal com `/config ata-canal` (sem configurar, vai pro chat do canal de voz). E o `MINUTES_WEBHOOK_URL` dispara um webhook JSON por reunião pra integrações self-hosted (n8n → Notion/Jira…).
 - **🔒 Acesso restrito de verdade** — só abre para quem **estava na call** (falando ou mutado), **enxerga o canal**, **iniciou** a gravação ou é **admin**. Link vazado não dá acesso a estranhos.
-- **🎛️ Painel ao vivo** no chat do canal de voz — log de eventos, botões de **Parar** e **Nota**, indicador `[GRAVANDO]` no apelido do bot (consentimento visível).
+- **🎛️ Painel ao vivo** no chat do canal de voz — log de eventos, botões de **Parar**, **Nota** e **📌 Marcar momento** (um clique carimba o timestamp, sem digitar nada), indicador `[GRAVANDO]` no apelido do bot (consentimento visível).
 - **🗒️ Notas com timestamp** (`/nota` ou botão) — entram no painel, na transcrição, na ata e nos labels do projeto Audacity.
 - **🔌 Conector MCP** *(opcional)* — pergunte sobre suas reuniões pelo **Claude Desktop/Cursor**: janela de tempo, **itens de ação com prazo** cruzando reuniões, busca full-text — cada um só vê o que já poderia ver. Veja [`mcp/`](mcp/).
 - **🤖 Auto-record** — começa a gravar sozinho quando N pessoas entram num canal e para quando esvazia.
+- **⏳ Retenção em camadas** — o `RETENTION_DAYS` expira só o **áudio**; transcrição, ata e notas vivem `TEXT_RETENTION_DAYS` (padrão 90 dias) — a busca, o `/perguntar` e o conector MCP continuam funcionando depois que o áudio se foi.
 - **❓ Onboarding embutido** — `/ajuda` com botões interativos por tópico; mandar DM ao bot também responde o guia.
 - **🌎 Bilíngue** (pt-BR / inglês, pelo idioma de cada usuário) e **cadeado HTTPS** via Cloudflare Tunnel (sem abrir portas).
 - Robustez: aviso de silêncio, parada automática (limite de horas / canal vazio / desconexão), expiração automática, recuperação pós-reinício e shutdown gracioso.
@@ -35,12 +39,14 @@ Um gravador de voz multi-track para Discord, auto-hospedado, inspirado no [Craig
 | `/parar` | `/stop` | Encerra e gera o link com áudio, transcrição e ata |
 | `/nota <texto>` | `/note <text>` | Marca uma nota no tempo atual (ou botão 📝 do painel) |
 | `/status` | `/status` | Estado da gravação em andamento |
-| `/gravacoes` | `/recordings` | Suas últimas gravações, com links (filtradas por acesso) |
+| `/gravacoes` | `/recordings` | Suas últimas gravações, com links (filtradas por acesso) — também linka pro índice web com busca full-text |
+| `/perguntar <pergunta> [dias]` | `/ask <question> [days]` | Pergunte às suas reuniões — a IA responde (só você vê) com citações no minuto exato, usando as transcrições que você pode acessar |
+| `/config ata-canal/ver` | `/config minutes-channel/view` | Admin: escolhe o canal de texto onde a ata resumida é postada (padrão: chat do canal de voz) |
 | `/ajuda` | `/help` | Guia interativo (também responde por DM) |
 | `/autorecord ligar/desligar/ver` | `/autorecord on/off/view` | Gravação automática por canal (admin) |
 | `/mcp novo/revogar-tudo` | `/mcp new/revoke-all` | Conectar/revogar seu assistente de IA (quando o MCP está ligado) |
 
-Qualquer membro grava e para. `/autorecord` exige **Gerenciar Servidor**. Apagar uma gravação (pela página) é restrito a quem iniciou ou a admins.
+Qualquer membro grava e para. `/autorecord` e `/config` exigem **Gerenciar Servidor**. Apagar uma gravação (pela página) é restrito a quem iniciou ou a admins.
 
 ---
 
@@ -54,7 +60,7 @@ Qualquer membro grava e para. `/autorecord` exige **Gerenciar Servidor**. Apagar
 
 **Seguro por construção:** o conector roda na sua máquina e carrega só um **token pessoal**; o bot aplica o *mesmo* controle de acesso da página, reunião por reunião — cada pessoa só vê o que já veria no site. Somente leitura, sem áudio, revogável. O conteúdo das reuniões vai embrulhado como "dados não-confiáveis" (defesa contra prompt-injection).
 
-Para ligar, defina `MCP_SECRET` (segredo forte, **≠** `COOKIE_SECRET`). Cada pessoa se conecta sozinha em `/conectar-ia`. Pacote e docs completos: [`mcp/`](mcp/).
+Para ligar, defina `MCP_SECRET` (segredo forte, **≠** `COOKIE_SECRET`). Cada pessoa se conecta sozinha em `/conectar-ia`. Pacote e docs completos: [`mcp/`](mcp/). Pro caso básico ("o que decidimos?") nem precisa de MCP — o `/perguntar` responde dentro do próprio Discord.
 
 ---
 
@@ -130,10 +136,12 @@ Custo de referência da transcrição (por hora de FALA — o silêncio das faix
 | `DISCORD_CLIENT_SECRET` | — | Client Secret (login OAuth da página) |
 | `GUILD_ID` | — | Registra comandos na hora nesse servidor (sem ele, usa os servidores em que o bot está) |
 | `BASE_URL` | `http://localhost:8080` | URL pública dos links e do OAuth |
-| `TUNNEL_TOKEN` | — | Token do Cloudflare Tunnel (Opção A) |
+| `REPO_PUBLIC` | `false` | `true` exibe os links do GitHub/código-fonte e o selo "auditável" na landing page |
+| `TUNNEL_TOKEN` | — | Token do Cloudflare Tunnel (Opção A; defina também `COMPOSE_PROFILES=tunnel`) |
 | `PORT` | `8080` | Porta do servidor web |
 | `RECORDINGS_DIR` | `./recordings` | Onde salvar as gravações |
-| `RETENTION_DAYS` | `7` | Dias até a gravação expirar |
+| `RETENTION_DAYS` | `7` | Dias até o **áudio** da gravação expirar |
+| `TEXT_RETENTION_DAYS` | `90` | Quanto tempo transcrição/ata/notas sobrevivem ao áudio (nunca menor que `RETENTION_DAYS`) |
 | `MAX_RECORDING_HOURS` | `6` | Duração máxima por gravação |
 | `MP3_BITRATE` | `192k` | Bitrate dos MP3 |
 | `COOKIE_SECRET` | gerado | Segredo dos cookies de sessão |
@@ -147,6 +155,7 @@ Custo de referência da transcrição (por hora de FALA — o silêncio das faix
 | `MINUTES_ENABLED` | `auto` | Ata com IA: `auto` (liga com OPENROUTER_API_KEY ou GROQ_API_KEY) / `true` / `false` |
 | `MINUTES_PROVIDER` / `OPENROUTER_API_KEY` | `openrouter` c/ chave | LLM da ata: `openrouter` (padrão `google/gemini-2.5-flash`) ou `groq` |
 | `MINUTES_MAX_TOKENS` | `8192` | Teto de tokens da ata |
+| `MINUTES_WEBHOOK_URL` | — | POSTa um JSON (`minutes.ready`) por reunião pra sua integração; só configurável por env, de propósito (evita SSRF via Discord) |
 
 ### Transcrição local (privacidade total)
 Com `TRANSCRIBE_PROVIDER=command` o áudio nunca sai do servidor. Wrapper pronto para faster-whisper em [`scripts/transcribe-local.py`](scripts/transcribe-local.py):

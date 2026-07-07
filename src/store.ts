@@ -109,7 +109,14 @@ export interface RecordingMeta {
   notes: RecordingNote[];
   transcription?: TranscriptionState;
   minutes?: MinutesState;
+  /** Quando o ÁUDIO expira (faixas + cache). Texto vive até textExpiresAt. */
   expiresAt?: number;
+  /** Quando transcrição/ata/metadados expiram (gravação some por completo). */
+  textExpiresAt?: number;
+  /** true depois que a retenção apagou as faixas de áudio (página esconde player/downloads). */
+  audioDeleted?: boolean;
+  /** Quando o webhook da ata foi disparado (dedupe entre reinícios). */
+  webhookSentAt?: number;
   /** true apenas para a gravação de exemplo servida publicamente em /demo. */
   demo?: boolean;
 }
@@ -259,6 +266,7 @@ export function recoverInterruptedRecordings(): void {
     meta.status = 'done';
     meta.endedAt = endedAt;
     meta.expiresAt = endedAt + config.retentionDays * 24 * 60 * 60 * 1000;
+    meta.textExpiresAt = endedAt + config.textRetentionDays * 24 * 60 * 60 * 1000;
     meta.events.push({ atMs: endedAt - meta.startedAt, text: t('pt', 'event.stopped-reinicio') });
     saveMeta(meta);
     console.log(`Gravação ${meta.id} recuperada após reinício (marcada como encerrada).`);

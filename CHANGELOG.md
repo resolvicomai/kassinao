@@ -4,6 +4,29 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-07-06
+
+### Added
+- **Web recordings index with full-text search** — `/gravacoes` on the web (Discord login) lists everything you can access across servers, with a channel filter and full-text search over transcripts, minutes and notes; results deep-link to the exact minute. The Discord `/recordings` command now links to it.
+- **`/ask` (`/perguntar`)** — ask your meetings right inside Discord: the AI answers (ephemeral, only you see it) using only the transcripts *you* can access, with `[hh:mm:ss]` citations linking to the exact moment. Optional `days:` window (default 30). Requires AI minutes enabled (OpenRouter or Groq key).
+- **Minutes summary posted to Discord** — when the minutes are ready, the bot posts an embed with summary, decisions and action items straight to Discord (no login needed), alongside the link.
+- **`/config minutes-channel` (`/config ata-canal`)** — admins pick the text channel where the minutes summary is posted; without it, it goes to the voice channel's chat. `/config view` shows the current state.
+- **📌 "Mark moment" button** on the live recording panel — stamps the current timestamp with a single click, no typing (saved as a "📌 moment marked" note).
+- **Tiered retention** — `RETENTION_DAYS` (default 7) now expires only the **audio**; transcript + minutes + notes live for `TEXT_RETENTION_DAYS` (default 90, never below `RETENTION_DAYS`). The page shows "audio expired" and keeps all the text; search, `/ask` and MCP keep working.
+- **Operator minutes webhook** — `MINUTES_WEBHOOK_URL` receives a POST JSON `{event:'minutes.ready', recordingId, url, guildName, channelName, startedAt, endedAt, participants, minutes}` for every finished minutes (self-hosted integrations: n8n → Notion/Jira/etc). Env-only by design — never settable via Discord, to avoid SSRF.
+
+### Changed
+- **Recording page redesign** — sticky player with 1×/1.5×/2× speed, transcript grouped by speaker with per-speaker colors, in-transcript search/filter, karaoke-style follow-along, clickable time bar, and one-click copy of action items.
+- Error messages shown to users are humanized (no more raw provider/stack errors).
+- Audio cooking (mix/downloads) now runs at lower CPU priority (`nice`) and respects the disk guard.
+
+### Fixed
+- Partial transcriptions no longer disappear — partial results always stay visible while missing tracks are retried.
+- Event anti-spam — join/leave floods no longer spam the live panel timeline.
+- VAD now splits speech segments longer than 20 minutes (avoids provider upload limits on long monologues).
+- Recordings stuck in an error state are recovered on boot.
+- `/status` now reports the correct voice room.
+
 ## [1.1.0] — 2026-07-06
 
 ### Added
@@ -42,5 +65,6 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
+[1.2.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.2.0
 [1.1.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.1.0
 [1.0.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.0.0

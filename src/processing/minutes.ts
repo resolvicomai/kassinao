@@ -35,8 +35,14 @@ export function minutesEnabled(): boolean {
   return config.minutesEnabled === 'true' || config.minutesEnabled === 'auto';
 }
 
-/** Chamada de chat ao provider da ata (OpenRouter ou Groq), com retry ciente de 429. */
-async function llmChat(system: string, user: string, maxTokens: number): Promise<string> {
+/** Chamada de chat ao provider da ata (OpenRouter ou Groq), com retry ciente de 429.
+ *  Exportada também para o /perguntar (RAG no Discord) — mesmo provedor, mesma chave. */
+export async function llmChat(
+  system: string,
+  user: string,
+  maxTokens: number,
+  opts: { json?: boolean } = {},
+): Promise<string> {
   const openrouter = config.minutesProvider === 'openrouter';
   const url = openrouter
     ? 'https://openrouter.ai/api/v1/chat/completions'
@@ -59,7 +65,7 @@ async function llmChat(system: string, user: string, maxTokens: number): Promise
         model: config.minutesModel,
         temperature: 0.2,
         max_tokens: maxTokens,
-        response_format: { type: 'json_object' },
+        ...(opts.json === false ? {} : { response_format: { type: 'json_object' } }),
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: user },

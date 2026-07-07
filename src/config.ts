@@ -74,6 +74,13 @@ export const config = {
   repoPublic: process.env.REPO_PUBLIC === 'true',
   recordingsDir,
   retentionDays: Number(process.env.RETENTION_DAYS || 7),
+  /**
+   * Retenção em camadas: o ÁUDIO expira em RETENTION_DAYS (pesado), mas
+   * transcrição + ata + metadados vivem TEXT_RETENTION_DAYS (leve) — a memória
+   * das reuniões (busca, MCP, /perguntar) não pode evaporar em 1 semana.
+   * Nunca menor que RETENTION_DAYS.
+   */
+  textRetentionDays: Math.max(Number(process.env.TEXT_RETENTION_DAYS || 90), Number(process.env.RETENTION_DAYS || 7)),
   maxRecordingHours: Number(process.env.MAX_RECORDING_HOURS || 6),
   mp3Bitrate: process.env.MP3_BITRATE || '192k',
   cookieSecret: loadCookieSecret(),
@@ -116,6 +123,12 @@ export const config = {
     process.env.MINUTES_MODEL || (minutesProvider === 'groq' ? 'llama-3.3-70b-versatile' : 'google/gemini-2.5-flash'),
   /** Teto de tokens de saída da ata. 8192 cobre reuniões longas. */
   minutesMaxTokens: Number(process.env.MINUTES_MAX_TOKENS || 8192),
+  /**
+   * Webhook opcional (URL definida pelo OPERADOR via env — nunca via Discord,
+   * senão viraria vetor de SSRF): recebe um POST JSON com a ata de cada reunião
+   * ao ficar pronta. Útil para n8n/Zapier self-hosted → Notion/Jira/etc.
+   */
+  minutesWebhookUrl: process.env.MINUTES_WEBHOOK_URL || '',
 
   // ---------- MCP (conector para assistentes de IA) — opt-in via MCP_SECRET ----------
   /** Liga a API /api/* e o comando /mcp quando há MCP_SECRET. */
