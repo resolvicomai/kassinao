@@ -209,8 +209,16 @@ const SHELL_CSS = `
   .tl-seg.s0 { background: rgba(88,101,242,.28); }
   .tl-seg.s1 { background: rgba(88,101,242,.16); }
   .tl-seg:hover { background: rgba(88,101,242,.45); }
-  .tl-seg span { font-size: 10.5px; color: #c9cdfb; white-space: nowrap; overflow: hidden;
-                 text-overflow: ellipsis; font-family: ui-monospace, monospace; }
+  .tl-seg span { font-size: 10px; color: #c9cdfb; font-family: ui-monospace, monospace;
+                 width: 100%; text-align: center; overflow: hidden; }
+  .tl-chlist { list-style: none; margin-top: 12px; display: grid;
+               grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 4px 22px; }
+  .tl-chlist a { display: flex; align-items: baseline; gap: 8px; text-decoration: none;
+                 color: #c9c7c5; font-size: 13px; line-height: 1.5; padding: 2px 4px; border-radius: 4px; }
+  .tl-chlist a:hover { background: rgba(88,101,242,.12); color: #f1eeec; }
+  .tl-chlist b { color: #7b90f7; font-weight: 600; font-size: 11px; }
+  .tl-chlist time { color: #8a888c; font-family: ui-monospace, monospace; font-size: 11.5px; flex-shrink: 0; }
+  .tl-chlist span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tl-ticks { position: relative; height: 14px; margin-top: 3px; }
   .tl-tk { position: absolute; top: 1px; width: 4px; height: 12px; border-radius: 2px;
            transform: translateX(-50%); }
@@ -644,18 +652,30 @@ function renderTimeline(
     const pct = (ms: number) => Math.min(100, Math.max(0, (ms / durMs) * 100)).toFixed(2);
     const click = (ms: number) => (seekable ? ` onclick="kseek(${Math.floor(ms)});return false" href="#"` : '');
 
-    // capítulos: do início de um tópico até o início do próximo
-    const topics = [...(minutes?.topicos ?? [])].sort((a, b) => a.inicioMs - b.inicioMs);
+    // capítulos: do início de um tópico até o início do próximo. Com MUITOS
+    // tópicos os blocos ficam finos demais pra rótulo — então a barra mostra só
+    // o NÚMERO (posição/duração) e a leitura acontece na lista logo abaixo.
+    const topics = [...(minutes?.topicos ?? [])]
+      .filter((tp) => tp.inicioMs >= 0 && tp.inicioMs < durMs) // LLM pode inventar tempo além do fim
+      .sort((a, b) => a.inicioMs - b.inicioMs);
     let chapters = '';
+    let chapterList = '';
     if (topics.length > 0) {
       const segs = topics.map((tp, i) => {
-        const start = Math.max(0, tp.inicioMs);
-        const end = i + 1 < topics.length ? topics[i + 1].inicioMs : durMs;
-        const w = Math.max(0.8, ((end - start) / durMs) * 100);
-        return `<a class="tl-seg s${i % 2}" style="left:${pct(start)}%;width:${Math.min(100 - Number(pct(start)), w).toFixed(2)}%"
-          title="${esc(`${formatOffset(start)} · ${tp.titulo}`)}"${click(start)}><span>${esc(tp.titulo)}</span></a>`;
+        const start = tp.inicioMs;
+        const end = Math.min(i + 1 < topics.length ? topics[i + 1].inicioMs : durMs, durMs);
+        const left = Number(pct(start));
+        const w = Math.min(100 - left, Math.max(0.6, ((end - start) / durMs) * 100));
+        return `<a class="tl-seg s${i % 2}" style="left:${left.toFixed(2)}%;width:${w.toFixed(2)}%"
+          title="${esc(`${formatOffset(start)} · ${tp.titulo}`)}"${click(start)}><span>${i + 1}</span></a>`;
       });
       chapters = `<div class="tl-ch">${segs.join('')}</div>`;
+      chapterList = `<ol class="tl-chlist">${topics
+        .map(
+          (tp, i) =>
+            `<li><a${click(tp.inicioMs) || ' href="#"'}><b>${String(i + 1).padStart(2, '0')}</b><time>${formatOffset(tp.inicioMs)}</time><span>${esc(tp.titulo)}</span></a></li>`,
+        )
+        .join('')}</ol>`;
     }
 
     // ticks: notas (amarelo, por cima) + entrou/saiu (verde/cinza, discretos)
@@ -688,6 +708,7 @@ function renderTimeline(
         ${tickRow}
         <div class="tl-ax"><span>0:00</span><span>${formatOffset(durMs)}</span></div>
         <div class="tl-lg">${legend.join('')}${seekable ? `<span class="lg-hint">${p(l, 'tlHint')}</span>` : ''}</div>
+        ${chapterList}
       </div>`;
     }
   }

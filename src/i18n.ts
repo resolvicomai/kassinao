@@ -224,6 +224,10 @@ const STRINGS: Strings = {
     pt: '⏹️ Gravação encerrada (**{duration}**). Áudio já disponível — transcrição e ata chegam aqui em alguns minutos: {url}',
     en: '⏹️ Recording ended (**{duration}**). Audio is up — transcript and minutes land here in a few minutes: {url}',
   },
+  'transcript.empty-note': {
+    pt: '🔇 Gravação processada, mas não detectei fala — sem transcrição/ata desta vez. O áudio está na página: {url}',
+    en: '🔇 Recording processed, but I detected no speech — no transcript/minutes this time. The audio is on the page: {url}',
+  },
   'transcript.failed': {
     pt: '⚠️ Não consegui transcrever desta vez: {error}\nO áudio continua disponível na página, viu?',
     en: '⚠️ I couldn’t transcribe this time: {error}\nThe audio is still available on the page.',

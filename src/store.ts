@@ -99,6 +99,8 @@ export interface RecordingMeta {
   voiceChannelName: string;
   /** Quem iniciou; null quando iniciada pelo auto-record. */
   startedBy: { id: string; name: string } | null;
+  /** Idioma da sessão ('pt'|'en') — usado pelas notificações mesmo após reinício. */
+  locale?: string;
   startedAt: number;
   endedAt?: number;
   status: 'recording' | 'done';
@@ -117,6 +119,8 @@ export interface RecordingMeta {
   audioDeleted?: boolean;
   /** Quando o webhook da ata foi disparado (dedupe entre reinícios). */
   webhookSentAt?: number;
+  /** Quando o aviso final (canal/DM) foi enviado — o boot re-notifica se o processo morreu antes. */
+  notifiedAt?: number;
   /** true apenas para a gravação de exemplo servida publicamente em /demo. */
   demo?: boolean;
 }
@@ -267,7 +271,13 @@ export function recoverInterruptedRecordings(): void {
     meta.endedAt = endedAt;
     meta.expiresAt = endedAt + config.retentionDays * 24 * 60 * 60 * 1000;
     meta.textExpiresAt = endedAt + config.textRetentionDays * 24 * 60 * 60 * 1000;
-    meta.events.push({ atMs: endedAt - meta.startedAt, text: t('pt', 'event.stopped-reinicio') });
+    meta.events.push({
+      atMs: endedAt - meta.startedAt,
+      text: t(
+        meta.locale === 'en' ? 'en' : meta.locale === 'pt' ? 'pt' : config.defaultLocale,
+        'event.stopped-reinicio',
+      ),
+    });
     saveMeta(meta);
     console.log(`Gravação ${meta.id} recuperada após reinício (marcada como encerrada).`);
   }
