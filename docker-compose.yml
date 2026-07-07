@@ -7,8 +7,16 @@ services:
       # args:
       #   LOCAL_TRANSCRIBE: "1"
     container_name: kassinao
+    labels: ['autoheal=true']
     restart: unless-stopped
     stop_grace_period: 45s # > soma dos tetos internos do shutdown (20s FLAC + 15s REST + margem)
+    # Logs com teto: sem isso o json-file cresce até encher o disco (e o
+    # disk-guard encerraria GRAVAÇÕES por causa de log).
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
     env_file: .env
     environment:
       RECORDINGS_DIR: /app/recordings
@@ -42,6 +50,11 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: kassinao-tunnel
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: '2'
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     # Só sobe com o perfil "tunnel" ativo — assim quem NÃO usa Cloudflare Tunnel
@@ -52,3 +65,22 @@ services:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN}
     depends_on:
       - kassinao
+
+  # Opcional (profile 'autoheal'): reinicia o kassinao quando o healthcheck
+  # marca unhealthy (event loop travado ≠ crash; restart: unless-stopped não age).
+  # Opt-in porque monta o docker.sock (superfície de segurança) — ligue com
+  # COMPOSE_PROFILES=tunnel,autoheal no .env.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: kassinao-autoheal
+    restart: unless-stopped
+    profiles: ['autoheal']
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    logging:
+      driver: json-file
+      options:
+        max-size: 2m
+        max-file: '2'

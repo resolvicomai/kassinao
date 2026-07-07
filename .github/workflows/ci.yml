@@ -28,5 +28,9 @@ jobs:
       - run: npm run format:check
       - run: npm test
       - run: npm run build
+      # o conector MCP é um pacote separado — sem este step, mcp/ quebrado passaria verde
+      - name: Build MCP connector
+        run: npm ci && npm run build
+        working-directory: mcp
       - name: Docker build (dry-run)
         run: docker build -t kassinao:ci .
