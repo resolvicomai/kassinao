@@ -96,6 +96,10 @@ function deepLink(id: string, ms: number): string {
 }
 
 function meetingSummary(m: RecordingMeta): Record<string, unknown> {
+  // presença ≠ participante: quem esteve na call sem falar também conta —
+  // sem isso a IA responde "quem estava na call?" factualmente errado
+  const spoke = new Set(m.participants.map((p) => p.id));
+  const silent = (m.presence ?? []).filter((p) => !spoke.has(p.id)).map((p) => cleanInline(p.name));
   return {
     id: m.id,
     url: pageUrl(m.id),
@@ -106,12 +110,18 @@ function meetingSummary(m: RecordingMeta): Record<string, unknown> {
     durationMin: m.endedAt ? Math.round((m.endedAt - m.startedAt) / 60000) : null,
     participants: m.participants.map((p) => cleanInline(p.name)),
     participantCount: m.participants.length,
+    /** Presentes que NÃO falaram (mutados/só ouvindo). */
+    presentSilent: silent,
+    presentCount: (m.presence?.length ?? 0) || m.participants.length,
     startedByName: m.startedBy ? cleanInline(m.startedBy.name) : null,
     status: m.status,
     hasTranscript: transcriptReady(m),
     /** 'partial' = faltam faixas (o cliente deve tratar o transcript como incompleto). */
     transcriptStatus: m.transcription?.status ?? 'none',
     hasMinutes: m.minutes?.status === 'done',
+    /** Retenção em camadas: áudio pode já ter expirado (texto continua). */
+    audioDeleted: m.audioDeleted ?? false,
+    textExpiresAtISO: m.textExpiresAt ? formatInTz(m.textExpiresAt) : null,
     noteCount: m.notes.length,
   };
 }
@@ -202,8 +212,16 @@ interface SearchHit {
   deepLink?: string;
 }
 
+/** Normaliza pra busca: minúsculas + sem acentos ("orcamento" acha "orçamento"). */
+function searchNorm(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
 function matchIn(haystack: string, terms: string[], mode: string): number {
-  const h = haystack.toLowerCase();
+  const h = searchNorm(haystack);
   if (mode === 'phrase') return h.includes(terms.join(' ')) ? 1 : 0;
   const hits = terms.filter((t) => h.includes(t));
   if (mode === 'all') return hits.length === terms.length ? hits.length : 0;
@@ -483,7 +501,13 @@ export function mountMcpApi(app: Express): void {
         }
         const md = transcriptToMarkdown(meta, readTranscript(meta.id) ?? []);
         const content = format === 'transcricao.txt' ? md.replace(/[*#`]/g, '') : md;
-        res.json({ id: meta.id, format, filename: `kassinao-${meta.id}-${format}`, content });
+        res.json({
+          id: meta.id,
+          format,
+          filename: `kassinao-${meta.id}-${format}`,
+          transcriptStatus: meta.transcription?.status ?? 'none',
+          content,
+        });
         return;
       }
       res.status(400).json({ error: 'bad_format', allowed: ['ata.md', 'transcricao.md', 'transcricao.txt'] });
@@ -529,6 +553,8 @@ export function mountMcpApi(app: Express): void {
             meetingId: m.id,
             meetingUrl: pageUrl(m.id),
             meetingStartedAtISO: formatInTz(m.startedAt),
+            /** ata gerada de transcrição parcial pode ter ações faltando */
+            transcriptStatus: m.transcription?.status ?? 'none',
           };
           if (!a.prazo) {
             buckets.noDeadline.push(item);
@@ -559,7 +585,7 @@ export function mountMcpApi(app: Express): void {
         return;
       }
       const mode = qstr(req, 'mode') ?? 'all';
-      const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+      const terms = searchNorm(q).split(/\s+/).filter(Boolean);
       const scope = new Set((qstr(req, 'scope') ?? 'transcript,minutes,notes').split(','));
       const range = resolveRange(rangeFromQuery(req), Date.now());
       const metas = await visibleInWindow(user, range, { guildId: qstr(req, 'guildId') });
@@ -575,7 +601,7 @@ export function mountMcpApi(app: Express): void {
         if (scope.has('transcript') && transcriptReady(m)) {
           for (const s of readTranscript(m.id) ?? []) {
             if (matchIn(s.text, terms, mode) > 0) {
-              const idx = s.text.toLowerCase().indexOf(terms[0]);
+              const idx = searchNorm(s.text).indexOf(terms[0]);
               hits.push({
                 where: 'transcript',
                 speaker: cleanInline(s.speaker),
@@ -614,8 +640,8 @@ export function mountMcpApi(app: Express): void {
         res.status(400).json({ error: 'missing_query' });
         return;
       }
-      const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
-      const speaker = qstr(req, 'speaker')?.toLowerCase();
+      const terms = searchNorm(q).split(/\s+/).filter(Boolean);
+      const speaker = qstr(req, 'speaker') ? searchNorm(qstr(req, 'speaker')!) : undefined;
       const ctx = qint(req, 'contextSegments', 1, 5);
       const scopeId = qstr(req, 'meetingId');
       const range = resolveRange(rangeFromQuery(req), Date.now());
@@ -629,11 +655,13 @@ export function mountMcpApi(app: Express): void {
         const segs = readTranscript(m.id) ?? [];
         for (let i = 0; i < segs.length; i++) {
           const s = segs[i];
-          if (speaker && !s.speaker.toLowerCase().includes(speaker)) continue;
+          if (speaker && !searchNorm(s.speaker).includes(speaker)) continue;
           if (matchIn(s.text, terms, 'all') === 0) continue;
           out.push({
             meetingId: m.id,
             url: pageUrl(m.id),
+            /** 'partial' = a faixa desta pessoa pode nem ter sido transcrita ainda. */
+            transcriptStatus: m.transcription?.status ?? 'none',
             speaker: cleanInline(s.speaker),
             startMs: s.startMs,
             text: neutralizeFences(cleanInline(s.text)),

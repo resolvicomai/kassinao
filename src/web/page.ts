@@ -197,7 +197,7 @@ const SHELL_CSS = `
   .pctl { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 6px;
           font-size: 12.5px; color: #8a888c; }
   .speed { display: inline-flex; gap: 4px; }
-  .speed button { background: #101012; border: 1px solid rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.13); color: #b6b4b2; border-radius: 6px;
+  .speed button { background: #101012; border: 1px solid rgba(255,255,255,.13); color: #b6b4b2; border-radius: 6px;
                   padding: 2px 9px; font-size: 12px; cursor: pointer; font-family: inherit; }
   .speed button.on { background: #5865f2; color: #fff; border-color: #5865f2; }
   .follow { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
@@ -247,7 +247,7 @@ const SHELL_CSS = `
   .isearch input:focus { outline: none; border-color: #5865f2; }
   .isearch .btn { flex-direction: row; align-items: center; padding: 10px 16px; }
   .rlist { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
-  .rcard { display: block; background: #101012; border: 1px solid rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.13); border-radius: 10px;
+  .rcard { display: block; background: #101012; border: 1px solid rgba(255,255,255,.13); border-radius: 10px;
            padding: 12px 14px; text-decoration: none; color: #c9c7c5; }
   .rcard:hover { border-color: #5865f2; }
   .rcard .rrow1 { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
@@ -979,7 +979,7 @@ export function recordingsIndexPage(
                const link =
                  h.atMs !== undefined ? `/rec/${h.metaId}#t=${Math.floor(h.atMs / 1000)}` : `/rec/${h.metaId}`;
                const icon = h.kind === 'minutes' ? '📋' : h.kind === 'note' ? '📝' : '💬';
-               const when = h.atMs !== undefined ? ` <span class="ts">${msToClock(h.atMs)}</span>` : '';
+               const when = h.atMs !== undefined ? ` <a class="ts" href="${link}">${msToClock(h.atMs)}</a>` : '';
                return `<li>${icon} <a href="${link}"><strong>#${esc(h.channelName)}</strong></a> · ${datetime(h.startedAt, l)}${when}<br>
                  <span class="muted">${h.speaker ? `<strong>${esc(h.speaker)}:</strong> ` : ''}${esc(h.snippet)}</span></li>`;
              })

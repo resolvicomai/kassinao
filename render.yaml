@@ -34,6 +34,12 @@ services:
         sync: false # https://console.groq.com — transcrição free tier + fallback (ative Zero Data Retention)
       - key: OPENROUTER_API_KEY
         sync: false # https://openrouter.ai — LLM da ata (padrão google/gemini-2.5-flash)
+      # Conector de IA (MCP) — opcional, mas é feature de destaque: sem MCP_SECRET
+      # o /conectar-ia e a API /api/* ficam DESLIGADOS (opt-in deliberado).
+      - key: MCP_SECRET
+        sync: false # ex.: `openssl rand -hex 32` — rotacionar revoga todos os conectores
+      - key: OWNER_IDS
+        sync: false # IDs Discord (CSV) autorizados ao comando /mcp
       - key: DEFAULT_LOCALE
         value: en # 'pt' pra respostas de DM em português
       - key: TZ

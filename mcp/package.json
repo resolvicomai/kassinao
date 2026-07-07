@@ -1,7 +1,7 @@
 {
   "name": "kassinao-mcp",
-  "version": "1.0.0",
-  "description": "MCP connector for Kassinão — ask your Discord meeting recordings (transcripts, minutes, action items) from Claude Desktop, Cursor and other MCP clients.",
+  "version": "1.0.1",
+  "description": "MCP connector for Kassin\u00e3o \u2014 ask your Discord meeting recordings (transcripts, minutes, action items) from Claude Desktop, Cursor and other MCP clients.",
   "type": "module",
   "bin": {
     "kassinao-mcp": "dist/index.js"
