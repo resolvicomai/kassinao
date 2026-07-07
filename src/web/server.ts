@@ -286,15 +286,16 @@ export function startWebServer(): void {
   /** Índice "minhas gravações": tudo que ESTA pessoa pode abrir, em todos os guilds. */
   app.get('/gravacoes', async (req, res) => {
     const l = pageLang(req);
-    const user = getWebUser(req);
-    if (!user) {
-      beginLogin(res, req.originalUrl || '/gravacoes'); // preserva ?q= da busca
-      return;
-    }
-    if (notReady(res, l, user)) return;
     const q = String(req.query.q ?? '')
       .trim()
       .slice(0, 100);
+    const user = getWebUser(req);
+    if (!user) {
+      // next reconstruído de partes VALIDADAS (nunca originalUrl cru) — preserva a busca
+      beginLogin(res, q ? `/gravacoes?q=${encodeURIComponent(q)}` : '/gravacoes');
+      return;
+    }
+    if (notReady(res, l, user)) return;
     // mesma regra da página individual (checkAccess) aplicada meta a meta —
     // o cache de membership (45s) segura o custo pra listas de um time pequeno
     const all = listMetas()
