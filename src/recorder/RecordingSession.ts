@@ -688,6 +688,24 @@ export class RecordingSession {
       }
     }
 
+    // O edit do painel é INVISÍVEL (a mensagem fica lá em cima no histórico):
+    // uma call que termina precisa de uma mensagem NOVA com o link, senão o
+    // time acha que a gravação se perdeu. Curta, sem embed — o painel é a fonte.
+    if (this.meta.participants.length > 0 && this.panelMessage) {
+      try {
+        if (this.voiceChannel.isTextBased()) {
+          await this.voiceChannel.send(
+            t(this.locale, 'record.stopped-link', {
+              duration: formatDuration(endedAt - this.startedAt),
+              url: this.pageUrl,
+            }),
+          );
+        }
+      } catch {
+        // sem permissão — painel/DM/gravacoes cobrem
+      }
+    }
+
     this.sendStopDM();
     return this.meta;
   }

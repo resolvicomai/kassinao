@@ -220,6 +220,10 @@ const STRINGS: Strings = {
     pt: '📝 Transcrição pronta! Já está na página 👉 {url}',
     en: '📝 Transcript ready! It’s on the page now 👉 {url}',
   },
+  'record.stopped-link': {
+    pt: '⏹️ Gravação encerrada (**{duration}**). Áudio já disponível — transcrição e ata chegam aqui em alguns minutos: {url}',
+    en: '⏹️ Recording ended (**{duration}**). Audio is up — transcript and minutes land here in a few minutes: {url}',
+  },
   'transcript.failed': {
     pt: '⚠️ Não consegui transcrever desta vez: {error}\nO áudio continua disponível na página, viu?',
     en: '⚠️ I couldn’t transcribe this time: {error}\nThe audio is still available on the page.',
