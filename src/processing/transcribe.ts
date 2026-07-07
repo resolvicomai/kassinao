@@ -230,6 +230,16 @@ async function transcribeRecording(recordingId: string): Promise<void> {
   const doneTrackIds = new Set(meta.transcription?.doneTrackIds ?? []);
   const previous = doneTrackIds.size > 0 ? (readTranscript(recordingId) ?? []) : [];
 
+  // Apelidos duplicados não podem virar UMA pessoa só na transcrição/ata/MCP:
+  // o segundo "João" vira "João (2)".
+  const nameCount = new Map<string, number>();
+  const displayName = new Map<string, string>();
+  for (const p of meta.participants) {
+    const n = (nameCount.get(p.name) ?? 0) + 1;
+    nameCount.set(p.name, n);
+    displayName.set(p.id, n > 1 ? `${p.name} (${n})` : p.name);
+  }
+
   meta.transcription = { ...meta.transcription, status: 'running', provider: config.transcribeProvider };
   saveMeta(meta);
 
@@ -256,7 +266,12 @@ async function transcribeRecording(recordingId: string): Promise<void> {
         continue;
       }
       try {
-        const segments = await transcribeTrack(master, participant, trackSec, work);
+        const segments = await transcribeTrack(
+          master,
+          { ...participant, name: displayName.get(participant.id) ?? participant.name },
+          trackSec,
+          work,
+        );
         all.push(...segments);
         doneTrackIds.add(participant.id);
         // checkpoint: se a PRÓXIMA faixa estourar o rate limit, esta não se perde

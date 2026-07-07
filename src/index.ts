@@ -482,16 +482,22 @@ async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise
     client.users.send(meta.startedBy.id, { content: text, embeds }).catch(() => {});
   }
   // webhook do operador (env) — integrações self-hosted (n8n → Notion/Jira...).
-  // Dedupe persistido: o resume pós-reinício re-chama o notify e não pode
-  // disparar o mesmo POST duas vezes.
+  // Dedupe persistido SÓ após sucesso: falha de rede num deploy não pode
+  // significar "nunca mais tenta"; o resume pós-reinício re-dispara.
   if (minutesDone && config.minutesWebhookUrl) {
     const fresh = readMeta(meta.id);
     if (fresh && !fresh.webhookSentAt) {
-      fresh.webhookSentAt = Date.now();
-      saveMeta(fresh);
-      postMinutesWebhook(meta).catch((err) =>
-        console.warn(`Webhook da ata (${meta.id}) falhou:`, (err as Error).message),
-      );
+      postMinutesWebhook(meta)
+        .then(() => {
+          const ok = readMeta(meta.id);
+          if (ok) {
+            ok.webhookSentAt = Date.now();
+            saveMeta(ok);
+          }
+        })
+        .catch((err) =>
+          console.warn(`Webhook da ata (${meta.id}) falhou (vai retentar no resume):`, (err as Error).message),
+        );
     }
   }
 }

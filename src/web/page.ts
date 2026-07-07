@@ -1024,9 +1024,14 @@ const LANDING_CSS = `
   strong { color: var(--text-strong); font-weight: 600; }
   .container { max-width: 1020px; margin: 0 auto; border-left: 1px solid var(--border);
                border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-  section { border-top: 1px solid var(--border); padding: 56px 56px; }
+  section { border-top: 1px solid var(--border); padding: 48px 56px; }
   @media (max-width: 1040px) { .container { border-left: 0; border-right: 0; } }
-  @media (max-width: 700px) { section { padding: 36px 20px; } body { font-size: 14px; } }
+  @media (max-width: 700px) { section { padding: 34px 20px; } body { font-size: 14px; } }
+
+  /* reveal sutil ao rolar — só quando JS está ativo (html.js): sem JS, tudo visível */
+  html.js .rv { opacity: 0; transform: translateY(14px); transition: opacity .55s ease, transform .55s ease; }
+  html.js .rv.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) { html.js .rv { opacity: 1; transform: none; transition: none; } }
 
   /* ---------- topo ---------- */
   .top { position: sticky; top: 0; z-index: 10; background: var(--bg);
@@ -1058,36 +1063,53 @@ const LANDING_CSS = `
     .btnp, .nav a.btnp { padding: 6px 10px; font-size: 12.5px; gap: 6px; }
   }
 
-  /* ---------- herói ---------- */
-  .hero h1 { color: var(--text-strong); font-size: 36px; line-height: 1.25; font-weight: 700;
-             letter-spacing: -.01em; max-width: 21ch; }
+  /* ---------- herói (2 colunas: pitch + terminal) ---------- */
+  .hero { position: relative; overflow: hidden; }
+  .hero::before { content: ''; position: absolute; inset: -40% -20% auto -20%; height: 90%;
+                  background: radial-gradient(ellipse at 30% 0%, rgba(88,101,242,.09), transparent 60%);
+                  pointer-events: none; }
+  .hgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 44px;
+           align-items: start; position: relative; }
+  @media (max-width: 900px) { .hgrid { grid-template-columns: 1fr; } }
+  .hero h1 { color: var(--text-strong); font-size: 34px; line-height: 1.25; font-weight: 700;
+             letter-spacing: -.01em; }
   @media (max-width: 700px) { .hero h1 { font-size: 26px; } }
-  .hero .sub { margin-top: 18px; max-width: 62ch; }
-  .badge { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 26px;
-           font-size: 13px; color: var(--text-weak); }
+  .hero .sub { margin-top: 16px; }
+  .badge { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 22px;
+           font-size: 12.5px; color: var(--text-weak); }
   .badge b { background: var(--bg-strong); color: var(--text-inverted); font-weight: 700;
              padding: 2px 8px; font-size: 12px; }
   .badge a { color: var(--text); }
-  .installer { margin-top: 30px; border: 1px solid var(--border); border-radius: 6px;
-               background: var(--bg-weak); max-width: 720px; }
+  .installer { margin-top: 26px; border: 1px solid var(--border); border-radius: 6px;
+               background: var(--bg-weak); }
   .installer .tab { display: flex; align-items: center; justify-content: space-between;
-                    padding: 10px 16px; border-bottom: 1px solid var(--border);
+                    padding: 9px 14px; border-bottom: 1px solid var(--border);
                     color: var(--text-weak); font-size: 12.5px; }
-  .installer pre { padding: 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.8;
+  .installer pre { padding: 13px 14px; overflow-x: auto; font-size: 13px; line-height: 1.8;
                    font-family: var(--mono); }
   .installer .pr { color: var(--text-weak); user-select: none; }
   .installer .hl { color: var(--text-strong); font-weight: 600; }
   .cp { background: none; border: 1px solid var(--border); color: var(--text-weak);
         font-family: var(--mono); font-size: 12px; padding: 3px 10px; border-radius: 4px;
-        cursor: pointer; }
+        cursor: pointer; transition: border-color .15s ease, color .15s ease; }
   .cp:hover { color: var(--text-strong); border-color: var(--border-strong); }
   .cp.ok { color: var(--ok); border-color: var(--ok); }
+  /* faixa de chips abaixo do herói (preenche e reforça os recibos) */
+  .strip { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 34px; font-size: 12.5px;
+           color: var(--text-weak); position: relative; }
+  .strip span::before { content: '[*] '; color: var(--accent); opacity: .75; }
 
-  /* ---------- terminal (a prova) ---------- */
-  .term-wrap { padding: 0; }
-  .term { font-size: 13.5px; line-height: 2.05; padding: 34px 56px; overflow-x: auto; }
-  @media (max-width: 700px) { .term { padding: 24px 20px; font-size: 12.5px; } }
+  /* ---------- terminal (a prova, dentro do herói) ---------- */
+  .term { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-weak);
+          font-size: 12.5px; line-height: 1.95; overflow: hidden; }
+  .term .tbar { display: flex; align-items: center; gap: 6px; padding: 9px 14px;
+                border-bottom: 1px solid var(--border); color: var(--text-weak); font-size: 12px; }
+  .term .tbar i { width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong); display: inline-block; }
+  .term .tbody { padding: 14px 16px; overflow-x: auto; min-height: 330px; }
   .term .ln { white-space: pre-wrap; }
+  /* animação de digitação: linhas entram uma a uma (JS); reduced-motion mostra tudo */
+  .term.typing .ln { visibility: hidden; }
+  .term.typing .ln.on { visibility: visible; }
   .term .p { color: var(--accent); user-select: none; }
   .term .c { color: var(--text-strong); font-weight: 600; }
   .term .ok { color: var(--ok); }
@@ -1095,24 +1117,27 @@ const LANDING_CSS = `
   .term .ans { color: var(--text-strong); }
   .term .ts { color: var(--accent); text-decoration: none; }
   .term .ts:hover { text-decoration: underline; }
-  .term .cursor { display: inline-block; width: 8px; height: 15px; background: var(--text-strong);
+  .term .cursor { display: inline-block; width: 8px; height: 14px; background: var(--text-strong);
                   vertical-align: -2px; animation: blink 1.2s steps(1) infinite; }
   @media (prefers-reduced-motion: reduce) { .term .cursor { animation: none; } }
-  .term-cap { border-top: 1px solid var(--border); padding: 12px 56px; font-size: 12.5px;
-              color: var(--text-weak); }
-  @media (max-width: 700px) { .term-cap { padding: 12px 20px; } }
+  .term-cap { padding: 10px 16px; font-size: 12px; color: var(--text-weak);
+              border-top: 1px solid var(--border); }
 
   /* ---------- listas [*] ---------- */
   h3 { color: var(--text-strong); font-size: 16px; font-weight: 700; margin-bottom: 18px; }
+  h3::before { content: '## '; color: var(--text-weak); font-weight: 400; }
   .stars { list-style: none; }
   .stars li { padding-left: 34px; position: relative; margin-bottom: 10px; }
   .stars li::before { content: '[*]'; position: absolute; left: 0; color: var(--text-weak); }
   .more { margin-top: 22px; font-size: 13.5px; }
 
   /* ---------- figuras ---------- */
-  .figs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; margin-top: 30px; }
+  .figs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 30px; }
   @media (max-width: 700px) { .figs { grid-template-columns: 1fr; } }
-  .figs figure { border: 1px solid var(--border); padding: 18px; border-radius: 6px; background: var(--bg-weak); }
+  .figs figure { border: 1px solid var(--border); padding: 18px; border-radius: 6px; background: var(--bg-weak);
+                 transition: border-color .2s ease, transform .2s ease; }
+  .figs figure:hover { border-color: rgba(88,101,242,.5); transform: translateY(-2px); }
+  @media (prefers-reduced-motion: reduce) { .figs figure, .figs figure:hover { transform: none; transition: none; } }
   .figs svg { width: 100%; height: 96px; display: block; }
   .figs figcaption { margin-top: 12px; font-size: 12.5px; color: var(--text-weak); line-height: 1.6; }
   .figs figcaption b { color: var(--text); font-weight: 600; }
@@ -1145,7 +1170,8 @@ const LANDING_CSS = `
   /* ---------- rodapé ---------- */
   .cells { display: flex; border-top: 1px solid var(--border); }
   .cells a { flex: 1; text-align: center; padding: 22px 8px; text-decoration: none;
-             color: var(--text); font-size: 13.5px; border-left: 1px solid var(--border); }
+             color: var(--text); font-size: 13.5px; border-left: 1px solid var(--border);
+             transition: background .15s ease; }
   .cells a:first-child { border-left: 0; }
   .cells a:hover { background: var(--bg-weak); color: var(--text-strong); }
   .cells .k { color: var(--text-weak); }
@@ -1184,61 +1210,69 @@ export function landingPage(lang: Locale): string {
     </nav>
   </div></header>`;
 
-  // ---------- herói ----------
+  // ---------- herói (2 colunas: pitch/instalação + terminal ao vivo) ----------
   const installCmd = repoPublic
     ? `git clone ${REPO_URL}.git && cd kassinao\ncp .env.example .env   ${T('# token do bot + chaves de IA', '# bot token + AI keys')}\ndocker compose up -d`
     : `npx -y kassinao-mcp   ${T('# conector de IA (o bot é self-hosted)', '# AI connector (the bot is self-hosted)')}`;
-  const hero = `<section class="hero">
-    <div class="badge"><b>v1.2.0</b><span>${T(
-      '/perguntar no Discord · índice web com busca · retenção em camadas',
-      '/ask in Discord · web index with search · tiered retention',
-    )}</span></div>
-    <h1>${T('Grava as calls do Discord. Depois é só perguntar.', 'Record your Discord calls. Then just ask.')}</h1>
-    <p class="sub">${T(
-      'Uma faixa de áudio por pessoa — a transcrição sai com o <strong>nome exato de quem falou</strong>, sem diarização por chute. A ata (resumo, decisões, ações) se escreve sozinha. E as reuniões viram memória que responde: no Discord, na web ou no seu assistente de IA.',
-      'One audio track per speaker — transcripts carry the <strong>exact name of who said what</strong>, no diarization guesswork. Minutes (summary, decisions, action items) write themselves. Your meetings become memory that answers: in Discord, on the web, or in your AI assistant.',
-    )}</p>
-    <div class="installer">
-      <div class="tab"><span>${T('self-hosted · docker', 'self-hosted · docker')}</span>
-        <button class="cp" type="button" data-copy="kcmd">${T('copiar', 'copy')}</button></div>
-      <pre id="kcmd">${installCmd
-        .split('\n')
-        .map((l) => `<span class="pr">$ </span>${l.replace(/(#.*)$/, '<span class="pr">$1</span>')}`)
-        .join('\n')}</pre>
-    </div>
-  </section>`;
 
-  // ---------- terminal: o produto em 20 linhas ----------
-  const term = `<section class="term-wrap">
-    <div class="term" role="img" aria-label="${T('Sessão de exemplo do Kassinão', 'Kassinão example session')}">
+  const termLines = `
 <div class="ln"><span class="p">discord&gt;</span> <span class="c">/${T('gravar', 'record')}</span></div>
-<div class="ln"><span class="dim">●</span> ${T('gravando <span class="c">#daily</span> — uma faixa FLAC por pessoa, painel com', 'recording <span class="c">#daily</span> — one FLAC track per person, panel with')} <span class="dim">[⏹ ${T('parar', 'stop')}] [📌 ${T('marcar', 'mark')}] [📝 ${T('nota', 'note')}]</span></div>
+<div class="ln"><span class="dim">●</span> ${T('gravando <span class="c">#daily</span> — 1 faixa FLAC por pessoa', 'recording <span class="c">#daily</span> — one FLAC track per person')}</div>
+<div class="ln"><span class="dim">  painel: [⏹ ${T('parar', 'stop')}] [📌 ${T('marcar', 'mark')}] [📝 ${T('nota', 'note')}]</span></div>
 <div class="ln">&nbsp;</div>
 <div class="ln"><span class="p">discord&gt;</span> <span class="c">/${T('parar', 'stop')}</span></div>
-<div class="ln"><span class="ok">✓</span> ${T('transcrição — 5 pessoas, nome exato em cada fala', 'transcript — 5 people, exact name on every line')} <span class="dim">(${T('só a fala vai pra API: VAD corta o silêncio', 'only speech hits the API: VAD trims silence')})</span></div>
-<div class="ln"><span class="ok">✓</span> ${T('ata — resumo · decisões · ações com responsável e prazo', 'minutes — summary · decisions · action items with owner & due')}</div>
-<div class="ln"><span class="ok">✓</span> ${T('postada no canal + página com player, busca e karaokê da transcrição', 'posted to the channel + page with player, search and transcript follow-along')}</div>
+<div class="ln"><span class="ok">✓</span> ${T('transcrição — 5 pessoas, nome exato em cada fala', 'transcript — 5 people, exact name on every line')}</div>
+<div class="ln"><span class="dim">  ${T('só a fala vai pra API: o VAD corta o silêncio', 'only speech hits the API: VAD trims the silence')}</span></div>
+<div class="ln"><span class="ok">✓</span> ${T('ata — resumo · decisões · ações (dono + prazo)', 'minutes — summary · decisions · actions (owner + due)')}</div>
+<div class="ln"><span class="ok">✓</span> ${T('postada no canal + página com player e busca', 'posted to the channel + page with player and search')}</div>
 <div class="ln">&nbsp;</div>
-<div class="ln"><span class="p">discord&gt;</span> <span class="c">/${T('perguntar', 'ask')}</span> ${T('o que decidimos sobre o rollback do onboarding?', 'what did we decide about the onboarding rollback?')}</div>
+<div class="ln"><span class="p">discord&gt;</span> <span class="c">/${T('perguntar', 'ask')}</span> ${T('o que decidimos sobre o rollback?', 'what did we decide about the rollback?')}</div>
 <div class="ln"><span class="ans">${T(
     'Rafael assumiu dar merge no rollback com feature-flag até quarta',
     'Rafael took merging the rollback behind a feature-flag by Wednesday',
   )} — <a class="ts" href="/demo">[16:10]</a></span></div>
-<div class="ln"><span class="dim">${T(
-    '· só busca nas reuniões que VOCÊ pode acessar · citação clicável pro segundo exato',
-    '· answers only from meetings YOU can access · citation jumps to the exact second',
-  )}</span></div>
+<div class="ln"><span class="dim">  ${T('só reuniões que VOCÊ pode acessar · cita o segundo exato', 'only meetings YOU can access · cites the exact second')}</span></div>
 <div class="ln">&nbsp;</div>
-<div class="ln"><span class="p">discord&gt;</span> <span class="cursor"></span></div>
+<div class="ln"><span class="p">discord&gt;</span> <span class="cursor"></span></div>`;
+
+  const hero = `<section class="hero">
+    <div class="hgrid">
+      <div>
+        <div class="badge"><b>v1.2.0</b><span>${T(
+          '/perguntar · índice web com busca · retenção em camadas',
+          '/ask · web index with search · tiered retention',
+        )}</span></div>
+        <h1>${T('Grava as calls do Discord. Depois é só perguntar.', 'Record your Discord calls. Then just ask.')}</h1>
+        <p class="sub">${T(
+          'Uma faixa de áudio por pessoa — a transcrição sai com o <strong>nome exato de quem falou</strong>, sem diarização por chute. A ata se escreve sozinha. E as reuniões viram memória que responde: no Discord, na web ou no seu assistente de IA.',
+          'One audio track per speaker — transcripts carry the <strong>exact name of who said what</strong>, no diarization guesswork. Minutes write themselves. Your meetings become memory that answers: in Discord, on the web, or in your AI assistant.',
+        )}</p>
+        <div class="installer">
+          <div class="tab"><span>${T('self-hosted · docker', 'self-hosted · docker')}</span>
+            <button class="cp" type="button" data-copy="kcmd">${T('copiar', 'copy')}</button></div>
+          <pre id="kcmd">${installCmd
+            .split('\n')
+            .map((l) => `<span class="pr">$ </span>${l.replace(/(#.*)$/, '<span class="pr">$1</span>')}`)
+            .join('\n')}</pre>
+        </div>
+      </div>
+      <div class="term" id="kterm">
+        <div class="tbar"><i></i><i></i><i></i>&nbsp; kassinao — discord</div>
+        <div class="tbody">${termLines}</div>
+        <div class="term-cap">${T('sessão real de exemplo — veja a página na', 'real example session — see the page on the')} <a href="/demo">${T('demo ao vivo →', 'live demo →')}</a></div>
+      </div>
     </div>
-    <div class="term-cap">${T(
-      'Sessão real de exemplo — veja a página que o time recebe na',
-      'Real example session — see the page your team gets on the',
-    )} <a href="/demo">${T('demo ao vivo →', 'live demo →')}</a></div>
+    <div class="strip">
+      <span>${T('open source (AGPL-3.0)', 'open source (AGPL-3.0)')}</span>
+      <span>${T('roda no seu servidor', 'runs on your server')}</span>
+      <span>${T('custo acompanha o tempo falado', 'cost tracks talk time')}</span>
+      <span>MCP · Claude · Cursor</span>
+      <span>pt-BR / EN</span>
+    </div>
   </section>`;
 
   // ---------- o que é ----------
-  const what = `<section>
+  const what = `<section class="rv">
     <h3>${T('O que é o Kassinão?', 'What is Kassinão?')}</h3>
     <ul class="stars">
       <li><strong>${T('Multipista de verdade.', 'True multi-track.')}</strong> ${T(
@@ -1292,7 +1326,7 @@ export function landingPage(lang: Locale): string {
         `<rect x="${x}" y="${i % 2 ? 36 : 30}" width="5" height="${i % 2 ? 24 : 36}" fill="rgba(255,255,255,${i % 3 ? '.32' : '.5'})"/>`,
     )
     .join('');
-  const figs = `<section>
+  const figs = `<section class="rv">
     <h3>${T('Como ele acerta o que os outros chutam', 'How it gets right what others guess')}</h3>
     <div class="figs">
       <figure><svg viewBox="0 0 200 96" aria-hidden="true">${lanes}</svg>
@@ -1314,7 +1348,7 @@ export function landingPage(lang: Locale): string {
   </section>`;
 
   // ---------- perguntar em 3 lugares ----------
-  const ask = `<section>
+  const ask = `<section class="rv">
     <h3>${T('Pergunte de onde você já trabalha', 'Ask from wherever you already work')}</h3>
     <ul class="stars">
       <li><strong>Discord</strong> — <span class="dim">/${T('perguntar', 'ask')}</span> ${T(
@@ -1346,7 +1380,7 @@ export function landingPage(lang: Locale): string {
   const accessReceipt = repoPublic
     ? `<a href="${REPO_URL}/blob/main/src/web/access.ts">src/web/access.ts →</a>`
     : `<span>src/web/access.ts</span>`;
-  const privacy = `<section>
+  const privacy = `<section class="rv">
     <h3>${T('Privacidade não é promessa, é arquitetura', 'Privacy is architecture, not a promise')}</h3>
     <ul class="stars">
       <li>${T(
@@ -1373,7 +1407,7 @@ export function landingPage(lang: Locale): string {
   </section>`;
 
   // ---------- comparação ----------
-  const compare = `<section>
+  const compare = `<section class="rv">
     <h3>${T('Craig grava. Otter resume. O Kassinão lembra.', 'Craig records. Otter summarizes. Kassinão remembers.')}</h3>
     <table>
       <tr><th></th><th>Kassinão</th><th>Craig</th><th>Otter/Fireflies</th></tr>
@@ -1387,7 +1421,7 @@ export function landingPage(lang: Locale): string {
   </section>`;
 
   // ---------- deploy ----------
-  const deploy = `<section id="deploy">
+  const deploy = `<section id="deploy" class="rv">
     <h3>${T('Rode o seu em 3 passos', 'Deploy yours in 3 steps')}</h3>
     <div class="steps">
       <div class="step"><div class="st-t">${T('Crie o app no Discord', 'Create the Discord app')}</div>
@@ -1423,6 +1457,7 @@ export function landingPage(lang: Locale): string {
   </div>`;
 
   const copyScript = `<script>(function(){
+    document.documentElement.classList.add('js'); // habilita as animações só com JS vivo
     document.querySelectorAll('.cp[data-copy]').forEach(function(b){
       b.addEventListener('click', function(){
         var el = document.getElementById(b.dataset.copy);
@@ -1433,6 +1468,31 @@ export function landingPage(lang: Locale): string {
         });
       });
     });
+    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // terminal "digitando": as linhas entram uma a uma (uma vez, ao carregar)
+    var term = document.getElementById('kterm');
+    if (term && !reduce) {
+      term.classList.add('typing');
+      var lns = term.querySelectorAll('.ln');
+      var i = 0;
+      (function next(){
+        if (i >= lns.length) { term.classList.remove('typing'); return; }
+        lns[i].classList.add('on');
+        var txt = lns[i].textContent || '';
+        i++;
+        setTimeout(next, txt.trim() ? Math.min(90 + txt.length * 6, 520) : 140);
+      })();
+    }
+    // reveal ao rolar
+    var rvs = document.querySelectorAll('.rv');
+    if ('IntersectionObserver' in window && !reduce) {
+      var io = new IntersectionObserver(function(es){
+        es.forEach(function(e){ if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+      }, { rootMargin: '0px 0px -8% 0px' });
+      rvs.forEach(function(el){ io.observe(el); });
+    } else {
+      rvs.forEach(function(el){ el.classList.add('in'); });
+    }
   })();</script>`;
 
   return `<!doctype html>
@@ -1465,7 +1525,6 @@ export function landingPage(lang: Locale): string {
 ${topnav}
 <div class="container">
 ${hero}
-${term}
 ${what}
 ${figs}
 ${ask}
