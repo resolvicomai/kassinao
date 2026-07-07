@@ -26,7 +26,7 @@ const P: Record<string, { pt: string; en: string }> = {
   duration: { pt: 'Duração', en: 'Duration' },
   counting: { pt: ' (e contando…)', en: ' (and counting…)' },
   participants: { pt: 'Participantes', en: 'Participants' },
-  nobody: { pt: 'Ninguém falou ainda. 🤷', en: 'Nobody spoke yet. 🤷' },
+  nobody: { pt: 'Ninguém falou ainda. 🤷', en: 'Nobody has spoken yet. 🤷' },
   downloads: { pt: 'Downloads', en: 'Downloads' },
   mp3sub: { pt: 'uma faixa por pessoa (ZIP)', en: 'one track per speaker (ZIP)' },
   flacsub: { pt: 'lossless, uma faixa por pessoa (ZIP)', en: 'lossless, one track per speaker (ZIP)' },
@@ -110,10 +110,11 @@ const P: Record<string, { pt: string; en: string }> = {
   searchTranscript: { pt: 'Buscar na transcrição…', en: 'Search the transcript…' },
   copyActions: { pt: 'Copiar itens de ação', en: 'Copy action items' },
   timelineAll: { pt: 'Todos os eventos ({n})', en: 'All events ({n})' },
-  timelineLegend: {
-    pt: '● falou · ● entrou · ● saiu · ● nota · ● tópico — clique pra pular',
-    en: '● spoke · ● joined · ● left · ● note · ● topic — click to jump',
-  },
+  tlTopics: { pt: 'tópicos da ata', en: 'minutes topics' },
+  tlNotes: { pt: 'notas', en: 'notes' },
+  tlJoined: { pt: 'entrou', en: 'joined' },
+  tlLeft: { pt: 'saiu', en: 'left' },
+  tlHint: { pt: 'clique pra pular no áudio', en: 'click to jump in the audio' },
   audioExpired: {
     pt: '🔇 O áudio desta gravação expirou (retenção). A transcrição, a ata e as notas continuam aqui.',
     en: '🔇 The audio of this recording has expired (retention). Transcript, minutes and notes remain here.',
@@ -200,14 +201,35 @@ const SHELL_CSS = `
                   padding: 2px 9px; font-size: 12px; cursor: pointer; font-family: inherit; }
   .speed button.on { background: #5865f2; color: #fff; border-color: #5865f2; }
   .follow { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
-  .tlbar { position: relative; height: 26px; background: #101012; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; margin: 4px 0 4px; }
-  .tlbar .mk { position: absolute; top: 6px; width: 8px; height: 14px; border-radius: 3px;
-               transform: translateX(-50%); text-decoration: none; }
-  .tlbar .mk:hover { transform: translateX(-50%) scaleY(1.25); }
-  .mk.speak { background: #7b90f7; } .mk.join { background: #3dbf7a; } .mk.leave { background: #6d7178; }
-  .mk.note { background: #f0b232; } .mk.topic { background: #a58cf2; top: 3px; height: 20px; }
-  .mk.sys { background: #4e5058; }
-  .tllegend { font-size: 11.5px; color: #6d7178; margin-bottom: 6px; }
+  /* linha do tempo: capítulos (blocos) + ticks (notas/entra-sai) + eixo + legenda */
+  .tl2 { margin: 6px 0 10px; }
+  .tl-ch { position: relative; height: 26px; }
+  .tl-seg { position: absolute; top: 0; height: 22px; border-radius: 4px; overflow: hidden;
+            text-decoration: none; display: flex; align-items: center; padding: 0 6px; }
+  .tl-seg.s0 { background: rgba(88,101,242,.28); }
+  .tl-seg.s1 { background: rgba(88,101,242,.16); }
+  .tl-seg:hover { background: rgba(88,101,242,.45); }
+  .tl-seg span { font-size: 10.5px; color: #c9cdfb; white-space: nowrap; overflow: hidden;
+                 text-overflow: ellipsis; font-family: ui-monospace, monospace; }
+  .tl-ticks { position: relative; height: 14px; margin-top: 3px; }
+  .tl-tk { position: absolute; top: 1px; width: 4px; height: 12px; border-radius: 2px;
+           transform: translateX(-50%); }
+  .tl-tk.tnote { background: #f0b232; width: 5px; }
+  .tl-tk.join { background: #3fbf7a; opacity: .75; }
+  .tl-tk.leave { background: #6d7178; opacity: .75; }
+  .tl-tk:hover { transform: translateX(-50%) scaleY(1.3); }
+  .tl-ax { display: flex; justify-content: space-between; font-size: 11px; color: #6d7178;
+           font-family: ui-monospace, monospace; border-top: 1px solid rgba(255,255,255,.13);
+           padding-top: 4px; margin-top: 4px; }
+  .tl-lg { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 11.5px; color: #8a888c;
+           margin-top: 6px; align-items: center; }
+  .tl-lg i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px;
+             vertical-align: -1px; }
+  .tl-lg .lg-ch { background: rgba(88,101,242,.55); }
+  .tl-lg .lg-note { background: #f0b232; }
+  .tl-lg .lg-join { background: #3fbf7a; }
+  .tl-lg .lg-leave { background: #6d7178; }
+  .tl-lg .lg-hint { margin-left: auto; color: #6d7178; }
   .evlist summary { cursor: pointer; font-size: 13px; color: #8a888c; margin: 6px 0; }
   .minutes .lead { font-size: 15.5px; line-height: 1.55; color: #f1eeec; }
   /* índice de gravações */
@@ -614,35 +636,60 @@ function renderTimeline(
     .map((e) => `<li><time>${formatOffset(e.atMs)}</time>${clockTime(meta.startedAt + e.atMs, l)}${esc(e.text)}</li>`)
     .join('')}</ul></details>`;
 
-  // barra visual só faz sentido com duração fechada e player pra pular
+  // Barra visual só com duração fechada. Desenho: CAPÍTULOS da ata como blocos
+  // clicáveis (estilo YouTube) + notas/entra-sai como ticks discretos noutra
+  // pista. "Falou pela primeira vez" fica só na lista (na barra é ruído).
   let bar = '';
   if (!live && durMs > 0) {
-    const markers: string[] = [];
+    const pct = (ms: number) => Math.min(100, Math.max(0, (ms / durMs) * 100)).toFixed(2);
+    const click = (ms: number) => (seekable ? ` onclick="kseek(${Math.floor(ms)});return false" href="#"` : '');
+
+    // capítulos: do início de um tópico até o início do próximo
+    const topics = [...(minutes?.topicos ?? [])].sort((a, b) => a.inicioMs - b.inicioMs);
+    let chapters = '';
+    if (topics.length > 0) {
+      const segs = topics.map((tp, i) => {
+        const start = Math.max(0, tp.inicioMs);
+        const end = i + 1 < topics.length ? topics[i + 1].inicioMs : durMs;
+        const w = Math.max(0.8, ((end - start) / durMs) * 100);
+        return `<a class="tl-seg s${i % 2}" style="left:${pct(start)}%;width:${Math.min(100 - Number(pct(start)), w).toFixed(2)}%"
+          title="${esc(`${formatOffset(start)} · ${tp.titulo}`)}"${click(start)}><span>${esc(tp.titulo)}</span></a>`;
+      });
+      chapters = `<div class="tl-ch">${segs.join('')}</div>`;
+    }
+
+    // ticks: notas (amarelo, por cima) + entrou/saiu (verde/cinza, discretos)
+    const ticks: string[] = [];
+    for (const n of meta.notes) {
+      ticks.push(
+        `<a class="tl-tk tnote" style="left:${pct(n.atMs)}%" title="${esc(`${formatOffset(n.atMs)} 📝 ${n.author}: ${n.text.slice(0, 80)}`)}"${click(n.atMs)}></a>`,
+      );
+    }
     for (const e of meta.events) {
-      const pct = Math.min(100, Math.max(0, (e.atMs / durMs) * 100));
-      const kind = e.text.startsWith('🎤')
-        ? 'speak'
-        : e.text.startsWith('🔊') || e.text.startsWith('👥')
-          ? 'join'
-          : e.text.startsWith('🚪')
-            ? 'leave'
-            : e.text.startsWith('📝')
-              ? 'note'
-              : 'sys';
-      const click = seekable ? ` onclick="kseek(${e.atMs});return false" href="#"` : '';
-      markers.push(
-        `<a class="mk ${kind}" style="left:${pct.toFixed(2)}%" title="${esc(`${formatOffset(e.atMs)} ${e.text}`)}"${click}></a>`,
+      const kind = e.text.startsWith('🔊') || e.text.startsWith('👥') ? 'join' : e.text.startsWith('🚪') ? 'leave' : '';
+      if (!kind) continue;
+      ticks.push(
+        `<a class="tl-tk ${kind}" style="left:${pct(e.atMs)}%" title="${esc(`${formatOffset(e.atMs)} ${e.text}`)}"${click(e.atMs)}></a>`,
       );
     }
-    for (const tp of minutes?.topicos ?? []) {
-      const pct = Math.min(100, Math.max(0, (tp.inicioMs / durMs) * 100));
-      const click = seekable ? ` onclick="kseek(${tp.inicioMs});return false" href="#"` : '';
-      markers.push(
-        `<a class="mk topic" style="left:${pct.toFixed(2)}%" title="${esc(`${formatOffset(tp.inicioMs)} · ${tp.titulo}`)}"${click}></a>`,
-      );
+    const tickRow = ticks.length > 0 ? `<div class="tl-ticks">${ticks.join('')}</div>` : '';
+
+    if (chapters || tickRow) {
+      // legenda só do que está NA barra, com as cores reais
+      const legend: string[] = [];
+      if (topics.length > 0) legend.push(`<span><i class="lg-ch"></i>${p(l, 'tlTopics')}</span>`);
+      if (meta.notes.length > 0) legend.push(`<span><i class="lg-note"></i>${p(l, 'tlNotes')}</span>`);
+      if (ticks.length > meta.notes.length)
+        legend.push(
+          `<span><i class="lg-join"></i>${p(l, 'tlJoined')}</span><span><i class="lg-leave"></i>${p(l, 'tlLeft')}</span>`,
+        );
+      bar = `<div class="tl2">
+        ${chapters}
+        ${tickRow}
+        <div class="tl-ax"><span>0:00</span><span>${formatOffset(durMs)}</span></div>
+        <div class="tl-lg">${legend.join('')}${seekable ? `<span class="lg-hint">${p(l, 'tlHint')}</span>` : ''}</div>
+      </div>`;
     }
-    bar = `<div class="tlbar">${markers.join('')}</div>
-      <div class="tllegend">${p(l, 'timelineLegend')}</div>`;
   }
 
   return `<h2 id="timeline">${p(l, 'timeline')}</h2>${bar}${list}`;
@@ -1189,7 +1236,7 @@ export function landingPage(lang: Locale): string {
     'Kassinão — Record your Discord calls. Then just ask.',
   );
   const metaDesc = T(
-    'Gravador de voz do Discord, open-source e self-hosted: uma faixa por pessoa, transcrição com nome exato de quem falou, ata por IA e memória que responde — /perguntar no Discord, busca na web ou qualquer assistente com MCP.',
+    'Gravador de voz do Discord, open-source e self-hosted: uma faixa por pessoa, transcrição com nome exato de quem falou, ata por IA e memória que responde — /perguntar no Discord, índice web com busca ou qualquer assistente com MCP.',
     'Open-source, self-hosted Discord voice recorder: one track per speaker, transcripts with exact speaker names, AI minutes, and memory that answers — /ask in Discord, web search, or any MCP-capable AI assistant.',
   );
 
@@ -1223,13 +1270,13 @@ export function landingPage(lang: Locale): string {
 <div class="ln"><span class="p">discord&gt;</span> <span class="c">/${T('parar', 'stop')}</span></div>
 <div class="ln"><span class="ok">✓</span> ${T('transcrição — 5 pessoas, nome exato em cada fala', 'transcript — 5 people, exact name on every line')}</div>
 <div class="ln"><span class="dim">  ${T('só a fala vai pra API: o VAD corta o silêncio', 'only speech hits the API: VAD trims the silence')}</span></div>
-<div class="ln"><span class="ok">✓</span> ${T('ata — resumo · decisões · ações (dono + prazo)', 'minutes — summary · decisions · actions (owner + due)')}</div>
+<div class="ln"><span class="ok">✓</span> ${T('ata — resumo · decisões · ações (responsável + prazo)', 'minutes — summary · decisions · actions (owner + due)')}</div>
 <div class="ln"><span class="ok">✓</span> ${T('postada no canal + página com player e busca', 'posted to the channel + page with player and search')}</div>
 <div class="ln">&nbsp;</div>
 <div class="ln"><span class="p">discord&gt;</span> <span class="c">/${T('perguntar', 'ask')}</span> ${T('o que decidimos sobre o rollback?', 'what did we decide about the rollback?')}</div>
 <div class="ln"><span class="ans">${T(
-    'Rafael assumiu dar merge no rollback com feature-flag até quarta',
-    'Rafael took merging the rollback behind a feature-flag by Wednesday',
+    'Rafael assumiu o merge do rollback (com feature flag) até quarta',
+    'Rafael owns merging the rollback behind a feature flag by Wednesday',
   )} — <a class="ts" href="/demo">[16:10]</a></span></div>
 <div class="ln"><span class="dim">  ${T('só reuniões que VOCÊ pode acessar · cita o segundo exato', 'only meetings YOU can access · cites the exact second')}</span></div>
 <div class="ln">&nbsp;</div>
@@ -1244,7 +1291,7 @@ export function landingPage(lang: Locale): string {
         )}</span></div>
         <h1>${T('Grava as calls do Discord. Depois é só perguntar.', 'Record your Discord calls. Then just ask.')}</h1>
         <p class="sub">${T(
-          'Uma faixa de áudio por pessoa — a transcrição sai com o <strong>nome exato de quem falou</strong>, sem diarização por chute. A ata se escreve sozinha. E as reuniões viram memória que responde: no Discord, na web ou no seu assistente de IA.',
+          'Uma faixa de áudio por pessoa — a transcrição sai com o <strong>nome exato de quem falou</strong>, sem IA chutando quem falou. A ata se escreve sozinha. E as reuniões viram memória que responde: no Discord, na web ou no seu assistente de IA.',
           'One audio track per speaker — transcripts carry the <strong>exact name of who said what</strong>, no diarization guesswork. Minutes write themselves. Your meetings become memory that answers: in Discord, on the web, or in your AI assistant.',
         )}</p>
         <div class="installer">
@@ -1259,13 +1306,13 @@ export function landingPage(lang: Locale): string {
       <div class="term" id="kterm">
         <div class="tbar"><i></i><i></i><i></i>&nbsp; kassinao — discord</div>
         <div class="tbody">${termLines}</div>
-        <div class="term-cap">${T('sessão real de exemplo — veja a página na', 'real example session — see the page on the')} <a href="/demo">${T('demo ao vivo →', 'live demo →')}</a></div>
+        <div class="term-cap">${T('sessão de exemplo — veja a página completa na', 'example session — see the full page on the')} <a href="/demo">${T('demo ao vivo →', 'live demo →')}</a></div>
       </div>
     </div>
     <div class="strip">
       <span>${T('open source (AGPL-3.0)', 'open source (AGPL-3.0)')}</span>
       <span>${T('roda no seu servidor', 'runs on your server')}</span>
-      <span>${T('custo acompanha o tempo falado', 'cost tracks talk time')}</span>
+      <span>${T('custo pelo tempo de fala', 'cost tracks talk time')}</span>
       <span>MCP · Claude · Cursor</span>
       <span>pt-BR / EN</span>
     </div>
@@ -1279,19 +1326,19 @@ export function landingPage(lang: Locale): string {
         'Cada pessoa vira um FLAC alinhado — atribuição perfeita de quem falou, exportável pra MP3, mix ou projeto Audacity.',
         'Every speaker becomes an aligned FLAC — perfect attribution, exportable to MP3, a single mix, or an Audacity project.',
       )}</li>
-      <li><strong>${T('Transcrição que não alucina.', 'Transcripts that do not hallucinate.')}</strong> ${T(
-        'VAD corta o silêncio antes da API (AssemblyAI, Groq, OpenAI, Gemini ou 100% local) e o custo acompanha o tempo falado, não pessoas × horas.',
+      <li><strong>${T('Transcrição que não alucina.', "Transcripts that don't hallucinate.")}</strong> ${T(
+        'VAD corta o silêncio antes da API (AssemblyAI, Groq, OpenAI, Gemini ou 100% local) e o custo acompanha o tempo de fala, não pessoas × horas.',
         'VAD trims silence before the API (AssemblyAI, Groq, OpenAI, Gemini, or 100% local) and cost tracks talk time — not people × hours.',
       )}</li>
       <li><strong>${T('Ata por IA no canal.', 'AI minutes in the channel.')}</strong> ${T(
         'Resumo, decisões e ações (com responsável e prazo) postados no Discord e na página — sem ninguém pedir.',
         'Summary, decisions and action items (owner + due) posted to Discord and the page — nobody has to ask.',
       )}</li>
-      <li><strong>${T('Memória que responde.', 'Memory that answers.')}</strong> ${T(
+      <li><strong>${T('Pergunte às suas reuniões.', 'Ask your meetings.')}</strong> ${T(
         '/perguntar no Discord, busca full-text na web e conector MCP pro seu assistente — o áudio expira, o texto fica (retenção em camadas).',
         '/ask in Discord, full-text web search, and an MCP connector for your assistant — audio expires, text stays (tiered retention).',
       )}</li>
-      <li><strong>${T('Acesso que fecha de verdade.', 'Access control that actually closes.')}</strong> ${T(
+      <li><strong>${T('Acesso que tranca de verdade.', 'Access control that actually locks.')}</strong> ${T(
         'Login com Discord: só abre pra quem estava na call (mesmo mutado), enxerga o canal, iniciou ou é admin. Link vazado não abre nada.',
         'Discord login: opens only for people who were in the call (even muted), can see the channel, started it, or are admins. A leaked link opens nothing.',
       )}</li>
@@ -1331,8 +1378,8 @@ export function landingPage(lang: Locale): string {
     <div class="figs">
       <figure><svg viewBox="0 0 200 96" aria-hidden="true">${lanes}</svg>
         <figcaption><b>Fig 1.</b> ${T(
-          'Uma faixa por pessoa, alinhadas na amostra — diarização não é chute, é arquitetura.',
-          'One track per speaker, sample-aligned — diarization is not a guess, it is architecture.',
+          'Uma faixa por pessoa, perfeitamente sincronizadas — identificar quem falou não é chute, é arquitetura.',
+          "One track per speaker, sample-aligned — diarization isn't guesswork, it's architecture.",
         )}</figcaption></figure>
       <figure><svg viewBox="0 0 200 96" aria-hidden="true">${vad}</svg>
         <figcaption><b>Fig 2.</b> ${T(
@@ -1349,14 +1396,14 @@ export function landingPage(lang: Locale): string {
 
   // ---------- perguntar em 3 lugares ----------
   const ask = `<section class="rv">
-    <h3>${T('Pergunte de onde você já trabalha', 'Ask from wherever you already work')}</h3>
+    <h3>${T('Pergunte da ferramenta que você já usa', 'Ask from the tools you already use')}</h3>
     <ul class="stars">
       <li><strong>Discord</strong> — <span class="dim">/${T('perguntar', 'ask')}</span> ${T(
         'responde na hora, só pra você, com citações. Zero setup pro time.',
         'answers on the spot, only to you, with citations. Zero setup for the team.',
       )}</li>
       <li><strong>Web</strong> — ${T(
-        'índice de todas as suas gravações com busca em transcrições, atas e notas.',
+        'índice de tudo que você pode acessar, com busca em transcrições, atas e notas.',
         'an index of everything you can access, with search across transcripts, minutes and notes.',
       )}</li>
       <li><strong>${T('Seu assistente de IA', 'Your AI assistant')}</strong> — ${T(
@@ -1384,7 +1431,7 @@ export function landingPage(lang: Locale): string {
     <h3>${T('Privacidade não é promessa, é arquitetura', 'Privacy is architecture, not a promise')}</h3>
     <ul class="stars">
       <li>${T(
-        '<strong>Roda no SEU servidor.</strong> Áudio e transcrição podem ser 100% locais (faster-whisper); a ata usa um LLM na nuvem (OpenRouter ou Groq) — ou você a desliga.',
+        '<strong>Roda no SEU servidor.</strong> Áudio e transcrição podem ser 100% locais (faster-whisper); a ata usa um LLM na nuvem (OpenRouter ou Groq) — ou é só desligar.',
         '<strong>Runs on YOUR server.</strong> Audio and transcription can be 100% local (faster-whisper); minutes use a cloud LLM (OpenRouter or Groq) — or you turn them off.',
       )}</li>
       <li>${T(
@@ -1412,7 +1459,7 @@ export function landingPage(lang: Locale): string {
     <table>
       <tr><th></th><th>Kassinão</th><th>Craig</th><th>Otter/Fireflies</th></tr>
       <tr><td>${T('Multipista (1 faixa/pessoa)', 'Multi-track (1 file/speaker)')}</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">—</td></tr>
-      <tr><td>${T('Quem falou = exato', 'Speaker attribution = exact')}</td><td class="yes">✓</td><td class="yes">✓</td><td class="half">${T('chute (IA)', 'guessed (AI)')}</td></tr>
+      <tr><td>${T('Identifica quem falou', 'Speaker attribution')}</td><td class="yes">${T('exato', 'exact')}</td><td class="yes">${T('exato', 'exact')}</td><td class="half">${T('chute (IA)', 'guessed (AI)')}</td></tr>
       <tr><td>${T('Ata por IA (decisões + ações)', 'AI minutes (decisions + actions)')}</td><td class="yes">✓</td><td class="no">—</td><td class="yes">✓</td></tr>
       <tr><td>${T('Perguntar às reuniões (Discord/web/MCP)', 'Ask your meetings (Discord/web/MCP)')}</td><td class="yes">✓</td><td class="no">—</td><td class="half">${T('só no app deles', 'their app only')}</td></tr>
       <tr><td>${T('Seus dados, seu servidor', 'Your data, your server')}</td><td class="yes">✓</td><td class="half">${T('parcial', 'partial')}</td><td class="no">—</td></tr>

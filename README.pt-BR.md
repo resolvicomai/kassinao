@@ -2,7 +2,9 @@
 
 **🌎 Idioma:** [English](README.md) · **Português (BR)**
 
-> Grave chamadas de voz do Discord com **uma faixa por pessoa**, e receba **transcrição** e **ata** (resumo, decisões e tarefas) geradas por IA — automaticamente, com o nome exato de quem falou.
+> Grava as calls do Discord. Depois é só perguntar.
+>
+> Uma faixa por pessoa, **transcrição com o nome exato de quem falou**, **ata** (resumo, decisões, itens de ação) automática — e as reuniões viram memória que responde, com **/perguntar** no Discord, busca na web ou qualquer assistente de IA com MCP.
 
 Um gravador de voz multi-track para Discord, auto-hospedado, inspirado no [Craig](https://craig.chat/) — com as principais features "premium" liberadas e um extra que nenhum concorrente entrega bem: como cada participante tem uma faixa de áudio separada, a **atribuição de quem falou o quê é perfeita** (sem diarização por IA, que é onde Otter/Fireflies erram).
 
@@ -14,11 +16,11 @@ Um gravador de voz multi-track para Discord, auto-hospedado, inspirado no [Craig
 
 ## ✨ Features
 
-- **🎚️ Multi-track sincronizado** — uma faixa FLAC (lossless) separada por falante, todas na mesma linha do tempo.
+- **🎚️ Multipista de verdade** — uma faixa FLAC (lossless) separada por pessoa, todas na mesma linha do tempo.
 - **📝 Transcrição automática** — com o nome de quem falou e horários. Motor plugável: **AssemblyAI**, **Groq**, **OpenAI**, **Gemini** ou **comando local** (faster-whisper/whisper.cpp) para privacidade total. **VAD de verdade**: só a fala vai pra API (sem custo com silêncio, sem alucinação de silêncio), com retomada automática se o provedor limitar.
 - **📋 Ata com IA** — resumo, decisões, itens de ação (com responsável/prazo), tópicos com horário e **um bloco por participante**. Gerada por LLM sobre a transcrição.
 - **🔊 Página web da gravação** — player fixo com **velocidade 1×/1.5×/2×**, transcrição agrupada por falante com **cores por pessoa**, **busca/filtro** dentro da transcrição, acompanhamento estilo karaokê, barra do tempo clicável, copiar itens de ação com um clique, downloads em **MP3 / FLAC / Mix único / projeto Audacity** — tudo protegido por **login com Discord**.
-- **🗂️ Índice web com busca** — `/gravacoes` na web lista tudo que você pode acessar em todos os servidores, com filtro por canal e **busca full-text** em transcrições, atas e notas — cada resultado linka pro minuto exato.
+- **🗂️ Índice web com busca** — `/gravacoes` na web lista tudo que você pode acessar em todos os servidores, com filtro por canal e **busca full-text** em transcrições, atas e notas — cada resultado linka pro segundo exato.
 - **💬 `/perguntar` no próprio Discord** — pergunte às suas reuniões sem sair do Discord; a IA responde (efêmero, só você vê) usando apenas as transcrições que VOCÊ pode acessar, com citações `[hh:mm:ss]` pro minuto certo. Opção `dias:` (janela, padrão 30). Requer a ata por IA habilitada (chave OpenRouter ou Groq).
 - **📤 Ata resumida no Discord** — quando a ata fica pronta, o bot posta um embed com resumo, decisões e itens de ação direto no Discord (sem precisar de login); o admin escolhe o canal com `/config ata-canal` (sem configurar, vai pro chat do canal de voz). E o `MINUTES_WEBHOOK_URL` dispara um webhook JSON por reunião pra integrações self-hosted (n8n → Notion/Jira…).
 - **🔒 Acesso restrito de verdade** — só abre para quem **estava na call** (falando ou mutado), **enxerga o canal**, **iniciou** a gravação ou é **admin**. Link vazado não dá acesso a estranhos.
@@ -40,7 +42,7 @@ Um gravador de voz multi-track para Discord, auto-hospedado, inspirado no [Craig
 | `/nota <texto>` | `/note <text>` | Marca uma nota no tempo atual (ou botão 📝 do painel) |
 | `/status` | `/status` | Estado da gravação em andamento |
 | `/gravacoes` | `/recordings` | Suas últimas gravações, com links (filtradas por acesso) — também linka pro índice web com busca full-text |
-| `/perguntar <pergunta> [dias]` | `/ask <question> [days]` | Pergunte às suas reuniões — a IA responde (só você vê) com citações no minuto exato, usando as transcrições que você pode acessar |
+| `/perguntar <pergunta> [dias]` | `/ask <question> [days]` | Pergunte às suas reuniões — a IA responde (só você vê) com citações no segundo exato, usando as transcrições que você pode acessar |
 | `/config ata-canal/ver` | `/config minutes-channel/view` | Admin: escolhe o canal de texto onde a ata resumida é postada (padrão: chat do canal de voz) |
 | `/ajuda` | `/help` | Guia interativo (também responde por DM) |
 | `/autorecord ligar/desligar/ver` | `/autorecord on/off/view` | Gravação automática por canal (admin) |
@@ -56,7 +58,7 @@ Qualquer membro grava e para. `/autorecord` e `/config` exigem **Gerenciar Servi
 
 - *"O que ficou pendente essa semana, e de quem?"* — junta itens de ação com prazo de várias reuniões.
 - *"Lista as calls deste canal entre 1 e 30 de junho."* — busca por janela de tempo (ciente do fuso).
-- *"Quando a Ana falou de orçamento? Me dá o link."* — busca com link no minuto exato.
+- *"Quando a Ana falou de orçamento? Me dá o link."* — busca com link no segundo exato.
 
 **Seguro por construção:** o conector roda na sua máquina e carrega só um **token pessoal**; o bot aplica o *mesmo* controle de acesso da página, reunião por reunião — cada pessoa só vê o que já veria no site. Somente leitura, sem áudio, revogável. O conteúdo das reuniões vai embrulhado como "dados não-confiáveis" (defesa contra prompt-injection).
 

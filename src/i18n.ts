@@ -132,7 +132,7 @@ const STRINGS: Strings = {
   'note.mark-text': { pt: '📌 momento marcado', en: '📌 moment marked' },
   'note.marked': {
     pt: '📌 Momento **{offset}** marcado! Ele vira um marcador na página e entra na ata.',
-    en: '📌 Moment **{offset}** marked! It becomes a marker on the page and feeds the minutes.',
+    en: '📌 Moment **{offset}** marked! It becomes a marker on the page and goes into the minutes.',
   },
 
   // /config (por servidor)
@@ -143,7 +143,7 @@ const STRINGS: Strings = {
   'config.title': { pt: '⚙️ Configuração deste servidor', en: '⚙️ This server’s configuration' },
   'config.minutes-channel-set': {
     pt: '✅ A ata resumida de cada reunião será postada em {channel} (além do chat do canal de voz pro aviso).',
-    en: '✅ The minutes summary of each meeting will be posted in {channel}.',
+    en: '✅ The minutes summary of each meeting will be posted in {channel} (the voice channel chat still gets the notice).',
   },
   'config.minutes-channel-cleared': {
     pt: '✅ Canal de ata removido — a ata volta a ser postada só no chat do canal de voz.',
@@ -173,8 +173,8 @@ const STRINGS: Strings = {
     en: '⚠️ I could not answer right now: {error}',
   },
   'ask.footer': {
-    pt: '-# Baseado em {n} reunião(ões) que você pode acessar. Confira na fonte: os links pulam pro minuto exato.',
-    en: '-# Based on {n} meeting(s) you can access. Verify at the source: links jump to the exact minute.',
+    pt: '-# Baseado em {n} reunião(ões) que você pode acessar. Confira na fonte: os links pulam pro segundo exato.',
+    en: '-# Based on {n} meeting(s) you can access. Check the source — links jump to the exact second.',
   },
 
   // eventos do log
@@ -256,8 +256,8 @@ const STRINGS: Strings = {
   },
   'help.commands': { pt: 'Comandos', en: 'Commands' },
   'help.cmd-list': {
-    pt: '**/gravar** — entra no seu canal de voz e começa a gravar\n**/parar** — encerra e gera o link com áudio, transcrição e ata\n**/perguntar** — pergunte às suas reuniões; a IA responde só pra você, com o minuto exato\n**/nota** — anotação no momento atual (ou 📌 *Marcar momento* no painel, sem digitar)\n**/status** — mostra a gravação em andamento\n**/gravacoes** — suas gravações + link do índice web com busca\n**/autorecord** — (admin) grava sozinho quando entram pessoas num canal\n**/config** — (admin) canal onde a ata é postada\n**/sobre** — autor, licença e código-fonte',
-    en: '**/record** — joins your voice channel and starts recording\n**/stop** — ends it and generates the link with audio, transcript and minutes\n**/ask** — ask your meetings; the AI answers only to you, with the exact minute\n**/note** — note at the current time (or 📌 *Mark moment* on the panel, no typing)\n**/status** — shows the recording in progress\n**/recordings** — your recordings + link to the searchable web index\n**/autorecord** — (admin) records automatically when people join a channel\n**/config** — (admin) channel where the minutes get posted\n**/about** — author, license and source code',
+    pt: '**/gravar** — entra no seu canal de voz e começa a gravar\n**/parar** — encerra e gera o link com áudio, transcrição e ata\n**/perguntar** — pergunte às suas reuniões; a IA responde só pra você, com o segundo exato\n**/nota** — anotação no momento atual (ou 📌 *Marcar momento* no painel, sem digitar)\n**/status** — mostra a gravação em andamento\n**/gravacoes** — suas gravações + link do índice web com busca\n**/autorecord** — (admin) grava sozinho quando entram pessoas num canal\n**/config** — (admin) canal onde a ata é postada\n**/sobre** — autor, licença e código-fonte',
+    en: '**/record** — joins your voice channel and starts recording\n**/stop** — ends it and generates the link with audio, transcript and minutes\n**/ask** — ask your meetings; the AI answers only to you, with the exact second\n**/note** — note at the current time (or 📌 *Mark moment* on the panel, no typing)\n**/status** — shows the recording in progress\n**/recordings** — your recordings + link to the searchable web index\n**/autorecord** — (admin) records automatically when people join a channel\n**/config** — (admin) channel where the minutes get posted\n**/about** — author, license and source code',
   },
   'help.flow': { pt: 'Passo a passo', en: 'Quick start' },
   'help.perms': { pt: 'Permissões', en: 'Permissions' },
@@ -266,8 +266,8 @@ const STRINGS: Strings = {
     en: '• **Record**: any member. **Stop/annotate**: whoever can see the recorded channel.\n• **Open a recording** (web): whoever **was in the call** (even muted), can see the channel, started it, or is an admin — re-checked against Discord on every visit.\n• **Delete**: starter or admin. **/autorecord** and **/config**: require *Manage Server*.\n• **/ask** and search only use meetings **you** can open.',
   },
   'help.flow-body': {
-    pt: '1. Entre num canal de voz e use **/gravar**\n2. Conversem normalmente (📌 marca momentos importantes)\n3. Use **/parar** — a ata resumida chega no canal e o link completo por DM\n4. Depois, é só **/perguntar** ("o que decidimos sobre X?") ou buscar no índice web',
-    en: '1. Join a voice channel and use **/record**\n2. Talk normally (📌 marks the important moments)\n3. Use **/stop** — the minutes summary lands in the channel, the full link via DM\n4. Later, just **/ask** ("what did we decide about X?") or search the web index',
+    pt: '1. Entre num canal de voz e use **/gravar**\n2. Conversem normalmente (📌 marca momentos importantes)\n3. Use **/parar** — a ata resumida chega no canal (quem iniciou recebe o link por DM)\n4. Depois, é só **/perguntar** ("o que decidimos sobre X?") ou buscar no índice web',
+    en: '1. Join a voice channel and use **/record**\n2. Talk normally (📌 marks the important moments)\n3. Use **/stop** — the minutes summary lands in the channel (the starter gets the link via DM)\n4. Later, just **/ask** ("what did we decide about X?") or search the web index',
   },
   'help.footer': { pt: 'Kassinão 🎙️ • use /ajuda a qualquer momento', en: 'Kassinão 🎙️ • use /help anytime' },
   // botões e tópicos do /ajuda (onboarding interativo)
