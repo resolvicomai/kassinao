@@ -91,9 +91,7 @@ async function refreshTokens(): Promise<void> {
   }
   if (!data) {
     const base = URL_BASE || '<sua URL do Kassinão>';
-    throw new Error(
-      `Não consegui renovar o token (revogado ou expirado). Gere um novo em ${base}/app/conectar-ia.`,
-    );
+    throw new Error(`Não consegui renovar o token (revogado ou expirado). Gere um novo em ${base}/app/conectar-ia.`);
   }
   refreshToken = data.refresh_token; // rotação: guarda o novo imediatamente
   accessToken = data.access_token;
