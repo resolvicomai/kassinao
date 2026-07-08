@@ -40,6 +40,16 @@ const LANDING_CSS = `
   --wrap:880px; color-scheme:dark;
 }
 *{box-sizing:border-box;margin:0}
+/* tema claro: aplicado no <html> por script no <head>, antes da pintura */
+html[data-theme='light']{color-scheme:light}
+html[data-theme='light'] body{
+  --bg:#faf9f7; --bg-weak:#ffffff; --text:#55534f; --text-weak:#8a8884; --text-strong:#161519;
+  --border:rgba(0,0,0,.1); --border-strong:rgba(0,0,0,.22);
+  --accent-soft:rgba(88,101,242,.12); --link:#4c5ae0;
+}
+html[data-theme='light'] .nav{background:rgba(250,249,247,.8)}
+html[data-theme='light'] .frame,html[data-theme='light'] .vc,html[data-theme='light'] .ansc{box-shadow:0 24px 60px -36px rgba(0,0,0,.25)}
+html[data-theme='light'] .ghost svg polyline{stroke:#b8b6b2}
 html,body{max-width:100%;overflow-x:clip}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.55;-webkit-font-smoothing:antialiased}
 a{color:inherit}
@@ -59,6 +69,11 @@ a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-off
 .lang a{color:var(--text-weak);text-decoration:none;padding:0 3px;font-size:13px}
 .lang a.on{color:var(--text-strong)}
 .lang span{opacity:.35}
+.thm{background:none;border:1px solid var(--border);border-radius:999px;width:28px;height:28px;cursor:pointer;font-size:13px;line-height:1;padding:0;display:inline-grid;place-items:center;margin-left:16px}
+.thm:hover{border-color:var(--border-strong)}
+.thm .to-dark{display:none}
+html[data-theme='light'] .thm .to-dark{display:inline}
+html[data-theme='light'] .thm .to-light{display:none}
 /* moldura de cena (o "frame" do filme) */
 .frame{border:1px solid var(--border);border-radius:16px;background:linear-gradient(180deg,var(--bg-weak),var(--bg));box-shadow:0 30px 80px -40px rgba(0,0,0,.9);padding:22px;position:relative}
 .fict{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:lowercase;color:var(--text-weak);opacity:.75}
@@ -342,6 +357,7 @@ export function landingPage(lang: Locale): string {
     <span class="sp"></span>
     <a class="gh" href="${ghHref()}">${ghLabel}</a>
     ${langToggle}
+    <button type="button" class="thm" aria-label="${T('alternar tema claro/escuro', 'toggle light/dark theme')}"><span class="to-light">☀️</span><span class="to-dark">🌙</span></button>
   </div></nav>`;
 
   // ---------- HERO: a call começando ----------
@@ -586,6 +602,8 @@ export function landingPage(lang: Locale): string {
 
   // controller: uma classe .on por cena, uma vez, e html.js pro fallback sem JS
   const script = `<script>(function(){
+var tb=document.querySelector('.thm');
+if(tb)tb.addEventListener('click',function(){var d=document.documentElement;var t=d.dataset.theme==='light'?'dark':'light';d.dataset.theme=t;try{localStorage.setItem('ktheme',t);}catch(e){}});
 document.documentElement.classList.add('js');
 var hero=document.querySelector('.hero');
 if(hero)hero.classList.add('on');
@@ -613,6 +631,7 @@ Object.keys(groups).forEach(function(t){
 <meta property="og:image" content="${config.baseUrl}/og.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="${FAVICON}">
+<script>(function(){try{var t=localStorage.getItem('ktheme');if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';document.documentElement.dataset.theme=t;}catch(e){}})();</script>
 <style>${LANDING_CSS}</style>
 </head>
 <body>
