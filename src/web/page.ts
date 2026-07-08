@@ -159,6 +159,7 @@ const P: Record<string, { pt: string; en: string }> = {
     pt: 'apaga tudo: áudio, transcrição, ata e notas — sem volta',
     en: 'deletes everything: audio, transcript, minutes and notes — no undo',
   },
+  manage: { pt: 'Gerenciar', en: 'Manage' },
 };
 
 function p(l: Locale, key: string, vars: Record<string, string> = {}): string {
@@ -213,15 +214,23 @@ const APP_CSS = `
     .badge.live { animation: pulse 1.6s infinite; }
     html { scroll-behavior: smooth; }
   }
-  /* barra de pulos: acesso de 1 clique às seções; rola na horizontal no celular */
-  .jumpnav { position: sticky; top: 0; z-index: 7; display: flex; gap: 8px; overflow-x: auto;
-             background: var(--bg-weak); padding: 10px 0; margin: 8px 0 0; scrollbar-width: none; }
-  .jumpnav::-webkit-scrollbar { display: none; }
-  .jumpnav a { flex-shrink: 0; font-size: 12.5px; color: var(--text); text-decoration: none;
-               border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; background: var(--bg);
-               white-space: nowrap; }
-  .jumpnav a:hover { border-color: var(--accent); color: var(--text-strong); }
-  .people { display: flex; flex-wrap: wrap; gap: 8px; }
+  /* bloco fixo da gravação: player + ABAS — a página mostra UMA seção por vez
+     (sem JS os painéis ficam todos visíveis, empilhados como antes) */
+  .stick { position: sticky; top: 0; z-index: 7; background: var(--bg-weak); margin: 4px 0 18px; }
+  .tabbar { display: flex; gap: 2px; overflow-x: auto; padding-top: 6px; scrollbar-width: none;
+            border-bottom: 1px solid var(--border); }
+  .tabbar::-webkit-scrollbar { display: none; }
+  .tabbar button { font: inherit; font-size: 13px; padding: 9px 14px; background: none; border: 0;
+                   border-bottom: 2px solid transparent; margin-bottom: -1px; color: var(--text-weak);
+                   cursor: pointer; white-space: nowrap; }
+  .tabbar button:hover { color: var(--text-strong); }
+  .tabbar button[aria-selected='true'] { color: var(--text-strong); border-bottom-color: var(--accent); font-weight: 600; }
+  .tpanel[hidden] { display: none; }
+  .tpanel > h2:first-child { margin-top: 6px; }
+  /* com abas ativas o título da seção repete o rótulo da aba — some */
+  .ktabs .tpanel > h2:first-child { display: none; }
+  .ktabs .tpanel { padding-top: 4px; }
+  .people { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
   .person { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid rgba(255,255,255,.1);
             padding: 6px 12px 6px 6px; border-radius: 999px; font-size: 14px; }
   .person img { width: 26px; height: 26px; border-radius: 50%; }
@@ -273,8 +282,7 @@ const APP_CSS = `
              font-size: 12px; padding: 3px 8px; vertical-align: middle; margin-left: 6px; font-family: inherit; }
   .copybtn:hover { background: #2a2a2f; }
   .subline { color: var(--text-weak); font-size: 14px; margin-top: 6px; }
-  .playerwrap { position: sticky; top: 49px; z-index: 5; background: var(--bg-weak); padding: 12px 0 8px;
-                margin: 14px 0 6px; border-bottom: 1px solid var(--border); }
+  .playerwrap { background: var(--bg-weak); padding: 12px 0 6px; }
   .playerwrap audio { width: 100%; }
   .pctl { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 6px;
           font-size: 12.5px; color: var(--text-weak); }
@@ -332,22 +340,27 @@ const APP_CSS = `
   .dayh { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim);
           margin: 16px 0 2px; }
   .rlist { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-  .rcard { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; }
+  /* card compacto: 1 linha de essencial, ações discretas à direita (fora do link) */
+  .rcard { background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+           display: flex; align-items: center; }
   .rcard:hover { border-color: var(--accent); }
-  .rcard .rlink { display: block; padding: 12px 14px; text-decoration: none; color: #c9c7c5; }
+  .rcard .rlink { display: block; padding: 11px 14px; text-decoration: none; color: #c9c7c5;
+                  flex: 1; min-width: 0; }
   .rcard .rrow1 { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
-  .rcard .rrow2 { color: var(--text-weak); font-size: 13px; margin-top: 4px; }
+  .rcard .rrow1 strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rcard .rrow2 { color: var(--text-weak); font-size: 12.5px; margin-top: 3px;
+                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rstats { margin-top: 14px; font-size: 13.5px; color: var(--text-weak); }
   .rstats strong { color: var(--text-strong); }
   .rsorts { margin-top: 6px; font-size: 12.5px; color: var(--text-dim); }
   .rsorts a { color: var(--link); text-decoration: none; }
   .rsorts a:hover { text-decoration: underline; }
   .rsorts .sorton { color: var(--text-strong); font-weight: 600; }
-  .ractions { display: flex; gap: 8px; padding: 0 14px 10px; }
+  .ractions { display: flex; gap: 6px; padding: 0 12px; align-items: center; flex-shrink: 0; }
   .ractions form { margin: 0; }
-  .rbtn { background: none; border: 1px solid var(--border-strong); color: var(--text-weak); border-radius: 7px;
-          padding: 4px 10px; font-size: 12px; cursor: pointer; font-family: inherit; }
-  .rbtn:hover { border-color: var(--text-strong); color: var(--text-strong); }
+  .rbtn { background: none; border: 1px solid transparent; color: var(--text-weak); border-radius: 7px;
+          padding: 5px 8px; font-size: 14px; cursor: pointer; font-family: inherit; line-height: 1; }
+  .rbtn:hover { border-color: var(--border-strong); color: var(--text-strong); }
   .rbtn.danger { border-color: rgba(218,55,60,.5); color: var(--danger); }
   .rbtn.danger:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
   .wb { font-size: 11.5px; background: var(--bg-weak); border-radius: 999px; padding: 2px 9px; color: var(--text-weak); }
@@ -383,6 +396,8 @@ const APP_CSS = `
   /* zona de gestão: separada, com a consequência dita em 1 linha antes do clique */
   .dangerzone { margin-top: 30px; border-top: 1px solid var(--border); padding-top: 18px;
                 display: flex; flex-direction: column; gap: 12px; }
+  /* dentro do painel "Gerenciar" a zona já está isolada — sem borda dupla */
+  .tpanel .dangerzone { margin-top: 10px; border-top: 0; padding-top: 0; }
   .dangerzone form { margin: 0; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .dangerzone .why { color: var(--text-dim); font-size: 12.5px; }
   button.danger { background: none; border: 1px solid var(--danger); color: var(--danger); padding: 8px 14px;
@@ -482,6 +497,8 @@ window.kseek = function(ms){
     p.play().catch(function(){});
     return;
   }
+  // sem player (áudio expirado/demo): abre a aba da transcrição e rola até o trecho
+  if (window.kshow) window.kshow('transcricao');
   var paras = document.querySelectorAll('.transcript p[data-s]');
   var sb = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
   for (var i = 0; i < paras.length; i++) {
@@ -629,19 +646,21 @@ export function recordingPage(
       ? `<p class="muted" style="margin-top:8px">${silentLabel}: ${silent.map((pr) => esc(pr.name)).join(', ')}</p>`
       : '';
 
-  // ---------- player (sticky + velocidade + seguir) ----------
+  // ---------- player: o dock real vai pro bloco sticky (junto das abas);
+  // demo/expirado ficam no fluxo do cabeçalho ----------
   const audioGone = !!meta.audioDeleted;
-  let player = '';
+  let playerDock = '';
+  let playerFlow = '';
   if (demo) {
-    player = `<h2>${p(l, 'sampleAudio')}</h2>
+    playerFlow = `<h2>${p(l, 'sampleAudio')}</h2>
        <div class="player">
          <audio preload="none" controls src="/demo/audio"></audio>
          <div class="hint">${p(l, 'sampleNote')}</div>
        </div>`;
   } else if (audioGone) {
-    player = `<div class="note" style="border-left-color:#6d7178;margin-top:14px">${p(l, 'audioExpired')}</div>`;
+    playerFlow = `<div class="note" style="border-left-color:#6d7178;margin-top:14px">${p(l, 'audioExpired')}</div>`;
   } else if (!live && meta.participants.length > 0) {
-    player = `<div class="playerwrap">
+    playerDock = `<div class="playerwrap">
          <audio id="kplayer" preload="none" controls src="/app/rec/${meta.id}/audio"></audio>
          <div class="pctl">
            <span class="speed">
@@ -663,7 +682,7 @@ export function recordingPage(
 
   const notes =
     meta.notes.length > 0
-      ? `<h2 id="notas">${p(l, 'notes')}</h2><ul class="notes">${meta.notes
+      ? `<h2>${p(l, 'notes')}</h2><ul class="notes">${meta.notes
           .map(
             (n) =>
               `<li>${seekable ? `<a class="ts" href="#" onclick="kseek(${n.atMs});return false">${formatOffset(n.atMs)}</a>` : `<time>${formatOffset(n.atMs)}</time>`}${clockTime(meta.startedAt + n.atMs, l)}<strong>${esc(n.author)}:</strong> ${esc(n.text)}</li>`,
@@ -674,19 +693,17 @@ export function recordingPage(
   // ---------- linha do tempo: barra visual clicável + lista dobrável ----------
   const events = renderTimeline(meta, opts.minutes, l, durMs, live, seekable);
 
-  // ---------- exportar (uso raro → dobrado num details, fora do caminho da leitura) ----------
+  // ---------- exportar (vira painel de aba — some do caminho da leitura) ----------
   const downloads =
     !demo && !audioGone && meta.participants.length > 0
-      ? `<details class="dlfold" id="exportar">
-        <summary>⬇️ ${p(l, 'dlFold')}<small>MP3 · FLAC · mix · Audacity</small></summary>
+      ? `<h2>⬇️ ${p(l, 'dlFold')}</h2>
         <div class="downloads">
           <a class="btn secondary" href="/app/rec/${meta.id}/download/mp3">🎵 MP3 <small>${p(l, 'mp3sub')}</small></a>
           <a class="btn secondary" href="/app/rec/${meta.id}/download/flac">💎 FLAC <small>${p(l, 'flacsub')}</small></a>
           <a class="btn secondary" href="/app/rec/${meta.id}/download/mix">🎧 Mix <small>${p(l, 'mixsub')}</small></a>
           <a class="btn secondary" href="/app/rec/${meta.id}/download/audacity">🎚️ Audacity <small>${p(l, 'audacitysub')}</small></a>
         </div>
-        <p class="muted" style="margin-top:10px">${p(l, 'cooking')}</p>
-      </details>`
+        <p class="muted" style="margin-top:10px">${p(l, 'cooking')}</p>`
       : '';
 
   // ---------- gestão: zona separada, consequência dita ANTES do clique; o
@@ -737,35 +754,40 @@ export function recordingPage(
     : '';
   const title = `🔊 #${esc(meta.voiceChannelName)}`;
 
-  // barra de pulos: 1 clique pra qualquer seção que EXISTE (sticky, rola na
-  // horizontal no celular); só aparece quando há pelo menos 2 destinos
-  const jumps: string[] = [];
-  if (minutes) jumps.push(`<a href="#ata">📋 ${p(l, 'minutes')}</a>`);
-  if (transcription) jumps.push(`<a href="#transcricao">💬 ${p(l, 'transcript')}</a>`);
-  if (events) jumps.push(`<a href="#timeline">⏱️ ${p(l, 'timeline')}</a>`);
-  if (notes) jumps.push(`<a href="#notas">📝 ${p(l, 'notes')}</a>`);
-  if (downloads) jumps.push(`<a href="#exportar">⬇️ ${p(l, 'dlShort')}</a>`);
-  const jumpnav = jumps.length >= 2 ? `<nav class="jumpnav">${jumps.join('')}</nav>` : '';
+  // ---------- ABAS: uma seção na tela por vez (nada de rolar até o fim).
+  // Sem JS os painéis rendem todos visíveis, empilhados — nada se perde.
+  const panels: Array<[string, string, string]> = [];
+  if (minutes) panels.push(['ata', `📋 ${p(l, 'minutes')}`, minutes]);
+  if (transcription) panels.push(['transcricao', `💬 ${p(l, 'transcript')}`, transcription]);
+  if (events) panels.push(['timeline', `⏱️ ${p(l, 'timeline')}`, events]);
+  if (notes) panels.push(['notas', `📝 ${p(l, 'notes')} (${meta.notes.length})`, notes]);
+  if (downloads) panels.push(['exportar', `⬇️ ${p(l, 'dlShort')}`, downloads]);
+  if (manage) panels.push(['gerenciar', `⚙️ ${p(l, 'manage')}`, manage]);
+  const tabbar =
+    panels.length >= 2
+      ? `<div class="tabbar" role="tablist">${panels
+          .map(
+            ([id, label]) => `<button type="button" role="tab" data-t="${id}" aria-selected="false">${label}</button>`,
+          )
+          .join('')}</div>`
+      : '';
+  const panelHtml = panels
+    .map(([id, , html]) => `<section class="tpanel" id="${id}" role="tabpanel">${html}</section>`)
+    .join('\n     ');
+  // player real + abas ficam FIXOS no topo: ouvir e trocar de seção sem rolar
+  const stick = playerDock || tabbar ? `<div class="stick">${playerDock}${tabbar}</div>` : '';
 
-  // ordem de leitura: identidade → participantes → player (dock) → ATA (herói)
-  // → transcrição → linha do tempo → notas → exportar (dobrado) → gestão
   return shell(
     demo ? `#${meta.voiceChannelName} (demo)` : `#${meta.voiceChannelName} — ${p(l, 'recording')}`,
     `<h1>${title} ${badge}</h1>
      ${subline}
      ${demoNote}
      ${liveNote}
-     ${jumpnav}
-     <h2>${p(l, 'participants')}</h2>
      ${people}
      ${presentAlso}
-     ${player}
-     ${minutes}
-     ${transcription}
-     ${events}
-     ${notes}
-     ${downloads}
-     ${manage}
+     ${playerFlow}
+     ${stick}
+     ${panelHtml}
      ${pageFoot}
      ${demoCta}
      ${RECORDING_SCRIPT}`,
@@ -874,12 +896,33 @@ function renderTimeline(
     }
   }
 
-  return `<h2 id="timeline">${p(l, 'timeline')}</h2>${bar}${list}`;
+  return `<h2>${p(l, 'timeline')}</h2>${bar}${list}`;
 }
 
-/** Script da página de gravação: velocidade, seguir-áudio (karaoke) e busca na transcrição. */
+/** Script da página de gravação: abas, velocidade, seguir-áudio (karaoke) e busca na transcrição. */
 const RECORDING_SCRIPT = `<script>
 (function(){
+  // ---------- abas: uma seção por vez; sem JS tudo fica empilhado ----------
+  var panels = [].slice.call(document.querySelectorAll('.tpanel'));
+  var tabs = [].slice.call(document.querySelectorAll('.tabbar [data-t]'));
+  window.kshow = function(id){
+    if (!tabs.length) return;
+    if (!panels.some(function(p){ return p.id === id; })) return;
+    panels.forEach(function(p){ p.hidden = p.id !== id; });
+    tabs.forEach(function(b){ b.setAttribute('aria-selected', String(b.dataset.t === id)); });
+  };
+  tabs.forEach(function(b){
+    b.addEventListener('click', function(){
+      window.kshow(b.dataset.t);
+      try { history.replaceState(null, '', '#' + b.dataset.t); } catch(e){}
+    });
+  });
+  if (tabs.length) {
+    document.documentElement.classList.add('ktabs');
+    // aba inicial: hash (#transcricao, #t=42 → transcrição) ou a primeira (ata)
+    var h = location.hash.slice(1);
+    window.kshow(/^t=/.test(h) ? 'transcricao' : (panels.some(function(p){ return p.id === h; }) ? h : panels[0].id));
+  }
   var player = document.getElementById('kplayer');
   // velocidade
   document.querySelectorAll('.speed button').forEach(function(b){
@@ -947,7 +990,7 @@ const RECORDING_SCRIPT = `<script>
 function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined, l: Locale, seekable = true): string {
   const state = meta.minutes;
   if (!state || state.status === 'disabled') return '';
-  const title = `<h2 id="ata">📋 ${p(l, 'minutes')}</h2>`;
+  const title = `<h2>📋 ${p(l, 'minutes')}</h2>`;
   if (state.status === 'pending') return `${title}<p class="tstate">${p(l, 'minutesPending')}</p>`;
   if (state.status === 'running') return `${title}<p class="tstate">${p(l, 'minutesRunning')}</p>`;
   if (state.status === 'error')
@@ -1016,7 +1059,7 @@ function renderTranscription(
 ): string {
   const state = meta.transcription;
   if (!state || state.status === 'disabled') return '';
-  const title = `<h2 id="transcricao">${p(l, 'transcript')}</h2>`;
+  const title = `<h2>${p(l, 'transcript')}</h2>`;
   const hasContent = !!transcript && transcript.length > 0;
 
   // Banner de estado (mostrado ACIMA do conteúdo, se houver conteúdo — texto
@@ -1279,23 +1322,25 @@ export function recordingsIndexPage(
             const freed = m.audioDeleted ? ` · <span class="muted">${p(l, 'ixAudioFreed')}</span>` : '';
             // ações só pra quem pode apagar (iniciador/admin) e nunca no meio de
             // gravação ao vivo — o servidor revalida tudo de novo no POST
+            // ações viram ícones (rótulo completo no title/aria) — o card fica de 1 altura
             const actions =
               canDelete && !live
                 ? `<div class="ractions">
                     ${
                       !m.audioDeleted
                         ? `<form method="post" action="/app/rec/${m.id}/liberar-audio?back=index" onsubmit="return confirm('${p(l, 'ixFreeSpaceConfirm')}')">
-                             <button type="submit" class="rbtn">${p(l, 'ixFreeSpace')}</button></form>`
+                             <button type="submit" class="rbtn" title="${p(l, 'ixFreeSpace')}" aria-label="${p(l, 'ixFreeSpace')}">🔇</button></form>`
                         : ''
                     }
                     <form method="post" action="/app/rec/${m.id}/delete?back=index" onsubmit="return confirm('${p(l, 'delconfirm')}')">
-                      <button type="submit" class="rbtn danger">${p(l, 'ixDelete')}</button></form>
+                      <button type="submit" class="rbtn danger" title="${p(l, 'ixDelete')}" aria-label="${p(l, 'ixDelete')}">🗑️</button></form>
                   </div>`
                 : '';
+            // o DIA já está no cabeçalho do grupo — o card só precisa de hora + idade
             return `${dayh}<div class="rcard" data-ch="${esc(m.voiceChannelName)}">
               <a class="rlink" href="/app/rec/${m.id}">
                 <div class="rrow1"><strong>#${esc(m.voiceChannelName)}</strong> ${webBadge(m, l)}</div>
-                <div class="rrow2">${datetime(m.startedAt, l)} <span class="muted">(${relativeAge(m.startedAt, l)})</span> · ${dur} · ${who} · 🎙️ ${m.participants.length}${size}${notes}${freed}</div>
+                <div class="rrow2">${clockTime(m.startedAt, l)} · ${relativeAge(m.startedAt, l)} · ${dur} · ${who} · 🎙️ ${m.participants.length}${size}${notes}${freed}</div>
               </a>
               ${actions}
             </div>`;
