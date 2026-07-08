@@ -1438,16 +1438,25 @@ client.on(Events.GuildCreate, async (guild) => {
   }
 });
 
-// DM ao bot → responde o guia (onboarding). Não lê o conteúdo, só reage ao evento.
+// DM ao bot → responde o guia (onboarding). Não lê o conteúdo além de detectar
+// a FORMA "/comando" no início — pra explicar na lata por que não rodou.
 client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot || message.guildId) return; // só DMs de pessoas
   // DM não expõe o locale do usuário → usa DEFAULT_LOCALE (padrão 'en' no repo;
   // defina DEFAULT_LOCALE=pt pra responder em português). Em servidores cada um vê no seu idioma.
   const l: Locale = config.defaultLocale;
-  console.log(`DM recebida de ${message.author.id} — respondendo o guia.`);
+  // "/perguntar ..." digitado como texto na DM: o comando nem existe aqui (são
+  // registrados por servidor, onde dá pra checar o que a pessoa pode ver).
+  // Responder o guia genérico confundia — explica o motivo + o caminho de fora.
+  const cmd = /^\s*\/([\p{L}\w-]{1,32})/u.exec(message.content ?? '');
+  console.log(`DM recebida de ${message.author.id} — respondendo ${cmd ? `dica do /${cmd[1]}` : 'o guia'}.`);
   try {
     // o canal de DM pode chegar PARCIAL (Partials.Channel) — completa antes de enviar
     if (message.channel.partial) await message.channel.fetch();
+    if (cmd) {
+      await message.channel.send(t(l, 'help.dm-command', { cmd: `/${cmd[1]}`, url: config.baseUrl }));
+      return;
+    }
     await message.channel.send({ content: t(l, 'help.dm-hint'), ...buildHelpPayload(l) });
   } catch (err) {
     console.error(`Falha ao responder DM de ${message.author.id}:`, err);

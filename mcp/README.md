@@ -22,7 +22,7 @@ The connector runs **on your machine** and is a **thin** HTTP client: it does **
 
 1. Open `https://YOUR-KASSINAO/app/conectar-ia` and sign in with Discord.
 2. Click **Generate connection token** and copy the config block shown (it appears **once**).
-3. Paste it into `claude_desktop_config.json` (Claude Desktop) or the Cursor equivalent:
+3. Paste it into your MCP client's config — `claude_desktop_config.json` (Claude Desktop), `~/.cursor/mcp.json` (Cursor), or wherever your assistant's docs point:
 
 ```json
 {
@@ -39,7 +39,7 @@ The connector runs **on your machine** and is a **thin** HTTP client: it does **
 }
 ```
 
-4. Restart Claude Desktop / Cursor. Done.
+4. Restart your MCP client (Claude Desktop, Cursor, or any other). Done.
 
 ### Option B — no browser (VM/SSH)
 

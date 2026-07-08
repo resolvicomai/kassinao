@@ -301,8 +301,8 @@ const STRINGS: Strings = {
     en: "🎥 **How to record**\n1. Join a voice channel and type **/record** — I join and show as `[RECORDING]` in my nickname, so everyone sees the call is being recorded.\n2. Talk normally. Each person becomes a **separate track** (perfect speaker attribution).\n3. Mark moments with the **📌 Mark moment** button (one click, no typing) or **/note**/📝 for a text note — everything flows into the transcript, the minutes and the Audacity labels.\n4. End with **/stop** (or the button). The minutes summary lands in the channel — and you can **download even while** recording.\n\n⏹️ **I stop on my own** when: the channel **empties**, it hits the **{hours}h limit**, or I get **disconnected**. (If nobody speaks for ~5 min I only warn on the panel — I don't stop.)",
   },
   'help.topic-ask': {
-    pt: '💬 **Perguntar às reuniões**\n• **/perguntar** "o que decidimos sobre o deploy?" — eu respondo **só pra você**, com citações `[hh:mm:ss]` que pulam pro segundo exato do áudio. Opção `dias:` muda a janela (padrão 30).\n• Eu só uso as reuniões que **você pode acessar** — a mesma regra da página.\n• Na **web**: o índice em {url}/app lista tudo que você pode abrir, com **busca** em transcrições, atas e notas.\n• No seu **assistente de IA** (Claude, Cursor…): conector MCP em {url}/app/conectar-ia — ações pendentes entre reuniões, quem disse o quê, busca por período.',
-    en: '💬 **Ask your meetings**\n• **/ask** "what did we decide about the deploy?" — I answer **only to you**, with `[hh:mm:ss]` citations that jump to the exact second of audio. The `days:` option changes the window (default 30).\n• I only use meetings **you can access** — same rule as the page.\n• On the **web**: the index at {url}/app lists everything you can open, with **search** across transcripts, minutes and notes.\n• In your **AI assistant** (Claude, Cursor…): MCP connector at {url}/app/conectar-ia — pending actions across meetings, who said what, time-window search.',
+    pt: '💬 **Perguntar às reuniões**\n• **/perguntar** "o que decidimos sobre o deploy?" — eu respondo **só pra você**, com citações `[hh:mm:ss]` que pulam pro segundo exato do áudio. Opção `dias:` muda a janela (padrão 30).\n• Eu só uso as reuniões que **você pode acessar** — a mesma regra da página.\n• Na **web**: o índice em {url}/app lista tudo que você pode abrir, com **busca** em transcrições, atas e notas.\n• No seu **assistente de IA** (qualquer um com MCP: Claude, Cursor…): conector em {url}/app/conectar-ia — ações pendentes entre reuniões, quem disse o quê, busca por período.',
+    en: '💬 **Ask your meetings**\n• **/ask** "what did we decide about the deploy?" — I answer **only to you**, with `[hh:mm:ss]` citations that jump to the exact second of audio. The `days:` option changes the window (default 30).\n• I only use meetings **you can access** — same rule as the page.\n• On the **web**: the index at {url}/app lists everything you can open, with **search** across transcripts, minutes and notes.\n• In your **AI assistant** (anything MCP-capable: Claude, Cursor…): connector at {url}/app/conectar-ia — pending actions across meetings, who said what, time-window search.',
   },
   'help.topic-downloads': {
     pt: '📥 **Downloads e ata** (na página da gravação)\n• **MP3** — uma faixa por pessoa (ZIP). Leve, abre em qualquer player.\n• **FLAC** — uma faixa por pessoa (ZIP), **sem perda** de qualidade; arquivos grandes, ideal pra edição/arquivo.\n• **Mix** — todo mundo junto num **MP3 único**; o player da página usa ele (com velocidade 1×/1.5×/2×).\n• **Audacity** — projeto (`.lof` + labels) que abre no Audacity com as faixas **já alinhadas** e suas notas marcadas.\n• **📝 Transcrição** (.md/.txt) — nome de quem falou, busca, filtro por pessoa e horários clicáveis.\n• **📋 Ata** — resumo, decisões, itens de ação (responsável/prazo) e o que cada um trouxe.\nTudo protegido por login. {retention} — a busca e o /perguntar continuam funcionando.',
@@ -335,12 +335,16 @@ const STRINGS: Strings = {
   },
   'help.mcp-title': { pt: '🔌 Conectar assistente de IA', en: '🔌 Connect your AI assistant' },
   'help.mcp-body': {
-    pt: 'Pergunte sobre suas reuniões pelo Claude Desktop/Cursor ("o que ficou pendente essa semana?"). Gere seu token em {url}/app/conectar-ia.',
-    en: 'Ask about your meetings from Claude Desktop/Cursor ("what is pending this week?"). Generate your token at {url}/app/conectar-ia.',
+    pt: 'Pergunte sobre suas reuniões por qualquer assistente de IA com MCP — Claude, Cursor e afins ("o que ficou pendente essa semana?"). Gere seu token em {url}/app/conectar-ia.',
+    en: 'Ask about your meetings from any MCP-capable AI assistant — Claude, Cursor and the like ("what is pending this week?"). Generate your token at {url}/app/conectar-ia.',
   },
   'help.dm-hint': {
     pt: 'Sou um bot de gravação — me use pelos **comandos dentro do servidor**. Aqui vai o guia rápido:',
     en: "I'm a recording bot — use me via the **commands inside the server**. Here's the quick guide:",
+  },
+  'help.dm-command': {
+    pt: 'O `{cmd}` funciona **dentro do servidor** — é lá que eu consigo checar o que você pode ver, e a resposta sai só pra você. Aqui na DM eu não executo comandos.\n\n🔌 Quer perguntar de fora do Discord? Conecte **qualquer assistente de IA com MCP** (Claude, Cursor…): {url}/app/conectar-ia',
+    en: "`{cmd}` works **inside the server** — that's where I can check what you're allowed to see, and the answer stays private to you. I don't run commands here in DMs.\n\n🔌 Want to ask from outside Discord? Connect **any MCP-capable AI assistant** (Claude, Cursor…): {url}/app/conectar-ia",
   },
   'welcome.title': { pt: '👋 Obrigado por me adicionar!', en: '👋 Thanks for adding me!' },
   'welcome.body': {
@@ -423,8 +427,8 @@ const STRINGS: Strings = {
     en: '`/mcp new` is only for bot admins. For you, just open {url}/app/conectar-ia and sign in with Discord — self-serve, scoped to your own access. 👉',
   },
   'mcp.new': {
-    pt: '🔌 **Conectar assistente de IA** (código válido ~5 min, uso único). No terminal:\n```\nKASSINAO_URL={url} npx -y kassinao-mcp exchange {code}\n```\nO comando salva o token e imprime a config pra colar no Claude Desktop/Cursor. Mais fácil ainda: abra {url}/app/conectar-ia no navegador.',
-    en: '🔌 **Connect your AI assistant** (code valid ~5 min, single use). In a terminal:\n```\nKASSINAO_URL={url} npx -y kassinao-mcp exchange {code}\n```\nIt saves the token and prints the config to paste into Claude Desktop/Cursor. Even easier: open {url}/app/conectar-ia in the browser.',
+    pt: '🔌 **Conectar assistente de IA** (código válido ~5 min, uso único). No terminal:\n```\nKASSINAO_URL={url} npx -y kassinao-mcp exchange {code}\n```\nO comando salva o token e imprime a config pra colar no seu assistente de IA (qualquer um com MCP: Claude, Cursor…). Mais fácil ainda: abra {url}/app/conectar-ia no navegador.',
+    en: '🔌 **Connect your AI assistant** (code valid ~5 min, single use). In a terminal:\n```\nKASSINAO_URL={url} npx -y kassinao-mcp exchange {code}\n```\nIt saves the token and prints the config to paste into your AI assistant (anything MCP-capable: Claude, Cursor…). Even easier: open {url}/app/conectar-ia in the browser.',
   },
   'mcp.revoked': {
     pt: '🔒 Pronto — revoguei {n} conector(es) de IA seu(s). Os tokens deixaram de funcionar na hora.',
