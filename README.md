@@ -2,73 +2,67 @@
 
 # Kassinão 🎙️
 
-### Record your Discord calls. Then just ask.
-
-Self-hosted recorder for Discord voice calls: **one separate track per person**, an **AI transcript** with **perfect speaker attribution** (no AI guessing who said what) and **meeting minutes** — then your meetings become memory that answers, via **/ask in Discord**, web search, or any MCP-capable AI assistant.
+### Every speaker gets their own track. No AI guesswork about who said what.
 
 **🌎 Language:** **English** · [Português (BR)](README.pt-BR.md)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
-[![CI](https://github.com/resolvicomai/kassinao/actions/workflows/ci.yml/badge.svg)](https://github.com/resolvicomai/kassinao/actions/workflows/ci.yml)
-[![Made with TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)](https://www.typescriptlang.org/)
-[![Runs on Docker](https://img.shields.io/badge/Docker-ready-2496ed.svg)](https://www.docker.com/)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![GitHub stars](https://img.shields.io/github/stars/resolvicomai/kassinao?style=social)](https://github.com/resolvicomai/kassinao/stargazers)
+
+<br/>
+
+[![See the live demo](https://img.shields.io/badge/▶_SEE_THE_LIVE_DEMO-5865F2?style=for-the-badge)](https://kassinao.resolvicomai.app/demo)
+
+A real recording page from a fictional 6-person, 1-hour meeting — transcript colored by speaker, AI-generated minutes, and player. No login needed.
+
+<sub>Prefer plain text? Read the same transcript &amp; minutes in [`docs/example/`](docs/example/).</sub>
 
 </div>
 
-<!-- 📹 DEMO: substitua por um GIF/vídeo real (docs/demo.gif) mostrando /gravar → painel → página com player + ata. É o ativo #1 do lançamento. -->
-<p align="center"><em>▶️ Demo GIF coming here — <code>/record</code> → live panel → recording page with player, clickable timestamps and AI minutes.</em></p>
-
-<p align="center">
-  <b>▶️ <a href="https://kassinao.resolvicomai.app/demo">Try the live example →</a></b><br/>
-  <sub>A real rendered recording page from a fictional 6-person, 1-hour meeting — opens without login.<br/>
-  (Prefer plain text? Read the same transcript &amp; minutes <a href="docs/example/">on GitHub</a>.)</sub>
-</p>
-
 ---
 
-## Why Kassinão?
-
-Bots like [Craig](https://craig.chat/) nail multi-track recording. AI note-takers like Otter or Fireflies nail summaries — but they **guess** who spoke (diarization), and that guessing breaks on crosstalk and non-English names.
-
-Kassinão combines both **and sidesteps the hard part**: because every participant is captured on their **own audio track**, it already knows *exactly* who said what. The transcript and the AI minutes inherit that perfect attribution for free. It's open-source, self-hosted, and privacy-first.
+Every AI notetaker guesses who's talking from voice patterns alone — and the guess falls apart the moment two people overlap or a name isn't English. Kassinão doesn't guess: each person in the call records to their own audio track, so the transcript, the meeting summary, and `/ask` always know, with certainty, who said what.
 
 ## Contents
 
-- [Features](#features)
+- [Knows who's talking](#knows-whos-talking)
+- [Becomes memory that answers](#becomes-memory-that-answers)
+- [Yours, with real control](#yours-with-real-control)
 - [Quick start](#quick-start)
 - [How it compares](#how-it-compares)
-- [Transcription backends](#transcription-backends)
-- [AI connector (MCP)](#ai-connector-mcp)
-- [Commands](#commands)
-- [Configuration](#configuration)
-- [Security & privacy](#security--privacy)
+- [Reference](#reference)
 - [How it works](#how-it-works)
-- [Contributing](#contributing)
-- [License](#license)
 
-## Features
+## Knows who's talking
 
-- **🎚️ Multi-track** — one lossless FLAC track per speaker, all sample-aligned.
-- **📝 AI transcription** with exact speaker names & timestamps. Engines: **AssemblyAI**, **Groq**, **OpenAI**, **Gemini**, or a **local** command (faster-whisper / whisper.cpp) for full privacy. Real **VAD**: only speech is sent to the API (no cost on silence, no silence hallucinations), with automatic retry/resume on provider rate limits.
-- **📋 AI meeting minutes** — summary, decisions, action items (with owner/due), timestamped topics, and a **per-participant** breakdown.
-- **🔊 Meeting page** — sticky audio player with **1×/1.5×/2× speed**, transcript grouped by speaker with **per-speaker colors**, in-page **search/filter**, karaoke-style follow-along, clickable timeline bar, one-click copy of action items, downloads in **MP3 / FLAC / single mix / Audacity project** — all behind **Discord login**.
-- **🗂️ Web index with full-text search** — `/gravacoes` lists every recording you can access across servers, with channel filter and search inside transcripts, minutes and notes — results deep-link to the exact second.
-- **💬 `/ask` inside Discord** — ask your meetings a question right in Discord; the AI answers (ephemeral, only you see it) from the transcripts *you* can access, with `[hh:mm:ss]` citations linking to the exact second. Optional `days:` window (default 30). Needs AI minutes enabled (OpenRouter or Groq key).
-- **📤 Minutes posted to Discord** — when the minutes are ready, the bot posts a summary embed (summary + decisions + action items) to a channel admins pick via `/config minutes-channel` (defaults to the voice channel's chat); an optional `MINUTES_WEBHOOK_URL` fires a JSON webhook per meeting for self-hosted integrations (n8n → Notion/Jira…).
-- **🔒 Real access control** — only people who were in the call (speaking **or muted**), people who can see the channel, the initiator, or admins can open a recording. A leaked link opens nothing.
-- **🎛️ Live panel** in the voice channel with **Stop** / **Add note** / **📌 Mark moment** buttons (one click stamps the timestamp, no typing) and a `[RECORDING]` nickname indicator (visible consent).
-- **🔌 MCP connector** *(optional)* — ask your meetings from **Claude Desktop / Cursor**: time-window queries, cross-meeting **action items with deadlines**, full-text search — each user scoped to exactly what they can already see. See [`mcp/`](mcp/).
-- **🤖 Auto-record** — starts by itself when N people join a channel; stops when it empties.
-- **⏳ Retention your way** — tiered by default: `RETENTION_DAYS` expires only the **audio**; transcript, minutes and notes live `TEXT_RETENTION_DAYS` (default 90), so search, `/ask` and the MCP connector keep working after the audio is gone. Or set `RETENTION_DAYS=0` for **unlimited**: nothing expires, and the `/gravacoes` web index becomes a storage manager — per-recording disk size (owner only), sort by largest, **"free up space"** (delete just the audio, keep the memory) and delete-all actions.
-- **❓ Built-in onboarding** — `/help` with interactive topic buttons; DM the bot and it replies with the guide too.
-- **🌎 Bilingual** (pt-BR / English), **HTTPS via Cloudflare Tunnel** (no open ports), auto-stop, retention/expiry, crash recovery and graceful shutdown.
+- One separate audio track per speaker — attribution comes from how the call was recorded, not from a voice-pattern guess.
+- Automatic transcription with the right name on every line, via AssemblyAI, Groq, OpenAI, Gemini, or a fully local engine.
+- Real voice activity detection: only speech gets sent to the transcription API, so silence costs nothing and invents nothing.
+- Accents, crosstalk, and non-English names don't confuse it — there's no diarization step to confuse.
+- Automatic retry and resume if a provider rate-limits mid-transcription.
+
+## Becomes memory that answers
+
+- AI-generated meeting minutes: summary, decisions, and action items, each with an owner and a due date.
+- `/ask` right inside Discord — ask a question in plain language, get an answer with clickable `[hh:mm:ss]` citations.
+- A web index with full-text search across every transcript, minutes doc, and note you're allowed to see.
+- An optional MCP connector plugs that same memory into Claude Desktop, Cursor, or any MCP-capable assistant.
+- Minutes get posted straight to a Discord channel the moment they're ready — no login required to read that summary.
+
+## Yours, with real control
+
+- Self-hosted: it runs on your own Docker, and your recordings never touch a third-party SaaS.
+- Access is gated by Discord login plus real participation — a leaked link opens nothing for a stranger.
+- Retention is a dial, not a default: expire audio on a schedule, keep the searchable text longer, or turn expiry off entirely.
+- Open source under AGPL-3.0-or-later — read it, fork it, self-host a modified version; just pass the source along too.
+- Runs behind HTTPS with no open inbound ports, via the bundled Cloudflare Tunnel profile.
 
 ## Quick start
 
-You need a machine with **Docker** and a **Discord application** ([1-minute setup](#1-create-the-discord-app)).
+You need a machine with **Docker** and a **Discord application** (free, 1-minute setup below).
 
-> **Do step 1 (create the Discord app) first** — the bot won't boot without `DISCORD_TOKEN`.
+> **Create the Discord app first** — the bot won't boot without `DISCORD_TOKEN`.
 
 ```bash
 git clone https://github.com/resolvicomai/kassinao.git && cd kassinao
@@ -77,12 +71,13 @@ cp .env.example .env      # fill DISCORD_TOKEN, APPLICATION_ID, DISCORD_CLIENT_S
 docker compose up -d --build
 ```
 
-Then **invite the bot** (step 1) and run **`/record`** in a Discord voice channel. That's it. Full walkthrough below.
+Then **invite the bot** (step 1 below) and run **`/record`** in a Discord voice channel. That's the whole loop.
 
-> ☁️ **One-click deploy:** [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/resolvicomai/kassinao) — blueprint in [`render.yaml`](render.yaml). Set `GROQ_API_KEY` + `TRANSCRIBE_PROVIDER=groq` in the dashboard to turn on transcription & minutes.
-> Avoid serverless (Vercel/Netlify) — the voice gateway needs an always-on WebSocket.
+> ☁️ **One-click deploy:** [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/resolvicomai/kassinao) — blueprint in [`render.yaml`](render.yaml). Set `GROQ_API_KEY` + `TRANSCRIBE_PROVIDER=groq` in the dashboard to turn on transcription and minutes.
+> Avoid serverless platforms (Vercel/Netlify) — the voice gateway needs an always-on WebSocket.
 
 ### 1. Create the Discord app
+
 1. <https://discord.com/developers/applications> → **New Application**.
 2. **General Information** → copy **Application ID** → `APPLICATION_ID`.
 3. **Bot** → **Reset Token** → `DISCORD_TOKEN` (no privileged intents needed).
@@ -91,11 +86,14 @@ Then **invite the bot** (step 1) and run **`/record`** in a Discord voice channe
    `https://discord.com/oauth2/authorize?client_id=APP_ID&scope=bot%20applications.commands&permissions=68176896`
 
 ### 2. Make it reachable
-- **Recommended — Cloudflare Tunnel** (HTTPS, no open ports): create a tunnel, then in `.env` set `TUNNEL_TOKEN` **and** `COMPOSE_PROFILES=tunnel`, point the public hostname to `kassinao:8080`, set `BASE_URL=https://your-subdomain.your-domain.com`, and re-run `docker compose up -d`. The bundled tunnel service only starts under the `tunnel` profile (so it never crash-loops when you're not using it).
-- **Direct IP (dev/test only — no HTTPS)**: uncomment `ports: ['8080:8080']` in `docker-compose.yml` and set `BASE_URL=http://YOUR_IP:8080`. ⚠️ Discord OAuth only accepts `https` (or `localhost`) redirects, so the login/download page won't work over a plain IP — use the tunnel (or any HTTPS proxy) for real use.
+
+- **Recommended — Cloudflare Tunnel** (HTTPS, no open ports): create a tunnel, then in `.env` set `TUNNEL_TOKEN` **and** `COMPOSE_PROFILES=tunnel`, point the public hostname to `kassinao:8080`, set `BASE_URL=https://your-subdomain.your-domain.com`, and re-run `docker compose up -d`. The bundled tunnel service only starts under the `tunnel` profile, so it never crash-loops when you're not using it.
+- **Direct IP (dev/test only — no HTTPS)**: uncomment `ports: ['8080:8080']` in `docker-compose.yml` and set `BASE_URL=http://YOUR_IP:8080`. Discord OAuth only accepts `https` (or `localhost`) redirects, so the login/download page won't work over a plain IP — use the tunnel (or any HTTPS proxy) for real use.
 
 ### 3. (Optional) Turn on transcription + minutes
+
 Best quality for the money (AssemblyAI for speech, any big-context model via OpenRouter for the minutes):
+
 ```env
 TRANSCRIBE_PROVIDER=assemblyai
 ASSEMBLYAI_API_KEY=...     # https://www.assemblyai.com — US$50 free credit
@@ -103,23 +101,76 @@ GROQ_API_KEY=gsk_...       # optional fallback engine (https://console.groq.com)
 OPENROUTER_API_KEY=sk-or-...  # https://openrouter.ai — minutes LLM (default: google/gemini-2.5-flash)
 MINUTES_ENABLED=auto
 ```
+
 OpenRouter is a paid LLM gateway (one key, many models, its own credits) — the minutes cost roughly a few cents per meeting.
-Zero-cost path: `TRANSCRIBE_PROVIDER=groq` with just a `GROQ_API_KEY` (free tier: 8 audio-hours/day; the minutes then run on Groq's free LLM in map-reduce for long calls).
+Zero-cost path: `TRANSCRIBE_PROVIDER=groq` with just a `GROQ_API_KEY` (free tier: 8 audio-hours/day; minutes then run on Groq's free LLM in map-reduce for long calls).
 
 ## How it compares
 
-| | **Kassinão** | Craig | Otter / Fireflies |
-|---|:---:|:---:|:---:|
-| Multi-track (one file per speaker) | ✅ | ✅ | ❌ |
-| Perfect speaker attribution (no AI diarization) | ✅ | ✅ | ❌ (guessed) |
-| AI minutes (summary, decisions, tasks) | ✅ | ❌ | ✅ |
-| Per-participant breakdown | ✅ | ❌ | ⚠️ |
-| Self-hosted / your data | ✅ | ⚠️ | ❌ |
-| Access gated by login (not "who has the link") | ✅ | ⚠️ | ✅ |
-| Open-source (AGPL-3.0) | ✅ | ✅ | ❌ |
-| Price | Free | Freemium | Paid |
+Craig records. Otter summarizes. Kassinão knows who's talking.
 
-## Transcription backends
+|                                                  |     **Kassinão**     |  Craig   | Otter / Fireflies |
+| ------------------------------------------------ | :------------------: | :------: | :---------------: |
+| Multi-track (one file per speaker)               |          ✅          |    ✅    |        ❌         |
+| Perfect speaker attribution (no AI diarization)  |          ✅          |    ✅    |   ❌ (guessed)    |
+| AI minutes (summary, decisions, tasks)           |          ✅          |    ❌    |        ✅         |
+| Per-participant breakdown                        |          ✅          |    ❌    |        ⚠️         |
+| Self-hosted / your data                          |          ✅          |    ⚠️    |        ❌         |
+| Access gated by login (not "who has the link")   |          ✅          |    ⚠️    |        ✅         |
+| Open-source (AGPL-3.0)                           |          ✅          |    ✅    |        ❌         |
+| Price                                            |         Free         | Freemium |       Paid        |
+
+## Reference
+
+Day-two material for people who already decided to run it — not required reading before you try the demo.
+
+### Configuration
+
+All options live in [`.env.example`](.env.example). Key ones:
+
+| Variable | Default | Description |
+|---|---|---|
+| `DISCORD_TOKEN` · `APPLICATION_ID` · `DISCORD_CLIENT_SECRET` | — | Bot credentials (Developer Portal) |
+| `BASE_URL` | `http://localhost:8080` | Public URL for links and OAuth |
+| `GUILD_ID` | — | Registers commands instantly in that server |
+| `TUNNEL_TOKEN` / `COMPOSE_PROFILES` | — | Cloudflare Tunnel token + the `tunnel` profile (recommended HTTPS path) |
+| `REPO_PUBLIC` | `false` | `true` shows the GitHub/source links and the "auditable" claim on the landing page |
+| `RETENTION_DAYS` · `MAX_RECORDING_HOURS` | `7` · `6` | Audio retention and max recording length (`0` retention = unlimited: nothing expires, manual delete only) |
+| `TEXT_RETENTION_DAYS` | `90` | How long transcript/minutes/notes outlive the audio (never below `RETENTION_DAYS`; `0` = forever) |
+| `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
+| `ASSEMBLYAI_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` | — | Key for the chosen provider (a Groq key also doubles as the ASR fallback) |
+| `TRANSCRIBE_PROMPT` / `TRANSCRIBE_KEYTERMS` | — | Domain vocabulary for the ASR engine (Whisper prompt / AssemblyAI keyterms); participant names are injected automatically |
+| `MINUTES_ENABLED` | `auto` | AI minutes: `auto` (on when an OpenRouter or Groq key exists) / `true` / `false` |
+| `MINUTES_PROVIDER` / `OPENROUTER_API_KEY` | `openrouter` when key set | Minutes LLM: `openrouter` (default `google/gemini-2.5-flash`) or `groq` (default `llama-3.3-70b-versatile`) |
+| `MINUTES_WEBHOOK_URL` | — | POSTs a JSON `minutes.ready` event per meeting to your own integration; env-only by design (no SSRF via Discord) |
+| `MCP_SECRET` | — | Turns the MCP connector on; rotating it revokes every connector at once |
+| `OWNER_IDS` | — | Discord IDs allowed to use `/mcp` (CSV); regular members self-serve at `/conectar-ia` |
+| `DEFAULT_LOCALE` | `en` | Language for DMs/replies when no per-user locale is available (guild members still see their own Discord client's language) |
+| `TZ` | `America/Sao_Paulo` | Timezone for dates (the web page defaults to the visitor's own) |
+
+More knobs — disk guard, disk-full alerts, off-site backup via rclone — are all documented one option at a time in [`.env.example`](.env.example).
+
+### Commands
+
+| Command | Does |
+|---|---|
+| `/record [channel]` | Start recording (your voice channel, or the one given) |
+| `/stop` | End it and generate the link with audio, transcript, and minutes |
+| `/note <text>` | Mark a note at the current time (or the 📝 panel button) |
+| `/status` | Current recording status |
+| `/recordings` | Your latest recordings, filtered by access — also links to the web index with full-text search |
+| `/ask <question> [days]` | Ask your meetings a question — AI answers (only you see it), with timestamped citations, from transcripts you can access |
+| `/config minutes-channel` / `/config view` | Admin: pick the text channel where the minutes summary gets posted (default: the voice channel's own chat) |
+| `/autorecord on/off/view` | Automatic recording per channel (admin) |
+| `/mcp new` / `/mcp revoke-all` | Owner-only (`OWNER_IDS`): generate or revoke an AI-connector code — regular members self-serve at `/conectar-ia` on the web |
+| `/help` | Interactive onboarding guide (also replies in DMs) |
+| `/about` | Author, license, and source code |
+
+Anyone can record and stop. `/autorecord` and `/config` require **Manage Server**. `/mcp` only exists when the connector is on (`MCP_SECRET` set). Deleting a recording (from its page) is limited to the initiator or admins.
+
+The MCP connector applies the exact same access check as the web page, meeting by meeting: each person sees only what they'd already see on the site. Read-only, no audio, revocable at any time. Client setup and full docs: [`mcp/`](mcp/).
+
+### Transcription backends
 
 | Provider | Cost (per audio hour, **per track**) | pt-BR quality | Privacy | Notes |
 |---|---|---|---|---|
@@ -129,65 +180,7 @@ Zero-cost path: `TRANSCRIBE_PROVIDER=groq` with just a `GROQ_API_KEY` (free tier
 | **Gemini** (`gemini-2.0-flash`, default) | ~cents | Good | Cloud (paid tier only) | Free tier trains on your audio — avoid |
 | **Local** (`faster-whisper`) | Free | Good (`small`+) | 🔒 Never leaves your server | Slower without a GPU; see [`scripts/transcribe-local.py`](scripts/transcribe-local.py) |
 
-> 💡 Recording is **multi-track**, but only **speech** is sent (VAD trims the silence-padded tracks), so a 1-hour call costs ≈ the total spoken time — not hours × speakers. The AI minutes run once per meeting (OpenRouter or Groq), a few cents each at most.
-
-## AI connector (MCP)
-
-*Optional, off by default.* Plug your meetings into **Claude Desktop, Cursor** or any MCP client and ask them in natural language:
-
-- *"What's pending this week, and who owns it?"* — aggregates action items with deadlines across meetings.
-- *"List the calls in this channel between June 1 and 30."* — time-window queries (timezone-aware).
-- *"When did Ana talk about the budget? Give me the link."* — search with deep links to the exact second.
-
-**Security by design:** the connector runs locally and only carries a **personal token**; the bot applies the *same* access check as the web page, meeting by meeting — each person sees only what they'd see on the site. Read-only, no audio, revocable. Meeting text is wrapped as untrusted data (prompt-injection defense).
-
-Turn it on by setting `MCP_SECRET` (a strong secret, **≠** `COOKIE_SECRET`). Users self-serve at `/conectar-ia`. Client package & full docs: [`mcp/`](mcp/). For the basic "what did we decide?" case you don't even need MCP — the `/ask` command answers right inside Discord.
-
-## Commands
-
-| English | pt-BR | Does |
-|---|---|---|
-| `/record [channel]` | `/gravar [canal]` | Start recording (your voice channel, or the given one) |
-| `/stop` | `/parar` | End it and generate the link with audio, transcript and minutes |
-| `/note <text>` | `/nota <texto>` | Mark a note at the current time (or the 📝 panel button) |
-| `/status` | `/status` | Current recording status |
-| `/recordings` | `/gravacoes` | Your latest recordings, with links (filtered by access) — also links to the web index with full-text search |
-| `/ask <question> [days]` | `/perguntar <pergunta> [dias]` | Ask your meetings — AI answers (only you see it) with timestamped citations, from transcripts you can access |
-| `/config minutes-channel/view` | `/config ata-canal/ver` | Admin: pick the text channel where the minutes summary is posted (default: the voice channel's chat) |
-| `/help` | `/ajuda` | Interactive guide (also replies in DMs) |
-| `/autorecord on/off/view` | `/autorecord ligar/desligar/ver` | Automatic recording per channel (admin) |
-| `/mcp new` | `/mcp novo` | Owner-only: generate an AI-connector code (members self-serve at `/conectar-ia` on the web) |
-
-Anyone can record and stop. `/autorecord` and `/config` require **Manage Server**. Deleting a recording (from its page) is limited to the initiator or admins.
-
-## Configuration
-
-All options live in [`.env.example`](.env.example). Key ones:
-
-| Variable | Default | Description |
-|---|---|---|
-| `DISCORD_TOKEN` · `APPLICATION_ID` · `DISCORD_CLIENT_SECRET` | — | Bot credentials (Developer Portal) |
-| `BASE_URL` | `http://localhost:8080` | Public URL for links & OAuth |
-| `REPO_PUBLIC` | `false` | `true` shows the GitHub/source links and the "auditable" claim on the landing page |
-| `TUNNEL_TOKEN` | — | Cloudflare Tunnel token (recommended HTTPS path; also set `COMPOSE_PROFILES=tunnel`) |
-| `GUILD_ID` | — | Registers commands instantly in that server |
-| `RETENTION_DAYS` · `MAX_RECORDING_HOURS` | `7` · `6` | Audio retention & max length (`0` = unlimited: nothing expires, manual delete only) |
-| `TEXT_RETENTION_DAYS` | `90` | How long transcript/minutes/notes outlive the audio (never below `RETENTION_DAYS`; `0` = forever) |
-| `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
-| `ASSEMBLYAI_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` | — | Key for the chosen provider (Groq key doubles as ASR fallback) |
-| `MINUTES_ENABLED` | `auto` | AI minutes: `auto` (on when an OpenRouter or Groq key exists) / `true` / `false` |
-| `MINUTES_PROVIDER` / `OPENROUTER_API_KEY` | `openrouter` when key set | Minutes LLM: `openrouter` (default `google/gemini-2.5-flash`) or `groq` |
-| `MINUTES_WEBHOOK_URL` | — | POSTs a JSON (`minutes.ready`) per meeting to your integration; env-only by design (no SSRF via Discord) |
-| `TZ` | `America/Sao_Paulo` | Timezone for dates (the web page uses the visitor's) |
-
-## Security & privacy
-
-Recording voice is processing **personal data**. Kassinão is built accordingly:
-
-- Access is always validated by **Discord OAuth login** + participant/channel checks — never by "who has the link".
-- The bot shows `[RECORDING]` in its nickname and posts a panel in the channel (visible consent).
-- Run transcription **locally**, or enable **Zero Data Retention** on your cloud provider, so audio isn't retained by third parties.
-- Secrets live only in `.env` (git-ignored) — **never** committed. See [SECURITY.md](SECURITY.md).
+Recording is multi-track, but only **speech** is sent (VAD trims the silence-padded tracks), so a 1-hour call costs roughly the total spoken time — not hours × speakers. AI minutes run once per meeting (OpenRouter or Groq), a few cents each at most.
 
 ## How it works
 
@@ -218,6 +211,16 @@ flowchart LR
 
 **Stack:** Node.js · TypeScript · discord.js / @discordjs/voice · Express · ffmpeg · Docker · Cloudflare Tunnel.
 
+## Security & privacy
+
+Recording voice is processing personal data, so access control isn't a feature bullet here — it's the thing to actually verify:
+
+- Every page request is authenticated via Discord OAuth and then re-checked live against who was actually in the call, who can see the channel, and who's an admin — not a cached role, not "whoever has the link." The full check is one file: [`src/web/access.ts`](src/web/access.ts).
+- Nothing leaves your server for transcription unless you configure a cloud provider — and even then, only the VAD-trimmed speech segments go out, never full raw audio you didn't intend to transcribe.
+- Prefer zero retention on the wire: turn on your provider's Zero Data Retention option (Groq offers one), or skip the cloud path entirely with the local `command` transcription backend.
+- Secrets (`DISCORD_TOKEN`, `MCP_SECRET`, API keys) live only in your own `.env`, which ships git-ignored — never committed, never sent anywhere by the bot itself.
+- Found an actual vulnerability? See [SECURITY.md](SECURITY.md) for how to report it privately.
+
 ## Contributing
 
 PRs and issues welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Run `npm run build` before opening a PR.
@@ -229,7 +232,7 @@ PRs and issues welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code 
 Free and open source. You may use, study, modify and share it — but if you run a
 modified version as a network service (e.g. host the bot for others), the AGPL
 requires you to offer those users the corresponding source code. The bot's
-`/sobre` (`/about`) command links to this repository to satisfy that.
+`/about` (`/sobre`) command links to this repository to satisfy that.
 
 Uses [ffmpeg](https://ffmpeg.org/) (via `ffmpeg-static`, GPL/LGPL) as a separate
 external binary; its own license applies to that binary.

@@ -6,3 +6,4 @@ recordings/
 *.log
 .DS_Store
 .claude/launch.json
+.scratch/

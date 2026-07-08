@@ -1,6 +1,8 @@
 dist
 node_modules
 recordings
+.claude
+.scratch
 *.md
 .github
 scratchpad
