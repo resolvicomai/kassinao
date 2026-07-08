@@ -24,17 +24,17 @@ import {
 } from '../store';
 import { checkAccess } from './access';
 import { mountMcpApi } from './api';
-import { beginLogin, finishLogin, getWebUser, signMcpRefresh, WebUser } from './auth';
+import { beginLogin, finishLogin, getWebUser, logoutWeb, signMcpRefresh, WebUser } from './auth';
 import { countUserSessions, createSession, revokeUser } from './mcpTokens';
 import {
   connectPage,
-  landingPage,
   messagePage,
   recordingPage,
   RecordingIndexItem,
   recordingsIndexPage,
   RecordingsSort,
 } from './page';
+import { landingPage } from './landing';
 import { searchRecordings } from './search';
 import { beginDownload, endDownload, hasActiveDownloads } from './tracker';
 
@@ -167,7 +167,7 @@ export function startWebServer(): void {
   // brute-force/reconhecimento sem incomodar uso real.
   const webHits = new Map<string, { n: number; reset: number }>();
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (!/^\/(rec|auth|demo|conectar-ia|gravacoes)\b/.test(req.path)) return next();
+    if (!/^\/(app|rec|auth|demo|conectar-ia|gravacoes)\b/.test(req.path)) return next();
     const now = Date.now();
     if (webHits.size > 5000) for (const [k, v] of webHits) if (v.reset < now) webHits.delete(k);
     const ip = req.ip ?? 'unknown';
@@ -194,20 +194,35 @@ export function startWebServer(): void {
   // API do MCP (/api/*) — só monta quando MCP_SECRET está definido (opt-in).
   mountMcpApi(app);
 
+  // ---------- separação site × app ----------
+  // Tudo que é PRIVADO (gravações, conector, gestão) vive sob /app/* — um
+  // namespace só, nunca linkado do markup público. Os caminhos ANTIGOS
+  // (/gravacoes, /rec/:id, /conectar-ia) já foram enviados em mensagens do
+  // Discord e salvos em favoritos: redirect PERMANENTE (308 preserva o método),
+  // a proteção continua sendo login+checkAccess no destino.
+  const legacyRedirect = (from: string, to: string) => {
+    app.use(from, (req: Request, res: Response) => {
+      res.redirect(308, to + (req.url === '/' ? '' : req.url));
+    });
+  };
+  legacyRedirect('/gravacoes', '/app');
+  legacyRedirect('/rec', '/app/rec');
+  legacyRedirect('/conectar-ia', '/app/conectar-ia');
+
   // Página de onboarding do conector MCP (self-serve por usuário logado).
   if (config.mcpEnabled) {
-    app.get('/conectar-ia', (req, res) => {
+    app.get('/app/conectar-ia', (req, res) => {
       const l = pageLang(req);
       const user = getWebUser(req);
       const sessionCount = user ? countUserSessions(user.id) : 0;
       res.type('html').send(connectPage({ lang: l, user, sessionCount, revoked: req.query.revoked === '1' }));
     });
 
-    app.post('/conectar-ia/gerar', (req, res) => {
+    app.post('/app/conectar-ia/gerar', (req, res) => {
       const l = pageLang(req);
       const user = getWebUser(req);
       if (!user) {
-        beginLogin(res, '/conectar-ia');
+        beginLogin(res, '/app/conectar-ia');
         return;
       }
       // O usuário recebe um REFRESH token (o conector troca por access via /api/mcp/refresh).
@@ -220,22 +235,22 @@ export function startWebServer(): void {
         .send(connectPage({ lang: l, user, refreshToken }));
     });
 
-    app.post('/conectar-ia/revogar', (req, res) => {
+    app.post('/app/conectar-ia/revogar', (req, res) => {
       const user = getWebUser(req);
       if (!user) {
-        beginLogin(res, '/conectar-ia');
+        beginLogin(res, '/app/conectar-ia');
         return;
       }
       const n = revokeUser(user.id);
       console.log(`MCP: ${n} sessão(ões) revogada(s) por ${cleanInline(user.name)} (${user.id}) via web.`);
-      res.redirect('/conectar-ia?revoked=1');
+      res.redirect('/app/conectar-ia?revoked=1');
     });
   }
 
   app.get('/', (req, res) => {
     // landing = vitrine pública; passa o usuário só pra a ponte do topo dizer
     // "Entrar" (deslogado) ou "Minhas gravações" (logado). O app é mundo à parte.
-    res.type('html').send(landingPage(pageLang(req), getWebUser(req)));
+    res.type('html').send(landingPage(pageLang(req)));
   });
 
   // Demo PÚBLICA (sem login) — serve SOMENTE os dados fictícios de docs/example.
@@ -298,6 +313,13 @@ export function startWebServer(): void {
     beginLogin(res, String(req.query.next ?? '/'));
   });
 
+  // Sair: expira o cookie de sessão e volta pra vitrine. O "Sair" do topo do
+  // app é a ÚNICA ponte app→site (o inverso da ponte de login da landing).
+  app.get('/auth/logout', (_req, res) => {
+    logoutWeb(res);
+    res.redirect('/');
+  });
+
   app.get('/auth/callback', async (req, res) => {
     const l = pageLang(req);
     try {
@@ -319,9 +341,9 @@ export function startWebServer(): void {
     }
   });
 
-  /** Índice "minhas gravações": tudo que ESTA pessoa pode abrir, em todos os guilds —
-   *  agora um painel de GESTÃO: totais de disco (só OWNER_IDS), ordenação e ações inline. */
-  app.get('/gravacoes', async (req, res) => {
+  /** Home do app ("minhas gravações"): tudo que ESTA pessoa pode abrir, em todos
+   *  os guilds — painel de GESTÃO: totais de disco (só OWNER_IDS), ordenação e ações. */
+  app.get('/app', async (req, res) => {
     const l = pageLang(req);
     const q = String(req.query.q ?? '')
       .trim()
@@ -329,7 +351,7 @@ export function startWebServer(): void {
     const user = getWebUser(req);
     if (!user) {
       // next reconstruído de partes VALIDADAS (nunca originalUrl cru) — preserva a busca
-      beginLogin(res, q ? `/gravacoes?q=${encodeURIComponent(q)}` : '/gravacoes');
+      beginLogin(res, q ? `/app?q=${encodeURIComponent(q)}` : '/app');
       return;
     }
     if (notReady(res, l, user)) return;
@@ -375,12 +397,12 @@ export function startWebServer(): void {
     );
   });
 
-  app.get('/rec/:id', async (req, res) => {
+  app.get('/app/rec/:id', async (req, res) => {
     const l = pageLang(req);
     // login ANTES de checar existência: não vaza quais IDs existem a quem não logou
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/rec/${req.params.id}`);
+      beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
     if (notReady(res, l, user)) return;
@@ -408,11 +430,11 @@ export function startWebServer(): void {
     res.type('html').send(recordingPage(meta, { live, canDelete: access.delete, user, lang: l, transcript, minutes }));
   });
 
-  app.get('/rec/:id/audio', async (req, res) => {
+  app.get('/app/rec/:id/audio', async (req, res) => {
     const l = pageLang(req);
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/rec/${req.params.id}`);
+      beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
     if (notReady(res, l, user)) return;
@@ -462,11 +484,11 @@ export function startWebServer(): void {
     }
   });
 
-  app.get('/rec/:id/ata.md', async (req, res) => {
+  app.get('/app/rec/:id/ata.md', async (req, res) => {
     const l = pageLang(req);
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/rec/${req.params.id}`);
+      beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
     if (notReady(res, l, user)) return;
@@ -501,11 +523,11 @@ export function startWebServer(): void {
       .send(minutesToMarkdown(meta, minutes));
   });
 
-  app.get('/rec/:id/transcricao.:ext(md|txt)', async (req, res) => {
+  app.get('/app/rec/:id/transcricao.:ext(md|txt)', async (req, res) => {
     const l = pageLang(req);
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/rec/${req.params.id}`);
+      beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
     if (notReady(res, l, user)) return;
@@ -541,11 +563,11 @@ export function startWebServer(): void {
       .send(ext === 'md' ? markdown : markdown.replace(/[*#`]/g, ''));
   });
 
-  app.get('/rec/:id/download/:format', async (req, res) => {
+  app.get('/app/rec/:id/download/:format', async (req, res) => {
     const l = pageLang(req);
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/rec/${req.params.id}`);
+      beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
     if (notReady(res, l, user)) return;
@@ -610,11 +632,11 @@ export function startWebServer(): void {
    * O par da retenção ilimitada — a memória fica, os gigas voltam. Mesmas guardas do
    * delete (permissão, ao-vivo, download/transcrição em andamento).
    */
-  app.post('/rec/:id/liberar-audio', async (req, res) => {
+  app.post('/app/rec/:id/liberar-audio', async (req, res) => {
     const l = pageLang(req);
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/rec/${req.params.id}`);
+      beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
     if (notReady(res, l, user)) return;
@@ -657,14 +679,14 @@ export function startWebServer(): void {
     // cleanInline: nome vem do Discord (controlado pelo usuário) — sem quebra de
     // linha/ANSI forjando entradas de log (log injection)
     console.log(`Áudio da gravação ${meta.id} liberado por ${cleanInline(user.name)} (${user.id}).`);
-    res.redirect(req.query.back === 'index' ? '/gravacoes?freed=1' : `/rec/${meta.id}`);
+    res.redirect(req.query.back === 'index' ? '/app?freed=1' : `/app/rec/${meta.id}`);
   });
 
-  app.post('/rec/:id/delete', async (req, res) => {
+  app.post('/app/rec/:id/delete', async (req, res) => {
     const l = pageLang(req);
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/rec/${req.params.id}`);
+      beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
     if (notReady(res, l, user)) return;
@@ -703,7 +725,7 @@ export function startWebServer(): void {
     console.log(`Gravação ${meta.id} apagada por ${cleanInline(user.name)} (${user.id}).`);
     // veio do índice de gestão → volta pra lá (com flash); da página → mensagem clássica
     if (req.query.back === 'index') {
-      res.redirect('/gravacoes?deleted=1');
+      res.redirect('/app?deleted=1');
       return;
     }
     res.type('html').send(messagePage(MSG.deletedTitle[l], MSG.deleted[l], user, l));

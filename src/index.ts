@@ -1108,7 +1108,7 @@ async function handleGravacoes(interaction: ChatInputCommandInteraction): Promis
   let content = `**${t(l, 'recordings.title')}**\n${lines.join('\n')}`;
   if (all.length > metas.length) content += `\n${t(l, 'recordings.more', { n: all.length - metas.length })}`;
   // o índice web mostra TODAS (com busca) — aqui só cabem 5
-  content += `\n${t(l, 'recordings.web', { url: `${config.baseUrl}/gravacoes` })}`;
+  content += `\n${t(l, 'recordings.web', { url: `${config.baseUrl}/app` })}`;
   content = safeSlice(content, 2000); // nomes de canal markdown-pesados estouram o limite do Discord
   await interaction.reply({ content, ephemeral: true });
 }
@@ -1215,7 +1215,7 @@ async function handleMcp(interaction: ChatInputCommandInteraction): Promise<void
   // "dono" de estar numa DM. Resposta SEMPRE efêmera; o código nunca é logado.
   if (!config.ownerIds.includes(interaction.user.id)) {
     await interaction.reply({
-      content: t(l, 'mcp.web-only', { url: `${config.baseUrl}/conectar-ia` }),
+      content: t(l, 'mcp.web-only', { url: `${config.baseUrl}/app/conectar-ia` }),
       ephemeral: true,
     });
     return;

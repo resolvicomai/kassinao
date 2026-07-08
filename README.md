@@ -144,7 +144,7 @@ All options live in [`.env.example`](.env.example). Key ones:
 | `MINUTES_PROVIDER` / `OPENROUTER_API_KEY` | `openrouter` when key set | Minutes LLM: `openrouter` (default `google/gemini-2.5-flash`) or `groq` (default `llama-3.3-70b-versatile`) |
 | `MINUTES_WEBHOOK_URL` | — | POSTs a JSON `minutes.ready` event per meeting to your own integration; env-only by design (no SSRF via Discord) |
 | `MCP_SECRET` | — | Turns the MCP connector on; rotating it revokes every connector at once |
-| `OWNER_IDS` | — | Discord IDs allowed to use `/mcp` (CSV); regular members self-serve at `/conectar-ia` |
+| `OWNER_IDS` | — | Discord IDs allowed to use `/mcp` (CSV); regular members self-serve at `/app/conectar-ia` |
 | `DEFAULT_LOCALE` | `en` | Language for DMs/replies when no per-user locale is available (guild members still see their own Discord client's language) |
 | `TZ` | `America/Sao_Paulo` | Timezone for dates (the web page defaults to the visitor's own) |
 
@@ -162,7 +162,7 @@ More knobs — disk guard, disk-full alerts, off-site backup via rclone — are 
 | `/ask <question> [days]` | Ask your meetings a question — AI answers (only you see it), with timestamped citations, from transcripts you can access |
 | `/config minutes-channel` / `/config view` | Admin: pick the text channel where the minutes summary gets posted (default: the voice channel's own chat) |
 | `/autorecord on/off/view` | Automatic recording per channel (admin) |
-| `/mcp new` / `/mcp revoke-all` | Owner-only (`OWNER_IDS`): generate or revoke an AI-connector code — regular members self-serve at `/conectar-ia` on the web |
+| `/mcp new` / `/mcp revoke-all` | Owner-only (`OWNER_IDS`): generate or revoke an AI-connector code — regular members self-serve at `/app/conectar-ia` on the web |
 | `/help` | Interactive onboarding guide (also replies in DMs) |
 | `/about` | Author, license, and source code |
 

@@ -107,7 +107,7 @@ const P: Record<string, { pt: string; en: string }> = {
   presentOnly: { pt: '👥 Estavam na call, mas ninguém falou', en: '👥 Were in the call, but nobody spoke' },
   nobodyDone: { pt: 'Ninguém falou nesta gravação.', en: 'Nobody spoke in this recording.' },
   follow: { pt: 'seguir o áudio', en: 'follow audio' },
-  searchTranscript: { pt: 'Buscar na transcrição…', en: 'Search the transcript…' },
+  searchTranscript: { pt: 'Ache o momento exato…', en: 'Find the exact moment…' },
   copyActions: { pt: 'Copiar itens de ação', en: 'Copy action items' },
   timelineAll: { pt: 'Todos os eventos ({n})', en: 'All events ({n})' },
   tlTopics: { pt: 'tópicos da ata', en: 'minutes topics' },
@@ -148,6 +148,17 @@ const P: Record<string, { pt: string; en: string }> = {
   ixAudioFreed: { pt: '🔇 áudio liberado', en: '🔇 audio released' },
   ixByAuto: { pt: 'auto-record', en: 'auto-record' },
   ixLive: { pt: 'ao vivo', en: 'live' },
+  // app shell v2 (cockpit)
+  dlFold: { pt: 'Baixar áudio', en: 'Download audio' },
+  dlShort: { pt: 'Baixar', en: 'Download' },
+  freeWhy: {
+    pt: 'apaga só o áudio — transcrição, ata e notas ficam',
+    en: 'deletes only the audio — transcript, minutes and notes stay',
+  },
+  delWhy: {
+    pt: 'apaga tudo: áudio, transcrição, ata e notas — sem volta',
+    en: 'deletes everything: audio, transcript, minutes and notes — no undo',
+  },
 };
 
 function p(l: Locale, key: string, vars: Record<string, string> = {}): string {
@@ -156,75 +167,121 @@ function p(l: Locale, key: string, vars: Record<string, string> = {}): string {
   return text;
 }
 
-const SHELL_CSS = `
-  :root { color-scheme: dark; }
+// CSS do app logado (cockpit). Mesma família de marca da landing (tokens de cor
+// idênticos), mas OUTRA sala: corpo em sans, coluna de trabalho de 760px, chrome
+// persistente de navegação e densidade utilitária. Monoespaçado é rebaixado a
+// timestamps, IDs, código, caminhos e JSON — nunca em prosa. Self-contained
+// (CSP: sem fonte/CSS/JS/imagem externa); respeita prefers-reduced-motion.
+const APP_CSS = `
+  :root { color-scheme: dark;
+    --bg:#101012; --bg-weak:#17171a; --bg-hover:#1e1e22;
+    --text:#b6b4b2; --text-weak:#8a888c; --text-dim:#6d7178; --text-strong:#f1eeec;
+    --border:rgba(255,255,255,.13); --border-strong:rgba(255,255,255,.22);
+    --accent:#5865f2; --accent-hover:#4752c4; --accent-soft:rgba(88,101,242,.16);
+    --warn:#f0b232; --danger:#da373c; --live:#da373c; --done:#23a55a; --ok:#3dbf7a; --link:#00a8fc;
+    --c0:#7b90f7; --c1:#3dbf7a; --c2:#f0b232; --c3:#eb6ab5;
+    --c4:#29b0e8; --c5:#e8735a; --c6:#a58cf2; --c7:#4fd1c5;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;
+    --col:760px;
+  }
   * { box-sizing: border-box; margin: 0; }
-  body { background: #101012; color: #b6b4b2; font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
-         min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 40px 16px; }
-  .card { background: #17171a; border: 1px solid rgba(255,255,255,.13); border-radius: 6px;
-          padding: 28px; max-width: 640px; width: 100%; }
-  h1 { font-size: 22px; color: #f1eeec; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #8a888c; margin: 22px 0 10px; }
-  .muted { color: #8a888c; font-size: 14px; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 15px; line-height: 1.55;
+         min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 26px 16px 40px; }
+  .card { background: var(--bg-weak); border: 1px solid var(--border); border-radius: 10px;
+          padding: 28px; max-width: var(--col); width: 100%; }
+  h1 { font-size: 22px; color: var(--text-strong); display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+       letter-spacing: -.01em; }
+  h2 { font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-weak);
+       margin: 26px 0 10px; font-weight: 600; }
+  .muted { color: var(--text-weak); font-size: 14px; }
+  /* mono SÓ onde é dado técnico: horários, IDs, código, caminhos, JSON */
+  time, .ts, code, pre { font-family: var(--mono); }
+  pre { overflow-x: auto; }
+  a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  input:focus-visible { outline: none; }
+  /* âncoras do jump-nav param abaixo da pilha sticky (nav + player) */
+  h2[id], details[id] { scroll-margin-top: 150px; }
   .grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin-top: 14px; font-size: 15px; }
-  .grid dt { color: #8a888c; }
-  .badge { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; vertical-align: middle; }
-  .badge.live { background: #da373c; color: #fff; animation: pulse 1.6s infinite; }
-  .badge.done { background: #23a55a; color: #fff; }
+  .grid dt { color: var(--text-weak); }
+  .badge { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; vertical-align: middle;
+           font-family: var(--sans); }
+  .badge.live { background: var(--live); color: #fff; }
+  .badge.done { background: var(--done); color: #fff; }
   @keyframes pulse { 50% { opacity: .55; } }
+  @media (prefers-reduced-motion: no-preference) {
+    .badge.live { animation: pulse 1.6s infinite; }
+    html { scroll-behavior: smooth; }
+  }
+  /* barra de pulos: acesso de 1 clique às seções; rola na horizontal no celular */
+  .jumpnav { position: sticky; top: 0; z-index: 7; display: flex; gap: 8px; overflow-x: auto;
+             background: var(--bg-weak); padding: 10px 0; margin: 8px 0 0; scrollbar-width: none; }
+  .jumpnav::-webkit-scrollbar { display: none; }
+  .jumpnav a { flex-shrink: 0; font-size: 12.5px; color: var(--text); text-decoration: none;
+               border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; background: var(--bg);
+               white-space: nowrap; }
+  .jumpnav a:hover { border-color: var(--accent); color: var(--text-strong); }
   .people { display: flex; flex-wrap: wrap; gap: 8px; }
-  .person { display: flex; align-items: center; gap: 8px; background: #101012; border: 1px solid rgba(255,255,255,.1); padding: 6px 12px 6px 6px;
-            border-radius: 999px; font-size: 14px; }
+  .person { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid rgba(255,255,255,.1);
+            padding: 6px 12px 6px 6px; border-radius: 999px; font-size: 14px; }
   .person img { width: 26px; height: 26px; border-radius: 50%; }
   .downloads { display: flex; flex-wrap: wrap; gap: 10px; }
-  /* .btn cobre <a> E <button> (o connect usa <button class="btn"> — antes caía no botão cinza padrão) */
-  .btn { display: inline-flex; flex-direction: column; gap: 2px; text-decoration: none; background: #5865f2;
+  /* .btn cobre <a> E <button> */
+  .btn { display: inline-flex; flex-direction: column; gap: 2px; text-decoration: none; background: var(--accent);
          color: #fff; padding: 12px 18px; border-radius: 8px; font-size: 15px; font-weight: 600;
          border: 0; cursor: pointer; font-family: inherit; line-height: 1.2; }
   .btn small { font-weight: 400; font-size: 12px; opacity: .8; }
-  .btn:hover { background: #4752c4; }
+  .btn:hover { background: var(--accent-hover); }
   .btn.secondary { background: #232327; }
   .btn.secondary:hover { background: #2a2a2f; }
+  /* exportar rebaixado: dobrado num details, fora do caminho da leitura */
+  details.dlfold { margin-top: 26px; }
+  details.dlfold summary { cursor: pointer; font-size: 12.5px; color: var(--text-weak); text-transform: uppercase;
+                           letter-spacing: .05em; font-weight: 600; }
+  details.dlfold summary small { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-dim); margin-left: 8px; }
+  details.dlfold[open] summary { margin-bottom: 12px; }
   .events { list-style: none; font-size: 14px; display: flex; flex-direction: column; gap: 4px;
             max-height: 220px; overflow-y: auto; }
-  .events time { color: #8a888c; font-family: ui-monospace, monospace; margin-right: 8px; }
-  .wall { color: #6d7178 !important; font-size: 12px; }
+  .events time { color: var(--text-weak); margin-right: 8px; }
+  .wall { color: var(--text-dim) !important; font-size: 12px; }
   .transcript { display: flex; flex-direction: column; gap: 14px;
-                background: #101012; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; padding: 14px; font-size: 14px; }
-  .transcript p { line-height: 1.5; padding: 2px 6px; border-left: 2px solid transparent; border-radius: 4px; }
-  .transcript p.now { background: rgba(88,101,242,.12); border-left-color: #5865f2; }
-  .transcript .who { color: #f1eeec; font-weight: 600; }
+                background: var(--bg); border: 1px solid rgba(255,255,255,.1); border-radius: 8px; padding: 14px;
+                font-size: 14.5px; }
+  .transcript p { line-height: 1.55; padding: 2px 6px; border-left: 2px solid transparent; border-radius: 4px; }
+  .transcript p.now { background: var(--accent-soft); border-left-color: var(--accent); }
+  .transcript .who { color: var(--text-strong); font-weight: 600; }
+  .transcript time { color: var(--text-weak); font-size: 12px; margin-right: 6px; }
   .tblock .thead { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
   .tblock .thead img { width: 22px; height: 22px; border-radius: 50%; }
   .tblock .thead .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: currentColor; }
-  /* paleta estável por falante */
-  .c0 { color: #7b90f7; } .c1 { color: #3dbf7a; } .c2 { color: #f0b232; } .c3 { color: #eb6ab5; }
-  .c4 { color: #29b0e8; } .c5 { color: #e8735a; } .c6 { color: #a58cf2; } .c7 { color: #4fd1c5; }
-  .tblock .thead .dot.c0 { background:#7b90f7 } .tblock .thead .dot.c1 { background:#3dbf7a }
-  .tblock .thead .dot.c2 { background:#f0b232 } .tblock .thead .dot.c3 { background:#eb6ab5 }
-  .tblock .thead .dot.c4 { background:#29b0e8 } .tblock .thead .dot.c5 { background:#e8735a }
-  .tblock .thead .dot.c6 { background:#a58cf2 } .tblock .thead .dot.c7 { background:#4fd1c5 }
+  /* paleta estável por falante — a MESMA da landing (uma marca só) */
+  .c0 { color: var(--c0); } .c1 { color: var(--c1); } .c2 { color: var(--c2); } .c3 { color: var(--c3); }
+  .c4 { color: var(--c4); } .c5 { color: var(--c5); } .c6 { color: var(--c6); } .c7 { color: var(--c7); }
+  .tblock .thead .dot.c0 { background:var(--c0) } .tblock .thead .dot.c1 { background:var(--c1) }
+  .tblock .thead .dot.c2 { background:var(--c2) } .tblock .thead .dot.c3 { background:var(--c3) }
+  .tblock .thead .dot.c4 { background:var(--c4) } .tblock .thead .dot.c5 { background:var(--c5) }
+  .tblock .thead .dot.c6 { background:var(--c6) } .tblock .thead .dot.c7 { background:var(--c7) }
   .tsearch { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 10px; }
-  .tsearch input { background: #101012; border: 1px solid rgba(255,255,255,.13); color: #c9c7c5; border-radius: 8px;
-                   padding: 9px 12px; font-size: 14px; width: 100%; }
-  .tsearch input:focus { outline: none; border-color: #5865f2; }
+  .tsearch input { background: var(--bg); border: 1px solid var(--border); color: #c9c7c5; border-radius: 8px;
+                   padding: 9px 12px; font-size: 14px; width: 100%; font-family: inherit; }
+  .tsearch input:focus { outline: none; border-color: var(--accent); }
   .fchips { display: flex; flex-wrap: wrap; gap: 6px; }
-  .fchip { background: #17171a; border: 1px solid rgba(255,255,255,.13); border-radius: 999px; padding: 3px 10px;
+  .fchip { background: var(--bg-weak); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
            font-size: 12.5px; cursor: pointer; font-family: inherit; }
   .fchip.off { opacity: .35; text-decoration: line-through; }
   .copybtn { background: #232327; border: 0; border-radius: 6px; color: #c9c7c5; cursor: pointer;
-             font-size: 12px; padding: 3px 8px; vertical-align: middle; margin-left: 6px; }
+             font-size: 12px; padding: 3px 8px; vertical-align: middle; margin-left: 6px; font-family: inherit; }
   .copybtn:hover { background: #2a2a2f; }
-  .subline { color: #8a888c; font-size: 14px; margin-top: 6px; }
-  .playerwrap { position: sticky; top: 0; z-index: 5; background: #17171a; padding: 12px 0 8px;
-                margin: 18px 0 6px; border-bottom: 1px solid rgba(255,255,255,.13); }
+  .subline { color: var(--text-weak); font-size: 14px; margin-top: 6px; }
+  .playerwrap { position: sticky; top: 49px; z-index: 5; background: var(--bg-weak); padding: 12px 0 8px;
+                margin: 14px 0 6px; border-bottom: 1px solid var(--border); }
   .playerwrap audio { width: 100%; }
   .pctl { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 6px;
-          font-size: 12.5px; color: #8a888c; }
+          font-size: 12.5px; color: var(--text-weak); }
   .speed { display: inline-flex; gap: 4px; }
-  .speed button { background: #101012; border: 1px solid rgba(255,255,255,.13); color: #b6b4b2; border-radius: 6px;
-                  padding: 2px 9px; font-size: 12px; cursor: pointer; font-family: inherit; }
-  .speed button.on { background: #5865f2; color: #fff; border-color: #5865f2; }
+  .speed button { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px;
+                  padding: 2px 9px; font-size: 12px; cursor: pointer; font-family: var(--mono); }
+  .speed button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
   .follow { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
   /* linha do tempo: capítulos (blocos) + ticks (notas/entra-sai) + eixo + legenda */
   .tl2 { margin: 6px 0 10px; }
@@ -234,123 +291,144 @@ const SHELL_CSS = `
   .tl-seg.s0 { background: rgba(88,101,242,.28); }
   .tl-seg.s1 { background: rgba(88,101,242,.16); }
   .tl-seg:hover { background: rgba(88,101,242,.45); }
-  .tl-seg span { font-size: 10px; color: #c9cdfb; font-family: ui-monospace, monospace;
+  .tl-seg span { font-size: 10px; color: #c9cdfb; font-family: var(--mono);
                  width: 100%; text-align: center; overflow: hidden; }
   .tl-chlist { list-style: none; margin-top: 12px; display: grid;
                grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 4px 22px; }
   .tl-chlist a { display: flex; align-items: baseline; gap: 8px; text-decoration: none;
-                 color: #c9c7c5; font-size: 13px; line-height: 1.5; padding: 2px 4px; border-radius: 4px; }
-  .tl-chlist a:hover { background: rgba(88,101,242,.12); color: #f1eeec; }
-  .tl-chlist b { color: #7b90f7; font-weight: 600; font-size: 11px; }
-  .tl-chlist time { color: #8a888c; font-family: ui-monospace, monospace; font-size: 11.5px; flex-shrink: 0; }
+                 color: #c9c7c5; font-size: 13.5px; line-height: 1.5; padding: 2px 4px; border-radius: 4px; }
+  .tl-chlist a:hover { background: var(--accent-soft); color: var(--text-strong); }
+  .tl-chlist b { color: var(--c0); font-weight: 600; font-size: 11px; font-family: var(--mono); }
+  .tl-chlist time { color: var(--text-weak); font-size: 11.5px; flex-shrink: 0; }
   .tl-chlist span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tl-ticks { position: relative; height: 14px; margin-top: 3px; }
   .tl-tk { position: absolute; top: 1px; width: 4px; height: 12px; border-radius: 2px;
            transform: translateX(-50%); }
-  .tl-tk.tnote { background: #f0b232; width: 5px; }
-  .tl-tk.join { background: #3fbf7a; opacity: .75; }
-  .tl-tk.leave { background: #6d7178; opacity: .75; }
+  .tl-tk.tnote { background: var(--warn); width: 5px; }
+  .tl-tk.join { background: var(--ok); opacity: .75; }
+  .tl-tk.leave { background: var(--text-dim); opacity: .75; }
   .tl-tk:hover { transform: translateX(-50%) scaleY(1.3); }
-  .tl-ax { display: flex; justify-content: space-between; font-size: 11px; color: #6d7178;
-           font-family: ui-monospace, monospace; border-top: 1px solid rgba(255,255,255,.13);
+  .tl-ax { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim);
+           font-family: var(--mono); border-top: 1px solid var(--border);
            padding-top: 4px; margin-top: 4px; }
-  .tl-lg { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 11.5px; color: #8a888c;
+  .tl-lg { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 11.5px; color: var(--text-weak);
            margin-top: 6px; align-items: center; }
   .tl-lg i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px;
              vertical-align: -1px; }
   .tl-lg .lg-ch { background: rgba(88,101,242,.55); }
-  .tl-lg .lg-note { background: #f0b232; }
-  .tl-lg .lg-join { background: #3fbf7a; }
-  .tl-lg .lg-leave { background: #6d7178; }
-  .tl-lg .lg-hint { margin-left: auto; color: #6d7178; }
-  .evlist summary { cursor: pointer; font-size: 13px; color: #8a888c; margin: 6px 0; }
-  .minutes .lead { font-size: 15.5px; line-height: 1.55; color: #f1eeec; }
-  /* índice de gravações */
-  .isearch { display: flex; gap: 8px; margin: 14px 0 4px; }
-  .isearch input { flex: 1; background: #101012; border: 1px solid rgba(255,255,255,.13); color: #c9c7c5;
-                   border-radius: 8px; padding: 10px 12px; font-size: 14px; }
-  .isearch input:focus { outline: none; border-color: #5865f2; }
+  .tl-lg .lg-note { background: var(--warn); }
+  .tl-lg .lg-join { background: var(--ok); }
+  .tl-lg .lg-leave { background: var(--text-dim); }
+  .tl-lg .lg-hint { margin-left: auto; color: var(--text-dim); }
+  .evlist summary { cursor: pointer; font-size: 13px; color: var(--text-weak); margin: 6px 0; }
+  .minutes .lead { font-size: 16px; line-height: 1.6; color: var(--text-strong); }
+  /* índice de gravações: buscar primeiro, varrer depois */
+  .isearch { position: sticky; top: 0; z-index: 7; display: flex; gap: 8px;
+             background: var(--bg-weak); padding: 12px 0 10px; margin: 10px 0 4px; }
+  .isearch input { flex: 1; background: var(--bg); border: 1px solid var(--border); color: #c9c7c5;
+                   border-radius: 8px; padding: 10px 12px; font-size: 14px; font-family: inherit; min-width: 0; }
+  .isearch input:focus { outline: none; border-color: var(--accent); }
   .isearch .btn { flex-direction: row; align-items: center; padding: 10px 16px; }
-  .rlist { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
-  .rcard { background: #101012; border: 1px solid rgba(255,255,255,.13); border-radius: 10px; }
-  .rcard:hover { border-color: #5865f2; }
+  .dayh { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim);
+          margin: 16px 0 2px; }
+  .rlist { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .rcard { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; }
+  .rcard:hover { border-color: var(--accent); }
   .rcard .rlink { display: block; padding: 12px 14px; text-decoration: none; color: #c9c7c5; }
   .rcard .rrow1 { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
-  .rcard .rrow2 { color: #8a888c; font-size: 13px; margin-top: 4px; }
-  .rstats { margin-top: 14px; font-size: 13.5px; color: #8a888c; }
-  .rstats strong { color: #f1eeec; }
-  .rsorts { margin-top: 6px; font-size: 12.5px; color: #6d7178; }
-  .rsorts a { color: #00a8fc; text-decoration: none; }
+  .rcard .rrow2 { color: var(--text-weak); font-size: 13px; margin-top: 4px; }
+  .rstats { margin-top: 14px; font-size: 13.5px; color: var(--text-weak); }
+  .rstats strong { color: var(--text-strong); }
+  .rsorts { margin-top: 6px; font-size: 12.5px; color: var(--text-dim); }
+  .rsorts a { color: var(--link); text-decoration: none; }
   .rsorts a:hover { text-decoration: underline; }
-  .rsorts .sorton { color: #f1eeec; font-weight: 600; }
+  .rsorts .sorton { color: var(--text-strong); font-weight: 600; }
   .ractions { display: flex; gap: 8px; padding: 0 14px 10px; }
   .ractions form { margin: 0; }
-  .rbtn { background: none; border: 1px solid rgba(255,255,255,.22); color: #8a888c; border-radius: 7px;
-          padding: 4px 10px; font-size: 12px; cursor: pointer; }
-  .rbtn:hover { border-color: #f1eeec; color: #f1eeec; }
-  .rbtn.danger { border-color: rgba(218,55,60,.5); color: #da373c; }
-  .rbtn.danger:hover { background: #da373c; border-color: #da373c; color: #fff; }
-  .wb { font-size: 11.5px; background: #17171a; border-radius: 999px; padding: 2px 9px; color: #8a888c; }
-  .wb.ok { color: #3dbf7a; } .wb.warn { color: #f0b232; } .wb.live { color: #fff; background: #da373c; }
+  .rbtn { background: none; border: 1px solid var(--border-strong); color: var(--text-weak); border-radius: 7px;
+          padding: 4px 10px; font-size: 12px; cursor: pointer; font-family: inherit; }
+  .rbtn:hover { border-color: var(--text-strong); color: var(--text-strong); }
+  .rbtn.danger { border-color: rgba(218,55,60,.5); color: var(--danger); }
+  .rbtn.danger:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .wb { font-size: 11.5px; background: var(--bg-weak); border-radius: 999px; padding: 2px 9px; color: var(--text-weak); }
+  .wb.ok { color: var(--ok); } .wb.warn { color: var(--warn); } .wb.live { color: #fff; background: var(--live); }
   .hits { list-style: none; display: flex; flex-direction: column; gap: 10px; font-size: 14px; margin-top: 8px; }
-  .hits a { color: #00a8fc; text-decoration: none; }
+  .hits a { color: var(--link); text-decoration: none; }
   .hits a:hover { text-decoration: underline; }
-  .transcript time { color: #8a888c; font-family: ui-monospace, monospace; font-size: 12px; margin-right: 6px; }
-  .tstate { font-size: 14px; color: #8a888c; }
-  details.tech { margin-top: 6px; font-size: 12px; color: #6d7178; }
+  .tstate { font-size: 14px; color: var(--text-weak); }
+  details.tech { margin-top: 6px; font-size: 12px; color: var(--text-dim); }
   details.tech summary { cursor: pointer; }
-  details.tech code { display: block; margin-top: 6px; padding: 8px 10px; background: #101012; border: 1px solid rgba(255,255,255,.1);
-                      border-radius: 6px; overflow-wrap: anywhere; }
+  details.tech code { display: block; margin-top: 6px; padding: 8px 10px; background: var(--bg);
+                      border: 1px solid rgba(255,255,255,.1); border-radius: 6px; overflow-wrap: anywhere; }
   .tdl { display: flex; gap: 10px; margin-top: 10px; }
-  .tdl a { color: #00a8fc; font-size: 13px; text-decoration: none; }
+  .tdl a { color: var(--link); font-size: 13px; text-decoration: none; }
   .tdl a:hover { text-decoration: underline; }
   .notes { list-style: none; font-size: 14px; display: flex; flex-direction: column; gap: 4px; }
-  .notes time { color: #8a888c; font-family: ui-monospace, monospace; margin-right: 8px; }
-  .minutes { background: #101012; border: 1px solid rgba(255,255,255,.1); border-radius: 8px; padding: 16px 18px; font-size: 14.5px; line-height: 1.5; }
-  .minutes h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #8a888c; margin: 16px 0 8px; }
+  .notes time { color: var(--text-weak); margin-right: 8px; }
+  .minutes { background: var(--bg); border: 1px solid rgba(255,255,255,.1); border-radius: 8px; padding: 16px 18px;
+             font-size: 14.5px; line-height: 1.55; }
+  .minutes h3 { font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-weak);
+                margin: 16px 0 8px; font-weight: 600; }
   .minutes h3:first-child { margin-top: 0; }
   .minutes ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 5px; }
   .minutes .action { display: flex; gap: 8px; align-items: baseline; }
-  .minutes .meta2 { color: #8a888c; font-size: 12.5px; }
-  .minutes time { color: #8a888c; font-family: ui-monospace, monospace; margin-right: 6px; }
-  .minutes .who { color: #f1eeec; font-weight: 600; margin: 10px 0 4px; }
-  .ts { color: #00a8fc; font-family: ui-monospace, monospace; font-size: 12px; margin-right: 8px;
-        text-decoration: none; cursor: pointer; }
+  .minutes .meta2 { color: var(--text-weak); font-size: 12.5px; }
+  .minutes time { color: var(--text-weak); margin-right: 6px; }
+  .minutes .who { color: var(--text-strong); font-weight: 600; margin: 10px 0 4px; }
+  .ts { color: var(--link); font-size: 12px; margin-right: 8px; text-decoration: none; cursor: pointer; }
   .ts:hover { text-decoration: underline; }
   .player { margin: 14px 0 4px; }
   .player audio { width: 100%; }
-  .player .hint { font-size: 12.5px; color: #8a888c; margin-top: 4px; }
-  form.delete { margin-top: 26px; border-top: 1px solid rgba(255,255,255,.13); padding-top: 16px; }
-  button.danger { background: none; border: 1px solid #da373c; color: #da373c; padding: 8px 14px;
-                  border-radius: 8px; font-size: 14px; cursor: pointer; }
-  button.danger:hover { background: #da373c; color: #fff; }
-  .topbar { max-width: 640px; width: 100%; display: flex; justify-content: space-between; align-items: center;
-            gap: 8px; margin-bottom: 16px; font-size: 13px; color: #8a888c; }
-  .topbar .brand { display: inline-flex; align-items: center; gap: 7px; font-weight: 800; font-size: 15px;
-                   color: #f1eeec; text-decoration: none; }
-  .topbar .topnav-r { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
-  .topbar .tl { color: #b6b4b2; text-decoration: none; }
-  .topbar .tl:hover { color: #f1eeec; }
+  .player .hint { font-size: 12.5px; color: var(--text-weak); margin-top: 4px; }
+  /* zona de gestão: separada, com a consequência dita em 1 linha antes do clique */
+  .dangerzone { margin-top: 30px; border-top: 1px solid var(--border); padding-top: 18px;
+                display: flex; flex-direction: column; gap: 12px; }
+  .dangerzone form { margin: 0; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .dangerzone .why { color: var(--text-dim); font-size: 12.5px; }
+  button.danger { background: none; border: 1px solid var(--danger); color: var(--danger); padding: 8px 14px;
+                  border-radius: 8px; font-size: 13.5px; cursor: pointer; font-family: inherit; }
+  button.danger:hover { background: var(--danger); color: #fff; }
+  button.softdanger { background: none; border: 1px solid var(--border-strong); color: var(--text); padding: 8px 14px;
+                      border-radius: 8px; font-size: 13.5px; cursor: pointer; font-family: inherit; }
+  button.softdanger:hover { border-color: var(--text-strong); color: var(--text-strong); }
+  /* chrome do app: marca à esquerda, nav de ação no meio, identidade+saída à direita */
+  .topbar { max-width: var(--col); width: 100%; display: flex; align-items: center; gap: 18px;
+            margin-bottom: 14px; font-size: 13.5px; color: var(--text-weak); flex-wrap: wrap; }
+  .topbar .brand { display: inline-flex; align-items: baseline; font-weight: 800; font-size: 15.5px;
+                   color: var(--text-strong); text-decoration: none; letter-spacing: -.02em; }
+  .topbar .brand .caret { color: var(--accent); font-family: var(--mono); font-weight: 400; }
+  .topbar .apptag { font-family: var(--mono); font-size: 10.5px; color: var(--text-dim);
+                    border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  .topbar nav { display: inline-flex; gap: 16px; }
+  .topbar nav a { color: var(--text-weak); text-decoration: none; padding: 3px 1px;
+                  border-bottom: 2px solid transparent; }
+  .topbar nav a:hover { color: var(--text-strong); }
+  .topbar nav a[aria-current="page"] { color: var(--text-strong); border-bottom-color: var(--accent); }
+  .topnav-r { margin-left: auto; display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap;
+              justify-content: flex-end; }
+  .topbar .tl { color: var(--text); text-decoration: none; }
+  .topbar .tl:hover { color: var(--text-strong); }
   .topbar .user { display: inline-flex; align-items: center; gap: 6px; color: #c9c7c5; }
   .topbar img { width: 22px; height: 22px; border-radius: 50%; }
-  .langtoggle a { color: #8a888c; text-decoration: none; padding: 2px 4px; }
-  .langtoggle a.on { color: #f1eeec; font-weight: 700; }
+  .langtoggle a { color: var(--text-weak); text-decoration: none; padding: 2px 4px; }
+  .langtoggle a.on { color: var(--text-strong); font-weight: 700; }
   .langtoggle a:hover { color: #c9c7c5; }
   .langtoggle span { opacity: .5; margin: 0 2px; }
-  .topfoot { max-width: 640px; width: 100%; margin-top: 30px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.13);
-             font-size: 13px; color: #8a888c; text-align: center; }
-  .topfoot a { color: #b6b4b2; text-decoration: none; }
-  .topfoot a:hover { color: #f1eeec; }
-  .note { background: #101012; border: 1px solid rgba(255,255,255,.1); border-left: 3px solid #f0b232; padding: 10px 14px; border-radius: 6px;
-          font-size: 14px; margin-top: 14px; }
-  footer { margin-top: 26px; font-size: 13px; color: #8a888c; }
+  .topfoot { max-width: var(--col); width: 100%; margin-top: 30px; padding-top: 16px;
+             border-top: 1px solid var(--border); font-size: 13px; color: var(--text-weak); text-align: center; }
+  .topfoot a { color: var(--text); text-decoration: none; }
+  .topfoot a:hover { color: var(--text-strong); }
+  .note { background: var(--bg); border: 1px solid rgba(255,255,255,.1); border-left: 3px solid var(--warn);
+          padding: 10px 14px; border-radius: 6px; font-size: 14px; margin-top: 14px; }
+  footer { margin-top: 26px; font-size: 13px; color: var(--text-weak); }
   /* nada de imagem/palavra longa forçando scroll horizontal no celular */
   img { max-width: 100%; height: auto; }
   .transcript p, .minutes, .note, .muted, .events li, h1 { overflow-wrap: anywhere; }
   @media (max-width: 480px) {
-    body { padding: 20px 10px; }
-    .card { padding: 18px; }
+    body { padding: 16px 10px; }
+    .card { padding: 16px 12px; }
     h1 { font-size: 19px; }
+    .topbar { gap: 10px 14px; }
     .downloads .btn { flex: 1 1 auto; text-align: center; align-items: center; }
     /* leitura longa no celular: um pouco mais de corpo e respiro */
     .transcript { font-size: 15px; padding: 12px 10px; }
@@ -431,25 +509,36 @@ function tsLink(ms: number, seekable = true): string {
 function shell(
   title: string,
   body: string,
-  opts: { user?: WebUser; lang?: Locale; refreshSeconds?: number; noindex?: boolean } = {},
+  opts: { user?: WebUser; lang?: Locale; refreshSeconds?: number; active?: 'rec' | 'ai'; demo?: boolean } = {},
 ): string {
   const lang = opts.lang === 'pt' ? 'pt' : 'en';
+  const pt = lang === 'pt';
   // Toggle de idioma (fica salvo via cookie); links relativos preservam a rota atual.
   const langToggle = `<div class="langtoggle"><a href="?lang=en"${lang === 'en' ? ' class="on"' : ''}>EN</a><span>·</span><a href="?lang=pt"${lang === 'pt' ? ' class="on"' : ''}>PT</a></div>`;
-  const repoLabel = config.repoPublic ? 'GitHub' : 'npm';
-  // Cabeçalho de marca: dá contexto + saída (home) a TODA página do shell (demo, conectar-ia, gravações, erro).
-  const userbar = `<header class="topbar">
-    <a class="brand" href="/">🎙️ Kassinão</a>
-    <span class="topnav-r">
-      ${opts.user ? `<a class="tl" href="/gravacoes">${lang === 'pt' ? '📼 Gravações' : '📼 Recordings'}</a>` : ''}
-      ${opts.user && config.mcpEnabled ? `<a class="tl" href="/conectar-ia">${lang === 'pt' ? '🔌 Conectar IA' : '🔌 Connect AI'}</a>` : ''}
-      <a class="tl" href="/demo">Demo</a>
-      <a class="tl" href="${ghHref()}">${repoLabel}</a>
-      ${langToggle}
-      ${opts.user ? `<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</span>` : ''}
-    </span>
-  </header>`;
-  const foot = `<footer class="topfoot"><a href="/">🎙️ Kassinão</a> · AGPL-3.0 · open-source · <a href="${ghHref()}">${repoLabel}</a></footer>`;
+  // Dois chromes, um shell. DEMO (público) é vitrine: a marca volta pra landing
+  // e o convite é "Entrar". APP (logado) é cockpit: a marca leva pra /app, a nav
+  // é só de ação (zero link de marketing — GitHub/demo vivem na landing) e a
+  // única saída é "Sair". Deslogado em página do app: a ponte é o login.
+  const brand = opts.demo
+    ? `<a class="brand" href="/">kassinao<span class="caret">▌</span></a>`
+    : `<a class="brand" href="/app">kassinao<span class="caret">▌</span></a><span class="apptag">app</span>`;
+  const nav =
+    !opts.demo && opts.user
+      ? `<nav><a href="/app"${opts.active === 'rec' ? ' aria-current="page"' : ''}>${pt ? 'Gravações' : 'Recordings'}</a>${
+          config.mcpEnabled
+            ? `<a href="/app/conectar-ia"${opts.active === 'ai' ? ' aria-current="page"' : ''}>${pt ? 'Conectar IA' : 'Connect AI'}</a>`
+            : ''
+        }</nav>`
+      : '';
+  const signIn = `<a class="tl" href="/auth/login?next=%2Fapp">${pt ? 'Entrar' : 'Sign in'}</a>`;
+  const right =
+    !opts.demo && opts.user
+      ? `${langToggle}<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</span><a class="tl" href="/auth/logout">${pt ? 'Sair' : 'Sign out'}</a>`
+      : `${langToggle}${signIn}`;
+  const userbar = `<header class="topbar">${brand}${nav}<span class="topnav-r">${right}</span></header>`;
+  const foot = opts.demo
+    ? `<footer class="topfoot"><a href="/">kassinao</a> · AGPL-3.0 · open-source</footer>`
+    : `<footer class="topfoot">kassinao · AGPL-3.0</footer>`;
   // Auto-refresh (enquanto transcrição/ata processam) via JS em vez de <meta refresh>,
   // pra NÃO recarregar e cortar o áudio enquanto a pessoa está ouvindo o player.
   // Preserva a posição de leitura (scrollY) entre os reloads.
@@ -463,10 +552,10 @@ setTimeout(function(){var p=document.getElementById('kplayer');if(p&&!p.paused)r
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-${opts.noindex ? '<meta name="robots" content="noindex">' : ''}
+${opts.demo ? '' : '<meta name="robots" content="noindex">'}
 <title>${esc(title)} — Kassinão</title>
 <link rel="icon" href="${FAVICON}">
-<style>${SHELL_CSS}</style>
+<style>${APP_CSS}</style>
 </head>
 <body>
 ${userbar}
@@ -548,7 +637,7 @@ export function recordingPage(
     player = `<div class="note" style="border-left-color:#6d7178;margin-top:14px">${p(l, 'audioExpired')}</div>`;
   } else if (!live && meta.participants.length > 0) {
     player = `<div class="playerwrap">
-         <audio id="kplayer" preload="none" controls src="/rec/${meta.id}/audio"></audio>
+         <audio id="kplayer" preload="none" controls src="/app/rec/${meta.id}/audio"></audio>
          <div class="pctl">
            <span class="speed">
              <button type="button" data-r="1" class="on">1×</button>
@@ -580,25 +669,39 @@ export function recordingPage(
   // ---------- linha do tempo: barra visual clicável + lista dobrável ----------
   const events = renderTimeline(meta, opts.minutes, l, durMs, live, seekable);
 
-  // ---------- exportar (uso raro → rebaixado pra baixo, estilo secundário) ----------
+  // ---------- exportar (uso raro → dobrado num details, fora do caminho da leitura) ----------
   const downloads =
     !demo && !audioGone && meta.participants.length > 0
-      ? `<h2 id="exportar">${p(l, 'downloads')}</h2>
+      ? `<details class="dlfold" id="exportar">
+        <summary>⬇️ ${p(l, 'dlFold')}<small>MP3 · FLAC · mix · Audacity</small></summary>
         <div class="downloads">
-          <a class="btn secondary" href="/rec/${meta.id}/download/mp3">🎵 MP3 <small>${p(l, 'mp3sub')}</small></a>
-          <a class="btn secondary" href="/rec/${meta.id}/download/flac">💎 FLAC <small>${p(l, 'flacsub')}</small></a>
-          <a class="btn secondary" href="/rec/${meta.id}/download/mix">🎧 Mix <small>${p(l, 'mixsub')}</small></a>
-          <a class="btn secondary" href="/rec/${meta.id}/download/audacity">🎚️ Audacity <small>${p(l, 'audacitysub')}</small></a>
+          <a class="btn secondary" href="/app/rec/${meta.id}/download/mp3">🎵 MP3 <small>${p(l, 'mp3sub')}</small></a>
+          <a class="btn secondary" href="/app/rec/${meta.id}/download/flac">💎 FLAC <small>${p(l, 'flacsub')}</small></a>
+          <a class="btn secondary" href="/app/rec/${meta.id}/download/mix">🎧 Mix <small>${p(l, 'mixsub')}</small></a>
+          <a class="btn secondary" href="/app/rec/${meta.id}/download/audacity">🎚️ Audacity <small>${p(l, 'audacitysub')}</small></a>
         </div>
-        <p class="muted" style="margin-top:10px">${p(l, 'cooking')}</p>`
+        <p class="muted" style="margin-top:10px">${p(l, 'cooking')}</p>
+      </details>`
       : '';
 
-  const deleteForm =
-    opts.canDelete && !live
-      ? `<form class="delete" method="post" action="/rec/${meta.id}/delete"
-         onsubmit="return confirm('${p(l, 'delconfirm')}')">
-         <button class="danger" type="submit">${p(l, 'del')}</button>
-       </form>`
+  // ---------- gestão: zona separada, consequência dita ANTES do clique; o
+  // servidor revalida permissão/estado no POST (o confirm() não é a autoridade)
+  const manage =
+    opts.canDelete && !live && !demo
+      ? `<div class="dangerzone">
+        ${
+          !audioGone
+            ? `<form method="post" action="/app/rec/${meta.id}/liberar-audio"
+                 onsubmit="return confirm('${p(l, 'ixFreeSpaceConfirm')}')">
+                 <button class="softdanger" type="submit">${p(l, 'ixFreeSpace')}</button><span class="why">${p(l, 'freeWhy')}</span>
+               </form>`
+            : ''
+        }
+        <form method="post" action="/app/rec/${meta.id}/delete"
+          onsubmit="return confirm('${p(l, 'delconfirm')}')">
+          <button class="danger" type="submit">${p(l, 'del')}</button><span class="why">${p(l, 'delWhy')}</span>
+        </form>
+      </div>`
       : '';
 
   // rodapé: a config ATUAL decide a mensagem de expiração (ilimitada = "até alguém apagar")
@@ -629,29 +732,43 @@ export function recordingPage(
     : '';
   const title = `🔊 #${esc(meta.voiceChannelName)}`;
 
+  // barra de pulos: 1 clique pra qualquer seção que EXISTE (sticky, rola na
+  // horizontal no celular); só aparece quando há pelo menos 2 destinos
+  const jumps: string[] = [];
+  if (minutes) jumps.push(`<a href="#ata">📋 ${p(l, 'minutes')}</a>`);
+  if (transcription) jumps.push(`<a href="#transcricao">💬 ${p(l, 'transcript')}</a>`);
+  if (events) jumps.push(`<a href="#timeline">⏱️ ${p(l, 'timeline')}</a>`);
+  if (notes) jumps.push(`<a href="#notas">📝 ${p(l, 'notes')}</a>`);
+  if (downloads) jumps.push(`<a href="#exportar">⬇️ ${p(l, 'dlShort')}</a>`);
+  const jumpnav = jumps.length >= 2 ? `<nav class="jumpnav">${jumps.join('')}</nav>` : '';
+
+  // ordem de leitura: identidade → participantes → player (dock) → ATA (herói)
+  // → transcrição → linha do tempo → notas → exportar (dobrado) → gestão
   return shell(
     demo ? `#${meta.voiceChannelName} (demo)` : `#${meta.voiceChannelName} — ${p(l, 'recording')}`,
     `<h1>${title} ${badge}</h1>
      ${subline}
      ${demoNote}
      ${liveNote}
+     ${jumpnav}
      <h2>${p(l, 'participants')}</h2>
      ${people}
      ${presentAlso}
      ${player}
      ${minutes}
      ${transcription}
-     ${notes}
      ${events}
+     ${notes}
      ${downloads}
-     ${deleteForm}
+     ${manage}
      ${pageFoot}
      ${demoCta}
      ${RECORDING_SCRIPT}`,
     {
       user: opts.user,
       lang: l,
-      noindex: !demo, // gravações reais (/rec/:id) fora de busca; a demo pública é indexável
+      active: 'rec',
+      demo,
       // ao vivo OU transcrição/ata em andamento: a página se atualiza sozinha
       refreshSeconds:
         live ||
@@ -877,7 +994,7 @@ function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined,
   if (parts.length === 0) return '';
 
   // Download .md vai pela rota protegida /rec/:id — no modo demo (público) omitimos.
-  const dl = seekable ? `<div class="tdl"><a href="/rec/${meta.id}/ata.md">${p(l, 'minutesDownload')}</a></div>` : '';
+  const dl = seekable ? `<div class="tdl"><a href="/app/rec/${meta.id}/ata.md">${p(l, 'minutesDownload')}</a></div>` : '';
   return `${title}<div class="minutes">${parts.join('')}</div>${dl}`;
 }
 
@@ -964,8 +1081,8 @@ function renderTranscription(
   // Downloads .md/.txt vão pelas rotas protegidas /rec/:id — no modo demo (público) omitimos.
   const dl = seekable
     ? `<div class="tdl">
-      <a href="/rec/${meta.id}/transcricao.md">${p(l, 'transcriptDownload')}</a>
-      <a href="/rec/${meta.id}/transcricao.txt">${p(l, 'transcriptDownloadTxt')}</a>
+      <a href="/app/rec/${meta.id}/transcricao.md">${p(l, 'transcriptDownload')}</a>
+      <a href="/app/rec/${meta.id}/transcricao.txt">${p(l, 'transcriptDownloadTxt')}</a>
     </div>`
     : '';
   return `${title}${note}${search}<div class="transcript">${blocks.join('')}</div>${dl}`;
@@ -1048,10 +1165,14 @@ export function recordingsIndexPage(
   const sort: RecordingsSort = opts.sort ?? 'recent';
   const metas = items.map((i) => i.meta);
 
-  const searchForm = `<form class="isearch" method="get" action="/gravacoes">
-      <input name="q" type="search" value="${esc(q)}" placeholder="${pt ? 'Buscar em transcrições, atas e notas…' : 'Search transcripts, minutes and notes…'}" autocomplete="off">
+  // busca primeiro (sticky); "/" foca o campo de qualquer lugar da página
+  const searchForm = `<form class="isearch" method="get" action="/app">
+      <input id="kq" name="q" type="search" value="${esc(q)}" placeholder="${pt ? 'Buscar em transcrições, atas e notas…  ( / )' : 'Search transcripts, minutes and notes…  ( / )'}" autocomplete="off">
       <button class="btn" type="submit">🔎 ${pt ? 'Buscar' : 'Search'}</button>
-    </form>`;
+    </form>
+    <script>document.addEventListener('keydown',function(e){
+      if(e.key==='/'&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)){e.preventDefault();var i=document.getElementById('kq');if(i)i.focus();}
+    });</script>`;
 
   let hitsHtml = '';
   if (q) {
@@ -1063,7 +1184,7 @@ export function recordingsIndexPage(
            <ul class="hits">${hits
              .map((h) => {
                const link =
-                 h.atMs !== undefined ? `/rec/${h.metaId}#t=${Math.floor(h.atMs / 1000)}` : `/rec/${h.metaId}`;
+                 h.atMs !== undefined ? `/app/rec/${h.metaId}#t=${Math.floor(h.atMs / 1000)}` : `/app/rec/${h.metaId}`;
                const icon = h.kind === 'minutes' ? '📋' : h.kind === 'note' ? '📝' : '💬';
                const when = h.atMs !== undefined ? ` <a class="ts" href="${link}">${msToClock(h.atMs)}</a>` : '';
                return `<li>${icon} <a href="${link}"><strong>#${esc(h.channelName)}</strong></a> · ${datetime(h.startedAt, l)}${when}<br>
@@ -1087,7 +1208,7 @@ export function recordingsIndexPage(
   const sortLink = (s: RecordingsSort, label: string) =>
     s === sort
       ? `<span class="sorton">${label}</span>`
-      : `<a href="/gravacoes?sort=${s}${q ? `&q=${encodeURIComponent(q)}` : ''}">${label}</a>`;
+      : `<a href="/app?sort=${s}${q ? `&q=${encodeURIComponent(q)}` : ''}">${label}</a>`;
   const sorts =
     items.length > 1
       ? `<div class="rsorts">${p(l, 'ixSort')} ${sortLink('recent', p(l, 'ixSortRecent'))} · ${sortLink('oldest', p(l, 'ixSortOldest'))}${
@@ -1105,6 +1226,18 @@ export function recordingsIndexPage(
           .join('')}</div>`
       : '';
 
+  // agrupamento por dia (no fuso do servidor) — vira subtítulo leve entre os
+  // cards; em "maiores" a ordem não é cronológica, então a lista fica plana
+  const dayLabel = (ms: number) =>
+    esc(
+      new Date(ms).toLocaleDateString(pt ? 'pt-BR' : 'en-US', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        timeZone: config.timezone,
+      }),
+    );
+  let lastDay = '';
   const cards =
     items.length === 0
       ? `<p class="muted" style="margin-top:16px">${
@@ -1114,6 +1247,14 @@ export function recordingsIndexPage(
         }</p>`
       : `<div class="rlist">${items
           .map(({ meta: m, canDelete, audioBytes }) => {
+            let dayh = '';
+            if (sort !== 'largest') {
+              const day = dayLabel(m.startedAt);
+              if (day !== lastDay) {
+                lastDay = day;
+                dayh = `<div class="dayh">${day}</div>`;
+              }
+            }
             const live = m.status === 'recording';
             const dur = m.endedAt ? formatDuration(m.endedAt - m.startedAt) : p(l, 'ixLive');
             const who = m.startedBy ? `👤 ${esc(m.startedBy.name)}` : `🤖 ${p(l, 'ixByAuto')}`;
@@ -1131,16 +1272,16 @@ export function recordingsIndexPage(
                 ? `<div class="ractions">
                     ${
                       !m.audioDeleted
-                        ? `<form method="post" action="/rec/${m.id}/liberar-audio?back=index" onsubmit="return confirm('${p(l, 'ixFreeSpaceConfirm')}')">
+                        ? `<form method="post" action="/app/rec/${m.id}/liberar-audio?back=index" onsubmit="return confirm('${p(l, 'ixFreeSpaceConfirm')}')">
                              <button type="submit" class="rbtn">${p(l, 'ixFreeSpace')}</button></form>`
                         : ''
                     }
-                    <form method="post" action="/rec/${m.id}/delete?back=index" onsubmit="return confirm('${p(l, 'delconfirm')}')">
+                    <form method="post" action="/app/rec/${m.id}/delete?back=index" onsubmit="return confirm('${p(l, 'delconfirm')}')">
                       <button type="submit" class="rbtn danger">${p(l, 'ixDelete')}</button></form>
                   </div>`
                 : '';
-            return `<div class="rcard" data-ch="${esc(m.voiceChannelName)}">
-              <a class="rlink" href="/rec/${m.id}">
+            return `${dayh}<div class="rcard" data-ch="${esc(m.voiceChannelName)}">
+              <a class="rlink" href="/app/rec/${m.id}">
                 <div class="rrow1"><strong>#${esc(m.voiceChannelName)}</strong> ${webBadge(m, l)}</div>
                 <div class="rrow2">${datetime(m.startedAt, l)} <span class="muted">(${relativeAge(m.startedAt, l)})</span> · ${dur} · ${who} · 🎙️ ${m.participants.length}${size}${notes}${freed}</div>
               </a>
@@ -1158,6 +1299,15 @@ export function recordingsIndexPage(
             document.querySelectorAll('.rcard').forEach(function(r){
               r.style.display = any && off[r.dataset.ch] ? 'none' : '';
             });
+            // cabeçalho de dia some junto quando o filtro esconde todos os cards do dia
+            document.querySelectorAll('.rlist .dayh').forEach(function(d){
+              var n = d.nextElementSibling, vis = false;
+              while (n && !n.classList.contains('dayh')) {
+                if (n.classList.contains('rcard') && n.style.display !== 'none') { vis = true; break; }
+                n = n.nextElementSibling;
+              }
+              d.style.display = vis ? '' : 'none';
+            });
           });
         });
         </script>`;
@@ -1165,7 +1315,11 @@ export function recordingsIndexPage(
   return shell(
     pt ? 'Minhas gravações' : 'My recordings',
     `<h1>📼 ${pt ? 'Minhas gravações' : 'My recordings'}</h1>
-     <p class="subline">${pt ? 'Tudo que você pode acessar, em todos os servidores.' : 'Everything you can access, across servers.'}</p>
+     <p class="subline">${
+       pt
+         ? `Você é <strong>${esc(opts.user.name)}</strong> · vendo tudo que você já pode acessar, em todos os servidores.`
+         : `You are <strong>${esc(opts.user.name)}</strong> · seeing everything you can access, across servers.`
+     }</p>
      ${searchForm}
      ${hitsHtml}
      ${flash}
@@ -1173,18 +1327,22 @@ export function recordingsIndexPage(
      ${sorts}
      ${chips}
      ${cards}`,
-    { user: opts.user, lang: l, noindex: true },
+    { user: opts.user, lang: l, active: 'rec' },
   );
 }
 
 export function messagePage(title: string, message: string, user?: WebUser, lang?: Locale): string {
-  // Páginas de mensagem/erro (404/403/etc.) não devem ser indexadas.
-  // Link de saída pra não virar beco sem saída.
-  const back = lang === 'pt' ? '← Início' : '← Home';
+  // Páginas de mensagem/erro (404/403/etc.) nunca são beco sem saída — e nunca
+  // jogam um usuário LOGADO de volta na landing: a casa dele é /app. Deslogado,
+  // a saída é a ponte de login (a única ponte público→app).
+  const pt = lang === 'pt';
+  const back = user
+    ? `<a class="btn" href="/app">${pt ? '← Minhas gravações' : '← My recordings'}</a>`
+    : `<a class="btn" href="/auth/login?next=%2Fapp">${pt ? 'Entrar com Discord' : 'Sign in with Discord'}</a>`;
   const body =
     `<h1>${esc(title)}</h1><p class="muted" style="margin-top:12px">${esc(message)}</p>` +
-    `<div class="downloads" style="margin-top:18px"><a class="btn" href="/">${back}</a></div>`;
-  return shell(title, body, { user, lang, noindex: true });
+    `<div class="downloads" style="margin-top:18px">${back}</div>`;
+  return shell(title, body, { user, lang });
 }
 
 const REPO_URL = 'https://github.com/resolvicomai/kassinao';
@@ -1201,550 +1359,9 @@ const FAVICON =
 // monoespaçado (.mono) fica reservado a timestamps, nomes de env var, comandos
 // e identificadores de licença — nunca em heading/parágrafo de venda. Os tokens
 // de cor (fundo, cartão, cores de falante .c0-.c7, badges) são os MESMOS do
-// SHELL_CSS/recordingPage() real: a "prova" da landing (.proof) reusa essas
+// APP_CSS/recordingPage() real: a "prova" da landing (.proof) reusa essas
 // classes literalmente, não é uma ilustração à parte. Self-contained (CSP: sem
 // fonte/CSS/JS/imagem externa); respeita prefers-reduced-motion.
-const LANDING_CSS = `
-  :root {
-    color-scheme: dark;
-    --bg: #101012;
-    --bg-weak: #17171a;
-    --bg-hover: #1e1e22;
-    --bg-strong: #f1eeec;
-    --bg-strong-hover: #dfdcda;
-    --text: #b6b4b2;
-    --text-weak: #78767a;
-    --text-strong: #f1eeec;
-    --text-inverted: #131316;
-    --border: rgba(255,255,255,.13);
-    --border-strong: rgba(255,255,255,.22);
-    --accent: #5865f2;
-    --accent-soft: rgba(88,101,242,.16);
-    --ok: #3fbf7a;
-    --warn: #e0b34c;
-    --link: #00a8fc;
-    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
-    /* paleta estável por falante — idêntica ao SHELL_CSS/recordingPage() real */
-    --c0: #7b90f7; --c1: #3dbf7a; --c2: #f0b232; --c3: #eb6ab5;
-    --c4: #29b0e8; --c5: #e8735a; --c6: #a58cf2; --c7: #4fd1c5;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  ::selection { background: var(--accent-soft); color: var(--text-strong); }
-  html { -webkit-text-size-adjust: 100%; }
-  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 16px;
-         line-height: 1.7; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
-  .mono { font-family: var(--mono); }
-  a { color: var(--text-strong); text-decoration: underline; text-underline-offset: 4px;
-      text-decoration-thickness: 1px; text-decoration-color: var(--border-strong); }
-  a:hover { text-decoration-color: var(--text-strong); }
-  strong { color: var(--text-strong); font-weight: 600; }
-  .container { max-width: 1020px; margin: 0 auto; border-left: 1px solid var(--border);
-               border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-  section { border-top: 1px solid var(--border); padding: 56px; }
-  @media (max-width: 1040px) { .container { border-left: 0; border-right: 0; } }
-  @media (max-width: 700px) { section { padding: 34px 20px; } body { font-size: 15px; } }
-
-  /* qualquer bloco de código/comando: rolagem própria, nunca estoura a viewport
-     nem a coluna de um grid (mata o bug clássico de <pre> forçando min-width). */
-  .codebox { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-weak);
-             overflow-x: auto; max-width: 100%; min-width: 0; }
-  .codebox pre { padding: 13px 14px; font-size: 13px; line-height: 1.8; font-family: var(--mono);
-                 white-space: pre; width: max-content; min-width: 100%; }
-  .codebox .pr { color: var(--text-weak); user-select: none; }
-
-  /* reveal sutil ao rolar — só quando JS está ativo (html.js): sem JS, tudo visível */
-  html.js .rv { opacity: 0; transform: translateY(14px); transition: opacity .55s ease, transform .55s ease; }
-  html.js .rv.in { opacity: 1; transform: none; }
-  @media (prefers-reduced-motion: reduce) { html.js .rv { opacity: 1; transform: none; transition: none; } }
-
-  /* ---------- topo ---------- */
-  .top { position: sticky; top: 0; z-index: 10; background: var(--bg);
-         border-bottom: 1px solid var(--border); }
-  .top-in { max-width: 1020px; margin: 0 auto; display: flex; align-items: center;
-            justify-content: space-between; gap: 10px; padding: 0 56px; height: 64px;
-            border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
-  @media (max-width: 1040px) { .top-in { border-left: 0; border-right: 0; } }
-  @media (max-width: 700px) { .top-in { padding: 0 20px; } }
-  .brand { display: inline-flex; align-items: baseline; gap: 2px; font-weight: 700;
-           color: var(--text-strong); text-decoration: none; font-size: 16px; letter-spacing: -.01em; }
-  /* único flourish de motion decorativo da página inteira */
-  .brand .cur { color: var(--accent); animation: blink 1.2s steps(1) infinite; }
-  @keyframes blink { 50% { opacity: 0; } }
-  @media (prefers-reduced-motion: reduce) { .brand .cur { animation: none; } }
-  .nav { display: flex; align-items: center; gap: 22px; font-size: 14px; min-width: 0; }
-  .nav a { color: var(--text); text-decoration: none; }
-  .nav a:hover { color: var(--text-strong); text-decoration: underline; text-underline-offset: 4px; }
-  .nav .lt a { color: var(--text-weak); padding: 0 2px; }
-  .nav .lt a.on { color: var(--text-strong); font-weight: 700; }
-  .nav .lt span { color: var(--text-weak); opacity: .5; }
-  .btnp, .nav a.btnp { display: inline-flex; align-items: center; gap: 10px; background: var(--bg-strong);
-          color: var(--text-inverted); text-decoration: none; font-weight: 600; font-size: 14px;
-          padding: 8px 14px 8px 16px; border-radius: 6px; white-space: nowrap; }
-  .btnp:hover, .nav a.btnp:hover { background: var(--bg-strong-hover); color: var(--text-inverted); text-decoration: none; }
-  /* ponte ÚNICA marketing→app: secundária (outline) — o CTA cheio é o self-host */
-  .btnp.app, .nav a.btnp.app { background: transparent; color: var(--text); border: 1px solid var(--border-strong); }
-  .btnp.app:hover, .nav a.btnp.app:hover { background: var(--bg-weak); color: var(--text-strong); border-color: var(--text-strong); }
-  @media (max-width: 700px) {
-    .nav .hidesm { display: none; }
-    /* no mobile o "self-host" da nav some (redundante: o herói já tem esse CTA);
-       fica só a ponte do app, evitando os dois botões estourarem a viewport */
-    .nav a.btnp.deploy { display: none; }
-    .top-in { height: auto; min-height: 56px; padding: 8px 20px; flex-wrap: wrap; }
-    .nav { gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
-    .btnp, .nav a.btnp { padding: 6px 10px; font-size: 13px; gap: 6px; }
-  }
-
-  /* ---------- herói (2 colunas: pitch + prova real do produto) ---------- */
-  .hero { position: relative; overflow: hidden; }
-  .hero::before { content: ''; position: absolute; inset: -40% -20% auto -20%; height: 90%;
-                  background: radial-gradient(ellipse at 30% 0%, rgba(88,101,242,.09), transparent 60%);
-                  pointer-events: none; }
-  .hgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 44px;
-           align-items: start; position: relative; }
-  @media (max-width: 760px) { .hgrid { grid-template-columns: minmax(0, 1fr); } }
-  .hgrid > * { min-width: 0; }
-  .hero h1 { color: var(--text-strong); font-size: 38px; line-height: 1.2; font-weight: 700;
-             letter-spacing: -.02em; }
-  @media (max-width: 700px) { .hero h1 { font-size: 27px; } }
-  .hero .sub { margin-top: 18px; font-size: 16.5px; line-height: 1.65; }
-  .hero-ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
-  .btn2 { display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
-          font-weight: 600; font-size: 15px; padding: 11px 18px; border-radius: 8px; }
-  .btn2.pri { background: var(--accent); color: #fff; }
-  .btn2.pri:hover { background: #4752c4; }
-  .btn2.sec { background: var(--bg-weak); color: var(--text-strong); border: 1px solid var(--border-strong); }
-  .btn2.sec:hover { background: var(--bg-hover); }
-
-  /* faixa de chips factuais abaixo do herói — texto simples, sem ícone */
-  .strip { display: flex; flex-wrap: wrap; gap: 8px 26px; margin-top: 36px; font-size: 13.5px;
-           color: var(--text-weak); }
-
-  /* ---------- prova: mockup real da página de gravação (recordingPage) ---------- */
-  .proof { display: block; text-decoration: none; border: 1px solid var(--border); border-radius: 10px;
-           background: var(--bg-weak); overflow: hidden; transition: border-color .15s ease; }
-  .proof:hover { border-color: var(--border-strong); }
-  .proof-head { display: flex; align-items: center; justify-content: space-between; gap: 10px;
-                padding: 14px 16px; border-bottom: 1px solid var(--border); }
-  .proof-chan { color: var(--text-strong); font-weight: 600; font-size: 14.5px; }
-  .proof-badge { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
-                 background: #23a55a; color: #fff; letter-spacing: .02em; }
-  .proof-body { padding: 14px 16px 18px; }
-  .proof-people { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
-  .proof-person { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px;
-                  color: var(--text); background: var(--bg); border: 1px solid var(--border);
-                  padding: 4px 10px 4px 8px; border-radius: 999px; }
-  .proof-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-  .proof-minutes { background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
-                   padding: 12px 14px; margin-bottom: 14px; }
-  .proof-minutes h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
-                      color: var(--text-weak); margin: 10px 0 4px; font-weight: 600; }
-  .proof-minutes h4:first-child { margin-top: 0; }
-  .proof-minutes p { font-size: 13px; line-height: 1.55; color: var(--text); }
-  .proof-transcript { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
-  .proof-transcript p { font-size: 13px; line-height: 1.5; color: var(--text); }
-  .proof-transcript .who { font-weight: 600; }
-  .proof-transcript .ts { color: var(--link); margin-right: 6px; font-size: 11.5px; }
-  .proof-tl { display: flex; gap: 3px; height: 20px; }
-  .proof-tl span { flex: 1; border-radius: 3px; background: rgba(88,101,242,.22); position: relative; overflow: hidden; }
-  .proof-tl span:nth-child(2) { background: rgba(88,101,242,.12); }
-  .proof-cap { padding: 12px 16px; font-size: 12.5px; color: var(--text-weak);
-               border-top: 1px solid var(--border); display: flex; justify-content: space-between;
-               gap: 10px; flex-wrap: wrap; }
-  .proof-cap b { color: var(--text-strong); font-weight: 600; }
-
-  /* ---------- pilares (h2 real, sem cosplay de Markdown) ---------- */
-  h2.pillar { color: var(--text-strong); font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
-  .pillar-sub { color: var(--text-weak); font-size: 15px; margin-top: 8px; max-width: 640px; }
-  .bullets { list-style: none; margin-top: 24px; display: flex; flex-direction: column; gap: 12px; max-width: 720px; }
-  .bullets li { padding-left: 20px; position: relative; font-size: 15px; line-height: 1.6; }
-  .bullets li::before { content: ''; position: absolute; left: 0; top: 9px; width: 6px; height: 6px;
-                        border-radius: 50%; background: var(--accent); }
-  .more { margin-top: 22px; font-size: 14px; }
-
-  /* ---------- exemplo de /ask dentro do pilar 2 ---------- */
-  .qa { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-weak);
-        padding: 16px 18px; margin-top: 24px; max-width: 720px; font-size: 14px; line-height: 1.8; }
-  .qa .q { color: var(--text-strong); }
-  .qa .p { color: var(--accent); font-family: var(--mono); font-size: 13px; }
-
-  /* ---------- tabela de comparação ---------- */
-  /* .tablewrap: no celular a tabela rola dentro do próprio container em vez de
-     estourar a viewport (mesma regra do .codebox — nada força scroll da página) */
-  .tablewrap { overflow-x: auto; max-width: 100%; margin-top: 24px; }
-  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 14px; }
-  th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
-  th { color: var(--text-strong); font-weight: 600; background: var(--bg-weak); }
-  td:first-child { color: var(--text); }
-  .yes { color: var(--ok); } .no { color: var(--text-weak); } .half { color: var(--warn); }
-  .caveat { margin-top: 18px; font-size: 14px; line-height: 1.7; color: var(--text-weak); max-width: 720px; }
-
-  /* ---------- deploy ---------- */
-  .deploy-demo { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-weak);
-                 padding: 16px 18px; margin-bottom: 22px; max-width: 720px; }
-  .steps p { font-size: 14.5px; line-height: 1.7; margin-top: 12px; color: var(--text); }
-
-  /* ---------- rodapé ---------- */
-  .cells { display: flex; border-top: 1px solid var(--border); flex-wrap: wrap; }
-  .cells a { flex: 1 1 auto; text-align: center; padding: 22px 8px; text-decoration: none;
-             color: var(--text); font-size: 14px; border-left: 1px solid var(--border);
-             transition: background .15s ease; min-width: 120px; }
-  .cells a:first-child { border-left: 0; }
-  .cells a:hover { background: var(--bg-weak); color: var(--text-strong); }
-  .cells .k { color: var(--text-weak); }
-  @media (max-width: 700px) { .cells a { flex: 1 1 50%; border-top: 1px solid var(--border); margin-top: -1px; } }
-  .legal { max-width: 1020px; margin: 0 auto; padding: 26px 20px 40px; text-align: center;
-           color: var(--text-weak); font-size: 12.5px; }
-  .legal a { color: var(--text-weak); }
-`;
-
-export function landingPage(lang: Locale, user?: WebUser): string {
-  const pt = lang === 'pt';
-  const T = (ptStr: string, enStr: string): string => (pt ? ptStr : enStr);
-  const metaTitle = T(
-    'Kassinão — uma faixa de áudio por pessoa. Ninguém chuta quem falou.',
-    'Kassinão — One audio track per speaker. Zero AI guessing.',
-  );
-  const metaDesc = T(
-    'Bot de gravação para Discord, self-hosted e de código aberto (AGPL): cada pessoa fala na própria faixa de áudio, então a transcrição, a ata por IA e o /perguntar sempre sabem, com certeza, quem disse o quê — sem diarização chutada por IA.',
-    'Self-hosted Discord recorder with one audio track per speaker: perfect speaker attribution, AI meeting minutes, /ask with clickable citations, full-text search, and an MCP connector. Open source, AGPL-3.0-or-later.',
-  );
-
-  const langUrl = `${config.baseUrl}/?lang=${pt ? 'pt' : 'en'}`;
-  const repoPublic = config.repoPublic;
-  const codeHref = repoPublic ? REPO_URL : NPM_URL;
-  const codeLabel = repoPublic ? 'GitHub' : 'npm';
-
-  // ---------- topo ----------
-  const topnav = `<header class="top"><div class="top-in">
-    <a class="brand" href="/">kassinao<span class="cur">▌</span></a>
-    <nav class="nav">
-      <a href="/demo">${T('demo', 'demo')}</a>
-      <a href="${codeHref}" class="hidesm">${codeLabel.toLowerCase()}</a>
-      ${repoPublic ? `<a href="${REPO_URL}/blob/main/CHANGELOG.md" class="hidesm">changelog</a>` : ''}
-      <span class="lt"><a href="?lang=en"${pt ? '' : ' class="on"'}>EN</a><span>·</span><a href="?lang=pt"${pt ? ' class="on"' : ''}>PT</a></span>
-      <a class="btnp deploy" href="#deploy">${T('rodar o meu', 'self-host it')} <span class="ar">↓</span></a>
-      <a class="btnp app" href="/gravacoes">${
-        user ? T('minhas gravações', 'my recordings') : T('entrar', 'sign in')
-      } <span class="ar">→</span></a>
-    </nav>
-  </div></header>`;
-
-  // ---------- herói: mecanismo (posicionamento) + prova real do produto ----------
-  // O mockup abaixo reaproveita LITERALMENTE as classes/cores de recordingPage()/SHELL_CSS
-  // (.c0-.c7, badge verde, .minutes, .who/.ts) — não é ilustração nem terminal simulado.
-  // Dado fictício mas plausível, hardcoded (zero chamada a API). Ver [[direction.proof_asset_plan]].
-  const proofPt = `<a class="proof" href="/demo" aria-label="Ver a demo ao vivo — página real de gravação">
-    <div class="proof-head">
-      <span class="proof-chan">#sprint-pagamentos</span>
-      <span class="proof-badge">CONCLUÍDA</span>
-    </div>
-    <div class="proof-body">
-      <div class="proof-people">
-        <span class="proof-person"><i class="proof-dot" style="background:var(--c0)"></i>João</span>
-        <span class="proof-person"><i class="proof-dot" style="background:var(--c2)"></i>Bianca</span>
-        <span class="proof-person"><i class="proof-dot" style="background:var(--c4)"></i>Priscila</span>
-      </div>
-      <div class="proof-minutes">
-        <h4>Resumo</h4>
-        <p>Time revisou o sprint de pagamentos: checkout novo testado, dois bugs de borda encontrados no PIX.</p>
-        <h4>Decisões</h4>
-        <p>Adiar o lançamento do checkout novo pra segunda, depois do fix do PIX.</p>
-        <h4>Ações</h4>
-        <p>☐ Corrigir o timeout do PIX em produção — João, até sexta</p>
-      </div>
-      <div class="proof-transcript">
-        <p><span class="who" style="color:var(--c2)">Bianca</span> <span class="ts mono">12:04</span>O PIX cai quando o usuário troca de banco no meio do fluxo.</p>
-        <p><span class="who" style="color:var(--c0)">João</span> <span class="ts mono">12:19</span>Eu assumo o fix, mas preciso adiar o merge do checkout pra segunda.</p>
-        <p><span class="who" style="color:var(--c4)">Priscila</span> <span class="ts mono">14:52</span>Fechado. Registro como decisão: lançamento adiado pra segunda.</p>
-      </div>
-      <div class="proof-tl" aria-hidden="true">
-        <span><span class="mono">01 payments</span></span><span><span class="mono">02 pix fix</span></span><span><span class="mono">03 ações</span></span>
-      </div>
-    </div>
-    <div class="proof-cap"><b>Exemplo com dados fictícios</b> — mas a interface é exatamente esta.<span>Ver a demo →</span></div>
-  </a>`;
-  const proofEn = `<a class="proof" href="/demo" aria-label="See the live demo — real recording page">
-    <div class="proof-head">
-      <span class="proof-chan">#sprint-review</span>
-      <span class="proof-badge">FINISHED</span>
-    </div>
-    <div class="proof-body">
-      <div class="proof-people">
-        <span class="proof-person"><i class="proof-dot" style="background:var(--c0)"></i>Alex</span>
-        <span class="proof-person"><i class="proof-dot" style="background:var(--c2)"></i>Priya</span>
-        <span class="proof-person"><i class="proof-dot" style="background:var(--c4)"></i>Sam</span>
-      </div>
-      <div class="proof-minutes">
-        <h4>Summary</h4>
-        <p>The team reviewed sprint velocity, agreed to hold the search redesign, and approved the new onboarding flow for release.</p>
-        <h4>Decisions</h4>
-        <p>Ship the new onboarding flow next Tuesday.</p>
-        <h4>Actions</h4>
-        <p>☐ Write the release notes — Sam, due Mon</p>
-      </div>
-      <div class="proof-transcript">
-        <p><span class="who" style="color:var(--c2)">Priya</span> <span class="ts mono">04:12</span>I'd hold off on the search redesign until we have real usage data.</p>
-        <p><span class="who" style="color:var(--c0)">Alex</span> <span class="ts mono">04:31</span>Agreed — ship onboarding first, revisit search after.</p>
-      </div>
-      <div class="proof-tl" aria-hidden="true">
-        <span><span class="mono">01 velocity</span></span><span><span class="mono">02 search</span></span><span><span class="mono">03 actions</span></span>
-      </div>
-    </div>
-    <div class="proof-cap"><b>Sample data — real interface.</b> This is the actual recording page.<span>See it live →</span></div>
-  </a>`;
-
-  const hero = `<section class="hero">
-    <div class="hgrid">
-      <div>
-        <h1>${T(
-          'Cada pessoa grava na própria faixa. Ninguém aqui chuta quem falou.',
-          'Every speaker gets their own track. No AI guesswork about who said what.',
-        )}</h1>
-        <p class="sub">${T(
-          'As ferramentas de IA para reunião adivinham quem está falando — e erram na conversa cruzada, no sotaque, no nome que não é em inglês. O Kassinão não faz esse trabalho de adivinhação: como cada pessoa tem sua própria faixa de áudio, a transcrição, a ata e o /perguntar sabem com certeza quem disse o quê, do primeiro segundo ao último.',
-          "Most AI meeting tools infer who's speaking from voice patterns — and get it wrong the moment people talk over each other or a name doesn't fit an English phonetic model. Kassinão skips the inference entirely: because each person records to their own audio track, the transcript, the summary, and /ask always know exactly who said what, from second one.",
-        )}</p>
-        <div class="hero-ctas">
-          <a class="btn2 pri" href="/demo">${T('Ver a demo ao vivo →', 'See the live demo →')}</a>
-          <a class="btn2 sec" href="#deploy">${T('Rodar no meu servidor', 'Self-host it')}</a>
-        </div>
-      </div>
-      ${pt ? proofPt : proofEn}
-    </div>
-    <div class="strip">
-      <span>${T('Self-hosted', 'Self-hosted')}</span>
-      <span>${T('Código aberto', 'Open source')} (<span class="mono">AGPL-3.0-or-later</span>)</span>
-      <span>${T('Roda no seu Docker', 'Runs on your Docker')}</span>
-      <span>${T('Nativo do Discord', 'Discord-native')}</span>
-    </div>
-  </section>`;
-
-  // ---------- pilar 1: sabe quem falou ----------
-  const pillar1 = `<section class="rv">
-    <h2 class="pillar">${T('Sabe quem falou', "Knows who's talking")}</h2>
-    <p class="pillar-sub">${T(
-      'Não é diarização por IA. É arquitetura: uma faixa de áudio por pessoa, do primeiro segundo ao último.',
-      'One audio track per person — not a guess made after the fact.',
-    )}</p>
-    <ul class="bullets">
-      <li>${T(
-        'Cada participante grava na própria faixa FLAC, sincronizada por amostra com as demais — a transcrição não precisa adivinhar de quem é a voz, porque ela já veio isolada do microfone daquela pessoa.',
-        'Every participant is captured on their own separate track from the moment they unmute — no diarization model decides afterward whose voice that was.',
-      )}</li>
-      <li>${T(
-        'VAD real (detecção de silêncio via ffmpeg) recorta os trechos sem fala antes de qualquer coisa ir pra API — sem alucinação em cima de silêncio, sem pagar por hora vazia de call.',
-        "Real VAD trims each track to speech only before anything leaves your server — a call with long silences doesn't cost 1 hour × N speakers of transcription.",
-      )}</li>
-      <li>${T(
-        'Motor de transcrição plugável — troque com uma variável de ambiente: <strong>AssemblyAI</strong> · <strong>Groq</strong> · <strong>OpenAI</strong> · <strong>Gemini</strong> · <strong>local</strong> (faster-whisper, áudio nunca sai do servidor).',
-        'Pick the engine, same pipeline underneath — one environment variable: <strong>AssemblyAI</strong> · <strong>Groq</strong> · <strong>OpenAI</strong> · <strong>Gemini</strong> · <strong>Local</strong> (faster-whisper, audio never leaves your server).',
-      )}</li>
-      <li>${T(
-        'Resultado prático: em conversa cruzada, sotaque forte ou num nome como "Priscila", o rótulo de quem falou não é palpite de modelo — é o próprio microfone que capturou aquela faixa.',
-        'Automatic retry and resume on provider rate limits — a flaky API key never costs you the transcript.',
-      )}</li>
-    </ul>
-  </section>`;
-
-  // ---------- pilar 2: vira memória que responde ----------
-  const pillar2 = `<section class="rv">
-    <h2 class="pillar">${T('Vira memória que responde', 'Becomes memory that answers')}</h2>
-    <p class="pillar-sub">${T(
-      'A ata escreve sozinha. E a reunião passa a responder pergunta, sempre citando a fonte.',
-      "The recording doesn't end when the call does — it turns into something you can query.",
-    )}</p>
-    <ul class="bullets">
-      <li>${T(
-        'Assim que a call termina, uma IA publica no canal e na página: <strong>resumo</strong>, <strong>decisões</strong> e <strong>itens de ação</strong> com responsável e prazo — sem ninguém pedir.',
-        'When the call wraps, an AI-generated record posts straight to the channel: <strong>summary</strong>, <strong>decisions</strong>, and <strong>action items</strong> — each with an owner and a due date.',
-      )}</li>
-      <li>${T(
-        'Índice web com busca full-text em transcrições, atas e notas de tudo que você pode acessar — cada resultado linka pro segundo exato.',
-        'Full-text search on the web, across every transcript, minutes doc, and note you can access, with results that deep-link to the exact second.',
-      )}</li>
-      <li>${T(
-        'Conector <strong>MCP</strong> pro Claude Desktop, Cursor ou outro assistente: ações pendentes cruzando reuniões, busca por período — com o mesmo controle de acesso da web.',
-        '<strong>MCP connector</strong> for Claude Desktop, Cursor, or any MCP client: cross-meeting action items with deadlines, time-window queries — scoped to the exact same access rules as the web page.',
-      )}</li>
-    </ul>
-    <div class="qa">
-      <div><span class="p">${T('/perguntar', '/ask')}</span> <span class="q">${T(
-        'o que decidimos sobre o checkout?',
-        'what did we decide about the rollback?',
-      )}</span></div>
-      <div>${T(
-        'Rafael assumiu o merge do rollback (com feature flag) até quarta',
-        'Rafael owns merging the rollback behind a feature flag by Wednesday',
-      )} — <a class="ts mono" href="/demo">[16:10]</a></div>
-    </div>
-  </section>`;
-
-  // ---------- pilar 3: é seu, com controle real ----------
-  const accessReceipt = repoPublic
-    ? `<a href="${REPO_URL}/blob/main/src/web/access.ts">src/web/access.ts →</a>`
-    : `<span class="mono">src/web/access.ts</span>`;
-  const pillar3 = `<section class="rv">
-    <h2 class="pillar">${T('É seu, com controle real', 'Yours, with real control')}</h2>
-    <p class="pillar-sub">${T(
-      'Self-hosted não é um selo — é onde o áudio, o texto e a chave de acesso realmente moram.',
-      'Self-hosted by default — control enforced in code, not promised in a privacy policy.',
-    )}</p>
-    <ul class="bullets">
-      <li>${T(
-        'Roda no seu Docker, no seu servidor — nenhum fornecedor guarda seu áudio, sua transcrição ou as decisões do seu time.',
-        "Runs on your own Docker host. No vendor holds your audio, your transcripts, or your team's decisions.",
-      )}</li>
-      <li>${T(
-        `Acesso via <strong>login com Discord</strong>, re-checado a cada visita: só abre pra quem estava na call, enxerga o canal, iniciou ou é admin. Link vazado não abre nada. A regra inteira cabe num arquivo: ${accessReceipt}`,
-        `<strong>Access control that's re-checked every time.</strong> Only people who were in the call, can see the channel, started it, or are admins can open the page. A leaked link opens nothing. The whole rule fits in one file: ${accessReceipt}`,
-      )}</li>
-      <li>${T(
-        'Retenção do seu jeito: em camadas por padrão (áudio expira, texto sobrevive) ou ilimitada — nada expira até você decidir apagar.',
-        'Retention on your terms: tiered by default (audio expires, transcript and minutes outlive it) — or unlimited: nothing expires until you say so.',
-      )}</li>
-      <li>${T(
-        'Licença <span class="mono">AGPL-3.0-or-later</span>: código aberto de verdade. Quem hospedar uma versão modificada como serviço é obrigado a abrir esse código também.',
-        'Licensed <span class="mono">AGPL-3.0-or-later</span>. Read the code, change it, self-host it — and if you host a modified version for others, share your changes back.',
-      )}</li>
-    </ul>
-  </section>`;
-
-  // ---------- comparação ----------
-  const compare = `<section class="rv">
-    <h2 class="pillar">${T('Craig grava. Otter resume. O Kassinão sabe quem falou.', "Craig records. Otter summarizes. Kassinão knows who's talking.")}</h2>
-    <p class="pillar-sub">${T(
-      'Comparando o que cada ferramenta realmente entrega — não o que a gente gostaria que fosse verdade.',
-      "A fair comparison — including where Kassinão doesn't win.",
-    )}</p>
-    <div class="tablewrap"><table>
-      <tr><th></th><th>Kassinão</th><th>Craig</th><th>Otter/Fireflies</th></tr>
-      <tr><td>${T('Multipista (1 faixa/pessoa)', 'Multi-track (1 file/speaker)')}</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">—</td></tr>
-      <tr><td>${T('Identifica quem falou', 'Speaker attribution')}</td><td class="yes">${T('exato', 'exact')}</td><td class="yes">${T('exato', 'exact')}</td><td class="half">${T('chute (IA)', 'guessed (AI)')}</td></tr>
-      <tr><td>${T('Ata por IA (decisões + ações)', 'AI minutes (decisions + actions)')}</td><td class="yes">✓</td><td class="no">—</td><td class="yes">✓</td></tr>
-      <tr><td>${T('Perguntar às reuniões (Discord/web/MCP)', 'Ask your meetings (Discord/web/MCP)')}</td><td class="yes">✓</td><td class="no">—</td><td class="half">${T('só no app deles', 'their app only')}</td></tr>
-      <tr><td>${T('Seus dados, seu servidor', 'Your data, your server')}</td><td class="yes">✓</td><td class="half">${T('parcial', 'partial')}</td><td class="no">—</td></tr>
-      <tr><td>${T('Código aberto (AGPL-3.0)', 'Open source (AGPL-3.0)')}</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">—</td></tr>
-      <tr><td>${T('Preço', 'Price')}</td><td class="yes">${T('grátis (AGPL)', 'free (AGPL)')}</td><td>freemium</td><td>${T('pago', 'paid')}</td></tr>
-    </table></div>
-    <p class="caveat">${T(
-      'Ressalva honesta: isso não quer dizer que o Kassinão ganha em tudo. Você troca o suporte de uma empresa por trás — e o conforto de "zero manutenção" — por um projeto solo e pelo trabalho de manter o próprio servidor no ar. Se o que você quer é não pensar em infraestrutura, um SaaS pago ainda é a escolha certa pra você. O Kassinão é pra quem prefere controlar os próprios dados e não pagar assinatura por gravação.',
-      "Honest caveat: Kassinão is a solo, indie project, not a funded company. There's no support line, no mobile app, and edge-case polish will lag behind Craig and Otter. What you get instead is the source code, a real self-hosting path, and a mechanism — one track per speaker — that structurally can't misattribute a line the way diarization can.",
-    )}</p>
-  </section>`;
-
-  // ---------- deploy: um único caminho ----------
-  const installCmd = repoPublic
-    ? `git clone ${REPO_URL}.git && cd kassinao\ncp .env.example .env   ${T('# token do bot + chaves de IA', '# bot token + AI keys')}\ndocker compose up -d --build`
-    : `git clone https://github.com/resolvicomai/kassinao.git && cd kassinao\ncp .env.example .env   ${T('# token do bot + chaves de IA', '# bot token + AI keys')}\ndocker compose up -d --build`;
-  const deploy = `<section id="deploy" class="rv">
-    <h2 class="pillar">${T('Antes de instalar, teste', 'Deploy — try it before you install it')}</h2>
-    <p class="pillar-sub">${T(
-      'A demo ao vivo mostra a página real em segundos. Instalar o seu leva só mais alguns minutos.',
-      'The live demo shows the real page in seconds. Installing your own takes a few more minutes.',
-    )}</p>
-    <div class="deploy-demo">
-      ${T(
-        '<strong>Passo 0, sem instalar nada:</strong> abra a demo ao vivo e veja a página de gravação de verdade — ata e transcrição coloridas por pessoa, dado fictício, sem login.',
-        '<strong>Step zero, no install:</strong> open the live demo and see the real recording page — AI minutes and transcript colored by speaker, fictional data, no login.',
-      )}
-      <div class="hero-ctas" style="margin-top:14px"><a class="btn2 sec" href="/demo">${T('Ver a demo ao vivo →', 'See the live demo →')}</a></div>
-    </div>
-    <div class="steps">
-      <div class="codebox"><pre>${installCmd
-        .split('\n')
-        .map((l) => `<span class="pr">$ </span>${l.replace(/(#.*)$/, '<span class="pr">$1</span>')}`)
-        .join('\n')}</pre></div>
-      <p>${T(
-        'Depois convide o bot e rode <span class="mono">/gravar</span> num canal de voz — é isso. HTTPS sem abrir porta (Cloudflare Tunnel) e como ligar transcrição + ata estão no passo a passo completo do README.',
-        'Then invite the bot and run <span class="mono">/record</span> in a voice channel — that\'s it. HTTPS without opening ports (Cloudflare Tunnel) and turning on transcription + minutes are in the full walkthrough in the README.',
-      )}</p>
-    </div>
-  </section>`;
-
-  // ---------- rodapé ----------
-  // Rodapé de MARKETING: só o que interessa a quem está avaliando o projeto.
-  // O app (gravações, conectar IA) vive atrás do "Entrar" do topo — mundo à parte.
-  const footer = `<div class="cells">
-    <a href="${codeHref}">${codeLabel} <span class="k mono">AGPL</span></a>
-    <a href="${NPM_URL}">npm <span class="k mono">kassinao-mcp</span></a>
-    <a href="/demo">${T('demo ao vivo', 'live demo')}</a>
-    <a href="/gravacoes">${user ? T('minhas gravações', 'my recordings') : T('entrar', 'sign in')}</a>
-  </div>`;
-
-  const copyScript = `<script>(function(){
-    document.documentElement.classList.add('js'); // habilita as animações só com JS vivo
-    document.querySelectorAll('.cp[data-copy]').forEach(function(b){
-      b.addEventListener('click', function(){
-        var el = document.getElementById(b.dataset.copy);
-        if (!el) return;
-        navigator.clipboard.writeText(el.textContent.replace(/^\\$ /gm, '')).then(function(){
-          var o = b.textContent; b.textContent = '${T('copiado ✓', 'copied ✓')}'; b.classList.add('ok');
-          setTimeout(function(){ b.textContent = o; b.classList.remove('ok'); }, 2000);
-        });
-      });
-    });
-    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    // reveal ao rolar
-    var rvs = document.querySelectorAll('.rv');
-    if ('IntersectionObserver' in window && !reduce) {
-      var io = new IntersectionObserver(function(es){
-        es.forEach(function(e){ if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
-      }, { rootMargin: '0px 0px -8% 0px' });
-      rvs.forEach(function(el){ io.observe(el); });
-    } else {
-      rvs.forEach(function(el){ el.classList.add('in'); });
-    }
-  })();</script>`;
-
-  return `<!doctype html>
-<html lang="${pt ? 'pt-BR' : 'en'}">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#101012">
-<link rel="icon" href="${FAVICON}">
-<title>${esc(metaTitle)}</title>
-<meta name="description" content="${esc(metaDesc)}">
-<link rel="canonical" href="${esc(langUrl)}">
-<link rel="alternate" hreflang="en" href="${esc(config.baseUrl)}/?lang=en">
-<link rel="alternate" hreflang="pt-BR" href="${esc(config.baseUrl)}/?lang=pt">
-<link rel="alternate" hreflang="x-default" href="${esc(config.baseUrl)}/">
-<meta property="og:type" content="website">
-<meta property="og:title" content="${esc(metaTitle)}">
-<meta property="og:description" content="${esc(metaDesc)}">
-<meta property="og:url" content="${esc(langUrl)}">
-<meta property="og:image" content="${esc(config.baseUrl)}/og.png">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="${esc(metaTitle)}">
-<meta name="twitter:description" content="${esc(metaDesc)}">
-<meta name="twitter:image" content="${esc(config.baseUrl)}/og.png">
-<style>${LANDING_CSS}</style>
-</head>
-<body>
-${topnav}
-<div class="container">
-${hero}
-${pillar1}
-${pillar2}
-${pillar3}
-${compare}
-${deploy}
-${footer}
-</div>
-<div class="legal">© 2026 resolvicomai · AGPL-3.0-or-later · <a href="/demo">demo</a> · <a href="${codeHref}">${codeLabel}</a></div>
-${copyScript}
-</body>
-</html>`;
-}
-
-/**
- * Página "Conectar assistente de IA" (/conectar-ia): o usuário loga com Discord,
- * gera um token pessoal e cola no Claude Desktop/Cursor. O token só enxerga o que
- * a pessoa já veria no site. Sempre noindex (é conteúdo por-usuário, com segredo).
- */
 export function connectPage(opts: {
   lang: Locale;
   user?: WebUser;
@@ -1765,9 +1382,9 @@ export function connectPage(opts: {
         ),
       )}</p>
       <div class="downloads" style="margin-top:18px">
-        <a class="btn" href="/auth/login?next=%2Fconectar-ia">${esc(T('Entrar com Discord', 'Sign in with Discord'))}</a>
+        <a class="btn" href="/auth/login?next=%2Fapp%2Fconectar-ia">${esc(T('Entrar com Discord', 'Sign in with Discord'))}</a>
       </div>`;
-    return shell(title, body, { lang: opts.lang, noindex: true });
+    return shell(title, body, { lang: opts.lang, active: 'ai' });
   }
 
   if (opts.refreshToken) {
@@ -1826,9 +1443,9 @@ export function connectPage(opts: {
           'Then restart Claude Desktop/Cursor and ask: "what is pending this week?"',
         ),
       )}</p>
-      <div class="downloads" style="margin-top:18px"><a class="btn" href="/conectar-ia">${esc(T('Voltar', 'Back'))}</a></div>
+      <div class="downloads" style="margin-top:18px"><a class="btn" href="/app/conectar-ia">${esc(T('Voltar', 'Back'))}</a></div>
       <script>(function(){var b=document.getElementById('kcopy');if(!b)return;b.addEventListener('click',function(){var t=(document.getElementById('kcfg').textContent)||'';navigator.clipboard.writeText(t).then(function(){var o=b.textContent;b.textContent='${esc(T('Copiado ✓', 'Copied ✓'))}';setTimeout(function(){b.textContent=o;},2000);});});})();</script>`;
-    return shell(title, body, { lang: opts.lang, user: opts.user, noindex: true });
+    return shell(title, body, { lang: opts.lang, user: opts.user, active: 'ai' });
   }
 
   const count = opts.sessionCount ?? 0;
@@ -1856,12 +1473,12 @@ export function connectPage(opts: {
       ),
     )} ${esc(T('Conexões ativas', 'Active connections'))}: ${count}</p>
     <div class="downloads" style="margin-top:18px">
-      <form method="post" action="/conectar-ia/gerar" style="display:inline"><button class="btn" type="submit" style="${btnStyle}">🔌 ${esc(T('Gerar conexão', 'Generate connection'))}</button></form>
+      <form method="post" action="/app/conectar-ia/gerar" style="display:inline"><button class="btn" type="submit" style="${btnStyle}">🔌 ${esc(T('Gerar conexão', 'Generate connection'))}</button></form>
       ${
         count > 0
-          ? `<form method="post" action="/conectar-ia/revogar" style="display:inline"><button class="btn" type="submit" style="${btnStyle};background:#5a2a2a">${esc(T('Revogar todas', 'Revoke all'))}</button></form>`
+          ? `<form method="post" action="/app/conectar-ia/revogar" style="display:inline"><button class="btn" type="submit" style="${btnStyle};background:#5a2a2a">${esc(T('Revogar todas', 'Revoke all'))}</button></form>`
           : ''
       }
     </div>`;
-  return shell(title, body, { lang: opts.lang, user: opts.user, noindex: true });
+  return shell(title, body, { lang: opts.lang, user: opts.user, active: 'ai' });
 }

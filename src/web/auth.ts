@@ -116,6 +116,11 @@ export function clearStateCookie(res: Response): void {
   setCookie(res, STATE_COOKIE, '', 0);
 }
 
+/** Sai da conta web: expira o cookie de sessão (o token HMAC morre com ele). */
+export function logoutWeb(res: Response): void {
+  setCookie(res, SESSION_COOKIE, '', 0);
+}
+
 // ---------- fluxo OAuth2 do Discord ----------
 
 export function redirectUri(): string {
