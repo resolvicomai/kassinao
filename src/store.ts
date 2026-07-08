@@ -97,6 +97,12 @@ export interface RecordingMeta {
   guildName: string;
   voiceChannelId: string;
   voiceChannelName: string;
+  /**
+   * O canal de voz era visível a @everyone no INÍCIO da gravação (audiência do
+   * consentimento). Fallback da entrega da ata quando o canal (efêmero) já foi
+   * apagado na hora de postar. Gravações antigas não têm este campo (= desconhecido).
+   */
+  sourceEveryoneViewable?: boolean;
   /** Quem iniciou; null quando iniciada pelo auto-record. */
   startedBy: { id: string; name: string } | null;
   /** Idioma da sessão ('pt'|'en') — usado pelas notificações mesmo após reinício. */
