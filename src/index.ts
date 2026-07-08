@@ -467,9 +467,28 @@ async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise
   // no Discord (o link continua sendo a fonte completa).
   const embeds = minutesDone ? buildMinutesEmbed(meta, locale) : [];
 
-  // canal de destino configurável (/config ata-canal); fallback = chat do canal de voz
+  // canal de destino configurável (/config ata-canal); fallback = chat do canal de voz.
+  // ACESSO: só transmitir a ata pro canal configurado se a gravação for de um canal de voz
+  // visível a @everyone. Senão, a audiência do canal público excede quem tem acesso à
+  // gravação (checkAccess concede view via ViewChannel no canal de voz), vazando resumo/
+  // decisões de uma reunião RESTRITA. Restrito → chat do canal de voz (audiência = conjunto
+  // de acesso) + DM do iniciador, que já casam com a regra de acesso.
   const cfg = guildConfigStore.get(meta.guildId);
-  const targetId = (minutesDone && cfg.minutesChannelId) || meta.voiceChannelId;
+  let allowConfigured = false;
+  if (minutesDone && cfg.minutesChannelId) {
+    try {
+      const guild = client.guilds.cache.get(meta.guildId);
+      const vc = guild
+        ? (guild.channels.cache.get(meta.voiceChannelId) ?? (await guild.channels.fetch(meta.voiceChannelId)))
+        : null;
+      if (guild && vc && 'permissionsFor' in vc) {
+        allowConfigured = vc.permissionsFor(guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel) ?? false;
+      }
+    } catch {
+      allowConfigured = false; // não deu pra verificar a visibilidade → não arrisca vazar
+    }
+  }
+  const targetId = allowConfigured && cfg.minutesChannelId ? cfg.minutesChannelId : meta.voiceChannelId;
   let delivered = false;
   try {
     const channel = (await client.channels.fetch(targetId)) as TextBasedChannel | null;
