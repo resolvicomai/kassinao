@@ -233,7 +233,9 @@ export function startWebServer(): void {
   }
 
   app.get('/', (req, res) => {
-    res.type('html').send(landingPage(pageLang(req)));
+    // landing = vitrine pública; passa o usuário só pra a ponte do topo dizer
+    // "Entrar" (deslogado) ou "Minhas gravações" (logado). O app é mundo à parte.
+    res.type('html').send(landingPage(pageLang(req), getWebUser(req)));
   });
 
   // Demo PÚBLICA (sem login) — serve SOMENTE os dados fictícios de docs/example.
