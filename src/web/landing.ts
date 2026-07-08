@@ -86,11 +86,12 @@ section.scene+section.scene{border-top:1px solid var(--border)}
 .rec-dot{width:7px;height:7px;border-radius:50%;background:var(--rec)}
 .cue{margin:44px auto 0;color:var(--text-weak);font-family:var(--mono);font-size:11.5px;letter-spacing:.12em}
 .cue svg{display:block;margin:8px auto 0;width:16px;height:16px;stroke:var(--text-weak)}
+.hero .act{margin:30px auto 0;display:flex;justify-content:center}
 /* animações do hero (só com JS) */
 html.js .hero .pav{opacity:0}
 html.js .hero .rec{opacity:0}
 html.js .hero h1 .w{opacity:0}
-html.js .hero .sub,html.js .hero .cue{opacity:0}
+html.js .hero .sub,html.js .hero .cue,html.js .hero .act{opacity:0}
 .hero.on .pav{animation:pop-in 400ms var(--ease-out) both}
 .hero.on .pav:nth-child(2){animation-delay:250ms}
 .hero.on .pav:nth-child(3){animation-delay:500ms}
@@ -99,6 +100,7 @@ html.js .hero .sub,html.js .hero .cue{opacity:0}
 .hero.on .rec-dot{animation:rec-pulse 1.4s ease-in-out 1500ms infinite;will-change:opacity}
 .hero.on h1 .w{animation:word-rise 500ms var(--ease-out) both}
 .hero.on .sub{animation:fade 400ms linear 1000ms both}
+.hero.on .act{animation:fade-rise 500ms var(--ease-out) 1300ms both;--rise:12px}
 .hero.on .cue{animation:fade 400ms linear 1600ms both}
 .hero.on .cue svg{animation:drift-y 1.6s ease-in-out 2s infinite;will-change:transform}
 .hero.on .pain.p1{animation:pain-float 2.4s var(--ease-out) both}
@@ -201,9 +203,11 @@ html.js .sc3 .ghostq{opacity:0}
 .bars{display:inline-flex;gap:3px;align-items:flex-end;height:14px;margin-left:10px;vertical-align:-2px}
 .bars i{width:3px;height:14px;border-radius:2px;background:var(--c4);transform-origin:bottom;transform:scaleY(.4)}
 .anslbl{margin-top:12px;font-family:var(--mono);font-size:11px;color:var(--text-weak);letter-spacing:.06em}
+.mcpnote{margin-top:22px;font-size:13.5px;color:var(--text-weak);max-width:56ch}
+.mcpnote code{font-family:var(--mono);font-size:12px;color:var(--text);background:var(--bg-weak);border:1px solid var(--border);border-radius:5px;padding:1px 6px}
 html.js .sc4 .cmd{width:0}
 html.js .sc4 .ansc{opacity:0;transform:translateY(16px)}
-html.js .sc4 .anslbl{opacity:0}
+html.js .sc4 .anslbl,html.js .sc4 .mcpnote{opacity:0}
 .sc4.on .cmd{animation:type-w 1.4s steps(32,end) 200ms both,caret-blink 900ms steps(2) 200ms 3,caret-off 1ms linear 3s both}
 .sc4.on .think{animation:fade 200ms linear 1600ms both,fade-out 200ms linear 2400ms both}
 .sc4.on .think i{animation:dot-think 600ms ease-in-out infinite}
@@ -211,11 +215,27 @@ html.js .sc4 .anslbl{opacity:0}
 .sc4.on .think i:nth-child(3){animation-delay:300ms}
 .sc4.on .ansc{animation:fade-rise 450ms var(--ease-out) 2500ms both;--rise:16px}
 .sc4.on .anslbl{animation:fade 300ms linear 3100ms both}
+.sc4.on .mcpnote{animation:fade 400ms linear 3400ms both}
 .sc4.on .chip{animation:chip-pulse 1.5s ease-in-out 3s infinite alternate;will-change:transform}
 .sc4.on .chip::after{animation:chip-glow 1.5s ease-in-out 3s infinite alternate}
 .sc4.on .bars i{animation:bar-bounce 1.2s ease-in-out 3s infinite;will-change:transform}
 .sc4.on .bars i:nth-child(2){animation-delay:150ms}
 .sc4.on .bars i:nth-child(3){animation-delay:300ms}
+/* ---------- CENA 5: os comandos ---------- */
+.cmds{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px}
+.cmdrow{display:flex;align-items:baseline;gap:12px;border:1px solid var(--border);border-radius:10px;background:var(--bg-weak);padding:12px 16px;min-width:0}
+.cmdrow .k{font-family:var(--mono);font-size:13px;color:var(--c0);white-space:nowrap;font-weight:500}
+.cmdrow .d{font-size:13px;color:var(--text);overflow-wrap:anywhere}
+.cmdsmore{margin-top:16px;font-family:var(--mono);font-size:11px;color:var(--text-weak);letter-spacing:.06em}
+html.js .sc5 .cmdrow,html.js .sc5 .cmdsmore{opacity:0;transform:translateY(14px)}
+.sc5.on .cmdrow{animation:fade-rise 450ms var(--ease-out) both;--rise:14px}
+.sc5.on .cmdrow:nth-child(2){animation-delay:90ms}
+.sc5.on .cmdrow:nth-child(3){animation-delay:180ms}
+.sc5.on .cmdrow:nth-child(4){animation-delay:270ms}
+.sc5.on .cmdrow:nth-child(5){animation-delay:360ms}
+.sc5.on .cmdrow:nth-child(6){animation-delay:450ms}
+.sc5.on .cmdsmore{animation:fade-rise 400ms var(--ease-out) 600ms both;--rise:8px}
+@media (max-width:640px){.cmds{grid-template-columns:1fr}}
 /* ---------- FECHAMENTO ---------- */
 .close{text-align:center;padding:clamp(72px,11vw,140px) 0}
 .reprise{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;color:var(--text-weak);margin-bottom:26px}
@@ -272,9 +292,10 @@ html:not(.js) .think{display:none}
 /* reduced motion: pula pro estado final, nada se move */
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
-  .hero .pav,.hero .rec,.hero h1 .w,.hero .sub,.hero .cue,.sc1 .who,.sc1 .ruler,.sc1 .ghost,
+  .hero .pav,.hero .rec,.hero h1 .w,.hero .sub,.hero .cue,.hero .act,.sc1 .who,.sc1 .ruler,.sc1 .ghost,
   .sc1 .overlap-note,.sc2 .pin,.sc2 .pinlbl,.sc3 .ln .meta,.sc3 .blk,.sc3 .tick,.sc3 .ghostq,
-  .sc4 .ansc,.sc4 .anslbl,.close .final,.close .btn,.close .reprise,.close .demolink{opacity:1!important;transform:none!important}
+  .sc4 .ansc,.sc4 .anslbl,.sc4 .mcpnote,.sc5 .cmdrow,.sc5 .cmdsmore,
+  .close .final,.close .btn,.close .reprise,.close .demolink{opacity:1!important;transform:none!important}
   .pain,.think{display:none}
   .wv{stroke-dasharray:none!important;stroke-dashoffset:0!important}
   .cmd{width:auto!important;border-right-color:transparent!important}
@@ -362,6 +383,9 @@ export function landingPage(lang: Locale): string {
         <span class="rec" aria-label="${T('gravando', 'recording')}"><span class="rec-dot"></span>REC</span>
       </div>
     </div>
+    <div class="act"><a class="btn" href="${ghHref()}" aria-label="${esc(T('Ver o Kassinão no GitHub', 'View Kassinão on GitHub'))}">${
+      config.repoPublic ? T('Ver no GitHub', 'View on GitHub') : T('Ver no npm', 'View on npm')
+    } →</a></div>
     <div class="cue" aria-hidden="true">${T('role pra assistir à reunião', 'scroll to watch the meeting')}
       <svg viewBox="0 0 16 16" fill="none" stroke-width="1.5"><path d="M8 3v10M4 9l4 4 4-4"/></svg>
     </div>
@@ -477,10 +501,10 @@ export function landingPage(lang: Locale): string {
       'Weeks later, a plain-language question gets an answer citing the exact moment of the recording',
     ),
   )}"><div class="wrap">
-    <div class="kicker">${T('três semanas depois', 'three weeks later')}</div>
+    <div class="kicker">${T('três semanas depois · no discord', 'three weeks later · in discord')}</div>
     <p class="scopy">${T(
-      'Pergunte em português. A resposta vem <b>com prova</b>: toque no tempo e ouça o momento exato.',
-      'Ask in plain English. The answer comes <b>with receipts</b>: tap the timestamp and hear the exact moment.',
+      'Pergunte <b>pro próprio bot, no Discord</b> — em português. A resposta vem <b>com prova</b>: toque no tempo e ouça o momento exato.',
+      'Ask <b>the bot itself, right in Discord</b> — in plain English. The answer comes <b>with receipts</b>: tap the timestamp and hear the exact moment.',
     )}</p>
     <figure class="frame">
       <div class="cmdwrap"><span class="cmd" style="--w:${askCmd.length + 1}ch"><span class="tok">${esc(askCmd.split(' ')[0])}</span>${esc(askCmd.slice(askCmd.indexOf(' ')))}</span></div>
@@ -494,6 +518,45 @@ export function landingPage(lang: Locale): string {
       <p class="anslbl">${T('o link pula pro segundo exato da gravação', 'the link jumps to the exact second of the recording')}</p>
       ${fict}
     </figure>
+    <p class="mcpnote">${T(
+      'Prefere perguntar do <b>Claude</b> ou do <b>Cursor</b>? O conector <code>kassinao-mcp</code> liga seu assistente de IA nas mesmas reuniões — cada pessoa só enxerga o que já pode ver.',
+      'Rather ask from <b>Claude</b> or <b>Cursor</b>? The <code>kassinao-mcp</code> connector plugs your AI assistant into the same meetings — each person only sees what they already can.',
+    )}</p>
+  </div></section>`;
+
+  // ---------- CENA 5: os comandos ----------
+  const CMDS: Array<[string, string]> = pt
+    ? [
+        ['/gravar', 'entra no canal de voz e começa a gravar — uma faixa por pessoa'],
+        ['/parar', 'encerra e posta o link com áudio, transcrição e ata'],
+        ['/nota', 'marca o momento com o segundo exato (ou o botão 📌 no painel)'],
+        ['/perguntar', 'pergunta às suas reuniões — a resposta é só pra você, com citação'],
+        ['/gravacoes', 'suas gravações + a central web com busca em tudo'],
+        ['/autorecord', '(admin) grava sozinho quando o canal enche, para quando esvazia'],
+      ]
+    : [
+        ['/record', 'joins your voice channel and starts recording — one track per person'],
+        ['/stop', 'ends it and posts the link with audio, transcript and minutes'],
+        ['/note', 'pins the moment down to the exact second (or the 📌 panel button)'],
+        ['/ask', 'ask your meetings — the answer is private to you, with citations'],
+        ['/recordings', 'your recordings + the web hub with full-text search'],
+        ['/autorecord', '(admin) records on its own when the channel fills up'],
+      ];
+  const scene5 = `<section class="scene sc5" data-th="0.4" aria-label="${esc(
+    T('Os comandos do bot no Discord', 'The bot commands in Discord'),
+  )}"><div class="wrap">
+    <div class="kicker">${T('os comandos', 'the commands')}</div>
+    <p class="scopy">${T(
+      'Tudo isso acontece com <b>comandos simples dentro do Discord</b> — sem app novo, sem convidado esquisito na call.',
+      'All of it happens through <b>simple commands inside Discord</b> — no new app, no weird guest joining your call.',
+    )}</p>
+    <div class="cmds">
+      ${CMDS.map(([k, d]) => `<div class="cmdrow"><span class="k">${esc(k)}</span><span class="d">${esc(d)}</span></div>`).join('\n      ')}
+    </div>
+    <p class="cmdsmore">${T(
+      'e mais /status, /ajuda, /config, /sobre — cada detalhe está no README',
+      'plus /status, /help, /config, /about — every detail lives in the README',
+    )}</p>
   </div></section>`;
 
   // ---------- FECHAMENTO ----------
@@ -558,6 +621,7 @@ ${scene1}
 ${scene2}
 ${scene3}
 ${scene4}
+${scene5}
 ${closeSec}
 ${footer}
 ${script}
