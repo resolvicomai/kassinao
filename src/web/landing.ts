@@ -103,9 +103,11 @@ html.js .hero .sub,html.js .hero .cue,html.js .hero .act{opacity:0}
 .hero.on .act{animation:fade-rise 500ms var(--ease-out) 1300ms both;--rise:12px}
 .hero.on .cue{animation:fade 400ms linear 1600ms both}
 .hero.on .cue svg{animation:drift-y 1.6s ease-in-out 2s infinite;will-change:transform}
-.hero.on .pain.p1{animation:pain-float 2.4s var(--ease-out) both}
-.hero.on .pain.p2{animation:pain-float 2.4s var(--ease-out) .5s both}
-.hero.on .pain.p3{animation:pain-float 2.4s var(--ease-out) 1s both}
+/* estritamente em sequência: um balão sobe e se desfaz ANTES do próximo
+   entrar (todos vivem no mesmo ponto — simultâneos viravam texto empilhado) */
+.hero.on .pain.p1{animation:pain-float 2s var(--ease-out) both}
+.hero.on .pain.p2{animation:pain-float 2s var(--ease-out) 2.1s both}
+.hero.on .pain.p3{animation:pain-float 2s var(--ease-out) 4.2s both}
 /* ---------- CENA 1: faixas ---------- */
 .ghost{display:flex;align-items:center;gap:12px;margin-bottom:18px}
 .ghost svg{flex:1;height:26px;opacity:.4}
