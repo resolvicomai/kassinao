@@ -1286,8 +1286,11 @@ const LANDING_CSS = `
   .btnp.app:hover, .nav a.btnp.app:hover { background: var(--bg-weak); color: var(--text-strong); border-color: var(--text-strong); }
   @media (max-width: 700px) {
     .nav .hidesm { display: none; }
+    /* no mobile o "self-host" da nav some (redundante: o herói já tem esse CTA);
+       fica só a ponte do app, evitando os dois botões estourarem a viewport */
+    .nav a.btnp.deploy { display: none; }
     .top-in { height: auto; min-height: 56px; padding: 8px 20px; flex-wrap: wrap; }
-    .nav { gap: 14px; }
+    .nav { gap: 14px; flex-wrap: wrap; justify-content: flex-end; }
     .btnp, .nav a.btnp { padding: 6px 10px; font-size: 13px; gap: 6px; }
   }
 
@@ -1419,7 +1422,7 @@ export function landingPage(lang: Locale, user?: WebUser): string {
       <a href="${codeHref}" class="hidesm">${codeLabel.toLowerCase()}</a>
       ${repoPublic ? `<a href="${REPO_URL}/blob/main/CHANGELOG.md" class="hidesm">changelog</a>` : ''}
       <span class="lt"><a href="?lang=en"${pt ? '' : ' class="on"'}>EN</a><span>·</span><a href="?lang=pt"${pt ? ' class="on"' : ''}>PT</a></span>
-      <a class="btnp" href="#deploy">${T('rodar o meu', 'self-host it')} <span class="ar">↓</span></a>
+      <a class="btnp deploy" href="#deploy">${T('rodar o meu', 'self-host it')} <span class="ar">↓</span></a>
       <a class="btnp app" href="/gravacoes">${
         user ? T('minhas gravações', 'my recordings') : T('entrar', 'sign in')
       } <span class="ar">→</span></a>
