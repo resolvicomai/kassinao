@@ -65,22 +65,34 @@ interface TokenResponse {
   refresh_token: string;
 }
 
+async function tryRefresh(token: string): Promise<TokenResponse | null> {
+  const r = await fetch(`${URL_BASE}/api/mcp/refresh`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ refresh_token: token }),
+  });
+  if (!r.ok) return null;
+  return (await r.json()) as TokenResponse;
+}
+
 async function refreshTokens(): Promise<void> {
   if (!URL_BASE) throw new Error('Defina KASSINAO_URL (ex.: https://kassinao.suaempresa.com).');
   if (!refreshToken) {
     const base = URL_BASE || '<sua URL do Kassinão>';
     throw new Error(`Sem token. Gere um em ${base}/app/conectar-ia ou rode: kassinao-mcp exchange <codigo>.`);
   }
-  const r = await fetch(`${URL_BASE}/api/mcp/refresh`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ refresh_token: refreshToken }),
-  });
-  if (!r.ok) {
-    const base = URL_BASE || '<sua URL do Kassinão>';
-    throw new Error(`Não consegui renovar o token (HTTP ${r.status}). Gere um novo em ${base}/app/conectar-ia.`);
+  let data = await tryRefresh(refreshToken);
+  // Token salvo morto (ex.: usuário revogou tudo e gerou um NOVO no env):
+  // cai de volta pro env uma vez, em vez de só falhar. Se o env funcionar,
+  // ele rotaciona e vira o salvo — o fluxo se conserta sozinho.
+  const envTok = process.env.KASSINAO_REFRESH_TOKEN || '';
+  if (!data && envTok && envTok !== refreshToken) {
+    data = await tryRefresh(envTok);
   }
-  const data = (await r.json()) as TokenResponse;
+  if (!data) {
+    const base = URL_BASE || '<sua URL do Kassinão>';
+    throw new Error(`Não consegui renovar o token (revogado ou expirado). Gere um novo em ${base}/app/conectar-ia.`);
+  }
   refreshToken = data.refresh_token; // rotação: guarda o novo imediatamente
   accessToken = data.access_token;
   accessExpMs = Date.parse(data.access_expires_at) || Date.now() + 10 * 60 * 1000;

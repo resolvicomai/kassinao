@@ -208,6 +208,7 @@ const APP_CSS = `
   html[data-theme='light'] .person, html[data-theme='light'] .transcript, html[data-theme='light'] .minutes,
   html[data-theme='light'] .note, html[data-theme='light'] details.tech code { border-color: rgba(0,0,0,.12); }
   * { box-sizing: border-box; margin: 0; }
+  body.wide .card, body.wide .topbar, body.wide .topfoot { max-width: 960px; }
   body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 15px; line-height: 1.55;
          min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 26px 16px 40px; }
   .card { background: var(--bg-weak); border: 1px solid var(--border); border-radius: 10px;
@@ -446,20 +447,32 @@ const APP_CSS = `
   .topbar .tl:hover { color: var(--text-strong); }
   .topbar .user { display: inline-flex; align-items: center; gap: 6px; color: #c9c7c5; }
   .topbar img { width: 22px; height: 22px; border-radius: 50%; }
-  /* conexões de IA: uma linha por conexão, revogação individual */
+  /* tabelas do app (gravações, conexões): scroll próprio no celular, nunca no body */
+  .tablewrap { overflow-x: auto; margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; }
+  .ktable { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 560px; }
+  .ktable th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+               color: var(--text-dim); text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border);
+               font-weight: 600; background: var(--bg); white-space: nowrap; }
+  .ktable td { padding: 8px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+  .ktable .wb { white-space: nowrap; }
+  .ktable tbody tr:last-child td { border-bottom: 0; }
+  .ktable time { font-size: 12.5px; }
+  .ktable .dayrow td { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+                       color: var(--text-dim); background: var(--bg); padding: 7px 12px; }
+  .rrow { cursor: pointer; }
+  .rrow:hover td { background: var(--bg-hover); }
+  .rrow .tdch a { color: var(--text-strong); font-weight: 600; text-decoration: none; }
+  .rrow .tdch a:hover { text-decoration: underline; }
+  .rrow .tdch { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tdmut { color: var(--text-weak); font-size: 12.5px; white-space: nowrap; }
+  .tdact { white-space: nowrap; text-align: right; }
+  .tdact form { display: inline-block; margin: 0 0 0 2px; }
+  /* conexões de IA: revogação individual */
   .genform { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
   .genform input { flex: 1; min-width: 220px; background: var(--bg); border: 1px solid var(--border);
                    color: var(--text-strong); border-radius: 8px; padding: 10px 12px; font-size: 14px;
                    font-family: inherit; }
   .genform input:focus { outline: none; border-color: var(--accent); }
-  .sesslist { display: flex; flex-direction: column; gap: 8px; }
-  .sess { display: flex; align-items: center; gap: 10px; background: var(--bg);
-          border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
-  .sess .smain { flex: 1; min-width: 0; }
-  .sess .srow1 { font-size: 14px; color: var(--text-strong); }
-  .sess .srow1 code { font-size: 11px; color: var(--text-dim); margin-left: 6px; }
-  .sess .srow2 { font-size: 12.5px; color: var(--text-weak); margin-top: 2px; overflow-wrap: anywhere; }
-  .sess .rbtn { flex-shrink: 0; font-size: 12px; padding: 5px 10px; }
   /* toggle claro/escuro: mostra o ícone do tema DESTINO */
   .thm { background: none; border: 1px solid var(--border); border-radius: 999px; width: 28px; height: 28px;
          cursor: pointer; font-size: 13px; line-height: 1; padding: 0; display: inline-grid; place-items: center; }
@@ -508,6 +521,17 @@ function datetime(ms: number, lang: Locale): string {
     timeZone: config.timezone,
   });
   return `<time data-ts="${ms}">${esc(fallback)}</time>`;
+}
+
+/** Data sem hora ("2 de julho de 2026"), reescrita pro fuso do navegador. */
+function dateOnly(ms: number, lang: Locale): string {
+  const fallback = new Date(ms).toLocaleDateString(lang === 'pt' ? 'pt-BR' : 'en-US', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: config.timezone,
+  });
+  return `<time data-ts="${ms}" data-fmt="day">${esc(fallback)}</time>`;
 }
 
 /** Hora do relógio (HH:MM) no fuso do servidor, reescrita pro fuso do navegador via data-fmt="clock". */
@@ -583,6 +607,8 @@ function shell(
     refreshSeconds?: number;
     active?: 'rec' | 'ai';
     demo?: boolean;
+    /** páginas de tabela (central): coluna larga de 960px. */
+    wide?: boolean;
     /** Mostra "Conectar IA" na nav — só na central e no próprio conectar
      *  (na página de uma gravação é ruído; feedback do Mauro). */
     navAi?: boolean;
@@ -636,7 +662,7 @@ ${opts.demo ? '' : '<meta name="robots" content="noindex">'}
 ${THEME_INIT}
 <style>${APP_CSS}</style>
 </head>
-<body>
+<body${opts.wide ? ' class="wide"' : ''}>
 ${userbar}
 <div class="card">${body}</div>
 ${foot}
@@ -1349,6 +1375,60 @@ export function recordingsIndexPage(
       }),
     );
   let lastDay = '';
+  // colunas: Canal(+estado) | Início | Duração | Iniciou | Detalhes | ações
+  const NCOL = 6;
+  const rows = items
+    .map(({ meta: m, canDelete, audioBytes }) => {
+      let dayh = '';
+      if (sort !== 'largest') {
+        const day = dayLabel(m.startedAt);
+        if (day !== lastDay) {
+          lastDay = day;
+          // <time data-fmt="day">: o TZ_SCRIPT reescreve pro fuso do navegador
+          dayh = `<tr class="dayrow"><td colspan="${NCOL}"><time data-ts="${m.startedAt}" data-fmt="day">${day}</time></td></tr>`;
+        }
+      }
+      const live = m.status === 'recording';
+      // "25min 0s" → "25min" (o sufixo zerado é ruído em tabela)
+      const dur = m.endedAt
+        ? formatDuration(m.endedAt - m.startedAt)
+            .replace(/ 0s$/, '')
+            .replace(/ 0min$/, '')
+        : p(l, 'ixLive');
+      const who = m.startedBy ? `👤 ${esc(m.startedBy.name)}` : `🤖 ${p(l, 'ixByAuto')}`;
+      // defesa em profundidade: tamanho SÓ com owner=true, mesmo se bytes vazarem no item
+      const size =
+        opts.owner && audioBytes !== undefined && audioBytes > 0 && !m.audioDeleted
+          ? `💾 ${formatBytes(audioBytes, l)}`
+          : '';
+      const notes = m.notes.length > 0 ? `📝 ${m.notes.length}` : '';
+      const freed = m.audioDeleted ? `<span class="muted">${p(l, 'ixAudioFreed')}</span>` : '';
+      const extras = [`🎙️ ${m.participants.length}`, notes, size, freed].filter(Boolean).join('&ensp;');
+      // ações só pra quem pode apagar (iniciador/admin) e nunca ao vivo —
+      // o servidor revalida tudo de novo no POST
+      const actions =
+        canDelete && !live
+          ? `${
+              !m.audioDeleted
+                ? `<form method="post" action="/app/rec/${m.id}/liberar-audio?back=index" onsubmit="return confirm('${p(l, 'ixFreeSpaceConfirm')}')">
+                     <button type="submit" class="rbtn" title="${p(l, 'ixFreeSpace')}" aria-label="${p(l, 'ixFreeSpace')}">🔇</button></form>`
+                : ''
+            }
+            <form method="post" action="/app/rec/${m.id}/delete?back=index" onsubmit="return confirm('${p(l, 'delconfirm')}')">
+              <button type="submit" class="rbtn danger" title="${p(l, 'ixDelete')}" aria-label="${p(l, 'ixDelete')}">🗑️</button></form>`
+          : '';
+      // a linha inteira navega (JS); o link do canal cobre o caso sem JS
+      return `${dayh}<tr class="rrow" data-ch="${esc(m.voiceChannelName)}" data-href="/app/rec/${m.id}">
+        <td class="tdch"><a href="/app/rec/${m.id}">#${esc(m.voiceChannelName)}</a> ${webBadge(m, l)}</td>
+        <td>${clockTime(m.startedAt, l)} <span class="tdmut">· ${relativeAge(m.startedAt, l)}</span></td>
+        <td>${dur}</td>
+        <td class="tdmut">${who}</td>
+        <td class="tdmut">${extras}</td>
+        <td class="tdact">${actions}</td>
+      </tr>`;
+    })
+    .join('');
+  const th = (a: string, b: string) => (pt ? a : b);
   const cards =
     items.length === 0
       ? `<p class="muted" style="margin-top:16px">${
@@ -1356,69 +1436,35 @@ export function recordingsIndexPage(
             ? 'Nenhuma gravação acessível ainda. Grave uma call com /gravar no Discord!'
             : 'No accessible recordings yet. Record a call with /record on Discord!'
         }</p>`
-      : `<div class="rlist">${items
-          .map(({ meta: m, canDelete, audioBytes }) => {
-            let dayh = '';
-            if (sort !== 'largest') {
-              const day = dayLabel(m.startedAt);
-              if (day !== lastDay) {
-                lastDay = day;
-                // <time data-fmt="day">: o TZ_SCRIPT reescreve o rótulo pro fuso do
-                // navegador, igual às datas dos cards (senão os dois contradizem)
-                dayh = `<div class="dayh"><time data-ts="${m.startedAt}" data-fmt="day">${day}</time></div>`;
-              }
-            }
-            const live = m.status === 'recording';
-            const dur = m.endedAt ? formatDuration(m.endedAt - m.startedAt) : p(l, 'ixLive');
-            const who = m.startedBy ? `👤 ${esc(m.startedBy.name)}` : `🤖 ${p(l, 'ixByAuto')}`;
-            // defesa em profundidade: tamanho SÓ com owner=true, mesmo se bytes vazarem no item
-            const size =
-              opts.owner && audioBytes !== undefined && audioBytes > 0 && !m.audioDeleted
-                ? ` · 💾 ${formatBytes(audioBytes, l)}`
-                : '';
-            const notes = m.notes.length > 0 ? ` · 📝 ${m.notes.length} ${p(l, 'ixNotes')}` : '';
-            const freed = m.audioDeleted ? ` · <span class="muted">${p(l, 'ixAudioFreed')}</span>` : '';
-            // ações só pra quem pode apagar (iniciador/admin) e nunca no meio de
-            // gravação ao vivo — o servidor revalida tudo de novo no POST
-            // ações viram ícones (rótulo completo no title/aria) — o card fica de 1 altura
-            const actions =
-              canDelete && !live
-                ? `<div class="ractions">
-                    ${
-                      !m.audioDeleted
-                        ? `<form method="post" action="/app/rec/${m.id}/liberar-audio?back=index" onsubmit="return confirm('${p(l, 'ixFreeSpaceConfirm')}')">
-                             <button type="submit" class="rbtn" title="${p(l, 'ixFreeSpace')}" aria-label="${p(l, 'ixFreeSpace')}">🔇</button></form>`
-                        : ''
-                    }
-                    <form method="post" action="/app/rec/${m.id}/delete?back=index" onsubmit="return confirm('${p(l, 'delconfirm')}')">
-                      <button type="submit" class="rbtn danger" title="${p(l, 'ixDelete')}" aria-label="${p(l, 'ixDelete')}">🗑️</button></form>
-                  </div>`
-                : '';
-            // o DIA já está no cabeçalho do grupo — o card só precisa de hora + idade
-            return `${dayh}<div class="rcard" data-ch="${esc(m.voiceChannelName)}">
-              <a class="rlink" href="/app/rec/${m.id}">
-                <div class="rrow1"><strong>#${esc(m.voiceChannelName)}</strong> ${webBadge(m, l)}</div>
-                <div class="rrow2">${clockTime(m.startedAt, l)} · ${relativeAge(m.startedAt, l)} · ${dur} · ${who} · 🎙️ ${m.participants.length}${size}${notes}${freed}</div>
-              </a>
-              ${actions}
-            </div>`;
-          })
-          .join('')}</div>
+      : `<div class="tablewrap"><table class="ktable">
+          <thead><tr>
+            <th>${th('Canal', 'Channel')}</th><th>${th('Início', 'Started')}</th><th>${th('Duração', 'Length')}</th>
+            <th>${th('Iniciou', 'By')}</th><th>${th('Detalhes', 'Details')}</th><th></th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>
         <script>
+        // linha inteira clicável (menos botões/links, que têm ação própria)
+        document.querySelectorAll('.rrow[data-href]').forEach(function(r){
+          r.addEventListener('click', function(e){
+            if (e.target.closest('a,button,form')) return;
+            location.href = r.dataset.href;
+          });
+        });
         document.querySelectorAll('.fchip[data-ch]').forEach(function(c){
           c.addEventListener('click', function(){
             c.classList.toggle('off');
             var off = Object.create(null); // nome de canal é do Discord: sem herdar Object.prototype
             document.querySelectorAll('.fchip.off').forEach(function(x){ off[x.dataset.ch] = true; });
             var any = document.querySelectorAll('.fchip.off').length > 0;
-            document.querySelectorAll('.rcard').forEach(function(r){
+            document.querySelectorAll('.rrow').forEach(function(r){
               r.style.display = any && off[r.dataset.ch] ? 'none' : '';
             });
-            // cabeçalho de dia some junto quando o filtro esconde todos os cards do dia
-            document.querySelectorAll('.rlist .dayh').forEach(function(d){
+            // cabeçalho de dia some junto quando o filtro esconde todas as linhas do dia
+            document.querySelectorAll('.ktable .dayrow').forEach(function(d){
               var n = d.nextElementSibling, vis = false;
-              while (n && !n.classList.contains('dayh')) {
-                if (n.classList.contains('rcard') && n.style.display !== 'none') { vis = true; break; }
+              while (n && !n.classList.contains('dayrow')) {
+                if (n.classList.contains('rrow') && n.style.display !== 'none') { vis = true; break; }
                 n = n.nextElementSibling;
               }
               d.style.display = vis ? '' : 'none';
@@ -1442,7 +1488,7 @@ export function recordingsIndexPage(
      ${sorts}
      ${chips}
      ${cards}`,
-    { user: opts.user, lang: l, active: 'rec', navAi: true },
+    { user: opts.user, lang: l, active: 'rec', navAi: true, wide: true },
   );
 }
 
@@ -1590,24 +1636,30 @@ export function connectPage(opts: {
   const rows = sess
     .map((s) => {
       const last = s.lastSeenAt
-        ? `${T('último uso', 'last used')} ${relativeAge(s.lastSeenAt, opts.lang)}`
-        : T('nunca usada', 'never used');
-      return `<div class="sess">
-        <div class="smain">
-          <div class="srow1">🔌 <strong>${s.label ? esc(s.label) : `<span class="muted">${noName}</span>`}</strong> <code>${esc(s.sid.slice(0, 8))}</code></div>
-          <div class="srow2">${T('criada', 'created')} ${datetime(s.createdAt, opts.lang)} · ${last} · ${T('expira', 'expires')} ${datetime(s.exp, opts.lang)}</div>
-        </div>
-        <form method="post" action="/app/conectar-ia/revogar/${esc(s.sid)}"
+        ? relativeAge(s.lastSeenAt, opts.lang)
+        : `<span class="muted">${T('nunca usada', 'never used')}</span>`;
+      return `<tr>
+        <td class="tdch">🔌 <strong>${s.label ? esc(s.label) : `<span class="muted">${noName}</span>`}</strong> <code>${esc(s.sid.slice(0, 8))}</code></td>
+        <td>${dateOnly(s.createdAt, opts.lang)}</td>
+        <td>${last}</td>
+        <td class="tdmut">${dateOnly(s.exp, opts.lang)}</td>
+        <td class="tdact"><form method="post" action="/app/conectar-ia/revogar/${esc(s.sid)}"
           onsubmit="return confirm('${esc(T('Revogar esta conexão? O assistente ligado nela para de funcionar na hora.', 'Revoke this connection? The assistant using it stops working immediately.'))}')">
           <button type="submit" class="rbtn danger" title="${esc(T('Revogar esta conexão', 'Revoke this connection'))}">${esc(T('revogar', 'revoke'))}</button>
-        </form>
-      </div>`;
+        </form></td>
+      </tr>`;
     })
     .join('');
   const list =
     sess.length > 0
       ? `<h2>${esc(T('Suas conexões', 'Your connections'))} (${sess.length})</h2>
-         <div class="sesslist">${rows}</div>
+         <div class="tablewrap"><table class="ktable" style="min-width:560px">
+           <thead><tr>
+             <th>${esc(T('Conexão', 'Connection'))}</th><th>${esc(T('Criada', 'Created'))}</th>
+             <th>${esc(T('Último uso', 'Last used'))}</th><th>${esc(T('Expira', 'Expires'))}</th><th></th>
+           </tr></thead>
+           <tbody>${rows}</tbody>
+         </table></div>
          ${
            sess.length > 1
              ? `<form method="post" action="/app/conectar-ia/revogar" style="margin-top:14px"
@@ -1644,5 +1696,5 @@ export function connectPage(opts: {
       ),
     )}</p>
     ${list}`;
-  return shell(title, body, { lang: opts.lang, user: opts.user, active: 'ai' });
+  return shell(title, body, { lang: opts.lang, user: opts.user, active: 'ai', wide: true });
 }
