@@ -5,6 +5,7 @@ import { formatDuration, formatOffset } from '../recorder/RecordingSession';
 import { audioExpiryOf, MeetingMinutes, RecordingMeta, textExpiryOf, TranscriptSegment } from '../store';
 import { shortError } from '../util';
 import type { WebUser } from './auth';
+import type { SessionSummary } from './mcpTokens';
 import type { WebSearchHit } from './search';
 
 function esc(s: string): string {
@@ -445,6 +446,20 @@ const APP_CSS = `
   .topbar .tl:hover { color: var(--text-strong); }
   .topbar .user { display: inline-flex; align-items: center; gap: 6px; color: #c9c7c5; }
   .topbar img { width: 22px; height: 22px; border-radius: 50%; }
+  /* conexões de IA: uma linha por conexão, revogação individual */
+  .genform { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .genform input { flex: 1; min-width: 220px; background: var(--bg); border: 1px solid var(--border);
+                   color: var(--text-strong); border-radius: 8px; padding: 10px 12px; font-size: 14px;
+                   font-family: inherit; }
+  .genform input:focus { outline: none; border-color: var(--accent); }
+  .sesslist { display: flex; flex-direction: column; gap: 8px; }
+  .sess { display: flex; align-items: center; gap: 10px; background: var(--bg);
+          border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
+  .sess .smain { flex: 1; min-width: 0; }
+  .sess .srow1 { font-size: 14px; color: var(--text-strong); }
+  .sess .srow1 code { font-size: 11px; color: var(--text-dim); margin-left: 6px; }
+  .sess .srow2 { font-size: 12.5px; color: var(--text-weak); margin-top: 2px; overflow-wrap: anywhere; }
+  .sess .rbtn { flex-shrink: 0; font-size: 12px; padding: 5px 10px; }
   /* toggle claro/escuro: mostra o ícone do tema DESTINO */
   .thm { background: none; border: 1px solid var(--border); border-radius: 999px; width: 28px; height: 28px;
          cursor: pointer; font-size: 13px; line-height: 1; padding: 0; display: inline-grid; place-items: center; }
@@ -1466,8 +1481,11 @@ export function connectPage(opts: {
   lang: Locale;
   user?: WebUser;
   refreshToken?: string;
-  sessionCount?: number;
-  revoked?: boolean;
+  /** apelido dado à conexão recém-gerada (eco na página do token). */
+  label?: string;
+  /** conexões ativas DESTE usuário — a lista de gestão. */
+  sessions?: SessionSummary[];
+  revoked?: 'all' | 'one';
 }): string {
   const pt = opts.lang === 'pt';
   const T = (a: string, b: string): string => (pt ? a : b);
@@ -1510,6 +1528,16 @@ export function connectPage(opts: {
         )}</p>`
       : '';
     const body = `<h1>✅ ${esc(T('Token gerado', 'Token generated'))}</h1>
+      ${
+        opts.label
+          ? `<p class="muted" style="margin-top:8px">${esc(T('Apelido', 'Nickname'))}: <strong>${esc(opts.label)}</strong> — ${esc(
+              T(
+                'é assim que ela aparece na sua lista de conexões.',
+                'that is how it shows up in your connections list.',
+              ),
+            )}</p>`
+          : ''
+      }
       ${localhostWarn}
       <p style="color:#ffb454;margin-top:12px">⚠️ ${esc(
         T(
@@ -1549,37 +1577,72 @@ export function connectPage(opts: {
     return shell(title, body, { lang: opts.lang, user: opts.user, active: 'ai' });
   }
 
-  const count = opts.sessionCount ?? 0;
-  const revokedMsg = opts.revoked
-    ? `<p style="color:#8f8;margin-top:12px">✅ ${esc(T('Todos os seus conectores foram revogados.', 'All your connectors were revoked.'))}</p>`
-    : '';
-  const btnStyle = 'border:0;cursor:pointer;font:inherit';
+  // ---------- estado de gestão: lista das SUAS conexões, cada uma nomeada,
+  // com criação/último uso/expiração e revogação individual ----------
+  const sess = opts.sessions ?? [];
+  const revokedMsg =
+    opts.revoked === 'all'
+      ? `<div class="note" style="border-left-color:var(--ok)">✅ ${esc(T('Todas as suas conexões foram revogadas.', 'All your connections were revoked.'))}</div>`
+      : opts.revoked === 'one'
+        ? `<div class="note" style="border-left-color:var(--ok)">✅ ${esc(T('Conexão revogada — o token dela parou de funcionar na hora.', 'Connection revoked — its token stopped working immediately.'))}</div>`
+        : '';
+  const noName = T('sem apelido', 'unnamed');
+  const rows = sess
+    .map((s) => {
+      const last = s.lastSeenAt
+        ? `${T('último uso', 'last used')} ${relativeAge(s.lastSeenAt, opts.lang)}`
+        : T('nunca usada', 'never used');
+      return `<div class="sess">
+        <div class="smain">
+          <div class="srow1">🔌 <strong>${s.label ? esc(s.label) : `<span class="muted">${noName}</span>`}</strong> <code>${esc(s.sid.slice(0, 8))}</code></div>
+          <div class="srow2">${T('criada', 'created')} ${datetime(s.createdAt, opts.lang)} · ${last} · ${T('expira', 'expires')} ${datetime(s.exp, opts.lang)}</div>
+        </div>
+        <form method="post" action="/app/conectar-ia/revogar/${esc(s.sid)}"
+          onsubmit="return confirm('${esc(T('Revogar esta conexão? O assistente ligado nela para de funcionar na hora.', 'Revoke this connection? The assistant using it stops working immediately.'))}')">
+          <button type="submit" class="rbtn danger" title="${esc(T('Revogar esta conexão', 'Revoke this connection'))}">${esc(T('revogar', 'revoke'))}</button>
+        </form>
+      </div>`;
+    })
+    .join('');
+  const list =
+    sess.length > 0
+      ? `<h2>${esc(T('Suas conexões', 'Your connections'))} (${sess.length})</h2>
+         <div class="sesslist">${rows}</div>
+         ${
+           sess.length > 1
+             ? `<form method="post" action="/app/conectar-ia/revogar" style="margin-top:14px"
+                 onsubmit="return confirm('${esc(T('Revogar TODAS as suas conexões de uma vez?', 'Revoke ALL your connections at once?'))}')">
+                 <button type="submit" class="danger">${esc(T('Revogar todas', 'Revoke all'))}</button>
+               </form>`
+             : ''
+         }`
+      : `<h2>${esc(T('Suas conexões', 'Your connections'))}</h2>
+         <p class="muted">${esc(T('Nenhuma conexão ativa no momento.', 'No active connections right now.'))}</p>`;
   const body = `<h1>🔌 ${esc(title)}</h1>
     ${revokedMsg}
     <p class="muted" style="margin-top:12px">${esc(
       T(
-        'Ligue o Kassinão em qualquer assistente de IA (Claude, Cursor e outros) para perguntar sobre as suas calls em linguagem natural.',
-        'Plug Kassinão into any AI assistant (Claude, Cursor, and more) to ask about your calls in natural language.',
+        'Ligue o Kassinão em qualquer assistente de IA com MCP (Claude, Cursor e outros) para perguntar sobre as suas calls em linguagem natural.',
+        'Plug Kassinão into any MCP-capable AI assistant (Claude, Cursor, and more) to ask about your calls in natural language.',
       ),
     )}</p>
-    <ol class="muted" style="margin:12px 0 0 18px;line-height:1.9">
-      <li>${esc(T('Clique em Gerar conexão — sai uma configuração pronta.', 'Click Generate connection — you get a ready-to-paste config.'))}</li>
-      <li>${esc(T('Cole no arquivo de config do seu app (a gente diz onde).', 'Paste it into your app config file (we tell you where).'))}</li>
-      <li>${esc(T('Reinicie o app e pergunte: "o que ficou pra essa semana?"', 'Restart the app and ask: "what\'s due this week?"'))}</li>
-    </ol>
-    <p class="muted" style="margin-top:12px">🔒 ${esc(
+    <p class="muted" style="margin-top:10px">🔒 ${esc(
       T(
-        'A conexão só enxerga as gravações que VOCÊ já pode ver — e você revoga quando quiser.',
-        'The connection only sees recordings YOU can already see — and you can revoke it anytime.',
+        'Esta página é sua: cada pessoa entra com o próprio Discord e só vê — e só pode revogar — as PRÓPRIAS conexões. E cada conexão só enxerga as gravações que o dono dela já pode ver.',
+        'This page is yours: each person signs in with their own Discord and only sees — and can only revoke — their OWN connections. And each connection only sees recordings its owner can already see.',
       ),
-    )} ${esc(T('Conexões ativas', 'Active connections'))}: ${count}</p>
-    <div class="downloads" style="margin-top:18px">
-      <form method="post" action="/app/conectar-ia/gerar" style="display:inline"><button class="btn" type="submit" style="${btnStyle}">🔌 ${esc(T('Gerar conexão', 'Generate connection'))}</button></form>
-      ${
-        count > 0
-          ? `<form method="post" action="/app/conectar-ia/revogar" style="display:inline"><button class="btn" type="submit" style="${btnStyle};background:#5a2a2a">${esc(T('Revogar todas', 'Revoke all'))}</button></form>`
-          : ''
-      }
-    </div>`;
+    )}</p>
+    <form class="genform" method="post" action="/app/conectar-ia/gerar">
+      <input name="label" maxlength="40" autocomplete="off"
+        placeholder="${esc(T('apelido (opcional) — ex.: Claude do notebook', 'nickname (optional) — e.g. Claude on my laptop'))}">
+      <button class="btn" type="submit" style="border:0;cursor:pointer;font:inherit">🔌 ${esc(T('Gerar conexão', 'Generate connection'))}</button>
+    </form>
+    <p class="muted" style="margin-top:8px;font-size:12.5px">${esc(
+      T(
+        'Sai uma configuração pronta pra colar no seu app (a gente diz onde). O apelido ajuda você a saber qual revogar depois.',
+        'You get a ready-to-paste config (we tell you where it goes). The nickname helps you know which one to revoke later.',
+      ),
+    )}</p>
+    ${list}`;
   return shell(title, body, { lang: opts.lang, user: opts.user, active: 'ai' });
 }
