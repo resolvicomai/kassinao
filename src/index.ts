@@ -1211,11 +1211,12 @@ async function handleMcp(interaction: ChatInputCommandInteraction): Promise<void
     return;
   }
   // /mcp é só para donos (allowlist explícita OWNER_IDS). Membros comuns usam
-  // a página /conectar-ia (self-serve, com o próprio acesso) — não inferimos
+  // a página /app/conectar-ia (self-serve, com o próprio acesso) — não inferimos
   // "dono" de estar numa DM. Resposta SEMPRE efêmera; o código nunca é logado.
   if (!config.ownerIds.includes(interaction.user.id)) {
     await interaction.reply({
-      content: t(l, 'mcp.web-only', { url: `${config.baseUrl}/app/conectar-ia` }),
+      // o template já traz o caminho ({url}/app/conectar-ia): passa SÓ o baseUrl
+      content: t(l, 'mcp.web-only', { url: config.baseUrl }),
       ephemeral: true,
     });
     return;

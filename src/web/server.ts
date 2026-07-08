@@ -167,7 +167,9 @@ export function startWebServer(): void {
   // brute-force/reconhecimento sem incomodar uso real.
   const webHits = new Map<string, { n: number; reset: number }>();
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (!/^\/(app|rec|auth|demo|conectar-ia|gravacoes)\b/.test(req.path)) return next();
+    // /i: o roteamento do Express é case-insensitive por padrão — sem a flag,
+    // /APP/rec/... chegaria ao handler sem passar pelo contador
+    if (!/^\/(app|rec|auth|demo|conectar-ia|gravacoes)\b/i.test(req.path)) return next();
     const now = Date.now();
     if (webHits.size > 5000) for (const [k, v] of webHits) if (v.reset < now) webHits.delete(k);
     const ip = req.ip ?? 'unknown';
@@ -245,11 +247,19 @@ export function startWebServer(): void {
       console.log(`MCP: ${n} sessão(ões) revogada(s) por ${cleanInline(user.name)} (${user.id}) via web.`);
       res.redirect('/app/conectar-ia?revoked=1');
     });
+
+    // A página do token é resposta direta de POST; o toggle EN/PT do topo faz
+    // GET ?lang=… na MESMA URL. Sem este fallback seria um 404 cru do Express —
+    // e a página de exibição única sumiria. O cookie de idioma já foi salvo
+    // pelo middleware; volta pra página canônica (novo token = gerar de novo).
+    app.get('/app/conectar-ia/gerar', (_req, res) => {
+      res.redirect('/app/conectar-ia');
+    });
   }
 
   app.get('/', (req, res) => {
-    // landing = vitrine pública; passa o usuário só pra a ponte do topo dizer
-    // "Entrar" (deslogado) ou "Minhas gravações" (logado). O app é mundo à parte.
+    // landing = vitrine pública, cega pra sessão de propósito: a única ponte
+    // público→app é o "entrar" do rodapé. O app (/app/*) é mundo à parte.
     res.type('html').send(landingPage(pageLang(req)));
   });
 
@@ -632,6 +642,13 @@ export function startWebServer(): void {
    * O par da retenção ilimitada — a memória fica, os gigas voltam. Mesmas guardas do
    * delete (permissão, ao-vivo, download/transcrição em andamento).
    */
+  // Mesmo caso do /gerar: as respostas de POST (delete/liberar e seus 403/409)
+  // exibem o toggle EN/PT, que faz GET ?lang=… na URL do POST. Fallback: volta
+  // pra página da gravação (ou pro índice, se ela já não existir).
+  app.get(['/app/rec/:id/delete', '/app/rec/:id/liberar-audio'], (req, res) => {
+    res.redirect(`/app/rec/${encodeURIComponent(req.params.id)}`);
+  });
+
   app.post('/app/rec/:id/liberar-audio', async (req, res) => {
     const l = pageLang(req);
     const user = getWebUser(req);

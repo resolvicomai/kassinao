@@ -421,9 +421,10 @@ const APP_CSS = `
   .note { background: var(--bg); border: 1px solid rgba(255,255,255,.1); border-left: 3px solid var(--warn);
           padding: 10px 14px; border-radius: 6px; font-size: 14px; margin-top: 14px; }
   footer { margin-top: 26px; font-size: 13px; color: var(--text-weak); }
-  /* nada de imagem/palavra longa forçando scroll horizontal no celular */
+  /* nada de imagem/palavra longa forçando scroll horizontal no celular —
+     cobre TUDO (nome de guild/canal/pessoa/nota sem espaço vem do Discord) */
   img { max-width: 100%; height: auto; }
-  .transcript p, .minutes, .note, .muted, .events li, h1 { overflow-wrap: anywhere; }
+  .card, .topbar, .topfoot { overflow-wrap: anywhere; }
   @media (max-width: 480px) {
     body { padding: 16px 10px; }
     .card { padding: 16px 12px; }
@@ -466,7 +467,9 @@ function clockTime(ms: number, lang: Locale): string {
 const TZ_SCRIPT = `<script>
 document.querySelectorAll('time[data-ts]').forEach(function(el){
   try {
-    var opts = el.dataset.fmt === 'clock' ? {timeStyle:'short'} : {dateStyle:'long', timeStyle:'short'};
+    var opts = el.dataset.fmt === 'clock' ? {timeStyle:'short'}
+      : el.dataset.fmt === 'day' ? {dateStyle:'long'}
+      : {dateStyle:'long', timeStyle:'short'};
     el.textContent = new Date(+el.dataset.ts).toLocaleString(navigator.language, opts);
   } catch(e){}
 });
@@ -480,18 +483,20 @@ window.kseek = function(ms){
     return;
   }
   var paras = document.querySelectorAll('.transcript p[data-s]');
+  var sb = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
   for (var i = 0; i < paras.length; i++) {
-    if (+paras[i].dataset.s >= ms) { paras[i].scrollIntoView({block:'center', behavior:'smooth'}); return; }
+    if (+paras[i].dataset.s >= ms) { paras[i].scrollIntoView({block:'center', behavior:sb}); return; }
   }
 };
 // deep link do MCP/transcrição: #t=<segundos> pula pro momento ao abrir (e ao trocar o hash).
 // preload=none: se os metadados ainda não carregaram, espera loadedmetadata antes de buscar.
+// Sem player (áudio expirado/liberado), o kseek degrada pra rolar até o trecho.
 function kseekFromHash(){
   var m = /#t=(\\d+)/.exec(location.hash);
   if (!m) return;
-  var p = document.getElementById('kplayer');
-  if (!p) return;
   var secs = +m[1];
+  var p = document.getElementById('kplayer');
+  if (!p) { window.kseek(secs*1000); return; }
   if (p.readyState >= 1) { window.kseek(secs*1000); }
   else { p.addEventListener('loadedmetadata', function(){ window.kseek(secs*1000); }, {once:true}); try { p.load(); } catch(e){} }
 }
@@ -901,7 +906,8 @@ const RECORDING_SCRIPT = `<script>
       if (current) {
         current.classList.add('now');
         var f = document.getElementById('kfollow');
-        if (f && f.checked) current.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        var sb = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+        if (f && f.checked) current.scrollIntoView({ block: 'center', behavior: sb });
       }
     });
   }
@@ -909,7 +915,9 @@ const RECORDING_SCRIPT = `<script>
   var input = document.getElementById('ksearch');
   function applyFilter(){
     var q = input ? input.value.trim().toLowerCase() : '';
-    var off = {};
+    // Object.create(null): nome de falante vem do Discord — 'constructor'/'toString'
+    // num objeto plano seria truthy sem filtro nenhum e sumiria com o bloco
+    var off = Object.create(null);
     document.querySelectorAll('.fchip.off').forEach(function(c){ off[c.dataset.sp] = true; });
     document.querySelectorAll('.transcript .tblock').forEach(function(b){
       if (off[b.dataset.sp]) { b.style.display = 'none'; return; }
@@ -1252,7 +1260,9 @@ export function recordingsIndexPage(
               const day = dayLabel(m.startedAt);
               if (day !== lastDay) {
                 lastDay = day;
-                dayh = `<div class="dayh">${day}</div>`;
+                // <time data-fmt="day">: o TZ_SCRIPT reescreve o rótulo pro fuso do
+                // navegador, igual às datas dos cards (senão os dois contradizem)
+                dayh = `<div class="dayh"><time data-ts="${m.startedAt}" data-fmt="day">${day}</time></div>`;
               }
             }
             const live = m.status === 'recording';
@@ -1293,7 +1303,7 @@ export function recordingsIndexPage(
         document.querySelectorAll('.fchip[data-ch]').forEach(function(c){
           c.addEventListener('click', function(){
             c.classList.toggle('off');
-            var off = {};
+            var off = Object.create(null); // nome de canal é do Discord: sem herdar Object.prototype
             document.querySelectorAll('.fchip.off').forEach(function(x){ off[x.dataset.ch] = true; });
             var any = document.querySelectorAll('.fchip.off').length > 0;
             document.querySelectorAll('.rcard').forEach(function(r){

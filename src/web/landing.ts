@@ -106,6 +106,12 @@ footer a:hover{color:var(--text-strong)}
   .hero .wrap,.beat{grid-template-columns:1fr}
   .beat.rev>div:first-child{order:0}
 }
+@media (max-width:600px){
+  /* o contraste Diarização×Kassinão empilha — lado a lado ele estoura a moldura
+     (overflow:hidden cortava o painel direito sem dar scroll) */
+  .two{grid-template-columns:1fr;min-width:0}
+  .two .l{border-right:0;border-bottom:1px solid var(--accent)}
+}
 `;
 
 export function landingPage(lang: Locale): string {
@@ -142,7 +148,9 @@ export function landingPage(lang: Locale): string {
   const wave = (cv: string, cross: boolean, b: string): string =>
     `<svg class="wv" viewBox="0 0 285 28" preserveAspectRatio="none" style="color:var(${cv})" aria-hidden="true">${cross ? '<rect x="182" y="0" width="60" height="28" fill="var(--accent)" opacity=".1"/><rect x="212" y="0" width="1.4" height="28" fill="var(--accent)" opacity=".45"/>' : ''}<g fill="currentColor">${b}</g></svg>`;
 
-  const heroArt = `<figure class="frame kh" role="img" aria-label="${esc(
+  // role="group" (não "img"): img é children-presentational e ESCONDERIA o link
+  // /demo interno de leitores de tela; group mantém o rótulo e expõe o conteúdo
+  const heroArt = `<figure class="frame kh" role="group" aria-label="${esc(
     T(
       'Gravação ao vivo de #estrategia: três pessoas, cada uma na própria faixa; às 00:14 duas falam juntas e cada linha da transcrição fica na cor de quem falou. Dados fictícios.',
       'Live recording of #estrategia: three people, each on their own track; at 00:14 two speak at once and each transcript line keeps the color of who spoke. Sample data.',
@@ -194,8 +202,8 @@ export function landingPage(lang: Locale): string {
         'Open-source, self-hosted. Each person records on their own track — so the transcript, the AI minutes, and /ask already know whose every line is.',
       )}</p>
       <div class="act">
-        <a class="btn" href="${ghHref()}">${T('Ver no GitHub', 'View on GitHub')} →</a>
-        <a class="tlink" href="/demo">${T('ver uma gravação real', 'see a real recording')}</a>
+        <a class="btn" href="${ghHref()}">${config.repoPublic ? T('Ver no GitHub', 'View on GitHub') : T('Ver no npm', 'View on npm')} →</a>
+        <a class="tlink" href="/demo">${T('ver uma gravação de exemplo', 'see a sample recording')}</a>
       </div>
     </div>
     ${heroArt}
@@ -255,8 +263,8 @@ export function landingPage(lang: Locale): string {
       'A solo, self-hosted project — no SaaS, no subscription. No mobile app, no support line. Setup and everything else: it\'s all in the README.',
     )}</p>
     <div class="act">
-      <a class="btn" href="${ghHref()}">${T('Ver no GitHub', 'View on GitHub')} →</a>
-      <a class="tlink" href="/demo">${T('ver uma gravação real', 'see a real recording')}</a>
+      <a class="btn" href="${ghHref()}">${config.repoPublic ? T('Ver no GitHub', 'View on GitHub') : T('Ver no npm', 'View on npm')} →</a>
+      <a class="tlink" href="/demo">${T('ver uma gravação de exemplo', 'see a sample recording')}</a>
     </div>
   </div></section>`;
 
