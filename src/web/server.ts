@@ -25,7 +25,7 @@ import {
 import { checkAccess } from './access';
 import { mountMcpApi } from './api';
 import { beginLogin, finishLogin, getWebUser, logoutWeb, signMcpRefresh, WebUser } from './auth';
-import { countUserSessions, createSession, revokeUser } from './mcpTokens';
+import { createSession, listUserSessions, revokeUser, revokeUserSession } from './mcpTokens';
 import {
   connectPage,
   messagePage,
@@ -216,25 +216,55 @@ export function startWebServer(): void {
     app.get('/app/conectar-ia', (req, res) => {
       const l = pageLang(req);
       const user = getWebUser(req);
-      const sessionCount = user ? countUserSessions(user.id) : 0;
-      res.type('html').send(connectPage({ lang: l, user, sessionCount, revoked: req.query.revoked === '1' }));
+      const q = String(req.query.revoked ?? '');
+      res.type('html').send(
+        connectPage({
+          lang: l,
+          user,
+          sessions: user ? listUserSessions(user.id) : undefined,
+          revoked: q === '1' ? 'all' : q === 'one' ? 'one' : undefined,
+        }),
+      );
     });
 
-    app.post('/app/conectar-ia/gerar', (req, res) => {
+    app.post('/app/conectar-ia/gerar', express.urlencoded({ extended: false, limit: '2kb' }), (req, res) => {
       const l = pageLang(req);
       const user = getWebUser(req);
       if (!user) {
         beginLogin(res, '/app/conectar-ia');
         return;
       }
+      // apelido opcional ("Claude do notebook") — só exibição na lista de gestão
+      const label = String((req.body as Record<string, unknown>)?.label ?? '')
+        .trim()
+        .slice(0, 40);
       // O usuário recebe um REFRESH token (o conector troca por access via /api/mcp/refresh).
-      const s = createSession(user.id, user.name);
+      const s = createSession(user.id, user.name, label);
       const refreshToken = signMcpRefresh({ id: user.id, name: user.name, exp: s.exp, jti: s.sid, gen: s.gen });
-      console.log(`MCP: sessão ${s.sid} criada para ${cleanInline(user.name)} (${user.id}) via web.`);
+      console.log(
+        `MCP: sessão ${s.sid} criada para ${cleanInline(user.name)} (${user.id}) via web${label ? ` — "${cleanInline(label)}"` : ''}.`,
+      );
       res
         .set('Cache-Control', 'no-store')
         .type('html')
-        .send(connectPage({ lang: l, user, refreshToken }));
+        .send(connectPage({ lang: l, user, refreshToken, label }));
+    });
+
+    // revoga UMA conexão — só do próprio usuário (revokeUserSession valida o dono)
+    app.post('/app/conectar-ia/revogar/:sid', (req, res) => {
+      const user = getWebUser(req);
+      if (!user) {
+        beginLogin(res, '/app/conectar-ia');
+        return;
+      }
+      const ok = revokeUserSession(user.id, req.params.sid);
+      // cleanInline também no sid: vem da URL (controlado pelo cliente) — mesmo
+      // sendo logado só quando pertence ao usuário, não entra cru no log
+      if (ok)
+        console.log(
+          `MCP: sessão ${cleanInline(req.params.sid)} revogada por ${cleanInline(user.name)} (${user.id}) via web.`,
+        );
+      res.redirect(ok ? '/app/conectar-ia?revoked=one' : '/app/conectar-ia');
     });
 
     app.post('/app/conectar-ia/revogar', (req, res) => {
@@ -252,7 +282,7 @@ export function startWebServer(): void {
     // GET ?lang=… na MESMA URL. Sem este fallback seria um 404 cru do Express —
     // e a página de exibição única sumiria. O cookie de idioma já foi salvo
     // pelo middleware; volta pra página canônica (novo token = gerar de novo).
-    app.get('/app/conectar-ia/gerar', (_req, res) => {
+    app.get(['/app/conectar-ia/gerar', '/app/conectar-ia/revogar', '/app/conectar-ia/revogar/:sid'], (_req, res) => {
       res.redirect('/app/conectar-ia');
     });
   }

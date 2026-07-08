@@ -24,6 +24,10 @@ interface Session {
   /** expiração do refresh (ms epoch), deslizante a cada rotação. */
   exp: number;
   createdAt: number;
+  /** apelido dado pelo usuário ao gerar ("Claude do notebook") — só exibição. */
+  label?: string;
+  /** último refresh bem-sucedido = conector em uso (sessões antigas não têm). */
+  lastSeenAt?: number;
 }
 
 const FILE = path.join(config.recordingsDir, '.mcp-sessions.json');
@@ -74,12 +78,12 @@ export interface NewSession {
   exp: number;
 }
 
-/** Cria uma nova sessão de conector para um usuário. */
-export function createSession(userId: string, name: string): NewSession {
+/** Cria uma nova sessão de conector para um usuário (label = apelido opcional). */
+export function createSession(userId: string, name: string, label?: string): NewSession {
   load();
   const sid = crypto.randomUUID();
   const exp = Date.now() + config.mcpRefreshTtlDays * 86400000;
-  sessions.set(sid, { sid, userId, name, gen: 0, exp, createdAt: Date.now() });
+  sessions.set(sid, { sid, userId, name, gen: 0, exp, createdAt: Date.now(), label: label || undefined });
   persist();
   return { sid, gen: 0, exp };
 }
@@ -110,6 +114,7 @@ export function rotateSession(sid: string, presentedGen: number): RotateResult {
   }
   s.gen += 1;
   s.exp = Date.now() + config.mcpRefreshTtlDays * 86400000; // janela deslizante
+  s.lastSeenAt = Date.now(); // refresh bem-sucedido = conector em uso
   persist();
   return { ok: true, gen: s.gen, userId: s.userId, name: s.name, exp: s.exp };
 }
@@ -152,6 +157,35 @@ export function countUserSessions(userId: string): number {
   let n = 0;
   for (const s of sessions.values()) if (s.userId === userId) n++;
   return n;
+}
+
+/** Resumo de uma sessão para a página de gestão (sem segredos: sid é id, não token). */
+export interface SessionSummary {
+  sid: string;
+  label?: string;
+  createdAt: number;
+  lastSeenAt?: number;
+  exp: number;
+}
+
+/** Lista as sessões ativas DESTE usuário (mais recentes primeiro) — pra ele ver o que revoga. */
+export function listUserSessions(userId: string): SessionSummary[] {
+  load();
+  gcSessions();
+  return [...sessions.values()]
+    .filter((s) => s.userId === userId)
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map(({ sid, label, createdAt, lastSeenAt, exp }) => ({ sid, label, createdAt, lastSeenAt, exp }));
+}
+
+/** Revoga UMA sessão, só se pertencer ao usuário (a rota web usa esta, nunca a crua). */
+export function revokeUserSession(userId: string, sid: string): boolean {
+  load();
+  const s = sessions.get(sid);
+  if (!s || s.userId !== userId) return false;
+  sessions.delete(sid);
+  persist();
+  return true;
 }
 
 // ---------- códigos de troca de uso único (fluxo headless /mcp new) ----------
