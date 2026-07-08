@@ -39,8 +39,16 @@ export function startCleanupJob(): void {
           continue;
         }
       }
+      // Não trimar o áudio enquanto a transcrição não está resolvida: no gap de ~12min
+      // entre rodadas parciais (rate limit) o id sai da fila em memória (isTranscribing=false),
+      // mas as faixas ainda serão relidas na próxima rodada. retryScheduled fica persistido
+      // no meta.json durante o gap; pending/running cobrem uma queda antes do recover re-enfileirar.
+      const txIncomplete =
+        meta.transcription?.retryScheduled === true ||
+        meta.transcription?.status === 'pending' ||
+        meta.transcription?.status === 'running';
       const audioExpiresAt = audioExpiryOf(meta);
-      if (audioExpiresAt && audioExpiresAt < now && !meta.audioDeleted) {
+      if (audioExpiresAt && audioExpiresAt < now && !meta.audioDeleted && !txIncomplete) {
         // só o áudio expira: some faixas e cache, ficam meta + transcrição + ata
         deleteAudioOnly(meta);
         trimmed++;

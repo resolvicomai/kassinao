@@ -108,9 +108,13 @@ export async function answerQuestion(question: string, metas: RecordingMeta[], l
   const raw = await llmChat(system, user, 700, { json: false });
   // Só links do PRÓPRIO Kassinão sobrevivem: uma transcrição hostil não pode
   // induzir o LLM a emitir [clique aqui](https://evil.tld) — phishing clicável.
+  // Fronteira de origem (não só prefixo): senão "https://kassinao.app.evil.tld"
+  // passaria no startsWith. Toda citação real é pageUrl(id)+"#t=" → baseUrl + "/..." | "#...".
+  const ownLink = (url: string): boolean =>
+    url === config.baseUrl || url.startsWith(`${config.baseUrl}/`) || url.startsWith(`${config.baseUrl}#`);
   const safeLinks = neutralizeFences(cleanText(raw)).replace(
     /\[([^\]]*)\]\(([^)]*)\)/g,
-    (whole, label: string, url: string) => (url.startsWith(config.baseUrl) ? whole : label),
+    (whole, label: string, url: string) => (ownLink(url) ? whole : label),
   );
   const answer = safeSlice(safeLinks.trim(), 1800);
   return { answer, meetingsUsed: used };

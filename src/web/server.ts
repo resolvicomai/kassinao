@@ -213,7 +213,7 @@ export function startWebServer(): void {
       // O usuário recebe um REFRESH token (o conector troca por access via /api/mcp/refresh).
       const s = createSession(user.id, user.name);
       const refreshToken = signMcpRefresh({ id: user.id, name: user.name, exp: s.exp, jti: s.sid, gen: s.gen });
-      console.log(`MCP: sessão ${s.sid} criada para ${user.name} (${user.id}) via web.`);
+      console.log(`MCP: sessão ${s.sid} criada para ${cleanInline(user.name)} (${user.id}) via web.`);
       res
         .set('Cache-Control', 'no-store')
         .type('html')
@@ -227,7 +227,7 @@ export function startWebServer(): void {
         return;
       }
       const n = revokeUser(user.id);
-      console.log(`MCP: ${n} sessão(ões) revogada(s) por ${user.name} (${user.id}) via web.`);
+      console.log(`MCP: ${n} sessão(ões) revogada(s) por ${cleanInline(user.name)} (${user.id}) via web.`);
       res.redirect('/conectar-ia?revoked=1');
     });
   }

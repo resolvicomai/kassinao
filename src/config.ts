@@ -61,6 +61,17 @@ const audioRetentionUnlimited = retentionDays <= 0;
 const textRetentionDaysRaw = Number(process.env.TEXT_RETENTION_DAYS || 90);
 const textRetentionUnlimited = audioRetentionUnlimited || textRetentionDaysRaw <= 0;
 
+// Aviso de upgrade: quem rodava RETENTION_DAYS curto (privacidade/compliance) e NÃO
+// setou TEXT_RETENTION_DAYS passa a reter transcrição/ata/notas por 90 dias (o default
+// da retenção em camadas do #23). É intencional e documentado, mas não pode ser silencioso.
+if (!process.env.TEXT_RETENTION_DAYS && !audioRetentionUnlimited && textRetentionDaysRaw > retentionDays) {
+  console.warn(
+    `⚠️  TEXT_RETENTION_DAYS não definido: transcrição/ata/notas ficam ${textRetentionDaysRaw} dias ` +
+      `(padrão da retenção em camadas), enquanto o áudio expira em ${retentionDays}. ` +
+      `Defina TEXT_RETENTION_DAYS no .env para alinhar (ex.: =${retentionDays}) se precisa apagar o texto junto com o áudio.`,
+  );
+}
+
 // Prompt de contexto do Whisper: o default em pt-BR só vale quando o idioma é pt
 // (um deploy em inglês não pode receber viés de português).
 const transcribeLanguage = process.env.TRANSCRIBE_LANGUAGE || 'pt';
