@@ -186,6 +186,26 @@ const APP_CSS = `
     --mono:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;
     --col:760px;
   }
+  /* tema claro: mesmos papéis, outra luz (o data-theme é aplicado no <html>
+     por um script no <head>, antes da pintura — sem flash) */
+  html[data-theme='light'] { color-scheme: light; }
+  html[data-theme='light'] body {
+    --bg: #f6f5f3; --bg-weak: #ffffff; --bg-hover: #ececea;
+    --text: #55534f; --text-weak: #85837f; --text-dim: #9a9894; --text-strong: #17161a;
+    --border: rgba(0,0,0,.12); --border-strong: rgba(0,0,0,.24);
+    --accent-soft: rgba(88,101,242,.12); --link: #2456c4;
+    --c0: #5568d8; --c1: #22945c; --c2: #a97f0a; --c3: #cc4694;
+    --c4: #1585ba; --c5: #c4523c; --c6: #7e60d8; --c7: #1d9c92;
+  }
+  html[data-theme='light'] .btn.secondary { background: #e9e7e4; color: #2c2b29; }
+  html[data-theme='light'] .btn.secondary:hover { background: #dedcd8; }
+  html[data-theme='light'] .copybtn { background: #e9e7e4; color: #444; }
+  html[data-theme='light'] .rcard .rlink, html[data-theme='light'] .topbar .user,
+  html[data-theme='light'] .tl-chlist a, html[data-theme='light'] .langtoggle a:hover { color: #3f3e3c; }
+  html[data-theme='light'] .tsearch input, html[data-theme='light'] .isearch input { color: #26251f; }
+  html[data-theme='light'] .tl-seg span { color: #3a48a0; }
+  html[data-theme='light'] .person, html[data-theme='light'] .transcript, html[data-theme='light'] .minutes,
+  html[data-theme='light'] .note, html[data-theme='light'] details.tech code { border-color: rgba(0,0,0,.12); }
   * { box-sizing: border-box; margin: 0; }
   body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 15px; line-height: 1.55;
          min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 26px 16px 40px; }
@@ -425,6 +445,13 @@ const APP_CSS = `
   .topbar .tl:hover { color: var(--text-strong); }
   .topbar .user { display: inline-flex; align-items: center; gap: 6px; color: #c9c7c5; }
   .topbar img { width: 22px; height: 22px; border-radius: 50%; }
+  /* toggle claro/escuro: mostra o ícone do tema DESTINO */
+  .thm { background: none; border: 1px solid var(--border); border-radius: 999px; width: 28px; height: 28px;
+         cursor: pointer; font-size: 13px; line-height: 1; padding: 0; display: inline-grid; place-items: center; }
+  .thm:hover { border-color: var(--border-strong); }
+  .thm .to-dark { display: none; }
+  html[data-theme='light'] .thm .to-dark { display: inline; }
+  html[data-theme='light'] .thm .to-light { display: none; }
   .langtoggle a { color: var(--text-weak); text-decoration: none; padding: 2px 4px; }
   .langtoggle a.on { color: var(--text-strong); font-weight: 700; }
   .langtoggle a:hover { color: #c9c7c5; }
@@ -528,10 +555,23 @@ function tsLink(ms: number, seekable = true): string {
   return `<a class="ts" href="#" onclick="kseek(${v});return false">${msToClock(v)}</a>`;
 }
 
+// Tema: aplicado ANTES da pintura (head) — salvo em localStorage, senão segue o sistema.
+const THEME_INIT = `<script>(function(){try{var t=localStorage.getItem('ktheme');if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';document.documentElement.dataset.theme=t;}catch(e){}})();</script>`;
+const THEME_TOGGLE_SCRIPT = `<script>(function(){var b=document.querySelector('.thm');if(!b)return;b.addEventListener('click',function(){var d=document.documentElement;var t=d.dataset.theme==='light'?'dark':'light';d.dataset.theme=t;try{localStorage.setItem('ktheme',t);}catch(e){}});})();</script>`;
+
 function shell(
   title: string,
   body: string,
-  opts: { user?: WebUser; lang?: Locale; refreshSeconds?: number; active?: 'rec' | 'ai'; demo?: boolean } = {},
+  opts: {
+    user?: WebUser;
+    lang?: Locale;
+    refreshSeconds?: number;
+    active?: 'rec' | 'ai';
+    demo?: boolean;
+    /** Mostra "Conectar IA" na nav — só na central e no próprio conectar
+     *  (na página de uma gravação é ruído; feedback do Mauro). */
+    navAi?: boolean;
+  } = {},
 ): string {
   const lang = opts.lang === 'pt' ? 'pt' : 'en';
   const pt = lang === 'pt';
@@ -547,16 +587,17 @@ function shell(
   const nav =
     !opts.demo && opts.user
       ? `<nav><a href="/app"${opts.active === 'rec' ? ' aria-current="page"' : ''}>${pt ? 'Gravações' : 'Recordings'}</a>${
-          config.mcpEnabled
+          config.mcpEnabled && (opts.navAi || opts.active === 'ai')
             ? `<a href="/app/conectar-ia"${opts.active === 'ai' ? ' aria-current="page"' : ''}>${pt ? 'Conectar IA' : 'Connect AI'}</a>`
             : ''
         }</nav>`
       : '';
+  const themeBtn = `<button type="button" class="thm" aria-label="${pt ? 'alternar tema claro/escuro' : 'toggle light/dark theme'}"><span class="to-light">☀️</span><span class="to-dark">🌙</span></button>`;
   const signIn = `<a class="tl" href="/auth/login?next=%2Fapp">${pt ? 'Entrar' : 'Sign in'}</a>`;
   const right =
     !opts.demo && opts.user
-      ? `${langToggle}<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</span><a class="tl" href="/auth/logout">${pt ? 'Sair' : 'Sign out'}</a>`
-      : `${langToggle}${signIn}`;
+      ? `${themeBtn}${langToggle}<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</span><a class="tl" href="/auth/logout">${pt ? 'Sair' : 'Sign out'}</a>`
+      : `${themeBtn}${langToggle}${signIn}`;
   const userbar = `<header class="topbar">${brand}${nav}<span class="topnav-r">${right}</span></header>`;
   const foot = opts.demo
     ? `<footer class="topfoot"><a href="/">kassinao</a> · AGPL-3.0 · open-source</footer>`
@@ -577,6 +618,7 @@ setTimeout(function(){var p=document.getElementById('kplayer');if(p&&!p.paused)r
 ${opts.demo ? '' : '<meta name="robots" content="noindex">'}
 <title>${esc(title)} — Kassinão</title>
 <link rel="icon" href="${FAVICON}">
+${THEME_INIT}
 <style>${APP_CSS}</style>
 </head>
 <body>
@@ -584,6 +626,7 @@ ${userbar}
 <div class="card">${body}</div>
 ${foot}
 ${TZ_SCRIPT}
+${THEME_TOGGLE_SCRIPT}
 ${refresh}
 </body>
 </html>`;
@@ -1384,7 +1427,7 @@ export function recordingsIndexPage(
      ${sorts}
      ${chips}
      ${cards}`,
-    { user: opts.user, lang: l, active: 'rec' },
+    { user: opts.user, lang: l, active: 'rec', navAi: true },
   );
 }
 
