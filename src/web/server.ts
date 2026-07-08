@@ -258,7 +258,12 @@ export function startWebServer(): void {
         return;
       }
       const ok = revokeUserSession(user.id, req.params.sid);
-      if (ok) console.log(`MCP: sessão ${req.params.sid} revogada por ${cleanInline(user.name)} (${user.id}) via web.`);
+      // cleanInline também no sid: vem da URL (controlado pelo cliente) — mesmo
+      // sendo logado só quando pertence ao usuário, não entra cru no log
+      if (ok)
+        console.log(
+          `MCP: sessão ${cleanInline(req.params.sid)} revogada por ${cleanInline(user.name)} (${user.id}) via web.`,
+        );
       res.redirect(ok ? '/app/conectar-ia?revoked=one' : '/app/conectar-ia');
     });
 
