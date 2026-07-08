@@ -118,10 +118,7 @@ export function landingPage(lang: Locale): string {
   const pt = lang === 'pt';
   const T = (p: string, e: string): string => (pt ? p : e);
 
-  const metaTitle = T(
-    'Kassinão — quem falou é fato, não chute',
-    'Kassinão — who spoke is a fact, not a guess',
-  );
+  const metaTitle = T('Kassinão — quem falou é fato, não chute', 'Kassinão — who spoke is a fact, not a guess');
   const metaDesc = T(
     'Gravador de voz do Discord, open-source e no seu servidor. Uma faixa por pessoa: quem falou é garantido pela captação, não pela diarização. Transcrição, ata por IA e /perguntar. AGPL.',
     'Open-source, self-hosted Discord voice recorder. One track per person, so attribution is structural — not diarization. Transcript, AI minutes, and ask-your-meetings. AGPL.',
@@ -256,11 +253,11 @@ export function landingPage(lang: Locale): string {
 
   // closing — honesto, uma linha, uma ação
   const closing = `<section class="close"><div class="wrap">
-    <div class="kicker">${T('É open-source', 'It\'s open source')}</div>
-    <h2>${T('É seu. Roda na sua máquina.', 'It\'s yours. It runs on your box.')}</h2>
+    <div class="kicker">${T('É open-source', "It's open source")}</div>
+    <h2>${T('É seu. Roda na sua máquina.', "It's yours. It runs on your box.")}</h2>
     <p>${T(
       'Um projeto solo, self-hosted, sem SaaS e sem assinatura. Sem app de celular, sem linha de suporte. Setup e o resto: está tudo no README.',
-      'A solo, self-hosted project — no SaaS, no subscription. No mobile app, no support line. Setup and everything else: it\'s all in the README.',
+      "A solo, self-hosted project — no SaaS, no subscription. No mobile app, no support line. Setup and everything else: it's all in the README.",
     )}</p>
     <div class="act">
       <a class="btn" href="${ghHref()}">${config.repoPublic ? T('Ver no GitHub', 'View on GitHub') : T('Ver no npm', 'View on npm')} →</a>

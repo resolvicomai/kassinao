@@ -1002,7 +1002,9 @@ function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined,
   if (parts.length === 0) return '';
 
   // Download .md vai pela rota protegida /rec/:id — no modo demo (público) omitimos.
-  const dl = seekable ? `<div class="tdl"><a href="/app/rec/${meta.id}/ata.md">${p(l, 'minutesDownload')}</a></div>` : '';
+  const dl = seekable
+    ? `<div class="tdl"><a href="/app/rec/${meta.id}/ata.md">${p(l, 'minutesDownload')}</a></div>`
+    : '';
   return `${title}<div class="minutes">${parts.join('')}</div>${dl}`;
 }
 
