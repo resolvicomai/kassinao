@@ -12,7 +12,7 @@ The connector runs **on your machine** and is a **thin** HTTP client: it does **
 
 ## Prerequisites
 
-- **The bot admin must have enabled MCP** (`MCP_SECRET` set on the server). Without it, `/conectar-ia` and `/mcp` don't exist (404 / missing command).
+- **The bot admin must have enabled MCP** (`MCP_SECRET` set on the server). Without it, `/app/conectar-ia` and `/mcp` don't exist (404 / missing command).
 - **Node.js 20+** on your machine.
 - **The connector.** `npx -y kassinao-mcp` downloads and runs it on its own — nothing to install manually (you just need Node). Prefer running from source? `git clone` the repo, `cd mcp && npm install && npm run build`; in the config, replace `"command": "npx"` / `"args": ["-y","kassinao-mcp"]` with `"command": "node"`, `"args": ["/absolute/path/to/repo/mcp/dist/index.js"]`.
 
@@ -20,7 +20,7 @@ The connector runs **on your machine** and is a **thin** HTTP client: it does **
 
 ### Option A — via the web page (easiest)
 
-1. Open `https://YOUR-KASSINAO/conectar-ia` and sign in with Discord.
+1. Open `https://YOUR-KASSINAO/app/conectar-ia` and sign in with Discord.
 2. Click **Generate connection token** and copy the config block shown (it appears **once**).
 3. Paste it into `claude_desktop_config.json` (Claude Desktop) or the Cursor equivalent:
 
@@ -57,7 +57,7 @@ After first use, the refresh token (rotated on every renewal) is stored at `~/.c
 
 ## Revoking
 
-- On the `/conectar-ia` page: **Revoke all** button.
+- On the `/app/conectar-ia` page: **Revoke all** button.
 - On Discord: `/mcp revoke-all`.
 - Admin panic button: rotate `MCP_SECRET` on the server (revokes **everyone's** connectors at once).
 
