@@ -442,6 +442,7 @@ function shell(
     <a class="brand" href="/">🎙️ Kassinão</a>
     <span class="topnav-r">
       ${opts.user ? `<a class="tl" href="/gravacoes">${lang === 'pt' ? '📼 Gravações' : '📼 Recordings'}</a>` : ''}
+      ${opts.user && config.mcpEnabled ? `<a class="tl" href="/conectar-ia">${lang === 'pt' ? '🔌 Conectar IA' : '🔌 Connect AI'}</a>` : ''}
       <a class="tl" href="/demo">Demo</a>
       <a class="tl" href="${ghHref()}">${repoLabel}</a>
       ${langToggle}
