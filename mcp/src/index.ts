@@ -18,7 +18,7 @@
  *
  * Env:
  *   KASSINAO_URL             ex.: https://kassinao.suaempresa.com  (obrigatório)
- *   KASSINAO_REFRESH_TOKEN   token gerado em /conectar-ia (só no 1º uso; depois fica salvo)
+ *   KASSINAO_REFRESH_TOKEN   token gerado em /app/conectar-ia (só no 1º uso; depois fica salvo)
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -69,7 +69,7 @@ async function refreshTokens(): Promise<void> {
   if (!URL_BASE) throw new Error('Defina KASSINAO_URL (ex.: https://kassinao.suaempresa.com).');
   if (!refreshToken) {
     const base = URL_BASE || '<sua URL do Kassinão>';
-    throw new Error(`Sem token. Gere um em ${base}/conectar-ia ou rode: kassinao-mcp exchange <codigo>.`);
+    throw new Error(`Sem token. Gere um em ${base}/app/conectar-ia ou rode: kassinao-mcp exchange <codigo>.`);
   }
   const r = await fetch(`${URL_BASE}/api/mcp/refresh`, {
     method: 'POST',
@@ -78,7 +78,7 @@ async function refreshTokens(): Promise<void> {
   });
   if (!r.ok) {
     const base = URL_BASE || '<sua URL do Kassinão>';
-    throw new Error(`Não consegui renovar o token (HTTP ${r.status}). Gere um novo em ${base}/conectar-ia.`);
+    throw new Error(`Não consegui renovar o token (HTTP ${r.status}). Gere um novo em ${base}/app/conectar-ia.`);
   }
   const data = (await r.json()) as TokenResponse;
   refreshToken = data.refresh_token; // rotação: guarda o novo imediatamente

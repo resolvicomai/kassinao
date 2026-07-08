@@ -116,6 +116,17 @@ export function clearStateCookie(res: Response): void {
   setCookie(res, STATE_COOKIE, '', 0);
 }
 
+/**
+ * Sai da conta web: expira o cookie no NAVEGADOR. A sessão é um token HMAC
+ * stateless (sem denylist) — um valor de cookie copiado antes do logout segue
+ * verificável até o exp (7 dias). Aceitável para o modelo (HttpOnly + SameSite
+ * seguram exfiltração via JS/cross-site); se um dia precisar de revogação de
+ * verdade, a infra de denylist dos tokens MCP (mcpTokens.ts) é o molde.
+ */
+export function logoutWeb(res: Response): void {
+  setCookie(res, SESSION_COOKIE, '', 0);
+}
+
 // ---------- fluxo OAuth2 do Discord ----------
 
 export function redirectUri(): string {

@@ -244,7 +244,9 @@ export function listGuildMetas(guildId: string, limit = 5): RecordingMeta[] {
 }
 
 export function pageUrl(id: string): string {
-  return `${config.baseUrl}/rec/${id}`;
+  // /app/* é o namespace privado (nunca linkado do markup público); o caminho
+  // antigo /rec/:id segue vivo por redirect 308 no server (links já enviados).
+  return `${config.baseUrl}/app/rec/${id}`;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
