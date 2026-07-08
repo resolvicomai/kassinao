@@ -521,8 +521,8 @@ export function landingPage(lang: Locale): string {
       ${fict}
     </figure>
     <p class="mcpnote">${T(
-      'Prefere perguntar do <b>Claude</b> ou do <b>Cursor</b>? O conector <code>kassinao-mcp</code> liga seu assistente de IA nas mesmas reuniões — cada pessoa só enxerga o que já pode ver.',
-      'Rather ask from <b>Claude</b> or <b>Cursor</b>? The <code>kassinao-mcp</code> connector plugs your AI assistant into the same meetings — each person only sees what they already can.',
+      'Prefere perguntar de fora do Discord? O conector <code>kassinao-mcp</code> liga <b>qualquer assistente de IA com MCP</b> (Claude, Cursor…) nas mesmas reuniões — cada pessoa só enxerga o que já pode ver.',
+      'Rather ask from outside Discord? The <code>kassinao-mcp</code> connector plugs <b>any MCP-capable AI assistant</b> (Claude, Cursor…) into the same meetings — each person only sees what they already can.',
     )}</p>
   </div></section>`;
 

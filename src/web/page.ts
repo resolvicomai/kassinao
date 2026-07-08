@@ -1389,8 +1389,8 @@ export function connectPage(opts: {
     const body = `<h1>🔌 ${esc(title)}</h1>
       <p class="muted" style="margin-top:12px">${esc(
         T(
-          'Conecte suas reuniões do Kassinão ao seu assistente de IA (Claude Desktop, Cursor…). Entre com o Discord — você só verá as gravações que já pode ver no site.',
-          'Connect your Kassinão meetings to your AI assistant (Claude Desktop, Cursor…). Sign in with Discord — you will only see recordings you can already see on the site.',
+          'Conecte suas reuniões do Kassinão a qualquer assistente de IA com MCP (Claude Desktop, Cursor…). Entre com o Discord — você só verá as gravações que já pode ver no site.',
+          'Connect your Kassinão meetings to any MCP-capable AI assistant (Claude Desktop, Cursor…). Sign in with Discord — you will only see recordings you can already see on the site.',
         ),
       )}</p>
       <div class="downloads" style="margin-top:18px">
@@ -1440,6 +1440,7 @@ export function connectPage(opts: {
         <li>Claude Desktop · macOS: <span style="font-family:ui-monospace,monospace">~/Library/Application Support/Claude/claude_desktop_config.json</span></li>
         <li>Claude Desktop · Windows: <span style="font-family:ui-monospace,monospace">%APPDATA%\\Claude\\claude_desktop_config.json</span></li>
         <li>Cursor: <span style="font-family:ui-monospace,monospace">~/.cursor/mcp.json</span></li>
+        <li>${esc(T('Outro assistente com MCP: onde a documentação dele indicar', 'Any other MCP-capable assistant: wherever its docs point'))}</li>
       </ul>
       <div style="margin-top:14px"><button id="kcopy" class="btn" type="button" style="border:0;cursor:pointer;font:inherit">📋 ${esc(T('Copiar config', 'Copy config'))}</button></div>
       <pre id="kcfg" style="background:#111;padding:14px;border-radius:8px;overflow-x:auto;white-space:pre;font-size:13px;margin-top:10px">${esc(cfg)}</pre>
@@ -1451,8 +1452,8 @@ export function connectPage(opts: {
       )}</p>
       <p class="muted" style="margin-top:12px">${esc(
         T(
-          'Depois reinicie o Claude Desktop/Cursor e pergunte: "o que ficou pendente essa semana?"',
-          'Then restart Claude Desktop/Cursor and ask: "what is pending this week?"',
+          'Depois reinicie o app e pergunte: "o que ficou pendente essa semana?"',
+          'Then restart the app and ask: "what is pending this week?"',
         ),
       )}</p>
       <div class="downloads" style="margin-top:18px"><a class="btn" href="/app/conectar-ia">${esc(T('Voltar', 'Back'))}</a></div>
