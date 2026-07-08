@@ -2,8 +2,27 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
 import { isTranscribing } from './processing/transcribe';
-import { audioExpiryOf, deleteAudioOnly, forgetAudioBytes, listMetas, deleteRecording, saveMeta } from './store';
+import {
+  audioExpiryOf,
+  deleteAudioOnly,
+  forgetAudioBytes,
+  listMetas,
+  deleteRecording,
+  saveMeta,
+  RecordingMeta,
+} from './store';
 import { hasActiveDownloads } from './web/tracker';
+
+/**
+ * A transcrição ainda vai reler as faixas? Então o trim de áudio da retenção NÃO pode
+ * apagá-las. No gap de ~12min entre rodadas parciais (rate limit) o id sai da fila em
+ * memória (isTranscribing=false), mas `retryScheduled` fica persistido no meta.json;
+ * pending/running cobrem uma queda antes do recovery de boot re-enfileirar.
+ */
+export function transcriptionBlocksAudioTrim(meta: RecordingMeta): boolean {
+  const s = meta.transcription?.status;
+  return meta.transcription?.retryScheduled === true || s === 'pending' || s === 'running';
+}
 
 /** Apaga gravações expiradas e diretórios órfãos. Roda a cada hora. */
 export function startCleanupJob(): void {
@@ -39,16 +58,9 @@ export function startCleanupJob(): void {
           continue;
         }
       }
-      // Não trimar o áudio enquanto a transcrição não está resolvida: no gap de ~12min
-      // entre rodadas parciais (rate limit) o id sai da fila em memória (isTranscribing=false),
-      // mas as faixas ainda serão relidas na próxima rodada. retryScheduled fica persistido
-      // no meta.json durante o gap; pending/running cobrem uma queda antes do recover re-enfileirar.
-      const txIncomplete =
-        meta.transcription?.retryScheduled === true ||
-        meta.transcription?.status === 'pending' ||
-        meta.transcription?.status === 'running';
+      // Não trimar o áudio enquanto a transcrição ainda vai reler as faixas (ver a função).
       const audioExpiresAt = audioExpiryOf(meta);
-      if (audioExpiresAt && audioExpiresAt < now && !meta.audioDeleted && !txIncomplete) {
+      if (audioExpiresAt && audioExpiresAt < now && !meta.audioDeleted && !transcriptionBlocksAudioTrim(meta)) {
         // só o áudio expira: some faixas e cache, ficam meta + transcrição + ata
         deleteAudioOnly(meta);
         trimmed++;
