@@ -11,6 +11,28 @@ export function safeSlice(s: string, max: number): string {
 }
 
 /**
+ * Decide se a ata pode ir pro canal CONFIGURADO (/config ata-canal), cuja audiência
+ * pode exceder quem tem acesso à gravação. Regra, em ordem:
+ *  1. checagem AO VIVO do canal de voz de origem venceu sempre que existe (permissões
+ *     podem ter apertado depois da call — respeita o estado atual);
+ *  2. canal DELETADO (efêmero): vale o snapshot tirado no início da gravação
+ *     (audiência do consentimento) — metas antigos sem snapshot ficam restritos;
+ *  3. indeterminado (erro transitório, guild fora do cache): fail-closed.
+ */
+export function allowMinutesBroadcast(opts: {
+  /** ViewChannel de @everyone no canal de voz AGORA; undefined = canal não avaliável. */
+  liveEveryoneViewable?: boolean;
+  /** true só quando o Discord confirmou que o canal não existe mais (10003). */
+  channelDeleted: boolean;
+  /** Snapshot persistido no meta no início da gravação (undefined em metas antigos). */
+  snapshotEveryoneViewable?: boolean;
+}): boolean {
+  if (opts.liveEveryoneViewable !== undefined) return opts.liveEveryoneViewable;
+  if (opts.channelDeleted) return opts.snapshotEveryoneViewable === true;
+  return false;
+}
+
+/**
  * Erro de provedor de IA em versão HUMANA para UI (página/DM). O erro cru
  * ("HTTP 413: {json gigante da API}") vai só para o log — usuário leigo não
  * merece stack de provedor no meio da reunião.

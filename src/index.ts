@@ -35,7 +35,7 @@ import { config } from './config';
 import { answerQuestion } from './ask';
 import { guildConfigStore } from './guildConfig';
 import { minutesEnabled } from './processing/minutes';
-import { safeSlice, shortError } from './util';
+import { allowMinutesBroadcast, safeSlice, shortError } from './util';
 import { startCleanupJob } from './cleanup';
 import { freeMB } from './disk';
 import { client } from './discord/client';
@@ -476,16 +476,39 @@ async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise
   const cfg = guildConfigStore.get(meta.guildId);
   let allowConfigured = false;
   if (minutesDone && cfg.minutesChannelId) {
+    // três estados, decididos por allowMinutesBroadcast: canal avaliável (checagem ao
+    // vivo vence), canal DELETADO (efêmero → vale o snapshot do início da gravação),
+    // indeterminado/transitório (fail-closed).
+    let liveEveryoneViewable: boolean | undefined;
+    let channelDeleted = false;
     try {
       const guild = client.guilds.cache.get(meta.guildId);
-      const vc = guild
-        ? (guild.channels.cache.get(meta.voiceChannelId) ?? (await guild.channels.fetch(meta.voiceChannelId)))
-        : null;
+      let vc = guild ? (guild.channels.cache.get(meta.voiceChannelId) ?? null) : null;
+      if (guild && !vc) {
+        try {
+          vc = await guild.channels.fetch(meta.voiceChannelId);
+        } catch (err) {
+          // 10003 Unknown Channel = confirmado apagado; qualquer outro erro = transitório
+          if (err && typeof err === 'object' && (err as { code?: unknown }).code === 10003) channelDeleted = true;
+          else throw err;
+        }
+      }
       if (guild && vc && 'permissionsFor' in vc) {
-        allowConfigured = vc.permissionsFor(guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel) ?? false;
+        liveEveryoneViewable = vc.permissionsFor(guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel) ?? false;
       }
     } catch {
-      allowConfigured = false; // não deu pra verificar a visibilidade → não arrisca vazar
+      // transitório: liveEveryoneViewable fica undefined e channelDeleted false → nega
+    }
+    allowConfigured = allowMinutesBroadcast({
+      liveEveryoneViewable,
+      channelDeleted,
+      snapshotEveryoneViewable: meta.sourceEveryoneViewable,
+    });
+    if (!allowConfigured) {
+      // sem isso o admin do /config ata-canal acha que "às vezes não posta" é bug
+      console.log(
+        `Ata de ${meta.id}: origem restrita/indeterminada — redirecionada do canal configurado pro chat do canal de voz + DM.`,
+      );
     }
   }
   const targetId = allowConfigured && cfg.minutesChannelId ? cfg.minutesChannelId : meta.voiceChannelId;
