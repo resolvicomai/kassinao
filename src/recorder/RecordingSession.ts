@@ -16,6 +16,7 @@ import {
   EmbedBuilder,
   Guild,
   Message,
+  PermissionFlagsBits,
   VoiceBasedChannel,
 } from 'discord.js';
 import prism from 'prism-media';
@@ -96,6 +97,11 @@ export class RecordingSession {
       guildName: this.guild.name,
       voiceChannelId: this.voiceChannel.id,
       voiceChannelName: this.voiceChannel.name,
+      // snapshot no INÍCIO (audiência do consentimento): permissionsFor(role) é
+      // síncrono e vem do cache — se não der pra saber, fica undefined (desconhecido)
+      sourceEveryoneViewable: this.voiceChannel
+        .permissionsFor(this.guild.roles.everyone)
+        ?.has(PermissionFlagsBits.ViewChannel),
       startedBy: opts.startedBy,
       locale: this.locale,
       startedAt: this.startedAt,
