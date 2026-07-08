@@ -13,6 +13,17 @@ import { safeSlice } from './util';
  * O chamador é responsável pelo controle de acesso (a lista de metas já vem filtrada).
  */
 
+/**
+ * Um link Markdown é "do próprio Kassinão"? Fronteira de ORIGEM, não só prefixo:
+ * `startsWith(baseUrl)` deixaria passar `https://kassinao.app.evil.tld` (mesmo prefixo,
+ * outro host) — phishing clicável emitido por transcrição hostil. Toda citação legítima
+ * é `pageUrl(id) + '#t='` = `baseUrl + '/...'` | `baseUrl + '#...'`, então exigimos a
+ * fronteira `/` ou `#` (ou igualdade exata) logo após o baseUrl.
+ */
+export function isOwnLink(url: string, baseUrl: string): boolean {
+  return url === baseUrl || url.startsWith(`${baseUrl}/`) || url.startsWith(`${baseUrl}#`);
+}
+
 /** Teto de contexto (cabe no caminho Groq free e custa centavos no OpenRouter). */
 const MAX_CONTEXT_CHARS = 9000;
 const MAX_SEGMENTS_PER_MEETING = 10;
@@ -108,13 +119,9 @@ export async function answerQuestion(question: string, metas: RecordingMeta[], l
   const raw = await llmChat(system, user, 700, { json: false });
   // Só links do PRÓPRIO Kassinão sobrevivem: uma transcrição hostil não pode
   // induzir o LLM a emitir [clique aqui](https://evil.tld) — phishing clicável.
-  // Fronteira de origem (não só prefixo): senão "https://kassinao.app.evil.tld"
-  // passaria no startsWith. Toda citação real é pageUrl(id)+"#t=" → baseUrl + "/..." | "#...".
-  const ownLink = (url: string): boolean =>
-    url === config.baseUrl || url.startsWith(`${config.baseUrl}/`) || url.startsWith(`${config.baseUrl}#`);
   const safeLinks = neutralizeFences(cleanText(raw)).replace(
     /\[([^\]]*)\]\(([^)]*)\)/g,
-    (whole, label: string, url: string) => (ownLink(url) ? whole : label),
+    (whole, label: string, url: string) => (isOwnLink(url, config.baseUrl) ? whole : label),
   );
   const answer = safeSlice(safeLinks.trim(), 1800);
   return { answer, meetingsUsed: used };
