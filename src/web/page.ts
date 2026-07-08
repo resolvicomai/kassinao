@@ -1196,9 +1196,13 @@ const FAVICON =
   "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%235865F2'/%3E%3Ctext%20x='16'%20y='23'%20font-size='19'%20font-weight='bold'%20text-anchor='middle'%20fill='white'%20font-family='sans-serif'%3EK%3C/text%3E%3C/svg%3E";
 
 // CSS da landing (vitrine pública). Documento próprio, full-width — NÃO usa o
-// .card do shell(). Estética dev-tool: tudo monospace, quase acromático, bordas
-// de 1px como único divisor, um accent usado com parcimônia. Self-contained
-// (CSP: sem fonte/CSS/JS/imagem externa); respeita prefers-reduced-motion.
+// .card do shell(). Voz tipográfica sans real (a mesma família do sistema);
+// monoespaçado (.mono) fica reservado a timestamps, nomes de env var, comandos
+// e identificadores de licença — nunca em heading/parágrafo de venda. Os tokens
+// de cor (fundo, cartão, cores de falante .c0-.c7, badges) são os MESMOS do
+// SHELL_CSS/recordingPage() real: a "prova" da landing (.proof) reusa essas
+// classes literalmente, não é uma ilustração à parte. Self-contained (CSP: sem
+// fonte/CSS/JS/imagem externa); respeita prefers-reduced-motion.
 const LANDING_CSS = `
   :root {
     color-scheme: dark;
@@ -1217,22 +1221,36 @@ const LANDING_CSS = `
     --accent-soft: rgba(88,101,242,.16);
     --ok: #3fbf7a;
     --warn: #e0b34c;
+    --link: #00a8fc;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+    /* paleta estável por falante — idêntica ao SHELL_CSS/recordingPage() real */
+    --c0: #7b90f7; --c1: #3dbf7a; --c2: #f0b232; --c3: #eb6ab5;
+    --c4: #29b0e8; --c5: #e8735a; --c6: #a58cf2; --c7: #4fd1c5;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   ::selection { background: var(--accent-soft); color: var(--text-strong); }
   html { -webkit-text-size-adjust: 100%; }
-  body { background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 15px;
-         line-height: 1.9; -webkit-font-smoothing: antialiased; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 16px;
+         line-height: 1.7; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+  .mono { font-family: var(--mono); }
   a { color: var(--text-strong); text-decoration: underline; text-underline-offset: 4px;
       text-decoration-thickness: 1px; text-decoration-color: var(--border-strong); }
   a:hover { text-decoration-color: var(--text-strong); }
   strong { color: var(--text-strong); font-weight: 600; }
   .container { max-width: 1020px; margin: 0 auto; border-left: 1px solid var(--border);
                border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-  section { border-top: 1px solid var(--border); padding: 48px 56px; }
+  section { border-top: 1px solid var(--border); padding: 56px; }
   @media (max-width: 1040px) { .container { border-left: 0; border-right: 0; } }
-  @media (max-width: 700px) { section { padding: 34px 20px; } body { font-size: 14px; } }
+  @media (max-width: 700px) { section { padding: 34px 20px; } body { font-size: 15px; } }
+
+  /* qualquer bloco de código/comando: rolagem própria, nunca estoura a viewport
+     nem a coluna de um grid (mata o bug clássico de <pre> forçando min-width). */
+  .codebox { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-weak);
+             overflow-x: auto; max-width: 100%; min-width: 0; }
+  .codebox pre { padding: 13px 14px; font-size: 13px; line-height: 1.8; font-family: var(--mono);
+                 white-space: pre; width: max-content; min-width: 100%; }
+  .codebox .pr { color: var(--text-weak); user-select: none; }
 
   /* reveal sutil ao rolar — só quando JS está ativo (html.js): sem JS, tudo visível */
   html.js .rv { opacity: 0; transform: translateY(14px); transition: opacity .55s ease, transform .55s ease; }
@@ -1248,155 +1266,144 @@ const LANDING_CSS = `
   @media (max-width: 1040px) { .top-in { border-left: 0; border-right: 0; } }
   @media (max-width: 700px) { .top-in { padding: 0 20px; } }
   .brand { display: inline-flex; align-items: baseline; gap: 2px; font-weight: 700;
-           color: var(--text-strong); text-decoration: none; font-size: 16px; letter-spacing: .02em; }
+           color: var(--text-strong); text-decoration: none; font-size: 16px; letter-spacing: -.01em; }
+  /* único flourish de motion decorativo da página inteira */
   .brand .cur { color: var(--accent); animation: blink 1.2s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { .brand .cur { animation: none; } }
-  .nav { display: flex; align-items: center; gap: 22px; font-size: 13.5px; }
+  .nav { display: flex; align-items: center; gap: 22px; font-size: 14px; min-width: 0; }
   .nav a { color: var(--text); text-decoration: none; }
   .nav a:hover { color: var(--text-strong); text-decoration: underline; text-underline-offset: 4px; }
   .nav .lt a { color: var(--text-weak); padding: 0 2px; }
   .nav .lt a.on { color: var(--text-strong); font-weight: 700; }
   .nav .lt span { color: var(--text-weak); opacity: .5; }
   .btnp, .nav a.btnp { display: inline-flex; align-items: center; gap: 10px; background: var(--bg-strong);
-          color: var(--text-inverted); text-decoration: none; font-weight: 600; font-size: 13.5px;
-          padding: 8px 14px 8px 16px; border-radius: 4px; white-space: nowrap; }
+          color: var(--text-inverted); text-decoration: none; font-weight: 600; font-size: 14px;
+          padding: 8px 14px 8px 16px; border-radius: 6px; white-space: nowrap; }
   .btnp:hover, .nav a.btnp:hover { background: var(--bg-strong-hover); color: var(--text-inverted); text-decoration: none; }
+  /* ponte ÚNICA marketing→app: secundária (outline) — o CTA cheio é o self-host */
+  .btnp.app, .nav a.btnp.app { background: transparent; color: var(--text); border: 1px solid var(--border-strong); }
+  .btnp.app:hover, .nav a.btnp.app:hover { background: var(--bg-weak); color: var(--text-strong); border-color: var(--text-strong); }
   @media (max-width: 700px) {
     .nav .hidesm { display: none; }
     .top-in { height: auto; min-height: 56px; padding: 8px 20px; flex-wrap: wrap; }
     .nav { gap: 14px; }
-    .btnp, .nav a.btnp { padding: 6px 10px; font-size: 12.5px; gap: 6px; }
+    .btnp, .nav a.btnp { padding: 6px 10px; font-size: 13px; gap: 6px; }
   }
 
-  /* ---------- herói (2 colunas: pitch + terminal) ---------- */
+  /* ---------- herói (2 colunas: pitch + prova real do produto) ---------- */
   .hero { position: relative; overflow: hidden; }
   .hero::before { content: ''; position: absolute; inset: -40% -20% auto -20%; height: 90%;
                   background: radial-gradient(ellipse at 30% 0%, rgba(88,101,242,.09), transparent 60%);
                   pointer-events: none; }
   .hgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 44px;
            align-items: start; position: relative; }
-  @media (max-width: 900px) { .hgrid { grid-template-columns: 1fr; } }
-  .hero h1 { color: var(--text-strong); font-size: 34px; line-height: 1.25; font-weight: 700;
-             letter-spacing: -.01em; }
-  @media (max-width: 700px) { .hero h1 { font-size: 26px; } }
-  .hero .sub { margin-top: 16px; }
-  .badge { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 22px;
-           font-size: 12.5px; color: var(--text-weak); }
-  .badge b { background: var(--bg-strong); color: var(--text-inverted); font-weight: 700;
-             padding: 2px 8px; font-size: 12px; }
-  .badge a { color: var(--text); }
-  .installer { margin-top: 26px; border: 1px solid var(--border); border-radius: 6px;
-               background: var(--bg-weak); }
-  .installer .tab { display: flex; align-items: center; justify-content: space-between;
-                    padding: 9px 14px; border-bottom: 1px solid var(--border);
-                    color: var(--text-weak); font-size: 12.5px; }
-  .installer pre { padding: 13px 14px; overflow-x: auto; font-size: 13px; line-height: 1.8;
-                   font-family: var(--mono); }
-  .installer .pr { color: var(--text-weak); user-select: none; }
-  .installer .hl { color: var(--text-strong); font-weight: 600; }
-  .cp { background: none; border: 1px solid var(--border); color: var(--text-weak);
-        font-family: var(--mono); font-size: 12px; padding: 3px 10px; border-radius: 4px;
-        cursor: pointer; transition: border-color .15s ease, color .15s ease; }
-  .cp:hover { color: var(--text-strong); border-color: var(--border-strong); }
-  .cp.ok { color: var(--ok); border-color: var(--ok); }
-  /* faixa de chips abaixo do herói (preenche e reforça os recibos) */
-  .strip { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 34px; font-size: 12.5px;
-           color: var(--text-weak); position: relative; }
-  .strip span::before { content: '[*] '; color: var(--accent); opacity: .75; }
+  @media (max-width: 760px) { .hgrid { grid-template-columns: minmax(0, 1fr); } }
+  .hgrid > * { min-width: 0; }
+  .hero h1 { color: var(--text-strong); font-size: 38px; line-height: 1.2; font-weight: 700;
+             letter-spacing: -.02em; }
+  @media (max-width: 700px) { .hero h1 { font-size: 27px; } }
+  .hero .sub { margin-top: 18px; font-size: 16.5px; line-height: 1.65; }
+  .hero-ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+  .btn2 { display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
+          font-weight: 600; font-size: 15px; padding: 11px 18px; border-radius: 8px; }
+  .btn2.pri { background: var(--accent); color: #fff; }
+  .btn2.pri:hover { background: #4752c4; }
+  .btn2.sec { background: var(--bg-weak); color: var(--text-strong); border: 1px solid var(--border-strong); }
+  .btn2.sec:hover { background: var(--bg-hover); }
 
-  /* ---------- terminal (a prova, dentro do herói) ---------- */
-  .term { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-weak);
-          font-size: 12.5px; line-height: 1.95; overflow: hidden; }
-  .term .tbar { display: flex; align-items: center; gap: 6px; padding: 9px 14px;
-                border-bottom: 1px solid var(--border); color: var(--text-weak); font-size: 12px; }
-  .term .tbar i { width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong); display: inline-block; }
-  .term .tbody { padding: 14px 16px; overflow-x: auto; min-height: 330px; }
-  .term .ln { white-space: pre-wrap; }
-  /* animação de digitação: linhas entram uma a uma (JS); reduced-motion mostra tudo */
-  .term.typing .ln { visibility: hidden; }
-  .term.typing .ln.on { visibility: visible; }
-  .term .p { color: var(--accent); user-select: none; }
-  .term .c { color: var(--text-strong); font-weight: 600; }
-  .term .ok { color: var(--ok); }
-  .term .dim { color: var(--text-weak); }
-  .term .ans { color: var(--text-strong); }
-  .term .ts { color: var(--accent); text-decoration: none; }
-  .term .ts:hover { text-decoration: underline; }
-  .term .cursor { display: inline-block; width: 8px; height: 14px; background: var(--text-strong);
-                  vertical-align: -2px; animation: blink 1.2s steps(1) infinite; }
-  @media (prefers-reduced-motion: reduce) { .term .cursor { animation: none; } }
-  .term-cap { padding: 10px 16px; font-size: 12px; color: var(--text-weak);
-              border-top: 1px solid var(--border); }
+  /* faixa de chips factuais abaixo do herói — texto simples, sem ícone */
+  .strip { display: flex; flex-wrap: wrap; gap: 8px 26px; margin-top: 36px; font-size: 13.5px;
+           color: var(--text-weak); }
 
-  /* ---------- listas [*] ---------- */
-  h3 { color: var(--text-strong); font-size: 16px; font-weight: 700; margin-bottom: 18px; }
-  h3::before { content: '## '; color: var(--text-weak); font-weight: 400; }
-  .stars { list-style: none; }
-  .stars li { padding-left: 34px; position: relative; margin-bottom: 10px; }
-  .stars li::before { content: '[*]'; position: absolute; left: 0; color: var(--text-weak); }
-  .more { margin-top: 22px; font-size: 13.5px; }
+  /* ---------- prova: mockup real da página de gravação (recordingPage) ---------- */
+  .proof { display: block; text-decoration: none; border: 1px solid var(--border); border-radius: 10px;
+           background: var(--bg-weak); overflow: hidden; transition: border-color .15s ease; }
+  .proof:hover { border-color: var(--border-strong); }
+  .proof-head { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+                padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .proof-chan { color: var(--text-strong); font-weight: 600; font-size: 14.5px; }
+  .proof-badge { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+                 background: #23a55a; color: #fff; letter-spacing: .02em; }
+  .proof-body { padding: 14px 16px 18px; }
+  .proof-people { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+  .proof-person { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px;
+                  color: var(--text); background: var(--bg); border: 1px solid var(--border);
+                  padding: 4px 10px 4px 8px; border-radius: 999px; }
+  .proof-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .proof-minutes { background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+                   padding: 12px 14px; margin-bottom: 14px; }
+  .proof-minutes h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+                      color: var(--text-weak); margin: 10px 0 4px; font-weight: 600; }
+  .proof-minutes h4:first-child { margin-top: 0; }
+  .proof-minutes p { font-size: 13px; line-height: 1.55; color: var(--text); }
+  .proof-transcript { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+  .proof-transcript p { font-size: 13px; line-height: 1.5; color: var(--text); }
+  .proof-transcript .who { font-weight: 600; }
+  .proof-transcript .ts { color: var(--link); margin-right: 6px; font-size: 11.5px; }
+  .proof-tl { display: flex; gap: 3px; height: 20px; }
+  .proof-tl span { flex: 1; border-radius: 3px; background: rgba(88,101,242,.22); position: relative; overflow: hidden; }
+  .proof-tl span:nth-child(2) { background: rgba(88,101,242,.12); }
+  .proof-cap { padding: 12px 16px; font-size: 12.5px; color: var(--text-weak);
+               border-top: 1px solid var(--border); display: flex; justify-content: space-between;
+               gap: 10px; flex-wrap: wrap; }
+  .proof-cap b { color: var(--text-strong); font-weight: 600; }
 
-  /* ---------- figuras ---------- */
-  .figs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 30px; }
-  @media (max-width: 700px) { .figs { grid-template-columns: 1fr; } }
-  .figs figure { border: 1px solid var(--border); padding: 18px; border-radius: 6px; background: var(--bg-weak);
-                 transition: border-color .2s ease, transform .2s ease; }
-  .figs figure:hover { border-color: rgba(88,101,242,.5); transform: translateY(-2px); }
-  @media (prefers-reduced-motion: reduce) { .figs figure, .figs figure:hover { transform: none; transition: none; } }
-  .figs svg { width: 100%; height: 96px; display: block; }
-  .figs figcaption { margin-top: 12px; font-size: 12.5px; color: var(--text-weak); line-height: 1.6; }
-  .figs figcaption b { color: var(--text); font-weight: 600; }
+  /* ---------- pilares (h2 real, sem cosplay de Markdown) ---------- */
+  h2.pillar { color: var(--text-strong); font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
+  .pillar-sub { color: var(--text-weak); font-size: 15px; margin-top: 8px; max-width: 640px; }
+  .bullets { list-style: none; margin-top: 24px; display: flex; flex-direction: column; gap: 12px; max-width: 720px; }
+  .bullets li { padding-left: 20px; position: relative; font-size: 15px; line-height: 1.6; }
+  .bullets li::before { content: ''; position: absolute; left: 0; top: 9px; width: 6px; height: 6px;
+                        border-radius: 50%; background: var(--accent); }
+  .more { margin-top: 22px; font-size: 14px; }
 
-  /* ---------- perguntar ---------- */
-  .qa { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-weak);
-        padding: 18px 20px; margin-top: 26px; max-width: 720px; font-size: 13.5px; line-height: 2; }
+  /* ---------- exemplo de /ask dentro do pilar 2 ---------- */
+  .qa { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-weak);
+        padding: 16px 18px; margin-top: 24px; max-width: 720px; font-size: 14px; line-height: 1.8; }
   .qa .q { color: var(--text-strong); }
-  .qa .p { color: var(--accent); }
+  .qa .p { color: var(--accent); font-family: var(--mono); font-size: 13px; }
 
-  /* ---------- tabela ---------- */
-  table { border-collapse: collapse; width: 100%; margin-top: 24px; font-size: 13.5px; }
+  /* ---------- tabela de comparação ---------- */
+  /* .tablewrap: no celular a tabela rola dentro do próprio container em vez de
+     estourar a viewport (mesma regra do .codebox — nada força scroll da página) */
+  .tablewrap { overflow-x: auto; max-width: 100%; margin-top: 24px; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 14px; }
   th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
   th { color: var(--text-strong); font-weight: 600; background: var(--bg-weak); }
   td:first-child { color: var(--text); }
   .yes { color: var(--ok); } .no { color: var(--text-weak); } .half { color: var(--warn); }
+  .caveat { margin-top: 18px; font-size: 14px; line-height: 1.7; color: var(--text-weak); max-width: 720px; }
 
-  /* ---------- passos ---------- */
-  .steps { counter-reset: st; margin-top: 8px; }
-  .step { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-weak);
-          padding: 18px 20px; margin-top: 18px; max-width: 760px; }
-  .step .st-t { color: var(--text-strong); font-weight: 600; margin-bottom: 6px; }
-  .step .st-t::before { counter-increment: st; content: counter(st, decimal-leading-zero) '  ';
-                        color: var(--text-weak); font-weight: 400; }
-  .step pre { margin-top: 10px; overflow-x: auto; font-size: 13px; line-height: 1.8;
-              border-top: 1px solid var(--border); padding-top: 12px; }
-  .step .pr { color: var(--text-weak); user-select: none; }
-  .step p { font-size: 13.5px; line-height: 1.8; }
+  /* ---------- deploy ---------- */
+  .deploy-demo { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-weak);
+                 padding: 16px 18px; margin-bottom: 22px; max-width: 720px; }
+  .steps p { font-size: 14.5px; line-height: 1.7; margin-top: 12px; color: var(--text); }
 
   /* ---------- rodapé ---------- */
-  .cells { display: flex; border-top: 1px solid var(--border); }
-  .cells a { flex: 1; text-align: center; padding: 22px 8px; text-decoration: none;
-             color: var(--text); font-size: 13.5px; border-left: 1px solid var(--border);
-             transition: background .15s ease; }
+  .cells { display: flex; border-top: 1px solid var(--border); flex-wrap: wrap; }
+  .cells a { flex: 1 1 auto; text-align: center; padding: 22px 8px; text-decoration: none;
+             color: var(--text); font-size: 14px; border-left: 1px solid var(--border);
+             transition: background .15s ease; min-width: 120px; }
   .cells a:first-child { border-left: 0; }
   .cells a:hover { background: var(--bg-weak); color: var(--text-strong); }
   .cells .k { color: var(--text-weak); }
-  @media (max-width: 700px) { .cells { flex-wrap: wrap; } .cells a { flex: 1 1 50%; border-top: 1px solid var(--border); margin-top: -1px; } }
+  @media (max-width: 700px) { .cells a { flex: 1 1 50%; border-top: 1px solid var(--border); margin-top: -1px; } }
   .legal { max-width: 1020px; margin: 0 auto; padding: 26px 20px 40px; text-align: center;
            color: var(--text-weak); font-size: 12.5px; }
   .legal a { color: var(--text-weak); }
 `;
 
-export function landingPage(lang: Locale): string {
+export function landingPage(lang: Locale, user?: WebUser): string {
   const pt = lang === 'pt';
   const T = (ptStr: string, enStr: string): string => (pt ? ptStr : enStr);
   const metaTitle = T(
-    'Kassinão — Grava as calls do Discord. Depois é só perguntar.',
-    'Kassinão — Record your Discord calls. Then just ask.',
+    'Kassinão — uma faixa de áudio por pessoa. Ninguém chuta quem falou.',
+    'Kassinão — One audio track per speaker. Zero AI guessing.',
   );
   const metaDesc = T(
-    'Gravador de voz do Discord, open-source e self-hosted: uma faixa por pessoa, transcrição com nome exato de quem falou, ata por IA e memória que responde — /perguntar no Discord, índice web com busca ou qualquer assistente com MCP.',
-    'Open-source, self-hosted Discord voice recorder: one track per speaker, transcripts with exact speaker names, AI minutes, and memory that answers — /ask in Discord, web search, or any MCP-capable AI assistant.',
+    'Bot de gravação para Discord, self-hosted e de código aberto (AGPL): cada pessoa fala na própria faixa de áudio, então a transcrição, a ata por IA e o /perguntar sempre sabem, com certeza, quem disse o quê — sem diarização chutada por IA.',
+    'Self-hosted Discord recorder with one audio track per speaker: perfect speaker attribution, AI meeting minutes, /ask with clickable citations, full-text search, and an MCP connector. Open source, AGPL-3.0-or-later.',
   );
 
   const langUrl = `${config.baseUrl}/?lang=${pt ? 'pt' : 'en'}`;
@@ -1412,254 +1419,253 @@ export function landingPage(lang: Locale): string {
       <a href="${codeHref}" class="hidesm">${codeLabel.toLowerCase()}</a>
       ${repoPublic ? `<a href="${REPO_URL}/blob/main/CHANGELOG.md" class="hidesm">changelog</a>` : ''}
       <span class="lt"><a href="?lang=en"${pt ? '' : ' class="on"'}>EN</a><span>·</span><a href="?lang=pt"${pt ? ' class="on"' : ''}>PT</a></span>
-      <a class="btnp" href="#deploy">${T('rodar o meu', 'deploy')} <span class="ar">↓</span></a>
+      <a class="btnp" href="#deploy">${T('rodar o meu', 'self-host it')} <span class="ar">↓</span></a>
+      <a class="btnp app" href="/gravacoes">${
+        user ? T('minhas gravações', 'my recordings') : T('entrar', 'sign in')
+      } <span class="ar">→</span></a>
     </nav>
   </div></header>`;
 
-  // ---------- herói (2 colunas: pitch/instalação + terminal ao vivo) ----------
-  const installCmd = repoPublic
-    ? `git clone ${REPO_URL}.git && cd kassinao\ncp .env.example .env   ${T('# token do bot + chaves de IA', '# bot token + AI keys')}\ndocker compose up -d`
-    : `npx -y kassinao-mcp   ${T('# conector de IA (o bot é self-hosted)', '# AI connector (the bot is self-hosted)')}`;
-
-  const termLines = `
-<div class="ln"><span class="p">discord&gt;</span> <span class="c">/${T('gravar', 'record')}</span></div>
-<div class="ln"><span class="dim">●</span> ${T('gravando <span class="c">#daily</span> — 1 faixa FLAC por pessoa', 'recording <span class="c">#daily</span> — one FLAC track per person')}</div>
-<div class="ln"><span class="dim">  painel: [⏹ ${T('parar', 'stop')}] [📌 ${T('marcar', 'mark')}] [📝 ${T('nota', 'note')}]</span></div>
-<div class="ln">&nbsp;</div>
-<div class="ln"><span class="p">discord&gt;</span> <span class="c">/${T('parar', 'stop')}</span></div>
-<div class="ln"><span class="ok">✓</span> ${T('transcrição — 5 pessoas, nome exato em cada fala', 'transcript — 5 people, exact name on every line')}</div>
-<div class="ln"><span class="dim">  ${T('só a fala vai pra API: o VAD corta o silêncio', 'only speech hits the API: VAD trims the silence')}</span></div>
-<div class="ln"><span class="ok">✓</span> ${T('ata — resumo · decisões · ações (responsável + prazo)', 'minutes — summary · decisions · actions (owner + due)')}</div>
-<div class="ln"><span class="ok">✓</span> ${T('postada no canal + página com player e busca', 'posted to the channel + page with player and search')}</div>
-<div class="ln">&nbsp;</div>
-<div class="ln"><span class="p">discord&gt;</span> <span class="c">/${T('perguntar', 'ask')}</span> ${T('o que decidimos sobre o rollback?', 'what did we decide about the rollback?')}</div>
-<div class="ln"><span class="ans">${T(
-    'Rafael assumiu o merge do rollback (com feature flag) até quarta',
-    'Rafael owns merging the rollback behind a feature flag by Wednesday',
-  )} — <a class="ts" href="/demo">[16:10]</a></span></div>
-<div class="ln"><span class="dim">  ${T('só reuniões que VOCÊ pode acessar · cita o segundo exato', 'only meetings YOU can access · cites the exact second')}</span></div>
-<div class="ln">&nbsp;</div>
-<div class="ln"><span class="p">discord&gt;</span> <span class="cursor"></span></div>`;
+  // ---------- herói: mecanismo (posicionamento) + prova real do produto ----------
+  // O mockup abaixo reaproveita LITERALMENTE as classes/cores de recordingPage()/SHELL_CSS
+  // (.c0-.c7, badge verde, .minutes, .who/.ts) — não é ilustração nem terminal simulado.
+  // Dado fictício mas plausível, hardcoded (zero chamada a API). Ver [[direction.proof_asset_plan]].
+  const proofPt = `<a class="proof" href="/demo" aria-label="Ver a demo ao vivo — página real de gravação">
+    <div class="proof-head">
+      <span class="proof-chan">#sprint-pagamentos</span>
+      <span class="proof-badge">CONCLUÍDA</span>
+    </div>
+    <div class="proof-body">
+      <div class="proof-people">
+        <span class="proof-person"><i class="proof-dot" style="background:var(--c0)"></i>João</span>
+        <span class="proof-person"><i class="proof-dot" style="background:var(--c2)"></i>Bianca</span>
+        <span class="proof-person"><i class="proof-dot" style="background:var(--c4)"></i>Priscila</span>
+      </div>
+      <div class="proof-minutes">
+        <h4>Resumo</h4>
+        <p>Time revisou o sprint de pagamentos: checkout novo testado, dois bugs de borda encontrados no PIX.</p>
+        <h4>Decisões</h4>
+        <p>Adiar o lançamento do checkout novo pra segunda, depois do fix do PIX.</p>
+        <h4>Ações</h4>
+        <p>☐ Corrigir o timeout do PIX em produção — João, até sexta</p>
+      </div>
+      <div class="proof-transcript">
+        <p><span class="who" style="color:var(--c2)">Bianca</span> <span class="ts mono">12:04</span>O PIX cai quando o usuário troca de banco no meio do fluxo.</p>
+        <p><span class="who" style="color:var(--c0)">João</span> <span class="ts mono">12:19</span>Eu assumo o fix, mas preciso adiar o merge do checkout pra segunda.</p>
+        <p><span class="who" style="color:var(--c4)">Priscila</span> <span class="ts mono">14:52</span>Fechado. Registro como decisão: lançamento adiado pra segunda.</p>
+      </div>
+      <div class="proof-tl" aria-hidden="true">
+        <span><span class="mono">01 payments</span></span><span><span class="mono">02 pix fix</span></span><span><span class="mono">03 ações</span></span>
+      </div>
+    </div>
+    <div class="proof-cap"><b>Exemplo com dados fictícios</b> — mas a interface é exatamente esta.<span>Ver a demo →</span></div>
+  </a>`;
+  const proofEn = `<a class="proof" href="/demo" aria-label="See the live demo — real recording page">
+    <div class="proof-head">
+      <span class="proof-chan">#sprint-review</span>
+      <span class="proof-badge">FINISHED</span>
+    </div>
+    <div class="proof-body">
+      <div class="proof-people">
+        <span class="proof-person"><i class="proof-dot" style="background:var(--c0)"></i>Alex</span>
+        <span class="proof-person"><i class="proof-dot" style="background:var(--c2)"></i>Priya</span>
+        <span class="proof-person"><i class="proof-dot" style="background:var(--c4)"></i>Sam</span>
+      </div>
+      <div class="proof-minutes">
+        <h4>Summary</h4>
+        <p>The team reviewed sprint velocity, agreed to hold the search redesign, and approved the new onboarding flow for release.</p>
+        <h4>Decisions</h4>
+        <p>Ship the new onboarding flow next Tuesday.</p>
+        <h4>Actions</h4>
+        <p>☐ Write the release notes — Sam, due Mon</p>
+      </div>
+      <div class="proof-transcript">
+        <p><span class="who" style="color:var(--c2)">Priya</span> <span class="ts mono">04:12</span>I'd hold off on the search redesign until we have real usage data.</p>
+        <p><span class="who" style="color:var(--c0)">Alex</span> <span class="ts mono">04:31</span>Agreed — ship onboarding first, revisit search after.</p>
+      </div>
+      <div class="proof-tl" aria-hidden="true">
+        <span><span class="mono">01 velocity</span></span><span><span class="mono">02 search</span></span><span><span class="mono">03 actions</span></span>
+      </div>
+    </div>
+    <div class="proof-cap"><b>Sample data — real interface.</b> This is the actual recording page.<span>See it live →</span></div>
+  </a>`;
 
   const hero = `<section class="hero">
     <div class="hgrid">
       <div>
-        <div class="badge"><b>v1.3.0</b><span>${T(
-          'retenção ilimitada · central de gravações · keyterms na transcrição',
-          'unlimited retention · recordings manager · transcript keyterms',
-        )}</span></div>
-        <h1>${T('Grava as calls do Discord. Depois é só perguntar.', 'Record your Discord calls. Then just ask.')}</h1>
+        <h1>${T(
+          'Cada pessoa grava na própria faixa. Ninguém aqui chuta quem falou.',
+          'Every speaker gets their own track. No AI guesswork about who said what.',
+        )}</h1>
         <p class="sub">${T(
-          'Uma faixa de áudio por pessoa — a transcrição sai com o <strong>nome exato de quem falou</strong>, sem IA chutando quem falou. A ata se escreve sozinha. E as reuniões viram memória que responde: no Discord, na web ou no seu assistente de IA.',
-          'One audio track per speaker — transcripts carry the <strong>exact name of who said what</strong>, no diarization guesswork. Minutes write themselves. Your meetings become memory that answers: in Discord, on the web, or in your AI assistant.',
+          'As ferramentas de IA para reunião adivinham quem está falando — e erram na conversa cruzada, no sotaque, no nome que não é em inglês. O Kassinão não faz esse trabalho de adivinhação: como cada pessoa tem sua própria faixa de áudio, a transcrição, a ata e o /perguntar sabem com certeza quem disse o quê, do primeiro segundo ao último.',
+          "Most AI meeting tools infer who's speaking from voice patterns — and get it wrong the moment people talk over each other or a name doesn't fit an English phonetic model. Kassinão skips the inference entirely: because each person records to their own audio track, the transcript, the summary, and /ask always know exactly who said what, from second one.",
         )}</p>
-        <div class="installer">
-          <div class="tab"><span>${T('self-hosted · docker', 'self-hosted · docker')}</span>
-            <button class="cp" type="button" data-copy="kcmd">${T('copiar', 'copy')}</button></div>
-          <pre id="kcmd">${installCmd
-            .split('\n')
-            .map((l) => `<span class="pr">$ </span>${l.replace(/(#.*)$/, '<span class="pr">$1</span>')}`)
-            .join('\n')}</pre>
+        <div class="hero-ctas">
+          <a class="btn2 pri" href="/demo">${T('Ver a demo ao vivo →', 'See the live demo →')}</a>
+          <a class="btn2 sec" href="#deploy">${T('Rodar no meu servidor', 'Self-host it')}</a>
         </div>
       </div>
-      <div class="term" id="kterm">
-        <div class="tbar"><i></i><i></i><i></i>&nbsp; kassinao — discord</div>
-        <div class="tbody">${termLines}</div>
-        <div class="term-cap">${T('sessão de exemplo — veja a página completa na', 'example session — see the full page on the')} <a href="/demo">${T('demo ao vivo →', 'live demo →')}</a></div>
-      </div>
+      ${pt ? proofPt : proofEn}
     </div>
     <div class="strip">
-      <span>${T('open source (AGPL-3.0)', 'open source (AGPL-3.0)')}</span>
-      <span>${T('roda no seu servidor', 'runs on your server')}</span>
-      <span>${T('custo pelo tempo de fala', 'cost tracks talk time')}</span>
-      <span>MCP · Claude · Cursor</span>
-      <span>pt-BR / EN</span>
+      <span>${T('Self-hosted', 'Self-hosted')}</span>
+      <span>${T('Código aberto', 'Open source')} (<span class="mono">AGPL-3.0-or-later</span>)</span>
+      <span>${T('Roda no seu Docker', 'Runs on your Docker')}</span>
+      <span>${T('Nativo do Discord', 'Discord-native')}</span>
     </div>
   </section>`;
 
-  // ---------- o que é ----------
-  const what = `<section class="rv">
-    <h3>${T('O que é o Kassinão?', 'What is Kassinão?')}</h3>
-    <ul class="stars">
-      <li><strong>${T('Multipista de verdade.', 'True multi-track.')}</strong> ${T(
-        'Cada pessoa vira um FLAC alinhado — atribuição perfeita de quem falou, exportável pra MP3, mix ou projeto Audacity.',
-        'Every speaker becomes an aligned FLAC — perfect attribution, exportable to MP3, a single mix, or an Audacity project.',
+  // ---------- pilar 1: sabe quem falou ----------
+  const pillar1 = `<section class="rv">
+    <h2 class="pillar">${T('Sabe quem falou', "Knows who's talking")}</h2>
+    <p class="pillar-sub">${T(
+      'Não é diarização por IA. É arquitetura: uma faixa de áudio por pessoa, do primeiro segundo ao último.',
+      'One audio track per person — not a guess made after the fact.',
+    )}</p>
+    <ul class="bullets">
+      <li>${T(
+        'Cada participante grava na própria faixa FLAC, sincronizada por amostra com as demais — a transcrição não precisa adivinhar de quem é a voz, porque ela já veio isolada do microfone daquela pessoa.',
+        'Every participant is captured on their own separate track from the moment they unmute — no diarization model decides afterward whose voice that was.',
       )}</li>
-      <li><strong>${T('Transcrição que não alucina.', "Transcripts that don't hallucinate.")}</strong> ${T(
-        'VAD corta o silêncio antes da API (AssemblyAI, Groq, OpenAI, Gemini ou 100% local) e o custo acompanha o tempo de fala, não pessoas × horas.',
-        'VAD trims silence before the API (AssemblyAI, Groq, OpenAI, Gemini, or 100% local) and cost tracks talk time — not people × hours.',
+      <li>${T(
+        'VAD real (detecção de silêncio via ffmpeg) recorta os trechos sem fala antes de qualquer coisa ir pra API — sem alucinação em cima de silêncio, sem pagar por hora vazia de call.',
+        "Real VAD trims each track to speech only before anything leaves your server — a call with long silences doesn't cost 1 hour × N speakers of transcription.",
       )}</li>
-      <li><strong>${T('Ata por IA no canal.', 'AI minutes in the channel.')}</strong> ${T(
-        'Resumo, decisões e ações (com responsável e prazo) postados no Discord e na página — sem ninguém pedir.',
-        'Summary, decisions and action items (owner + due) posted to Discord and the page — nobody has to ask.',
+      <li>${T(
+        'Motor de transcrição plugável — troque com uma variável de ambiente: <strong>AssemblyAI</strong> · <strong>Groq</strong> · <strong>OpenAI</strong> · <strong>Gemini</strong> · <strong>local</strong> (faster-whisper, áudio nunca sai do servidor).',
+        'Pick the engine, same pipeline underneath — one environment variable: <strong>AssemblyAI</strong> · <strong>Groq</strong> · <strong>OpenAI</strong> · <strong>Gemini</strong> · <strong>Local</strong> (faster-whisper, audio never leaves your server).',
       )}</li>
-      <li><strong>${T('Pergunte às suas reuniões.', 'Ask your meetings.')}</strong> ${T(
-        '/perguntar no Discord, busca full-text na web e conector MCP pro seu assistente — o texto fica pesquisável pelo tempo que você escolher (até pra sempre).',
-        '/ask in Discord, full-text web search, and an MCP connector for your assistant — text stays searchable for as long as you choose (even forever).',
-      )}</li>
-      <li><strong>${T('Acesso que tranca de verdade.', 'Access control that actually locks.')}</strong> ${T(
-        'Login com Discord: só abre pra quem estava na call (mesmo mutado), enxerga o canal, iniciou ou é admin. Link vazado não abre nada.',
-        'Discord login: opens only for people who were in the call (even muted), can see the channel, started it, or are admins. A leaked link opens nothing.',
+      <li>${T(
+        'Resultado prático: em conversa cruzada, sotaque forte ou num nome como "Priscila", o rótulo de quem falou não é palpite de modelo — é o próprio microfone que capturou aquela faixa.',
+        'Automatic retry and resume on provider rate limits — a flaky API key never costs you the transcript.',
       )}</li>
     </ul>
-    <p class="more"><a href="${repoPublic ? `${REPO_URL}#readme` : NPM_URL}">${T('Leia o README →', 'Read the README →')}</a></p>
   </section>`;
 
-  // ---------- figuras ----------
-  const lanes = [22, 46, 70]
-    .map(
-      (y, i) =>
-        `<rect x="4" y="${y - 7}" width="192" height="14" fill="none" stroke="rgba(255,255,255,.14)"/>` +
-        [8, 30, 58, 92, 118, 150, 172]
-          .filter((_, j) => (j + i) % 3 !== 0)
-          .map(
-            (x) =>
-              `<rect x="${x}" y="${y - 5}" width="${10 + ((x * (i + 2)) % 16)}" height="10" fill="rgba(255,255,255,.34)"/>`,
-          )
-          .join(''),
-    )
-    .join('');
-  const vad = [4, 22, 34, 58, 76, 96, 110, 128, 152, 170, 184]
-    .map((x, i) => {
-      const h = [8, 30, 6, 38, 10, 44, 8, 34, 6, 26, 8][i];
-      const speech = h > 12;
-      return `<rect x="${x}" y="${48 - h / 2}" width="8" height="${h}" fill="${speech ? 'rgba(255,255,255,.42)' : 'rgba(255,255,255,.12)'}"/>${speech ? '' : `<line x1="${x - 1}" y1="58" x2="${x + 9}" y2="58" stroke="rgba(255,255,255,.2)" stroke-dasharray="2 2"/>`}`;
-    })
-    .join('');
-  const marks = [14, 38, 52, 90, 108, 146, 178]
-    .map(
-      (x, i) =>
-        `<rect x="${x}" y="${i % 2 ? 36 : 30}" width="5" height="${i % 2 ? 24 : 36}" fill="rgba(255,255,255,${i % 3 ? '.32' : '.5'})"/>`,
-    )
-    .join('');
-  const figs = `<section class="rv">
-    <h3>${T('Como ele acerta o que os outros chutam', 'How it gets right what others guess')}</h3>
-    <div class="figs">
-      <figure><svg viewBox="0 0 200 96" aria-hidden="true">${lanes}</svg>
-        <figcaption><b>Fig 1.</b> ${T(
-          'Uma faixa por pessoa, perfeitamente sincronizadas — identificar quem falou não é chute, é arquitetura.',
-          "One track per speaker, sample-aligned — diarization isn't guesswork, it's architecture.",
-        )}</figcaption></figure>
-      <figure><svg viewBox="0 0 200 96" aria-hidden="true">${vad}</svg>
-        <figcaption><b>Fig 2.</b> ${T(
-          'Só a fala é enviada à API (VAD): sem alucinação de silêncio, sem pagar por hora vazia.',
-          'Only speech is sent to the API (VAD): no silence hallucinations, no paying for empty hours.',
-        )}</figcaption></figure>
-      <figure><svg viewBox="0 0 200 96" aria-hidden="true"><line x1="4" y1="66" x2="196" y2="66" stroke="rgba(255,255,255,.2)"/>${marks}</svg>
-        <figcaption><b>Fig 3.</b> ${T(
-          'Tudo tem timestamp clicável: ata, busca e respostas pulam pro segundo exato do áudio.',
-          'Everything carries a clickable timestamp: minutes, search and answers jump to the exact second.',
-        )}</figcaption></figure>
-    </div>
-  </section>`;
-
-  // ---------- perguntar em 3 lugares ----------
-  const ask = `<section class="rv">
-    <h3>${T('Pergunte da ferramenta que você já usa', 'Ask from the tools you already use')}</h3>
-    <ul class="stars">
-      <li><strong>Discord</strong> — <span class="dim">/${T('perguntar', 'ask')}</span> ${T(
-        'responde na hora, só pra você, com citações. Zero setup pro time.',
-        'answers on the spot, only to you, with citations. Zero setup for the team.',
+  // ---------- pilar 2: vira memória que responde ----------
+  const pillar2 = `<section class="rv">
+    <h2 class="pillar">${T('Vira memória que responde', 'Becomes memory that answers')}</h2>
+    <p class="pillar-sub">${T(
+      'A ata escreve sozinha. E a reunião passa a responder pergunta, sempre citando a fonte.',
+      "The recording doesn't end when the call does — it turns into something you can query.",
+    )}</p>
+    <ul class="bullets">
+      <li>${T(
+        'Assim que a call termina, uma IA publica no canal e na página: <strong>resumo</strong>, <strong>decisões</strong> e <strong>itens de ação</strong> com responsável e prazo — sem ninguém pedir.',
+        'When the call wraps, an AI-generated record posts straight to the channel: <strong>summary</strong>, <strong>decisions</strong>, and <strong>action items</strong> — each with an owner and a due date.',
       )}</li>
-      <li><strong>Web</strong> — ${T(
-        'índice de tudo que você pode acessar, com busca em transcrições, atas e notas.',
-        'an index of everything you can access, with search across transcripts, minutes and notes.',
+      <li>${T(
+        'Índice web com busca full-text em transcrições, atas e notas de tudo que você pode acessar — cada resultado linka pro segundo exato.',
+        'Full-text search on the web, across every transcript, minutes doc, and note you can access, with results that deep-link to the exact second.',
       )}</li>
-      <li><strong>${T('Seu assistente de IA', 'Your AI assistant')}</strong> — ${T(
-        'conector MCP (padrão aberto) pra Claude, Cursor e o que vier: ações pendentes entre reuniões, quem disse o quê, busca por período.',
-        'MCP connector (open standard) for Claude, Cursor and whatever comes next: pending actions across meetings, who said what, time-window search.',
+      <li>${T(
+        'Conector <strong>MCP</strong> pro Claude Desktop, Cursor ou outro assistente: ações pendentes cruzando reuniões, busca por período — com o mesmo controle de acesso da web.',
+        '<strong>MCP connector</strong> for Claude Desktop, Cursor, or any MCP client: cross-meeting action items with deadlines, time-window queries — scoped to the exact same access rules as the web page.',
       )}</li>
     </ul>
     <div class="qa">
-      <div><span class="p">claude&gt;</span> <span class="q">${T(
-        'o que ficou pendente das reuniões dessa semana?',
-        'what is still pending from this week’s meetings?',
+      <div><span class="p">${T('/perguntar', '/ask')}</span> <span class="q">${T(
+        'o que decidimos sobre o checkout?',
+        'what did we decide about the rollback?',
       )}</span></div>
       <div>${T(
-        '3 itens: load test no staging (<strong>Mei</strong>, qua) · e-mail de lançamento (<strong>Priya</strong>, qui) · rollback do onboarding (<strong>Rafael</strong>, qua)',
-        '3 items: staging load test (<strong>Mei</strong>, Wed) · launch email (<strong>Priya</strong>, Thu) · onboarding rollback (<strong>Rafael</strong>, Wed)',
-      )} <span class="dim">— product-sync</span> <a class="ts" href="/demo">[5:20]</a></div>
+        'Rafael assumiu o merge do rollback (com feature flag) até quarta',
+        'Rafael owns merging the rollback behind a feature flag by Wednesday',
+      )} — <a class="ts mono" href="/demo">[16:10]</a></div>
     </div>
   </section>`;
 
-  // ---------- privacidade ----------
+  // ---------- pilar 3: é seu, com controle real ----------
   const accessReceipt = repoPublic
     ? `<a href="${REPO_URL}/blob/main/src/web/access.ts">src/web/access.ts →</a>`
-    : `<span>src/web/access.ts</span>`;
-  const privacy = `<section class="rv">
-    <h3>${T('Privacidade não é promessa, é arquitetura', 'Privacy is architecture, not a promise')}</h3>
-    <ul class="stars">
+    : `<span class="mono">src/web/access.ts</span>`;
+  const pillar3 = `<section class="rv">
+    <h2 class="pillar">${T('É seu, com controle real', 'Yours, with real control')}</h2>
+    <p class="pillar-sub">${T(
+      'Self-hosted não é um selo — é onde o áudio, o texto e a chave de acesso realmente moram.',
+      'Self-hosted by default — control enforced in code, not promised in a privacy policy.',
+    )}</p>
+    <ul class="bullets">
       <li>${T(
-        '<strong>Roda no SEU servidor.</strong> Áudio e transcrição podem ser 100% locais (faster-whisper); a ata usa um LLM na nuvem (OpenRouter ou Groq) — ou é só desligar.',
-        '<strong>Runs on YOUR server.</strong> Audio and transcription can be 100% local (faster-whisper); minutes use a cloud LLM (OpenRouter or Groq) — or you turn them off.',
+        'Roda no seu Docker, no seu servidor — nenhum fornecedor guarda seu áudio, sua transcrição ou as decisões do seu time.',
+        "Runs on your own Docker host. No vendor holds your audio, your transcripts, or your team's decisions.",
       )}</li>
       <li>${T(
-        '<strong>Consentimento visível:</strong> apelido [GRAVANDO] + painel no canal enquanto grava.',
-        '<strong>Visible consent:</strong> a [RECORDING] nickname + a panel in the channel while recording.',
+        `Acesso via <strong>login com Discord</strong>, re-checado a cada visita: só abre pra quem estava na call, enxerga o canal, iniciou ou é admin. Link vazado não abre nada. A regra inteira cabe num arquivo: ${accessReceipt}`,
+        `<strong>Access control that's re-checked every time.</strong> Only people who were in the call, can see the channel, started it, or are admins can open the page. A leaked link opens nothing. The whole rule fits in one file: ${accessReceipt}`,
       )}</li>
       <li>${T(
-        `<strong>Cada acesso é re-checado no Discord</strong> a cada visita — a regra inteira cabe num arquivo: ${accessReceipt}`,
-        `<strong>Every access is re-checked against Discord</strong> on every visit — the whole rule fits in one file: ${accessReceipt}`,
+        'Retenção do seu jeito: em camadas por padrão (áudio expira, texto sobrevive) ou ilimitada — nada expira até você decidir apagar.',
+        'Retention on your terms: tiered by default (audio expires, transcript and minutes outlive it) — or unlimited: nothing expires until you say so.',
       )}</li>
       <li>${T(
-        '<strong>Retenção do seu jeito:</strong> em camadas (o áudio pesado expira em dias, o texto vive mais) ou ilimitada (nada expira; você libera espaço apagando só o áudio, a memória fica).',
-        '<strong>Retention your way:</strong> tiered (heavy audio expires in days, text lives longer) or unlimited (nothing expires; free space by deleting just the audio, the memory stays).',
-      )}</li>
-      <li>${T(
-        '<strong>Open source sob AGPL-3.0</strong> — quem hospedar uma versão modificada é obrigado a abrir o código também.',
-        '<strong>Open source under AGPL-3.0</strong> — anyone hosting a modified version must open their code too.',
+        'Licença <span class="mono">AGPL-3.0-or-later</span>: código aberto de verdade. Quem hospedar uma versão modificada como serviço é obrigado a abrir esse código também.',
+        'Licensed <span class="mono">AGPL-3.0-or-later</span>. Read the code, change it, self-host it — and if you host a modified version for others, share your changes back.',
       )}</li>
     </ul>
   </section>`;
 
   // ---------- comparação ----------
   const compare = `<section class="rv">
-    <h3>${T('Craig grava. Otter resume. O Kassinão lembra.', 'Craig records. Otter summarizes. Kassinão remembers.')}</h3>
-    <table>
+    <h2 class="pillar">${T('Craig grava. Otter resume. O Kassinão sabe quem falou.', "Craig records. Otter summarizes. Kassinão knows who's talking.")}</h2>
+    <p class="pillar-sub">${T(
+      'Comparando o que cada ferramenta realmente entrega — não o que a gente gostaria que fosse verdade.',
+      "A fair comparison — including where Kassinão doesn't win.",
+    )}</p>
+    <div class="tablewrap"><table>
       <tr><th></th><th>Kassinão</th><th>Craig</th><th>Otter/Fireflies</th></tr>
       <tr><td>${T('Multipista (1 faixa/pessoa)', 'Multi-track (1 file/speaker)')}</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">—</td></tr>
       <tr><td>${T('Identifica quem falou', 'Speaker attribution')}</td><td class="yes">${T('exato', 'exact')}</td><td class="yes">${T('exato', 'exact')}</td><td class="half">${T('chute (IA)', 'guessed (AI)')}</td></tr>
       <tr><td>${T('Ata por IA (decisões + ações)', 'AI minutes (decisions + actions)')}</td><td class="yes">✓</td><td class="no">—</td><td class="yes">✓</td></tr>
       <tr><td>${T('Perguntar às reuniões (Discord/web/MCP)', 'Ask your meetings (Discord/web/MCP)')}</td><td class="yes">✓</td><td class="no">—</td><td class="half">${T('só no app deles', 'their app only')}</td></tr>
       <tr><td>${T('Seus dados, seu servidor', 'Your data, your server')}</td><td class="yes">✓</td><td class="half">${T('parcial', 'partial')}</td><td class="no">—</td></tr>
+      <tr><td>${T('Código aberto (AGPL-3.0)', 'Open source (AGPL-3.0)')}</td><td class="yes">✓</td><td class="yes">✓</td><td class="no">—</td></tr>
       <tr><td>${T('Preço', 'Price')}</td><td class="yes">${T('grátis (AGPL)', 'free (AGPL)')}</td><td>freemium</td><td>${T('pago', 'paid')}</td></tr>
-    </table>
+    </table></div>
+    <p class="caveat">${T(
+      'Ressalva honesta: isso não quer dizer que o Kassinão ganha em tudo. Você troca o suporte de uma empresa por trás — e o conforto de "zero manutenção" — por um projeto solo e pelo trabalho de manter o próprio servidor no ar. Se o que você quer é não pensar em infraestrutura, um SaaS pago ainda é a escolha certa pra você. O Kassinão é pra quem prefere controlar os próprios dados e não pagar assinatura por gravação.',
+      "Honest caveat: Kassinão is a solo, indie project, not a funded company. There's no support line, no mobile app, and edge-case polish will lag behind Craig and Otter. What you get instead is the source code, a real self-hosting path, and a mechanism — one track per speaker — that structurally can't misattribute a line the way diarization can.",
+    )}</p>
   </section>`;
 
-  // ---------- deploy ----------
+  // ---------- deploy: um único caminho ----------
+  const installCmd = repoPublic
+    ? `git clone ${REPO_URL}.git && cd kassinao\ncp .env.example .env   ${T('# token do bot + chaves de IA', '# bot token + AI keys')}\ndocker compose up -d --build`
+    : `git clone https://github.com/resolvicomai/kassinao.git && cd kassinao\ncp .env.example .env   ${T('# token do bot + chaves de IA', '# bot token + AI keys')}\ndocker compose up -d --build`;
   const deploy = `<section id="deploy" class="rv">
-    <h3>${T('Rode o seu em 3 passos', 'Deploy yours in 3 steps')}</h3>
+    <h2 class="pillar">${T('Antes de instalar, teste', 'Deploy — try it before you install it')}</h2>
+    <p class="pillar-sub">${T(
+      'A demo ao vivo mostra a página real em segundos. Instalar o seu leva só mais alguns minutos.',
+      'The live demo shows the real page in seconds. Installing your own takes a few more minutes.',
+    )}</p>
+    <div class="deploy-demo">
+      ${T(
+        '<strong>Passo 0, sem instalar nada:</strong> abra a demo ao vivo e veja a página de gravação de verdade — ata e transcrição coloridas por pessoa, dado fictício, sem login.',
+        '<strong>Step zero, no install:</strong> open the live demo and see the real recording page — AI minutes and transcript colored by speaker, fictional data, no login.',
+      )}
+      <div class="hero-ctas" style="margin-top:14px"><a class="btn2 sec" href="/demo">${T('Ver a demo ao vivo →', 'See the live demo →')}</a></div>
+    </div>
     <div class="steps">
-      <div class="step"><div class="st-t">${T('Crie o app no Discord', 'Create the Discord app')}</div>
-        <p>${T(
-          'Developer Portal → New Application → Bot. Copie token, application id e client secret. (~1 minuto)',
-          'Developer Portal → New Application → Bot. Copy the token, application id and client secret. (~1 minute)',
-        )}</p></div>
-      <div class="step"><div class="st-t">${T('Suba com Docker', 'Bring it up with Docker')}</div>
-        <pre><span class="pr">$ </span>git clone ${repoPublic ? `${REPO_URL}.git` : 'https://github.com/resolvicomai/kassinao.git'} && cd kassinao
-<span class="pr">$ </span>cp .env.example .env && $EDITOR .env
-<span class="pr">$ </span>docker compose up -d</pre>
-        <p>${T(
-          'HTTPS sem abrir porta: Cloudflare Tunnel (TUNNEL_TOKEN + COMPOSE_PROFILES=tunnel). Ou 1-clique no Render.',
-          'HTTPS without opening ports: Cloudflare Tunnel (TUNNEL_TOKEN + COMPOSE_PROFILES=tunnel). Or 1-click on Render.',
-        )}</p></div>
-      <div class="step"><div class="st-t">${T('Ligue a IA (opcional)', 'Turn on the AI (optional)')}</div>
-        <pre><span class="pr"># </span>TRANSCRIBE_PROVIDER=assemblyai   <span class="pr">${T('# ou groq (free tier) / local', '# or groq (free tier) / local')}</span>
-<span class="pr"># </span>OPENROUTER_API_KEY=sk-or-...     <span class="pr">${T('# ata + /perguntar (~centavos/reunião)', '# minutes + /ask (~cents/meeting)')}</span></pre>
-        <p>${T(
-          'Depois /gravar num canal de voz — o resto acontece sozinho.',
-          'Then /record in a voice channel — everything else just happens.',
-        )}</p></div>
+      <div class="codebox"><pre>${installCmd
+        .split('\n')
+        .map((l) => `<span class="pr">$ </span>${l.replace(/(#.*)$/, '<span class="pr">$1</span>')}`)
+        .join('\n')}</pre></div>
+      <p>${T(
+        'Depois convide o bot e rode <span class="mono">/gravar</span> num canal de voz — é isso. HTTPS sem abrir porta (Cloudflare Tunnel) e como ligar transcrição + ata estão no passo a passo completo do README.',
+        'Then invite the bot and run <span class="mono">/record</span> in a voice channel — that\'s it. HTTPS without opening ports (Cloudflare Tunnel) and turning on transcription + minutes are in the full walkthrough in the README.',
+      )}</p>
     </div>
   </section>`;
 
   // ---------- rodapé ----------
+  // Rodapé de MARKETING: só o que interessa a quem está avaliando o projeto.
+  // O app (gravações, conectar IA) vive atrás do "Entrar" do topo — mundo à parte.
   const footer = `<div class="cells">
-    <a href="${codeHref}">${codeLabel} <span class="k">[AGPL]</span></a>
-    <a href="${NPM_URL}">npm <span class="k">[kassinao-mcp]</span></a>
+    <a href="${codeHref}">${codeLabel} <span class="k mono">AGPL</span></a>
+    <a href="${NPM_URL}">npm <span class="k mono">kassinao-mcp</span></a>
     <a href="/demo">${T('demo ao vivo', 'live demo')}</a>
-    <a href="/gravacoes">${T('minhas gravações', 'my recordings')}</a>
-    <a href="/conectar-ia">${T('conectar IA', 'connect AI')}</a>
+    <a href="/gravacoes">${user ? T('minhas gravações', 'my recordings') : T('entrar', 'sign in')}</a>
   </div>`;
 
   const copyScript = `<script>(function(){
@@ -1675,20 +1681,6 @@ export function landingPage(lang: Locale): string {
       });
     });
     var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    // terminal "digitando": as linhas entram uma a uma (uma vez, ao carregar)
-    var term = document.getElementById('kterm');
-    if (term && !reduce) {
-      term.classList.add('typing');
-      var lns = term.querySelectorAll('.ln');
-      var i = 0;
-      (function next(){
-        if (i >= lns.length) { term.classList.remove('typing'); return; }
-        lns[i].classList.add('on');
-        var txt = lns[i].textContent || '';
-        i++;
-        setTimeout(next, txt.trim() ? Math.min(90 + txt.length * 6, 520) : 140);
-      })();
-    }
     // reveal ao rolar
     var rvs = document.querySelectorAll('.rv');
     if ('IntersectionObserver' in window && !reduce) {
@@ -1731,10 +1723,9 @@ export function landingPage(lang: Locale): string {
 ${topnav}
 <div class="container">
 ${hero}
-${what}
-${figs}
-${ask}
-${privacy}
+${pillar1}
+${pillar2}
+${pillar3}
 ${compare}
 ${deploy}
 ${footer}

@@ -1,82 +1,88 @@
+<div align="center">
+
 # Kassinão 🎙️
+
+### Cada pessoa grava na própria faixa. Ninguém aqui chuta quem falou.
 
 **🌎 Idioma:** [English](README.md) · **Português (BR)**
 
-> Grava as calls do Discord. Depois é só perguntar.
->
-> Uma faixa por pessoa, **transcrição com o nome exato de quem falou**, **ata** (resumo, decisões, itens de ação) automática — e as reuniões viram memória que responde, com **/perguntar** no Discord, busca na web ou qualquer assistente de IA com MCP.
+[![Licença: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![GitHub stars](https://img.shields.io/github/stars/resolvicomai/kassinao?style=social)](https://github.com/resolvicomai/kassinao/stargazers)
 
-Um gravador de voz multi-track para Discord, auto-hospedado, inspirado no [Craig](https://craig.chat/) — com as principais features "premium" liberadas e um extra que nenhum concorrente entrega bem: como cada participante tem uma faixa de áudio separada, a **atribuição de quem falou o quê é perfeita** (sem diarização por IA, que é onde Otter/Fireflies erram).
+<br/>
 
-🔗 **Demo ao vivo (sem instalar nada):** <https://kassinao.resolvicomai.app/demo> — reunião fictícia com transcrição, ata e player. E dá pra **conectar ao seu assistente de IA** (Claude/Cursor) — veja [Conector de IA](#-conector-de-ia-mcp).
+[![Ver a demo ao vivo](https://img.shields.io/badge/▶_VER_A_DEMO_AO_VIVO-5865F2?style=for-the-badge)](https://kassinao.resolvicomai.app/demo)
 
-<!-- Dica: adicione aqui um screenshot da página da gravação (docs/pagina.png) -->
+Reunião fictícia, **sem precisar logar**: um chip colorido por participante, player de áudio, card de ata com resumo/decisões/ações e a transcrição inteira colorida por quem falou, com timestamp clicável — a mesma página que qualquer gravação sua vai gerar.
 
----
+<sub>Prefere ler puro texto? A mesma transcrição e ata estão em [`docs/example/`](docs/example/), direto no repositório.</sub>
 
-## ✨ Features
-
-- **🎚️ Multipista de verdade** — uma faixa FLAC (lossless) separada por pessoa, todas na mesma linha do tempo.
-- **📝 Transcrição automática** — com o nome de quem falou e horários. Motor plugável: **AssemblyAI**, **Groq**, **OpenAI**, **Gemini** ou **comando local** (faster-whisper/whisper.cpp) para privacidade total. **VAD de verdade**: só a fala vai pra API (sem custo com silêncio, sem alucinação de silêncio), com retomada automática se o provedor limitar.
-- **📋 Ata com IA** — resumo, decisões, itens de ação (com responsável/prazo), tópicos com horário e **um bloco por participante**. Gerada por LLM sobre a transcrição.
-- **🔊 Página web da gravação** — player fixo com **velocidade 1×/1.5×/2×**, transcrição agrupada por falante com **cores por pessoa**, **busca/filtro** dentro da transcrição, acompanhamento estilo karaokê, barra do tempo clicável, copiar itens de ação com um clique, downloads em **MP3 / FLAC / Mix único / projeto Audacity** — tudo protegido por **login com Discord**.
-- **🗂️ Índice web com busca** — `/gravacoes` na web lista tudo que você pode acessar em todos os servidores, com filtro por canal e **busca full-text** em transcrições, atas e notas — cada resultado linka pro segundo exato.
-- **💬 `/perguntar` no próprio Discord** — pergunte às suas reuniões sem sair do Discord; a IA responde (efêmero, só você vê) usando apenas as transcrições que VOCÊ pode acessar, com citações `[hh:mm:ss]` pro minuto certo. Opção `dias:` (janela, padrão 30). Requer a ata por IA habilitada (chave OpenRouter ou Groq).
-- **📤 Ata resumida no Discord** — quando a ata fica pronta, o bot posta um embed com resumo, decisões e itens de ação direto no Discord (sem precisar de login); o admin escolhe o canal com `/config ata-canal` (sem configurar, vai pro chat do canal de voz). E o `MINUTES_WEBHOOK_URL` dispara um webhook JSON por reunião pra integrações self-hosted (n8n → Notion/Jira…).
-- **🔒 Acesso restrito de verdade** — só abre para quem **estava na call** (falando ou mutado), **enxerga o canal**, **iniciou** a gravação ou é **admin**. Link vazado não dá acesso a estranhos.
-- **🎛️ Painel ao vivo** no chat do canal de voz — log de eventos, botões de **Parar**, **Nota** e **📌 Marcar momento** (um clique carimba o timestamp, sem digitar nada), indicador `[GRAVANDO]` no apelido do bot (consentimento visível).
-- **🗒️ Notas com timestamp** (`/nota` ou botão) — entram no painel, na transcrição, na ata e nos labels do projeto Audacity.
-- **🔌 Conector MCP** *(opcional)* — pergunte sobre suas reuniões pelo **Claude Desktop/Cursor**: janela de tempo, **itens de ação com prazo** cruzando reuniões, busca full-text — cada um só vê o que já poderia ver. Veja [`mcp/`](mcp/).
-- **🤖 Auto-record** — começa a gravar sozinho quando N pessoas entram num canal e para quando esvazia.
-- **⏳ Retenção do seu jeito** — em camadas por padrão: o `RETENTION_DAYS` expira só o **áudio**; transcrição, ata e notas vivem `TEXT_RETENTION_DAYS` (padrão 90 dias) — a busca, o `/perguntar` e o conector MCP continuam funcionando depois que o áudio se foi. Ou use `RETENTION_DAYS=0` pra retenção **ilimitada**: nada expira, e o índice web `/gravacoes` vira uma central de gestão — tamanho em disco por gravação (só o dono), ordenação por maiores, **"liberar espaço"** (apaga só o áudio, a memória fica) e apagar tudo.
-- **❓ Onboarding embutido** — `/ajuda` com botões interativos por tópico; mandar DM ao bot também responde o guia.
-- **🌎 Bilíngue** (pt-BR / inglês, pelo idioma de cada usuário) e **cadeado HTTPS** via Cloudflare Tunnel (sem abrir portas).
-- Robustez: aviso de silêncio, parada automática (limite de horas / canal vazio / desconexão), expiração automática, recuperação pós-reinício e shutdown gracioso.
-
-## 🧭 Comandos
-
-| pt-BR | inglês | o que faz |
-|---|---|---|
-| `/gravar [canal]` | `/record [channel]` | Começa a gravar (seu canal de voz, ou o indicado) |
-| `/parar` | `/stop` | Encerra e gera o link com áudio, transcrição e ata |
-| `/nota <texto>` | `/note <text>` | Marca uma nota no tempo atual (ou botão 📝 do painel) |
-| `/status` | `/status` | Estado da gravação em andamento |
-| `/gravacoes` | `/recordings` | Suas últimas gravações, com links (filtradas por acesso) — também linka pro índice web com busca full-text |
-| `/perguntar <pergunta> [dias]` | `/ask <question> [days]` | Pergunte às suas reuniões — a IA responde (só você vê) com citações no segundo exato, usando as transcrições que você pode acessar |
-| `/config ata-canal/ver` | `/config minutes-channel/view` | Admin: escolhe o canal de texto onde a ata resumida é postada (padrão: chat do canal de voz) |
-| `/ajuda` | `/help` | Guia interativo (também responde por DM) |
-| `/autorecord ligar/desligar/ver` | `/autorecord on/off/view` | Gravação automática por canal (admin) |
-| `/mcp novo/revogar-tudo` | `/mcp new/revoke-all` | Conectar/revogar seu assistente de IA (quando o MCP está ligado) |
-
-Qualquer membro grava e para. `/autorecord` e `/config` exigem **Gerenciar Servidor**. Apagar uma gravação (pela página) é restrito a quem iniciou ou a admins.
+</div>
 
 ---
 
-## 🔌 Conector de IA (MCP)
+A maioria das ferramentas de IA para reunião infere quem está falando a partir do padrão de voz — e erra toda vez que duas pessoas falam junto ou um nome foge do inglês. O Kassinão pula essa inferência: cada pessoa da call grava numa faixa de áudio própria, então a transcrição, a ata e o `/perguntar` sempre sabem, com certeza, quem disse o quê.
 
-*Opcional, desligado por padrão.* Plugue suas reuniões no **Claude Desktop, Cursor** ou outro cliente MCP e pergunte em linguagem natural:
+## Sumário
 
-- *"O que ficou pendente essa semana, e de quem?"* — junta itens de ação com prazo de várias reuniões.
-- *"Lista as calls deste canal entre 1 e 30 de junho."* — busca por janela de tempo (ciente do fuso).
-- *"Quando a Ana falou de orçamento? Me dá o link."* — busca com link no segundo exato.
+- [Sabe quem falou](#sabe-quem-falou)
+- [Vira memória que responde](#vira-memória-que-responde)
+- [É seu, com controle real](#é-seu-com-controle-real)
+- [Comece agora](#comece-agora)
+- [Como se compara](#como-se-compara)
+- [Referência](#referência)
+- [Como funciona por dentro](#como-funciona-por-dentro)
+- [Segurança e privacidade](#segurança-e-privacidade)
 
-**Seguro por construção:** o conector roda na sua máquina e carrega só um **token pessoal**; o bot aplica o *mesmo* controle de acesso da página, reunião por reunião — cada pessoa só vê o que já veria no site. Somente leitura, sem áudio, revogável. O conteúdo das reuniões vai embrulhado como "dados não-confiáveis" (defesa contra prompt-injection).
+## Sabe quem falou
 
-Para ligar, defina `MCP_SECRET` (segredo forte, **≠** `COOKIE_SECRET`). Cada pessoa se conecta sozinha em `/conectar-ia`. Pacote e docs completos: [`mcp/`](mcp/). Pro caso básico ("o que decidimos?") nem precisa de MCP — o `/perguntar` responde dentro do próprio Discord.
+- Uma faixa de áudio própria por pessoa (FLAC, perfeitamente sincronizada) — não é diarização adivinhada por IA.
+- VAD real: só o trecho com fala de cada faixa vai pra API, então silêncio não custa nem gera alucinação.
+- Motor de transcrição plugável — AssemblyAI, Groq, OpenAI, Gemini ou um comando local, pra privacidade total.
+- Nomes de quem estava na call e vocabulário da equipe entram sozinhos no motor, pra sotaque e termos técnicos saírem certos.
+- Roda sozinha depois do `/parar` — a transcrição com nome de quem falou e timestamp chega sem apertar mais nada.
 
----
+## Vira memória que responde
 
-## 🚀 Instalação (do zero)
+- Ata por IA: resumo, decisões e itens de ação com responsável e prazo, gerada sozinha depois de cada reunião.
+- A ata chega no canal do Discord assim que fica pronta — sem precisar abrir a página.
+- `/perguntar` responde dentro do próprio Discord, com citação `[hh:mm:ss]` clicável, usando só as reuniões que você pode ver.
+- Índice web com busca full-text em transcrições, atas e notas — cada resultado linka pro segundo exato.
+- O mesmo acervo conecta no Claude Desktop, Cursor ou outro assistente compatível, via MCP.
 
-### Pré-requisitos
-- Um servidor (VPS) com **Docker** e **Docker Compose**.
-- Uma conta no **Discord**.
-- *(Recomendado)* Um **domínio na Cloudflare** para ter HTTPS sem abrir portas. *(Alternativa: usar o IP do VPS direto.)*
+> Exemplo: _"o que ficou pendente essa semana, e de quem?"_ — o `/perguntar` (ou o conector MCP) cruza itens de ação com prazo de várias reuniões e responde só com o que você tem direito de ver.
+
+## É seu, com controle real
+
+- Self-hosted: roda no seu Docker, seus dados não passam pela infraestrutura de ninguém.
+- Acesso liberado por login no Discord + participação real na call — nunca por "quem tem o link".
+- Retenção do seu jeito: só o áudio expira, ou nada expira — você decide o que vira memória permanente.
+- Painel ao vivo no canal (parar, marcar nota/momento com um clique) e indicador `[GRAVANDO]` visível pra quem está na call.
+- Auto-record liga sozinho quando alguém entra no canal, é bilíngue (pt-BR/inglês) e roda sob código aberto AGPL-3.0-or-later.
+
+## Comece agora
+
+Precisa de um servidor com **Docker** e de um **app criado no Discord** — é rápido, veja o [passo 1](#1-criar-o-app-do-bot-no-discord) abaixo.
+
+> Faça o passo 1 primeiro: sem `DISCORD_TOKEN` o bot nem sobe.
+
+```bash
+git clone https://github.com/resolvicomai/kassinao.git && cd kassinao
+cp .env.example .env      # preencha DISCORD_TOKEN, APPLICATION_ID, DISCORD_CLIENT_SECRET, BASE_URL
+docker compose up -d --build
+```
+
+Depois **convide o bot** (passo 1) e rode **`/gravar`** num canal de voz. Pronto — o passo a passo completo está logo abaixo.
+
+> ☁️ **Deploy em 1 clique:** [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/resolvicomai/kassinao) — blueprint em [`render.yaml`](render.yaml). Defina `GROQ_API_KEY` + `TRANSCRIBE_PROVIDER=groq` no painel do Render pra já subir com transcrição e ata ligadas.
+> Evite serverless (Vercel/Netlify): o gateway de voz do Discord precisa de um WebSocket sempre ativo.
 
 ### 1. Criar o app do bot no Discord
+
 1. Em <https://discord.com/developers/applications> → **New Application** → dê um nome.
 2. **General Information**: copie o **Application ID** → `APPLICATION_ID`.
-3. **Bot** → **Reset Token** → copie → `DISCORD_TOKEN`. (Nenhuma *privileged intent* é necessária.)
+3. **Bot** → **Reset Token** → copie → `DISCORD_TOKEN`. (Nenhuma _privileged intent_ é necessária.)
 4. **OAuth2** → copie o **Client Secret** → `DISCORD_CLIENT_SECRET`.
 5. **OAuth2 → Redirects** → adicione `SUA_BASE_URL/auth/callback` (ex.: `https://kassinao.seu-dominio.com/auth/callback`). Sem isso, o login da página falha.
 6. Convide o bot (troque `SEU_APP_ID`):
@@ -86,16 +92,10 @@ Para ligar, defina `MCP_SECRET` (segredo forte, **≠** `COOKIE_SECRET`). Cada p
    Permissões: Ver Canais, Enviar Mensagens, Inserir Links, Conectar, Alterar Apelido.
    > Em canais **restritos**, libere o bot no próprio canal (Ver Canal + Conectar), ou dê a ele um cargo com acesso.
 
-### 2. Pegar o código e configurar
-```bash
-git clone https://github.com/resolvicomai/kassinao.git && cd kassinao
-cp .env.example .env
-# edite o .env (veja a tabela de configurações abaixo)
-```
-
-### 3. Como o bot fica acessível (escolha um)
+### 2. Deixar o bot acessível (escolha um)
 
 **Opção A — Cloudflare Tunnel (recomendado: HTTPS, sem abrir portas)**
+
 1. Em <https://one.dash.cloudflare.com> → **Networks → Tunnels → Create a tunnel → Cloudflared**.
 2. Dê um nome, copie o **token** (`eyJ...`) → `TUNNEL_TOKEN` no `.env`.
 3. Em **Public Hostname**: subdomínio + seu domínio, **Type = HTTP**, **URL = `kassinao:8080`**.
@@ -103,18 +103,23 @@ cp .env.example .env
    O serviço `cloudflared` do compose fica sob o profile `tunnel` e **não sobe sozinho** — sem o `COMPOSE_PROFILES=tunnel` (ou `docker compose --profile tunnel up -d`), o túnel simplesmente não inicia.
 
 **Opção B — IP direto (só dev/teste, sem HTTPS)**
+
 - No `.env`: `BASE_URL=http://SEU_IP:8080` e publique a porta 8080 (descomente o `ports` no `docker-compose.yml`). Não precisa mexer no serviço `cloudflared`: sem o profile `tunnel` ele nem sobe.
 - ⚠️ O OAuth do Discord só aceita redirect `https` (ou `localhost`), então o **login e os downloads da página não funcionam via IP puro** — para uso real, use o túnel (ou qualquer proxy HTTPS).
 
-### 4. Subir
+### 3. Subir
+
 ```bash
 docker compose up -d --build
 docker compose logs -f     # deve mostrar "Kassinão online como ..."
 ```
-As gravações ficam em `./recordings` (volume — sobrevivem a rebuilds). Rode `/gravar` num canal de voz e pronto.
 
-### 5. *(Opcional)* Ligar transcrição + ata
+As gravações ficam em `./recordings` (volume — sobrevivem a rebuilds).
+
+### 4. (Opcional) Ligar transcrição + ata
+
 Melhor qualidade em pt-BR (AssemblyAI para a voz; ata num modelo de contexto gigante via OpenRouter):
+
 ```env
 TRANSCRIBE_PROVIDER=assemblyai
 ASSEMBLYAI_API_KEY=...        # https://www.assemblyai.com — US$50 de crédito grátis
@@ -122,14 +127,33 @@ GROQ_API_KEY=gsk_...          # opcional: fallback da transcrição (https://con
 OPENROUTER_API_KEY=sk-or-...  # https://openrouter.ai — LLM da ata (padrão google/gemini-2.5-flash)
 MINUTES_ENABLED=auto
 ```
+
 Caminho 100% grátis: `TRANSCRIBE_PROVIDER=groq` só com a `GROQ_API_KEY` (free tier: 8h de áudio/dia; a ata roda no LLM free da Groq, em map-reduce nas calls longas).
+
 > 🔒 **Privacidade:** no painel da Groq, ligue o **Zero Data Retention (ZDR)** para o áudio não ser retido. Ou use o motor **local** (`TRANSCRIBE_PROVIDER=command`) para o áudio nunca sair do servidor.
 
-Custo de referência da transcrição (por hora de FALA — o silêncio das faixas não é enviado): AssemblyAI ~US$0,21 (US$50 grátis) · Groq ~US$0,11 (free tier 8h/dia) · OpenAI ~US$0,36. A ata custa centavos por reunião.
+## Como se compara
 
----
+Craig grava. Otter resume. O Kassinão sabe quem falou.
 
-## ⚙️ Configuração (`.env`)
+|                                                     | **Kassinão** |  Craig   | Otter / Fireflies |
+| --------------------------------------------------- | :----------: | :------: | :---------------: |
+| Multipista (um arquivo por pessoa)                  |      ✅      |    ✅    |        ❌         |
+| Atribuição perfeita de quem falou (sem diarização)  |      ✅      |    ✅    |    ❌ (chuta)     |
+| Ata por IA (resumo, decisões, tarefas)              |      ✅      |    ❌    |        ✅         |
+| Detalhamento por participante                       |      ✅      |    ❌    |        ⚠️         |
+| Self-hosted / o dado é seu                          |      ✅      |    ⚠️    |        ❌         |
+| Acesso por login (não "quem tem o link")            |      ✅      |    ⚠️    |        ✅         |
+| Código aberto (AGPL-3.0)                            |      ✅      |    ✅    |        ❌         |
+| Preço                                               |    Grátis    | Freemium |       Pago        |
+
+## Referência
+
+Consulta rápida pós-instalação — não precisa ler isso pra decidir se instala, só quando for configurar.
+
+### Configuração (`.env`)
+
+Todas as opções estão comentadas, uma a uma, em [`.env.example`](.env.example). Aqui vão as principais:
 
 | Variável | Padrão | Descrição |
 |---|---|---|
@@ -148,40 +172,67 @@ Custo de referência da transcrição (por hora de FALA — o silêncio das faix
 | `MP3_BITRATE` | `192k` | Bitrate dos MP3 |
 | `COOKIE_SECRET` | gerado | Segredo dos cookies de sessão |
 | `TZ` | `America/Sao_Paulo` | Fuso das datas (a página usa o do navegador) |
+| `DEFAULT_LOCALE` | `en` | Idioma padrão quando não há locale do usuário (ex.: DM); dentro dos servidores, cada pessoa vê no idioma do próprio Discord |
 | `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
 | `TRANSCRIBE_MODEL` | por provider | Ex.: `universal-3-5-pro` (assemblyai), `whisper-large-v3` (groq) |
 | `TRANSCRIBE_LANGUAGE` | `pt` | Idioma falado nas calls |
+| `TRANSCRIBE_PROMPT` | — | Contexto pro motor de ASR (vocabulário/nomes/estilo) — funciona no Whisper e no _keyterms_ do AssemblyAI |
+| `TRANSCRIBE_KEYTERMS` | — | Vocabulário fixo da equipe (AssemblyAI Universal-3.5-Pro): produtos, siglas, nomes de projeto — os nomes dos participantes já entram sozinhos |
 | `TRANSCRIBE_COMMAND` | — | Comando local com `{input}`/`{output}` (provider `command`) |
 | `TRANSCRIBE_TIMEOUT_FACTOR` | `5` | Watchdog do provider `command` |
 | `ASSEMBLYAI_API_KEY` / `OPENAI_API_KEY` / `GROQ_API_KEY` / `GEMINI_API_KEY` | — | Chave do provider escolhido (a da Groq também serve de fallback) |
-| `MINUTES_ENABLED` | `auto` | Ata com IA: `auto` (liga com OPENROUTER_API_KEY ou GROQ_API_KEY) / `true` / `false` |
-| `MINUTES_PROVIDER` / `OPENROUTER_API_KEY` | `openrouter` c/ chave | LLM da ata: `openrouter` (padrão `google/gemini-2.5-flash`) ou `groq` |
+| `MINUTES_ENABLED` | `auto` | Ata com IA: `auto` (liga com `OPENROUTER_API_KEY` ou `GROQ_API_KEY`) / `true` / `false` |
+| `MINUTES_PROVIDER` / `OPENROUTER_API_KEY` | `openrouter` c/ chave | LLM da ata: `openrouter` (padrão `google/gemini-2.5-flash`) ou `groq` (padrão `llama-3.3-70b-versatile`) |
 | `MINUTES_MAX_TOKENS` | `8192` | Teto de tokens da ata |
 | `MINUTES_WEBHOOK_URL` | — | POSTa um JSON (`minutes.ready`) por reunião pra sua integração; só configurável por env, de propósito (evita SSRF via Discord) |
+| `MCP_SECRET` | — | Liga o conector MCP (Claude/Cursor). Defina um segredo forte pra ativar; girar o valor revoga todos os conectores de uma vez |
+| `OWNER_IDS` | — | IDs do Discord com acesso ao `/mcp` (CSV); membros comuns se conectam sozinhos em `/conectar-ia` |
+| `MCP_ACCESS_TTL_MIN` / `MCP_REFRESH_TTL_DAYS` | `15` / `30` | Validade do token de acesso (minutos) e do refresh (dias) do conector MCP |
 
-### Transcrição local (privacidade total)
-Com `TRANSCRIBE_PROVIDER=command` o áudio nunca sai do servidor. Wrapper pronto para faster-whisper em [`scripts/transcribe-local.py`](scripts/transcribe-local.py):
+Tem mais: guarda de espaço em disco, alerta de disco cheio, backup automático via rclone — tudo comentado, uma opção por vez, em [`.env.example`](.env.example).
+
+Transcrição 100% local: com `TRANSCRIBE_PROVIDER=command` o áudio nunca sai do servidor. Wrapper pronto para faster-whisper em [`scripts/transcribe-local.py`](scripts/transcribe-local.py):
+
 ```env
 TRANSCRIBE_PROVIDER=command
 TRANSCRIBE_COMMAND=python3 ./scripts/transcribe-local.py {input} {output}
 ```
+
 No Docker, construa com Python + faster-whisper na imagem: `docker compose build --build-arg LOCAL_TRANSCRIBE=1`. Qualquer comando serve, desde que escreva em `{output}` um JSON `[{"start":s,"end":s,"text":"..."}]`.
 
----
+### Comandos
 
-## 🔐 Segurança e privacidade (LGPD)
+| pt-BR | inglês | o que faz |
+|---|---|---|
+| `/gravar [canal]` | `/record [channel]` | Começa a gravar (seu canal de voz, ou o indicado) |
+| `/parar` | `/stop` | Encerra e gera o link com áudio, transcrição e ata |
+| `/nota <texto>` | `/note <text>` | Marca uma nota no tempo atual (ou botão 📝 do painel) |
+| `/status` | `/status` | Estado da gravação em andamento |
+| `/gravacoes` | `/recordings` | Suas últimas gravações, com links (filtradas por acesso) — também linka pro índice web com busca full-text |
+| `/perguntar <pergunta> [dias]` | `/ask <question> [days]` | Pergunte às suas reuniões — a IA responde (só você vê) com citações no segundo exato, usando as transcrições que você pode acessar |
+| `/config ata-canal/ver` | `/config minutes-channel/view` | Admin: escolhe o canal de texto onde a ata resumida é postada (padrão: chat do canal de voz) |
+| `/autorecord ligar/desligar/ver` | `/autorecord on/off/view` | Gravação automática por canal (admin) |
+| `/mcp novo/revogar-tudo` | `/mcp new/revoke-all` | Só o dono do bot (`OWNER_IDS`): gera ou revoga o código de conexão do assistente de IA — membros comuns se conectam sozinhos em `/conectar-ia` |
+| `/ajuda` | `/help` | Guia interativo (também responde por DM) |
+| `/sobre` | `/about` | Autor, licença e link do código-fonte |
 
-- Gravar voz é tratar **dado pessoal**. Avise os participantes (o bot já mostra `[GRAVANDO]` no apelido e um painel no canal) e defina uma política de retenção (`RETENTION_DAYS`).
-- O acesso às gravações é sempre validado por login no Discord + participação/visibilidade do canal — nunca por "quem tem o link".
-- Prefira **ZDR** (Groq) ou o **motor local** para que o áudio não seja retido por terceiros.
-- **Nunca comite o `.env`** (já está no `.gitignore`). As chaves ficam só no servidor.
+Qualquer membro grava e para. `/autorecord` e `/config` exigem **Gerenciar Servidor**. Apagar uma gravação (pela página) é restrito a quem iniciou ou a admins. `/mcp` só existe quando o conector está ligado (`MCP_SECRET` definido).
 
-## 🧠 Como funciona por dentro
+### Motores de transcrição
 
-- Recebe os pacotes Opus de cada falante via `@discordjs/voice`, decodifica para PCM e alimenta **um ffmpeg por falante** gravando **FLAC contínuo** (silêncio entre falas comprime a quase nada e mantém tudo sincronizado).
-- Ao encerrar a gravação, o **mix já é pré-cozinhado** — o player toca na hora, sem esperar minutos no primeiro clique. Os demais downloads (MP3/FLAC/Audacity) continuam sendo gerados sob demanda, com cache.
-- Transcrição e ata rodam numa **fila serial** após a gravação: o **VAD** (`silencedetect` do ffmpeg) recorta cada faixa e **só os trechos com fala** vão pra API de transcrição (**AssemblyAI** — com fallback pra Groq —, **Groq**, **OpenAI**, **Gemini** ou **comando local**); a ata roda em seguida num LLM via **OpenRouter** ou **Groq**. A página se atualiza sozinha até tudo ficar pronto.
-- A página autentica com **OAuth2 do Discord** (escopo `identify`) e o backend confere no Discord se a pessoa pode acessar aquela gravação.
+| Provedor | Custo (por hora de fala, **por faixa**) | Qualidade em pt-BR | Privacidade | Notas |
+|---|---|---|---|---|
+| **AssemblyAI** (`universal-3-5-pro`) | ~US$0,21 (**US$50 de crédito grátis**) | Top-3 no Open ASR Leaderboard | Nuvem | Escolha padrão; cai pro Groq sozinho se houver `GROQ_API_KEY` |
+| **Groq** (`whisper-large-v3`) | ~US$0,11 (free tier: 8h de áudio/dia) | Excelente | Nuvem (ligue o ZDR) | Melhor opção 100% grátis |
+| **OpenAI** (`whisper-1`) | ~US$0,36 | Excelente | Nuvem | Segmentos com timestamp |
+| **Gemini** (`gemini-2.0-flash`, padrão) | ~centavos | Boa | Nuvem (só no tier pago) | O tier grátis treina modelo com seu áudio — evite |
+| **Local** (`faster-whisper`) | Grátis | Boa (`small` ou maior) | 🔒 Nunca sai do seu servidor | Mais lento sem GPU; veja [`scripts/transcribe-local.py`](scripts/transcribe-local.py) |
+
+> 💡 A gravação é multipista, mas só a **fala** é enviada — o VAD corta o silêncio de cada faixa antes do envio — então uma call de 1h custa perto do tempo total falado, não horas × pessoas. A ata roda uma vez por reunião (OpenRouter ou Groq), poucos centavos no total.
+
+## Como funciona por dentro
+
+Cada falante manda pacotes Opus pro `@discordjs/voice`, que são decodificados em PCM e alimentam **um ffmpeg por pessoa** gravando **FLAC contínuo** (o silêncio entre falas comprime a quase nada e mantém tudo sincronizado). Ao encerrar, o **mix já sai pré-cozido** — o player toca na hora, sem esperar minutos no primeiro clique; os demais downloads (MP3/FLAC/Audacity) são gerados sob demanda, com cache. Transcrição e ata rodam numa **fila serial** depois da call: o **VAD** (`silencedetect` do ffmpeg) recorta cada faixa e só os trechos com fala vão pra API de transcrição escolhida; a ata roda em seguida num LLM via OpenRouter ou Groq. A página se atualiza sozinha até tudo ficar pronto, e autentica com **OAuth2 do Discord** — o backend confere no Discord, a cada acesso, se a pessoa pode abrir aquela gravação.
 
 ```mermaid
 flowchart LR
@@ -208,7 +259,19 @@ flowchart LR
 
 **Stack:** Node.js + TypeScript · discord.js / @discordjs/voice · Express · ffmpeg · Docker · Cloudflare Tunnel.
 
-## 💻 Desenvolvimento
+## Segurança e privacidade
+
+Gravar voz é tratar **dado pessoal** — o design parte disso, não é um adendo:
+
+- **Controle de acesso é código, não convenção.** Toda checagem — página web, índice `/gravacoes`, API do conector MCP — passa pela mesma função em [`src/web/access.ts`](src/web/access.ts): só vê quem **iniciou a gravação**, **esteve na call** (falando ou mutado), **enxerga o canal de voz de origem**, ou tem **Gerenciar Servidor**; apagar é restrito a quem iniciou ou a admins. Não existe um caminho "por disco" que pule essa regra.
+- **Falha pro lado seguro.** Se o cache do Discord está frio (gateway reiniciando, rate limit), a página nunca _concede_ um acesso que não conseguiu confirmar — ela nega, e no caminho do conector MCP devolve um erro retriável (503) em vez de um 403 que poderia esconder um acesso legítimo.
+- **Consentimento visível.** O apelido do bot vira `[GRAVANDO]` durante a call e um painel aparece no canal — ninguém é gravado sem saber.
+- **O conector MCP não amplia acesso.** O token carrega só identidade — a regra de visibilidade é a mesma da web; o texto das reuniões chega ao seu assistente marcado como "dado não confiável" (defesa contra prompt-injection); girar o `MCP_SECRET` revoga todos os conectores na hora.
+- **Áudio não precisa passar por terceiros.** Ligue **Zero Data Retention** no provedor de transcrição escolhido, ou rode o motor **local** (`TRANSCRIBE_PROVIDER=command`) pra o áudio nunca sair do seu servidor.
+- **Segredos ficam só no seu `.env`** (já no `.gitignore` por padrão) — nunca comitados, nunca em log. Reportar uma vulnerabilidade: [SECURITY.md](SECURITY.md).
+
+## Desenvolvimento
+
 ```bash
 npm install
 cp .env.example .env
@@ -216,10 +279,12 @@ npm run dev     # reload automático
 npm run build   # compila para dist/
 ```
 
-## 🤝 Contribuindo
+## Contribuindo
+
 Issues e PRs são bem-vindos. Rode `npm run build` antes de abrir um PR.
 
-## 📄 Licença
+## Licença
+
 [GNU AGPL-3.0-or-later](LICENSE) © 2026 Mauro Marques (resolvicomai).
 
 Software livre e de código aberto: você pode usar, estudar, modificar e
