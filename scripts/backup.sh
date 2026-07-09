@@ -6,8 +6,9 @@
 # ── Setup (só uma vez, no VPS) ───────────────────────────────────────────────
 #   1. Instale o rclone:      curl https://rclone.org/install.sh | sudo bash
 #   2. Configure um remoto:   rclone config
-#      → crie um remoto (ex.: Backblaze B2, barato) e NOMEIE ele "kassinao-backup".
-#        No B2: crie um bucket + uma "Application Key" e cole no rclone config.
+#      → crie o storage (ex.: Backblaze B2) e depois um remoto `crypt` por cima;
+#        nomeie o remoto CRIPTOGRAFADO "kassinao-backup". A nuvem nunca deve
+#        receber voz/transcrição em claro nem o segredo do servidor.
 #   3. Teste:                 RCLONE_REMOTE=kassinao-backup:SEU_BUCKET ./scripts/backup.sh
 #   4. Agende no cron (3h da manhã):
 #      (crontab -l 2>/dev/null; echo "0 3 * * * RCLONE_REMOTE=kassinao-backup:SEU_BUCKET /root/kassinao/scripts/backup.sh >> /var/log/kassinao-backup.log 2>&1") | crontab -
@@ -36,8 +37,18 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 ARCHIVE="$TMP/kassinao-$STAMP.tar.gz"
 
-# Empacota tudo menos cache/ (regenerável) e temporários — economiza espaço/banda.
-tar --exclude='*/cache' --exclude='*.tmp' -czf "$ARCHIVE" -C "$(dirname "$REC_DIR")" "$(basename "$REC_DIR")"
+# Empacota o conteúdo, mas NUNCA estado de autenticação. Restaurar um backup não
+# pode ressuscitar sessão revogada nem entregar o segredo que assina cookies.
+# cache/ é regenerável; temporários também ficam de fora.
+tar \
+  --exclude='*/cache' \
+  --exclude='*.tmp' \
+  --exclude='*/.cookie-secret' \
+  --exclude='*/.web-sessions.json' \
+  --exclude='*/.mcp-sessions.json' \
+  -czf "$ARCHIVE" \
+  -C "$(dirname "$REC_DIR")" \
+  "$(basename "$REC_DIR")"
 
 # Envia pro armazenamento externo.
 rclone copy "$ARCHIVE" "$REMOTE/"

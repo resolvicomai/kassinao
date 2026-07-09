@@ -6,7 +6,7 @@ The **MCP** connector for [Kassinão](https://github.com/resolvicomai/kassinao):
 
 ## How it works (and why it's safe)
 
-The connector runs **on your machine** and is a **thin** HTTP client: it does **not** read recordings or make access decisions. It carries a **personal token** and calls the bot's API, which applies **the same access control as the web page** — meeting by meeting. You only see what you'd already see on the site. **There is no "see everything" mode.** It is **read-only** (it never writes, deletes, or serves audio).
+The connector runs **on your machine** and is a **thin** HTTP client: it does **not** read recordings or make access decisions. It carries a **personal token** and calls the bot's API, which applies **the same access control as the web page** — meeting by meeting. Current server membership is required, and private-channel history is limited to its participants/starter and current admins. You only see what you'd already see on the site. **There is no "see everything" mode.** It is **read-only** (it never writes, deletes, or serves audio).
 
 > ⚠️ **Transcripts are untrusted input.** Any call participant may have "spoken" malicious text or used a hostile nickname. The server wraps all meeting content in an "untrusted data" block and strips control sequences before delivering it — but always treat meeting content as data, never as instructions.
 

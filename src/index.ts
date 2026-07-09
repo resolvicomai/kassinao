@@ -76,7 +76,7 @@ import {
   saveMeta,
   transcriptReady,
 } from './store';
-import { forgetMember } from './web/access';
+import { allowsCurrentChannelGrant, forgetMember, recordingIdentityGrant } from './web/access';
 import { createExchangeCode, revokeUser } from './web/mcpTokens';
 import { startWebServer } from './web/server';
 
@@ -1064,16 +1064,14 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
 }
 
 /**
- * Uma pessoa só pode ver/listar uma gravação se: iniciou, esteve na call
- * (falando ou não), é admin, ou enxerga o canal de voz de origem. Mesma regra
- * do controle de acesso da página web — aqui aplicada para o /gravacoes não
- * vazar metadados.
+ * No Discord a própria interaction já prova membership atual. Calls privadas
+ * ficam limitadas a quem iniciou/esteve presente e admins; só calls públicas
+ * no início aceitam ViewChannel atual. Mesma política do acesso web/MCP.
  */
 function memberCanAccessRecording(member: GuildMember, meta: RecordingMeta, guild: Guild): boolean {
-  if (meta.startedBy?.id === member.id) return true;
-  if (meta.participants.some((p) => p.id === member.id)) return true;
-  if (meta.presence?.some((p) => p.id === member.id)) return true;
+  if (recordingIdentityGrant(member.id, meta).view) return true;
   if (member.permissions.has(PermissionFlagsBits.ManageGuild)) return true;
+  if (!allowsCurrentChannelGrant(meta)) return false;
   const channel = guild.channels.cache.get(meta.voiceChannelId);
   if (channel && channel.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel)) return true;
   return false;
@@ -1485,22 +1483,24 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   for (const channelId of channels) scheduleAutoRecordCheck(guild, channelId);
 });
 
-// Saiu do servidor → mata as sessões MCP dele e limpa o cache de membership.
-// OBS: só dispara se a intent privilegiada GuildMembers estiver habilitada; sem
-// ela, ex-membros perdem o acesso pelas camadas de servidor no próximo query
-// (checkAccess refaz o members.fetch), mantendo só participante/iniciador — a
-// mesma política da página web. Revogação total manual: /mcp revoke-all.
-if (config.mcpEnabled) {
-  client.on(Events.GuildMemberRemove, (member) => {
-    try {
+// Se a intent privilegiada GuildMembers estiver habilitada no futuro, invalida
+// imediatamente remoções/trocas de cargo. Sem ela, access.ts revalida via REST
+// autoritativo no máximo após o TTL (e SEM cache antes de exclusões).
+client.on(Events.GuildMemberUpdate, (_oldMember, newMember) => {
+  forgetMember(newMember.guild.id, newMember.id);
+});
+
+client.on(Events.GuildMemberRemove, (member) => {
+  try {
+    forgetMember(member.guild.id, member.id);
+    if (config.mcpEnabled) {
       const n = revokeUser(member.id);
-      forgetMember(member.guild.id, member.id);
       if (n > 0) console.log(`MCP: ${n} sessão(ões) revogada(s) — ${member.id} saiu de ${member.guild.name}.`);
-    } catch (err) {
-      console.error('Erro revogando sessões MCP no guildMemberRemove:', err);
     }
-  });
-}
+  } catch (err) {
+    console.error('Erro revogando sessões MCP no guildMemberRemove:', err);
+  }
+});
 
 // ---------- shutdown gracioso ----------
 

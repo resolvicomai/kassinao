@@ -8,11 +8,13 @@ import { AccessIdentity } from './auth';
  * do MCP. Não existe variante "só-disco": a regra "enxerga o canal"/ManageGuild
  * exige o gateway do Discord vivo, então o MCP passa exatamente por aqui.
  *
- * Regra:
+ * Regra (sempre depois de confirmar membership ATUAL no servidor):
  *  - iniciou a gravação OU esteve na call (falando ou mutado) → vê
- *  - enxerga o canal de voz de origem → vê
- *  - tem "Gerenciar Servidor" → vê e apaga
+ *  - tem "Gerenciar Servidor" AGORA → vê e apaga
  *  - quem iniciou também apaga
+ *  - se o canal era público para @everyone no INÍCIO da gravação, quem ainda
+ *    enxerga o canal pode ver; canal privado nunca libera o histórico para quem
+ *    ganhou permissão só depois da call
  */
 
 export interface Access {
@@ -22,10 +24,9 @@ export interface Access {
 
 interface AccessResult extends Access {
   /**
-   * As camadas de SERVIDOR (ManageGuild / enxergar-canal) não puderam ser avaliadas
-   * por falha transitória do Discord (cache frio, 429, 5xx, timeout). O caminho web
-   * ignora (fica no fail-closed de iniciou/participou); o caminho MCP transforma em
-   * 503 quando isso poderia esconder um acesso legítimo.
+   * Membership/camadas de servidor não puderam ser avaliadas por falha transitória
+   * do Discord (cache frio, 429, 5xx, timeout). O caminho web nega por segurança;
+   * o MCP transforma em 503 para o cliente tentar novamente.
    */
   serverLayersUnknown: boolean;
 }
@@ -47,14 +48,19 @@ function isUnknownMember(err: unknown): boolean {
 const MEMBER_TTL_MS = 45_000;
 const memberCache = new Map<string, { member: GuildMember | null; at: number }>();
 
-async function fetchMemberCached(guildId: string, userId: string): Promise<GuildMember | null> {
+async function fetchMemberCached(guildId: string, userId: string, forceRefresh = false): Promise<GuildMember | null> {
   const guild = client.guilds.cache.get(guildId);
   if (!guild) throw new TransientAccessError('guild fora do cache (gateway não pronto?)');
   const key = `${guildId}:${userId}`;
   const hit = memberCache.get(key);
-  if (hit && Date.now() - hit.at < MEMBER_TTL_MS) return hit.member;
+  if (!forceRefresh && hit && Date.now() - hit.at < MEMBER_TTL_MS) return hit.member;
   try {
-    const member = await guild.members.fetch(userId);
+    // `members.fetch(userId)` SEM force devolve o GuildMember já presente no
+    // cache interno do discord.js. Sem a intent privilegiada GuildMembers, uma
+    // remoção de cargo/saída do servidor não atualiza esse objeto e a permissão
+    // revogada poderia sobreviver indefinidamente. Toda renovação deste cache é
+    // portanto autoritativa via REST.
+    const member = await guild.members.fetch({ user: userId, force: true, cache: true });
     memberCache.set(key, { member, at: Date.now() });
     return member;
   } catch (err) {
@@ -66,39 +72,58 @@ async function fetchMemberCached(guildId: string, userId: string): Promise<Guild
   }
 }
 
+export interface AccessCheckOptions {
+  /** Ignora também o TTL local. Obrigatório antes de apagar dados. */
+  freshMember?: boolean;
+}
+
+/** Grant ligado à presença histórica; só é aplicado depois de confirmar membership atual. */
+export function recordingIdentityGrant(userId: string, meta: RecordingMeta): Access {
+  const isInitiator = !!meta.startedBy && meta.startedBy.id === userId;
+  const isParticipant = meta.participants.some((p) => p.id === userId);
+  const wasPresent = meta.presence?.some((p) => p.id === userId) ?? false;
+  return { view: isInitiator || isParticipant || wasPresent, delete: isInitiator };
+}
+
+/** Só calls públicas no início aceitam o ViewChannel atual como grant histórico. */
+export function allowsCurrentChannelGrant(meta: RecordingMeta): boolean {
+  return meta.sourceEveryoneViewable === true;
+}
+
 /** Invalida o cache de um membro (chamado no guildMemberRemove). */
 export function forgetMember(guildId: string, userId: string): void {
   memberCache.delete(`${guildId}:${userId}`);
 }
 
-async function computeAccess(user: AccessIdentity, meta: RecordingMeta): Promise<AccessResult> {
+async function computeAccess(
+  user: AccessIdentity,
+  meta: RecordingMeta,
+  options: AccessCheckOptions = {},
+): Promise<AccessResult> {
   // Sem id não há acesso a nada (impede null/undefined "casar" com startedBy null).
   if (!user.id) return { view: false, delete: false, serverLayersUnknown: false };
 
-  const isInitiator = !!meta.startedBy && meta.startedBy.id === user.id;
-  const isParticipant = meta.participants.some((p) => p.id === user.id);
-  // presença basta: quem estava na call (mesmo mutado do início ao fim) vê a gravação
-  const wasPresent = meta.presence?.some((p) => p.id === user.id) ?? false;
-  let view = isInitiator || isParticipant || wasPresent;
-  let del = isInitiator;
-
   const guild = client.guilds.cache.get(meta.guildId);
   if (!guild) {
-    // não sabemos as camadas de servidor
-    return { view, delete: del, serverLayersUnknown: true };
+    // Membership atual é pré-condição de TODOS os grants: sem guild, fail-closed.
+    return { view: false, delete: false, serverLayersUnknown: true };
   }
 
   let member: GuildMember | null;
   try {
-    member = await fetchMemberCached(meta.guildId, user.id);
+    member = await fetchMemberCached(meta.guildId, user.id, options.freshMember);
   } catch {
-    // transitório: camadas de servidor desconhecidas (participante/iniciador ainda valem)
-    return { view, delete: del, serverLayersUnknown: true };
+    // Não dá para confirmar que ainda é membro: nenhum grant histórico é aceito.
+    return { view: false, delete: false, serverLayersUnknown: true };
   }
   if (member === null) {
-    // não é (mais) membro: camadas de servidor definitivamente NÃO
-    return { view, delete: del, serverLayersUnknown: false };
+    // Saiu do servidor: perde inclusive os grants de participante/iniciador.
+    return { view: false, delete: false, serverLayersUnknown: false };
   }
+
+  const identity = recordingIdentityGrant(user.id, meta);
+  let view = identity.view;
+  let del = identity.delete;
 
   if (member.permissions.has(PermissionFlagsBits.ManageGuild)) {
     view = true;
@@ -106,26 +131,34 @@ async function computeAccess(user: AccessIdentity, meta: RecordingMeta): Promise
   }
 
   let channelUnknown = false;
-  let channel = guild.channels.cache.get(meta.voiceChannelId) ?? null;
-  if (!channel) {
-    try {
-      channel = await guild.channels.fetch(meta.voiceChannelId);
-    } catch (err) {
-      // canal apagado (10003) = sem grant por canal; transitório = desconhecido
-      if (!(err && typeof err === 'object' && (err as { code?: unknown }).code === 10003)) channelUnknown = true;
+  // Participante/iniciador/admin já tem resposta; call privada jamais usa a
+  // audiência atual. Só consulta o canal quando ele ainda pode mudar o veredito.
+  if (!view && allowsCurrentChannelGrant(meta)) {
+    let channel = guild.channels.cache.get(meta.voiceChannelId) ?? null;
+    if (!channel) {
+      try {
+        channel = await guild.channels.fetch(meta.voiceChannelId);
+      } catch (err) {
+        // canal apagado (10003) = sem grant por canal; transitório = desconhecido
+        if (!(err && typeof err === 'object' && (err as { code?: unknown }).code === 10003)) channelUnknown = true;
+      }
     }
+    if (channel?.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel)) view = true;
   }
-  if (channel && channel.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel)) view = true;
 
   return { view, delete: del, serverLayersUnknown: channelUnknown && !view };
 }
 
 /**
- * Acesso para a PÁGINA WEB: best-effort. Em falha transitória mantém o veredito
- * de iniciou/participou (comportamento histórico; as rotas web já têm readiness-gate).
+ * Acesso para a PÁGINA WEB: fail-closed. Sem confirmar membership atual, ninguém
+ * recebe sequer o grant histórico de participante/iniciador.
  */
-export async function checkAccess(user: AccessIdentity, meta: RecordingMeta): Promise<Access> {
-  const r = await computeAccess(user, meta);
+export async function checkAccess(
+  user: AccessIdentity,
+  meta: RecordingMeta,
+  options: AccessCheckOptions = {},
+): Promise<Access> {
+  const r = await computeAccess(user, meta, options);
   return { view: r.view, delete: r.delete };
 }
 
@@ -135,8 +168,12 @@ export async function checkAccess(user: AccessIdentity, meta: RecordingMeta): Pr
  * → o endpoint responde 503 (o conector faz backoff), nunca um 403 falso ou um
  * grant indevido. Fail-closed de verdade.
  */
-export async function checkAccessForMcp(user: AccessIdentity, meta: RecordingMeta): Promise<Access> {
-  const r = await computeAccess(user, meta);
+export async function checkAccessForMcp(
+  user: AccessIdentity,
+  meta: RecordingMeta,
+  options: AccessCheckOptions = {},
+): Promise<Access> {
+  const r = await computeAccess(user, meta, options);
   if (r.serverLayersUnknown && !r.view) {
     throw new TransientAccessError('camadas de acesso indisponíveis no momento');
   }
