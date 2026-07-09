@@ -26,36 +26,120 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import {
+  mayFallbackToEnvToken,
+  normalizeKassinaoUrl,
+  selectBootstrapRefreshToken,
+  singleFlight,
+  StoredCredentials,
+  tokenStoreFileName,
+} from './tokenAuth.js';
 
-const URL_BASE = (process.env.KASSINAO_URL || '').replace(/\/$/, '');
-const STORE_DIR = path.join(os.homedir(), '.config', 'kassinao-mcp');
-const STORE_FILE = path.join(STORE_DIR, 'token.json');
-
-interface Stored {
-  url?: string;
-  refreshToken?: string;
+function configuredUrl(): string {
+  const raw = process.env.KASSINAO_URL;
+  if (!raw) return '';
+  try {
+    return normalizeKassinaoUrl(raw);
+  } catch (err) {
+    console.error(`KASSINAO_URL inválida: ${(err as Error).message}`);
+    process.exit(1);
+  }
 }
 
-function loadStore(): Stored {
+const URL_BASE = configuredUrl();
+const ENV_REFRESH_TOKEN = process.env.KASSINAO_REFRESH_TOKEN || '';
+const STORE_DIR = path.join(os.homedir(), '.config', 'kassinao-mcp');
+const LEGACY_STORE_FILE = path.join(STORE_DIR, 'token.json');
+const STORE_FILE = path.join(STORE_DIR, tokenStoreFileName(URL_BASE, ENV_REFRESH_TOKEN));
+
+function readStore(file: string): StoredCredentials {
   try {
-    return JSON.parse(fs.readFileSync(STORE_FILE, 'utf8')) as Stored;
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const value = parsed as Record<string, unknown>;
+    return {
+      url: typeof value.url === 'string' ? value.url : undefined,
+      refreshToken: typeof value.refreshToken === 'string' ? value.refreshToken : undefined,
+    };
   } catch {
     return {};
   }
 }
 
+function syncStoreFile(file: string): void {
+  const fd = fs.openSync(file, 'r+');
+  try {
+    if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function syncStoreDir(): void {
+  if (process.platform === 'win32') return;
+  const fd = fs.openSync(STORE_DIR, 'r');
+  try {
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function loadStore(): StoredCredentials {
+  const current = readStore(STORE_FILE);
+  if (current.refreshToken || STORE_FILE === LEGACY_STORE_FILE) return current;
+
+  // Upgrade do store único antigo: a primeira conexão que o encontra o reclama
+  // de forma exclusiva. As demais usam seus próprios tokens de bootstrap.
+  const legacy = readStore(LEGACY_STORE_FILE);
+  if (selectBootstrapRefreshToken(legacy, URL_BASE, '') !== '') {
+    fs.mkdirSync(STORE_DIR, { recursive: true, mode: 0o700 });
+    try {
+      // rename reclama a origem de forma atômica: mesmo que dois perfis subam
+      // juntos, só um consegue mover o store legado; o outro cai no próprio env.
+      fs.renameSync(LEGACY_STORE_FILE, STORE_FILE);
+      syncStoreFile(STORE_FILE);
+      syncStoreDir();
+      return readStore(STORE_FILE);
+    } catch {
+      const claimed = readStore(STORE_FILE);
+      if (claimed.refreshToken) return claimed;
+      // Store legado é conveniência de migração; falhar ao movê-lo não autoriza
+      // compartilhar o token entre perfis. O env específico continua seguro.
+    }
+  }
+  return {};
+}
+
 // Guarda o refresh no disco do usuário com 0600. (Cofre do SO — Keychain/DPAPI/
 // libsecret — é uma melhoria futura; por ora, 0600 com aviso no README.)
-function saveStore(s: Stored): void {
+function saveStore(s: StoredCredentials): void {
   fs.mkdirSync(STORE_DIR, { recursive: true, mode: 0o700 });
-  const tmp = `${STORE_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(s), { mode: 0o600 });
-  fs.renameSync(tmp, STORE_FILE);
+  if (process.platform !== 'win32') fs.chmodSync(STORE_DIR, 0o700);
+  const tmp = `${STORE_FILE}.${process.pid}.tmp`;
+  try {
+    const fd = fs.openSync(tmp, 'w', 0o600);
+    try {
+      // Windows não implementa permissões POSIX; no Unix, arquivo reaproveitado
+      // após crash também precisa voltar a 0600.
+      if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
+      fs.writeFileSync(fd, JSON.stringify(s));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, STORE_FILE);
+    syncStoreDir(); // confirma também a troca do nome após queda de energia
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 // Precedência: token salvo (rotacionado) > env (só bootstrap). Reusar o token do
 // env depois de já ter rotacionado dispararia a detecção de reuso no servidor.
-let refreshToken = loadStore().refreshToken || process.env.KASSINAO_REFRESH_TOKEN || '';
+const stored = loadStore();
+let refreshToken = selectBootstrapRefreshToken(stored, URL_BASE, ENV_REFRESH_TOKEN);
 let accessToken = '';
 let accessExpMs = 0;
 
@@ -65,13 +149,14 @@ interface TokenResponse {
   refresh_token: string;
 }
 
-async function tryRefresh(token: string): Promise<TokenResponse | null> {
+async function tryRefresh(token: string): Promise<TokenResponse | undefined> {
   const r = await fetch(`${URL_BASE}/api/mcp/refresh`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ refresh_token: token }),
   });
-  if (!r.ok) return null;
+  if (mayFallbackToEnvToken(r.status)) return undefined;
+  if (!r.ok) throw new Error(`Não consegui renovar o token agora (HTTP ${r.status}). Tente de novo em instantes.`);
   return (await r.json()) as TokenResponse;
 }
 
@@ -85,7 +170,7 @@ async function refreshTokens(): Promise<void> {
   // Token salvo morto (ex.: usuário revogou tudo e gerou um NOVO no env):
   // cai de volta pro env uma vez, em vez de só falhar. Se o env funcionar,
   // ele rotaciona e vira o salvo — o fluxo se conserta sozinho.
-  const envTok = process.env.KASSINAO_REFRESH_TOKEN || '';
+  const envTok = ENV_REFRESH_TOKEN;
   if (!data && envTok && envTok !== refreshToken) {
     data = await tryRefresh(envTok);
   }
@@ -99,9 +184,13 @@ async function refreshTokens(): Promise<void> {
   saveStore({ url: URL_BASE, refreshToken });
 }
 
+// O protocolo de rotação é estrito: refresh paralelo com a mesma geração mata
+// a sessão por suspeita de reuso. Todos os tools compartilham um único voo.
+const refreshOnce = singleFlight(refreshTokens);
+
 async function getAccess(): Promise<string> {
   if (accessToken && Date.now() < accessExpMs - 30_000) return accessToken;
-  await refreshTokens();
+  await refreshOnce();
   return accessToken;
 }
 
@@ -113,7 +202,9 @@ async function apiGet(pathname: string, params: Record<string, unknown>): Promis
   let token = await getAccess();
   let r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   if (r.status === 401) {
-    await refreshTokens(); // access venceu/rotacionou — renova uma vez e tenta de novo
+    // Outra tool pode ter renovado enquanto este request ainda usava o access
+    // antigo. Nesse caso reaproveita o novo; só renova se o token atual falhou.
+    if (token === accessToken) await refreshOnce();
     token = accessToken;
     r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   }
@@ -262,7 +353,7 @@ async function runExchange(code: string): Promise<void> {
     null,
     2,
   );
-  console.error('✅ Conectado! Token salvo em ~/.config/kassinao-mcp/token.json (0600).');
+  console.error(`✅ Conectado! Token salvo em ~/.config/kassinao-mcp/${path.basename(STORE_FILE)} (0600).`);
   console.error('Cole este bloco no claude_desktop_config.json (ou no equivalente do Cursor) e reinicie o app:\n');
   console.log(cfg); // stdout = a config, pronta pra copiar
 }
@@ -270,7 +361,12 @@ async function runExchange(code: string): Promise<void> {
 // ---------- servidor MCP ----------
 
 async function runServer(): Promise<void> {
-  const server = new Server({ name: 'kassinao', version: '1.0.1' }, { capabilities: { tools: {} } });
+  const packageVersion = (
+    JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      version: string;
+    }
+  ).version;
+  const server = new Server({ name: 'kassinao', version: packageVersion }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),

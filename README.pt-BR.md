@@ -170,7 +170,7 @@ Todas as opções estão comentadas, uma a uma, em [`.env.example`](.env.example
 | `TEXT_RETENTION_DAYS` | `90` | Quanto tempo transcrição/ata/notas sobrevivem ao áudio (nunca menor que `RETENTION_DAYS`; `0` = pra sempre) |
 | `MAX_RECORDING_HOURS` | `6` | Duração máxima por gravação |
 | `MP3_BITRATE` | `192k` | Bitrate dos MP3 |
-| `COOKIE_SECRET` | gerado | Segredo dos cookies de sessão |
+| `COOKIE_SECRET` | gerado | Segredo dos cookies de sessão (mín. 32 bytes se definido manualmente) |
 | `TZ` | `America/Sao_Paulo` | Fuso das datas (a página usa o do navegador) |
 | `DEFAULT_LOCALE` | `en` | Idioma padrão quando não há locale do usuário (ex.: DM); dentro dos servidores, cada pessoa vê no idioma do próprio Discord |
 | `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
@@ -186,7 +186,7 @@ Todas as opções estão comentadas, uma a uma, em [`.env.example`](.env.example
 | `MINUTES_MAX_TOKENS` | `8192` | Teto de tokens da ata |
 | `MINUTES_WEBHOOK_URL` | — | POSTa um JSON (`minutes.ready`) por reunião pra sua integração; só configurável por env, de propósito (evita SSRF via Discord) |
 | `MCP_SECRET` | — | Liga o conector MCP (Claude/Cursor). Defina um segredo forte pra ativar; girar o valor revoga todos os conectores de uma vez |
-| `OWNER_IDS` | — | IDs do Discord com acesso ao `/mcp` (CSV); membros comuns se conectam sozinhos em `/conectar-ia` |
+| `OWNER_IDS` | — | IDs do Discord com acesso ao `/mcp` (CSV); membros comuns se conectam sozinhos em `/app/conectar-ia` |
 | `MCP_ACCESS_TTL_MIN` / `MCP_REFRESH_TTL_DAYS` | `15` / `30` | Validade do token de acesso (minutos) e do refresh (dias) do conector MCP |
 
 Tem mais: guarda de espaço em disco, alerta de disco cheio, backup automático via rclone — tudo comentado, uma opção por vez, em [`.env.example`](.env.example).
@@ -212,7 +212,7 @@ No Docker, construa com Python + faster-whisper na imagem: `docker compose build
 | `/perguntar <pergunta> [dias]` | `/ask <question> [days]` | Pergunte às suas reuniões — a IA responde (só você vê) com citações no segundo exato, usando as transcrições que você pode acessar |
 | `/config ata-canal/ver` | `/config minutes-channel/view` | Admin: escolhe o canal de texto onde a ata resumida é postada (padrão: chat do canal de voz) |
 | `/autorecord ligar/desligar/ver` | `/autorecord on/off/view` | Gravação automática por canal (admin) |
-| `/mcp novo/revogar-tudo` | `/mcp new/revoke-all` | Só o dono do bot (`OWNER_IDS`): gera ou revoga o código de conexão do assistente de IA — membros comuns se conectam sozinhos em `/conectar-ia` |
+| `/mcp novo/revogar-tudo` | `/mcp new/revoke-all` | Só o dono do bot (`OWNER_IDS`): gera ou revoga o código de conexão do assistente de IA — membros comuns se conectam sozinhos em `/app/conectar-ia` |
 | `/ajuda` | `/help` | Guia interativo (também responde por DM) |
 | `/sobre` | `/about` | Autor, licença e link do código-fonte |
 
@@ -263,7 +263,7 @@ flowchart LR
 
 Gravar voz é tratar **dado pessoal** — o design parte disso, não é um adendo:
 
-- **Controle de acesso é código, não convenção.** Toda checagem — página web, índice `/gravacoes`, API do conector MCP — passa pela mesma função em [`src/web/access.ts`](src/web/access.ts): só vê quem **iniciou a gravação**, **esteve na call** (falando ou mutado), **enxerga o canal de voz de origem**, ou tem **Gerenciar Servidor**; apagar é restrito a quem iniciou ou a admins. Não existe um caminho "por disco" que pule essa regra.
+- **Controle de acesso é código, não convenção.** Toda checagem — página web, central privada `/app`, API do conector MCP — passa pela mesma função em [`src/web/access.ts`](src/web/access.ts): só vê quem **iniciou a gravação**, **esteve na call** (falando ou mutado), **enxerga o canal de voz de origem**, ou tem **Gerenciar Servidor**; apagar é restrito a quem iniciou ou a admins. Não existe um caminho "por disco" que pule essa regra.
 - **Falha pro lado seguro.** Se o cache do Discord está frio (gateway reiniciando, rate limit), a página nunca _concede_ um acesso que não conseguiu confirmar — ela nega, e no caminho do conector MCP devolve um erro retriável (503) em vez de um 403 que poderia esconder um acesso legítimo.
 - **Consentimento visível.** O apelido do bot vira `[GRAVANDO]` durante a call e um painel aparece no canal — ninguém é gravado sem saber.
 - **O conector MCP não amplia acesso.** O token carrega só identidade — a regra de visibilidade é a mesma da web; o texto das reuniões chega ao seu assistente marcado como "dado não confiável" (defesa contra prompt-injection); girar o `MCP_SECRET` revoga todos os conectores na hora.

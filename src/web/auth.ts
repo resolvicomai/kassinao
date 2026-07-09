@@ -45,6 +45,8 @@ export interface McpRefreshToken {
 
 const SESSION_COOKIE = 'kassinao_session';
 const STATE_COOKIE = 'kassinao_state';
+const SESSION_PATH = '/app';
+const STATE_PATH = '/auth';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 // ---------- assinatura de tokens (HMAC-SHA256) ----------
@@ -92,11 +94,11 @@ function readCookie(req: Request, name: string): string | undefined {
   return undefined;
 }
 
-function setCookie(res: Response, name: string, value: string, maxAgeMs: number): void {
+function setCookie(res: Response, name: string, value: string, maxAgeMs: number, cookiePath: string): void {
   const secure = config.baseUrl.startsWith('https') ? '; Secure' : '';
   res.append(
     'Set-Cookie',
-    `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${Math.floor(maxAgeMs / 1000)}; HttpOnly; SameSite=Lax${secure}`,
+    `${name}=${encodeURIComponent(value)}; Path=${cookiePath}; Max-Age=${Math.floor(maxAgeMs / 1000)}; HttpOnly; SameSite=Lax${secure}`,
   );
 }
 
@@ -113,7 +115,9 @@ export function getWebUser(req: Request): WebUser | undefined {
 }
 
 export function clearStateCookie(res: Response): void {
-  setCookie(res, STATE_COOKIE, '', 0);
+  setCookie(res, STATE_COOKIE, '', 0, STATE_PATH);
+  // Migração da versão antiga, que usava Path=/ para todos os cookies.
+  setCookie(res, STATE_COOKIE, '', 0, '/');
 }
 
 /**
@@ -124,7 +128,49 @@ export function clearStateCookie(res: Response): void {
  * verdade, a infra de denylist dos tokens MCP (mcpTokens.ts) é o molde.
  */
 export function logoutWeb(res: Response): void {
-  setCookie(res, SESSION_COOKIE, '', 0);
+  setCookie(res, SESSION_COOKIE, '', 0, SESSION_PATH);
+  // Também derruba sessões emitidas antes do escopo /app entrar em vigor.
+  setCookie(res, SESSION_COOKIE, '', 0, '/');
+}
+
+/**
+ * Migra transparentemente uma sessão antiga (Path=/) para o namespace privado.
+ * O token mantém a expiração original: navegar não renova os 7 dias.
+ */
+export function scopeWebSessionToApp(req: Request, res: Response): void {
+  const raw = readCookie(req, SESSION_COOKIE);
+  const user = verify<WebUser>(raw, config.cookieSecret);
+  if (
+    !raw ||
+    !user ||
+    user.typ !== 'session' ||
+    typeof user.id !== 'string' ||
+    !user.id ||
+    !Number.isFinite(user.exp) ||
+    user.exp <= Date.now()
+  )
+    return;
+  setCookie(res, SESSION_COOKIE, raw, user.exp - Date.now(), SESSION_PATH);
+  setCookie(res, SESSION_COOKIE, '', 0, '/');
+}
+
+/**
+ * Defesa CSRF para as mutações do app. SameSite=Lax bloqueia sites externos,
+ * mas subdomínios irmãos ainda são "same-site"; o Origin precisa ser o host
+ * exato do Kassinão. Clientes não-browser sem Origin continuam aceitos (eles
+ * também não carregam automaticamente o cookie HttpOnly do navegador).
+ */
+export function isAllowedWebMutation(req: Request, expectedBaseUrl = config.baseUrl): boolean {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method.toUpperCase())) return true;
+  if (req.get('sec-fetch-site') === 'cross-site') return false;
+  const origin = req.get('origin');
+  if (!origin) return true;
+  if (origin === 'null') return false;
+  try {
+    return new URL(origin).origin === new URL(expectedBaseUrl).origin;
+  } catch {
+    return false;
+  }
 }
 
 // ---------- fluxo OAuth2 do Discord ----------
@@ -138,7 +184,7 @@ export function beginLogin(res: Response, next: string): void {
   // apenas caminhos locais: "//evil.com" e "/\evil.com" são redirects externos no navegador
   const safeNext = /^\/(?![/\\])/.test(next) && !next.includes('\\') ? next : '/';
   const stateToken: StateToken = { typ: 'state', state, next: safeNext };
-  setCookie(res, STATE_COOKIE, sign(stateToken, config.cookieSecret), 10 * 60 * 1000);
+  setCookie(res, STATE_COOKIE, sign(stateToken, config.cookieSecret), 10 * 60 * 1000, STATE_PATH);
   const params = new URLSearchParams({
     client_id: config.applicationId,
     redirect_uri: redirectUri(),
@@ -191,7 +237,9 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
     avatar: me.avatar ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png?size=64` : null,
     exp: Date.now() + SESSION_TTL_MS,
   };
-  setCookie(res, SESSION_COOKIE, sign(user, config.cookieSecret), SESSION_TTL_MS);
+  setCookie(res, SESSION_COOKIE, sign(user, config.cookieSecret), SESSION_TTL_MS, SESSION_PATH);
+  // Remove um eventual cookie legado Path=/ com o mesmo nome.
+  setCookie(res, SESSION_COOKIE, '', 0, '/');
   return saved.next;
 }
 

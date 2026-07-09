@@ -167,6 +167,15 @@ interface MetaFilters {
   status?: string;
 }
 
+/** Participou = falou, esteve presente sem falar, ou iniciou a gravação. */
+export function recordingIncludesUser(meta: RecordingMeta, userId: string): boolean {
+  return (
+    meta.startedBy?.id === userId ||
+    meta.participants.some((p) => p.id === userId) ||
+    (meta.presence?.some((p) => p.id === userId) ?? false)
+  );
+}
+
 /**
  * Filtra por metadados BARATOS (janela/guild/canal) ANTES de qualquer checkAccess,
  * e só chama checkAccessForMcp depois — que pode lançar TransientAccessError (→503).
@@ -179,11 +188,7 @@ async function visibleInWindow(user: McpToken, range: ResolvedRange, f: MetaFilt
     if (f.guildId && m.guildId !== f.guildId) continue;
     if (f.channelId && m.voiceChannelId !== f.channelId) continue;
     if (f.status && m.status !== f.status) continue;
-    if (
-      f.participantId &&
-      !m.participants.some((p) => p.id === f.participantId) &&
-      m.startedBy?.id !== f.participantId
-    ) {
+    if (f.participantId && !recordingIncludesUser(m, f.participantId)) {
       continue;
     }
     const access = await checkAccessForMcp(user, m);
@@ -223,6 +228,10 @@ function searchNorm(s: string): string {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
+}
+
+export function normalizedSearchTerms(query: string): string[] {
+  return searchNorm(query).split(/\s+/).filter(Boolean);
 }
 
 function matchIn(haystack: string, terms: string[], mode: string): number {
@@ -330,6 +339,11 @@ export function mountMcpApi(app: Express): void {
   if (!config.mcpEnabled) return;
 
   const api = express.Router();
+  // Tokens, atas e transcrições nunca devem ser armazenados por browser/proxy.
+  api.use((_req, res, next) => {
+    res.set('Cache-Control', 'private, no-store, max-age=0').set('Pragma', 'no-cache');
+    next();
+  });
   api.use(express.json({ limit: '32kb' }));
 
   // ----- lifecycle de token (sem auth Bearer; protegido por rate-limit de IP) -----
@@ -590,7 +604,11 @@ export function mountMcpApi(app: Express): void {
         return;
       }
       const mode = qstr(req, 'mode') ?? 'all';
-      const terms = searchNorm(q).split(/\s+/).filter(Boolean);
+      const terms = normalizedSearchTerms(q);
+      if (q.length > 200 || terms.length === 0 || !['all', 'any', 'phrase'].includes(mode)) {
+        res.status(400).json({ error: 'bad_query' });
+        return;
+      }
       const scope = new Set((qstr(req, 'scope') ?? 'transcript,minutes,notes').split(','));
       const range = resolveRange(rangeFromQuery(req), Date.now());
       const metas = await visibleInWindow(user, range, { guildId: qstr(req, 'guildId') });
@@ -645,7 +663,11 @@ export function mountMcpApi(app: Express): void {
         res.status(400).json({ error: 'missing_query' });
         return;
       }
-      const terms = searchNorm(q).split(/\s+/).filter(Boolean);
+      const terms = normalizedSearchTerms(q);
+      if (q.length > 200 || terms.length === 0) {
+        res.status(400).json({ error: 'bad_query' });
+        return;
+      }
       const speaker = qstr(req, 'speaker') ? searchNorm(qstr(req, 'speaker')!) : undefined;
       const ctx = qint(req, 'contextSegments', 1, 5);
       const scopeId = qstr(req, 'meetingId');

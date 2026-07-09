@@ -12,6 +12,64 @@ function required(name: string): string {
   return value;
 }
 
+interface NumberRule {
+  min?: number;
+  max?: number;
+  integer?: boolean;
+}
+
+/** Parser puro e estrito: "abc"/NaN/Infinity não podem desligar guardas em silêncio. */
+export function parseConfiguredNumber(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  rule: NumberRule,
+): number {
+  const value = raw === undefined || raw.trim() === '' ? fallback : Number(raw);
+  if (!Number.isFinite(value))
+    throw new Error(`${name} precisa ser um número finito (recebido: ${JSON.stringify(raw)})`);
+  if (rule.integer && !Number.isInteger(value)) throw new Error(`${name} precisa ser inteiro (recebido: ${value})`);
+  if (rule.min !== undefined && value < rule.min)
+    throw new Error(`${name} precisa ser >= ${rule.min} (recebido: ${value})`);
+  if (rule.max !== undefined && value > rule.max)
+    throw new Error(`${name} precisa ser <= ${rule.max} (recebido: ${value})`);
+  return value;
+}
+
+function numberEnv(name: string, fallback: number, rule: NumberRule): number {
+  try {
+    return parseConfiguredNumber(name, process.env[name], fallback, rule);
+  } catch (err) {
+    console.error(`Configuração inválida: ${(err as Error).message}`);
+    process.exit(1);
+  }
+}
+
+/** BASE_URL é origem, não prefixo de caminho: todas as rotas do app partem de /. */
+export function normalizeBaseUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`BASE_URL precisa ser uma URL absoluta http(s) (recebido: ${JSON.stringify(raw)})`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:')
+    throw new Error('BASE_URL aceita apenas http:// ou https://');
+  if (url.username || url.password || url.search || url.hash)
+    throw new Error('BASE_URL não pode conter credenciais, query ou hash');
+  if (url.pathname !== '/' && url.pathname !== '')
+    throw new Error('BASE_URL não pode conter caminho; use apenas a origem');
+  return url.origin;
+}
+
+/** Segredos HMAC fracos não podem parecer configuração válida. */
+export function validateSecret(name: string, value: string, minBytes = 32): string {
+  if (Buffer.byteLength(value, 'utf8') < minBytes) {
+    throw new Error(`${name} precisa ter ao menos ${minBytes} bytes (gere com: openssl rand -hex 32)`);
+  }
+  return value;
+}
+
 const recordingsDir = path.resolve(process.env.RECORDINGS_DIR || './recordings');
 
 /**
@@ -20,15 +78,39 @@ const recordingsDir = path.resolve(process.env.RECORDINGS_DIR || './recordings')
  * as sessões sobrevivam a reinícios do bot.
  */
 function loadCookieSecret(): string {
-  if (process.env.COOKIE_SECRET) return process.env.COOKIE_SECRET;
+  if (process.env.COOKIE_SECRET) {
+    try {
+      return validateSecret('COOKIE_SECRET', process.env.COOKIE_SECRET);
+    } catch (err) {
+      console.error(`Configuração inválida: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  }
   const secretFile = path.join(recordingsDir, '.cookie-secret');
   try {
-    return fs.readFileSync(secretFile, 'utf8').trim();
-  } catch {
+    const saved = validateSecret('.cookie-secret', fs.readFileSync(secretFile, 'utf8').trim());
+    if (process.platform !== 'win32') fs.chmodSync(secretFile, 0o600);
+    return saved;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.error(
+        `Não foi possível carregar o segredo de sessão ${secretFile}: ${(err as Error).message}. ` +
+          'Corrija o arquivo ou apague-o deliberadamente para gerar outro (isso encerra os logins atuais).',
+      );
+      process.exit(1);
+    }
     const secret = crypto.randomBytes(32).toString('hex');
     fs.mkdirSync(recordingsDir, { recursive: true });
-    fs.writeFileSync(secretFile, secret, { mode: 0o600 });
-    return secret;
+    try {
+      fs.writeFileSync(secretFile, secret, { mode: 0o600, flag: 'wx' });
+      return secret;
+    } catch (writeErr) {
+      // Dois processos podem subir juntos no primeiro boot: quem perdeu a
+      // corrida lê o arquivo já criado, em vez de sobrescrever o segredo.
+      if ((writeErr as NodeJS.ErrnoException).code === 'EEXIST') return loadCookieSecret();
+      console.error(`Não foi possível persistir o segredo de sessão ${secretFile}: ${(writeErr as Error).message}`);
+      process.exit(1);
+    }
   }
 }
 
@@ -56,10 +138,13 @@ const minutesProvider = (process.env.MINUTES_PROVIDER || (process.env.OPENROUTER
 // Retenção: RETENTION_DAYS=0 desliga a expiração (áudio E texto ficam até alguém
 // apagar manualmente). Áudio ilimitado FORÇA texto ilimitado — não faz sentido a
 // memória (transcrição/ata) morrer antes do áudio que ela resume.
-const retentionDays = Number(process.env.RETENTION_DAYS || 7);
+const retentionDays = numberEnv('RETENTION_DAYS', 7, { min: 0 });
 const audioRetentionUnlimited = retentionDays <= 0;
-const textRetentionDaysRaw = Number(process.env.TEXT_RETENTION_DAYS || 90);
+const textRetentionDaysRaw = numberEnv('TEXT_RETENTION_DAYS', 90, { min: 0 });
 const textRetentionUnlimited = audioRetentionUnlimited || textRetentionDaysRaw <= 0;
+
+const port = numberEnv('PORT', 8080, { min: 1, max: 65535, integer: true });
+const baseUrl = normalizeBaseUrl(process.env.BASE_URL || `http://localhost:${port}`);
 
 // Aviso de upgrade: quem rodava RETENTION_DAYS curto (privacidade/compliance) e NÃO
 // setou TEXT_RETENTION_DAYS passa a reter transcrição/ata/notas por 90 dias (o default
@@ -86,9 +171,9 @@ export const config = {
   clientSecret: required('DISCORD_CLIENT_SECRET'),
   /** Se definido, registra os comandos só nesse servidor (atualização instantânea). */
   guildId: process.env.GUILD_ID || undefined,
-  port: Number(process.env.PORT || 8080),
+  port,
   /** URL pública usada nos links (ex.: https://kassinao.suaempresa.com). */
-  baseUrl: (process.env.BASE_URL || `http://localhost:${process.env.PORT || 8080}`).replace(/\/$/, ''),
+  baseUrl,
   /** true quando o repo do GitHub está público — libera os links "GitHub"/access.ts e a afirmação "auditável" na landing. Padrão false pra nunca servir link 404. */
   repoPublic: process.env.REPO_PUBLIC === 'true',
   recordingsDir,
@@ -105,7 +190,7 @@ export const config = {
   textRetentionDays: Math.max(textRetentionDaysRaw, retentionDays),
   /** true quando texto (transcrição/ata/meta) nunca expira sozinho. */
   textRetentionUnlimited,
-  maxRecordingHours: Number(process.env.MAX_RECORDING_HOURS || 6),
+  maxRecordingHours: numberEnv('MAX_RECORDING_HOURS', 6, { min: Number.EPSILON }),
   mp3Bitrate: process.env.MP3_BITRATE || '192k',
   cookieSecret: loadCookieSecret(),
   /** Fuso para datas no transcript .md e fallback da página (o navegador tem prioridade na web). */
@@ -135,7 +220,7 @@ export const config = {
     .filter(Boolean),
   transcribeCommand: process.env.TRANSCRIBE_COMMAND || '',
   /** Timeout do provider 'command' = max(10min, duração do chunk × este fator). */
-  transcribeTimeoutFactor: Number(process.env.TRANSCRIBE_TIMEOUT_FACTOR || 5),
+  transcribeTimeoutFactor: numberEnv('TRANSCRIBE_TIMEOUT_FACTOR', 5, { min: Number.EPSILON }),
   openaiApiKey: process.env.OPENAI_API_KEY || '',
   groqApiKey: process.env.GROQ_API_KEY || '',
   geminiApiKey: process.env.GEMINI_API_KEY || '',
@@ -155,7 +240,7 @@ export const config = {
   minutesModel:
     process.env.MINUTES_MODEL || (minutesProvider === 'groq' ? 'llama-3.3-70b-versatile' : 'google/gemini-2.5-flash'),
   /** Teto de tokens de saída da ata. 8192 cobre reuniões longas. */
-  minutesMaxTokens: Number(process.env.MINUTES_MAX_TOKENS || 8192),
+  minutesMaxTokens: numberEnv('MINUTES_MAX_TOKENS', 8192, { min: 1, integer: true }),
   /**
    * Webhook opcional (URL definida pelo OPERADOR via env — nunca via Discord,
    * senão viraria vetor de SSRF): recebe um POST JSON com a ata de cada reunião
@@ -176,23 +261,43 @@ export const config = {
     .map((s) => s.trim())
     .filter(Boolean),
   /** Vida do access token (curto: se vazar, morre sozinho). */
-  mcpAccessTtlMin: Number(process.env.MCP_ACCESS_TTL_MIN || 15),
+  mcpAccessTtlMin: numberEnv('MCP_ACCESS_TTL_MIN', 15, { min: Number.EPSILON }),
   /** Vida do refresh token (rotacionado a cada uso). */
-  mcpRefreshTtlDays: Number(process.env.MCP_REFRESH_TTL_DAYS || 30),
+  mcpRefreshTtlDays: numberEnv('MCP_REFRESH_TTL_DAYS', 30, { min: Number.EPSILON }),
 
   // ---------- guarda de disco e monitoramento ----------
   /** Espaço livre mínimo (MB) para INICIAR uma gravação; abaixo disso, recusa com aviso. */
-  minFreeMbStart: Number(process.env.MIN_FREE_MB_START || 500),
+  minFreeMbStart: numberEnv('MIN_FREE_MB_START', 500, { min: 0 }),
   /** Espaço livre mínimo (MB) DURANTE a gravação; abaixo disso, encerra pra não corromper a faixa. */
-  minFreeMbAbort: Number(process.env.MIN_FREE_MB_ABORT || 150),
+  minFreeMbAbort: numberEnv('MIN_FREE_MB_ABORT', 150, { min: 0 }),
   /** % de uso de disco que dispara alerta por DM ao(s) dono(s). */
-  diskAlertPct: Number(process.env.DISK_ALERT_PCT || 85),
+  diskAlertPct: numberEnv('DISK_ALERT_PCT', 85, { min: Number.EPSILON, max: 100 }),
 };
+
+if (config.minFreeMbAbort > config.minFreeMbStart) {
+  console.error(
+    'MIN_FREE_MB_ABORT não pode ser maior que MIN_FREE_MB_START (senão a gravação aborta logo após iniciar).',
+  );
+  process.exit(1);
+}
+
+const baseHost = new URL(config.baseUrl).hostname;
+if (config.baseUrl.startsWith('http:') && !['localhost', '127.0.0.1', '::1'].includes(baseHost)) {
+  console.warn(
+    '⚠️  BASE_URL usa HTTP fora de localhost: cookies e OAuth ficam sem transporte seguro. Use HTTPS em produção.',
+  );
+}
 
 // Isolamento de blast-radius: o segredo do MCP não pode coincidir com o dos
 // cookies (senão um token de sessão web e um token de MCP se forjariam entre si,
 // exatamente a classe de bug do crítico histórico #1).
 if (config.mcpEnabled) {
+  try {
+    validateSecret('MCP_SECRET', config.mcpSecret);
+  } catch (err) {
+    console.error(`Configuração inválida: ${(err as Error).message}`);
+    process.exit(1);
+  }
   if (config.mcpSecret === config.cookieSecret) {
     console.error('MCP_SECRET não pode ser igual ao COOKIE_SECRET (isolamento de segurança).');
     process.exit(1);

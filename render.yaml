@@ -35,7 +35,7 @@ services:
       - key: OPENROUTER_API_KEY
         sync: false # https://openrouter.ai — LLM da ata (padrão google/gemini-2.5-flash)
       # Conector de IA (MCP) — opcional, mas é feature de destaque: sem MCP_SECRET
-      # o /conectar-ia e a API /api/* ficam DESLIGADOS (opt-in deliberado).
+      # o /app/conectar-ia e a API /api/* ficam DESLIGADOS (opt-in deliberado).
       - key: MCP_SECRET
         sync: false # ex.: `openssl rand -hex 32` — rotacionar revoga todos os conectores
       - key: OWNER_IDS
