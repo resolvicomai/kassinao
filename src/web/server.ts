@@ -10,6 +10,7 @@ import { isTranscribing, transcriptToMarkdown } from '../processing/transcribe';
 import { minutesToMarkdown } from '../processing/minutes';
 import { sessionManager } from '../recorder/manager';
 import { cleanInline } from '../sanitize';
+import { isLoopbackAddress } from '../util';
 import {
   audioBytesOf,
   deleteAudioOnly,
@@ -24,7 +25,16 @@ import {
 } from '../store';
 import { checkAccess } from './access';
 import { mountMcpApi } from './api';
-import { beginLogin, finishLogin, getWebUser, logoutWeb, signMcpRefresh, WebUser } from './auth';
+import {
+  beginLogin,
+  finishLogin,
+  getWebUser,
+  isAllowedWebMutation,
+  logoutWeb,
+  scopeWebSessionToApp,
+  signMcpRefresh,
+  WebUser,
+} from './auth';
 import { createSession, listUserSessions, revokeUser, revokeUserSession } from './mcpTokens';
 import {
   connectPage,
@@ -150,17 +160,41 @@ export function startWebServer(): void {
     res.setHeader(
       'Content-Security-Policy',
       "default-src 'self'; img-src 'self' https://cdn.discordapp.com data:; media-src 'self'; " +
-        "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+        "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; " +
+        "base-uri 'none'; form-action 'self'; object-src 'none'",
     );
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     if (config.baseUrl.startsWith('https')) {
       res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     }
     next();
   });
 
-  // Health check público (sem segredos) — pra um uptime monitor (ex.: UptimeRobot).
+  // Migração transparente: sessões antigas tinham Path=/ e viajavam também
+  // para landing/demo/health. Reemite o MESMO token com Path=/app e apaga o
+  // legado; sessões novas já nascem restritas ao namespace privado.
+  app.use((req, res, next) => {
+    if ((req.headers.cookie ?? '').includes('kassinao_session=')) scopeWebSessionToApp(req, res);
+    next();
+  });
+
+  // Health check público: só disponibilidade. Contagem de calls ativas e disco
+  // são metadados operacionais privados (e não são necessários ao healthcheck).
   app.get('/health', (_req, res) => {
-    res.json({ ok: true, ready: isClientReady(), freeMB: freeMB(), activeRecordings: sessionManager.all().length });
+    res.set('Cache-Control', 'no-store').json({ ok: true, ready: isClientReady() });
+  });
+
+  // Diagnóstico usado antes de deploy/restart, acessível só DENTRO do container
+  // (`docker exec ... fetch(localhost/health/details)`). Mantém o stop seguro sem
+  // anunciar ao mundo se há uma call ativa nem quanto disco resta.
+  app.get('/health/details', (req, res) => {
+    if (!isLoopbackAddress(req.socket.remoteAddress)) {
+      res.status(404).end();
+      return;
+    }
+    res
+      .set('Cache-Control', 'no-store')
+      .json({ ok: true, ready: isClientReady(), freeMB: freeMB(), activeRecordings: sessionManager.all().length });
   });
 
   // Rate-limit leve por IP nas rotas web (a API /api/* tem o dela). Segura
@@ -189,6 +223,27 @@ export function startWebServer(): void {
     if (q === 'pt' || q === 'en') {
       const secure = config.baseUrl.startsWith('https') ? '; Secure' : '';
       res.append('Set-Cookie', `kassinao_lang=${q}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`);
+    }
+    next();
+  });
+
+  // A superfície privada nunca deve ficar no cache do navegador/proxy. Isso
+  // inclui HTML, áudio, downloads e OAuth: sair e apertar "voltar" não pode
+  // ressuscitar transcrição/ata de uma página cacheada.
+  const privateNoStore = (_req: Request, res: Response, next: NextFunction): void => {
+    res.set('Cache-Control', 'private, no-store, max-age=0').set('Pragma', 'no-cache');
+    next();
+  };
+  app.use('/app', privateNoStore);
+  app.use('/auth', privateNoStore);
+
+  // SameSite=Lax não basta contra um subdomínio irmão comprometido (same-site).
+  // Toda mutação web autenticada exige o Origin exato do Kassinão quando o
+  // navegador o envia; requests cross-site são recusados antes do handler.
+  app.use('/app', (req: Request, res: Response, next: NextFunction) => {
+    if (!isAllowedWebMutation(req)) {
+      res.status(403).type('text/plain').send('Origem inválida / invalid origin.');
+      return;
     }
     next();
   });

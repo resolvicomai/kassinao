@@ -69,6 +69,7 @@ export function gcSessions(): number {
       removed++;
     }
   }
+  if (removed > 0 && loaded) persist();
   return removed;
 }
 

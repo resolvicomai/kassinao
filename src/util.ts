@@ -64,3 +64,8 @@ export function shortError(error: string | undefined, locale: 'pt' | 'en'): stri
     .replace(/[:—-]\s*$/, '');
   return safeSlice(cut || raw, 140);
 }
+
+/** Endereço do socket é loopback real (não confia em X-Forwarded-For). */
+export function isLoopbackAddress(address: string | undefined): boolean {
+  return !!address && (address === '::1' || address.startsWith('127.') || address.startsWith('::ffff:127.'));
+}

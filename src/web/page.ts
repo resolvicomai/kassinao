@@ -847,16 +847,21 @@ export function recordingPage(
   if (notes) panels.push(['notas', `📝 ${p(l, 'notes')} (${meta.notes.length})`, notes]);
   if (downloads) panels.push(['exportar', `⬇️ ${p(l, 'dlShort')}`, downloads]);
   if (manage) panels.push(['gerenciar', `⚙️ ${p(l, 'manage')}`, manage]);
-  const tabbar =
-    panels.length >= 2
-      ? `<div class="tabbar" role="tablist">${panels
-          .map(
-            ([id, label]) => `<button type="button" role="tab" data-t="${id}" aria-selected="false">${label}</button>`,
-          )
-          .join('')}</div>`
-      : '';
+  const hasTabs = panels.length >= 2;
+  const tabbar = hasTabs
+    ? `<div class="tabbar" role="tablist" aria-label="${l === 'pt' ? 'Seções da gravação' : 'Recording sections'}">${panels
+        .map(
+          ([id, label], i) =>
+            `<button type="button" role="tab" id="tab-${id}" data-t="${id}" aria-controls="${id}" aria-selected="${i === 0}" tabindex="${i === 0 ? 0 : -1}">${label}</button>`,
+        )
+        .join('')}</div>`
+    : '';
   const panelHtml = panels
-    .map(([id, , html]) => `<section class="tpanel" id="${id}" role="tabpanel">${html}</section>`)
+    .map(([id, , html]) =>
+      hasTabs
+        ? `<section class="tpanel" id="${id}" role="tabpanel" aria-labelledby="tab-${id}">${html}</section>`
+        : `<section class="tpanel" id="${id}">${html}</section>`,
+    )
     .join('\n     ');
   // player real + abas ficam FIXOS no topo: ouvir e trocar de seção sem rolar
   const stick = playerDock || tabbar ? `<div class="stick">${playerDock}${tabbar}</div>` : '';
@@ -993,12 +998,28 @@ const RECORDING_SCRIPT = `<script>
     if (!tabs.length) return;
     if (!panels.some(function(p){ return p.id === id; })) return;
     panels.forEach(function(p){ p.hidden = p.id !== id; });
-    tabs.forEach(function(b){ b.setAttribute('aria-selected', String(b.dataset.t === id)); });
+    tabs.forEach(function(b){
+      var on = b.dataset.t === id;
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
+    });
   };
   tabs.forEach(function(b){
     b.addEventListener('click', function(){
       window.kshow(b.dataset.t);
       try { history.replaceState(null, '', '#' + b.dataset.t); } catch(e){}
+    });
+    b.addEventListener('keydown', function(e){
+      var i = tabs.indexOf(b), next = i;
+      if (e.key === 'ArrowRight') next = (i + 1) % tabs.length;
+      else if (e.key === 'ArrowLeft') next = (i - 1 + tabs.length) % tabs.length;
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = tabs.length - 1;
+      else return;
+      e.preventDefault();
+      window.kshow(tabs[next].dataset.t);
+      tabs[next].focus();
+      try { history.replaceState(null, '', '#' + tabs[next].dataset.t); } catch(err){}
     });
   });
   if (tabs.length) {
@@ -1593,8 +1614,8 @@ export function connectPage(opts: {
       )}</p>
       <p class="muted" style="margin-top:12px">${esc(
         T(
-          '1) Copie o bloco abaixo. 2) Cole no arquivo de config do seu app. 3) Reinicie o app e pergunte.',
-          '1) Copy the block below. 2) Paste it into your app config file. 3) Restart the app and ask.',
+          '1) Copie o bloco abaixo. 2) Cole no arquivo de config de UM app. 3) Reinicie o app e pergunte. Para ligar outro assistente, gere outra conexão — não reutilize o mesmo token.',
+          '1) Copy the block below. 2) Paste it into ONE app config file. 3) Restart the app and ask. Generate another connection for a second assistant — do not reuse the same token.',
         ),
       )}</p>
       <p class="muted" style="margin-top:10px">${esc(T('Onde fica esse arquivo:', 'Where that config file lives:'))}</p>
@@ -1691,8 +1712,8 @@ export function connectPage(opts: {
     </form>
     <p class="muted" style="margin-top:8px;font-size:12.5px">${esc(
       T(
-        'Sai uma configuração pronta pra colar no seu app (a gente diz onde). O apelido ajuda você a saber qual revogar depois.',
-        'You get a ready-to-paste config (we tell you where it goes). The nickname helps you know which one to revoke later.',
+        'Sai uma configuração pronta pra colar no seu app (a gente diz onde). Gere uma conexão por assistente; o apelido ajuda você a saber qual revogar depois.',
+        'You get a ready-to-paste config (we tell you where it goes). Generate one connection per assistant; the nickname helps you know which one to revoke later.',
       ),
     )}</p>
     ${list}`;
