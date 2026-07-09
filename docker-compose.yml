@@ -9,6 +9,12 @@ services:
     container_name: kassinao
     labels: ['autoheal=true']
     restart: unless-stopped
+    # Mesmo ainda rodando como uid 0 por compatibilidade com volumes antigos,
+    # não recebe capabilities Linux nem pode ganhar novos privilégios.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     stop_grace_period: 45s # > soma dos tetos internos do shutdown (20s FLAC + 15s REST + margem)
     # Logs com teto: sem isso o json-file cresce até encher o disco (e o
     # disk-guard encerraria GRAVAÇÕES por causa de log).
@@ -48,8 +54,14 @@ services:
   # Túnel da Cloudflare: entrega https://SEU_SUBDOMINIO.SEU_DOMINIO com cadeado,
   # sem abrir portas no VPS. O TUNNEL_TOKEN vem do .env (criado no painel da Cloudflare).
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    # Versão + digest multi-arquitetura: o registry não pode mover a tag por baixo
+    # do deploy. Dependabot abre o update deliberado.
+    image: cloudflare/cloudflared:2026.7.1@sha256:188bb03589a32affed3cf4d0590565ffe67b78866e6b5582574afab2b705bafe
     container_name: kassinao-tunnel
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     logging:
       driver: json-file
       options:
@@ -71,14 +83,22 @@ services:
   # Opt-in porque monta o docker.sock (superfície de segurança) — ligue com
   # COMPOSE_PROFILES=tunnel,autoheal no .env.
   autoheal:
-    image: willfarrell/autoheal:latest
+    # O projeto publica `latest` sem tags de release novas; prende o índice OCI
+    # exato auditado em 2026-07-09, em vez de executar rebuild futuro às cegas.
+    image: willfarrell/autoheal:latest@sha256:82dfd76bbe7da38bfbd8b52385186233211c0548aa44828dff668629702e643d
     container_name: kassinao-autoheal
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     profiles: ['autoheal']
     environment:
       AUTOHEAL_CONTAINER_LABEL: autoheal
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      # `:ro` protege o arquivo do socket, mas a API ainda tem poder alto sobre
+      # o host; por isso o profile continua opt-in e deve usar imagem pinada.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     logging:
       driver: json-file
       options:

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import { config } from '../config';
+import { createWebSession, isActiveWebSession, revokeWebSession } from './webSessions';
 
 export interface WebUser {
   typ: 'session';
@@ -8,12 +9,15 @@ export interface WebUser {
   name: string;
   avatar: string | null;
   exp: number;
+  /** Sessão ativa persistida; permite revogação real no logout. */
+  jti: string;
 }
 
 interface StateToken {
   typ: 'state';
   state: string;
   next: string;
+  exp: number;
 }
 
 /** Mínimo que o checkAccess precisa: quem é o usuário (sessão web OU token MCP). */
@@ -111,6 +115,8 @@ export function getWebUser(req: Request): WebUser | undefined {
   if (!user || user.typ !== 'session') return undefined;
   if (!Number.isFinite(user.exp) || user.exp < Date.now()) return undefined; // NaN/Infinity não vira token eterno
   if (typeof user.id !== 'string' || !user.id) return undefined;
+  if (typeof user.jti !== 'string' || !user.jti) return undefined;
+  if (!isActiveWebSession(user.jti, user.id)) return undefined;
   return user;
 }
 
@@ -121,21 +127,24 @@ export function clearStateCookie(res: Response): void {
 }
 
 /**
- * Sai da conta web: expira o cookie no NAVEGADOR. A sessão é um token HMAC
- * stateless (sem denylist) — um valor de cookie copiado antes do logout segue
- * verificável até o exp (7 dias). Aceitável para o modelo (HttpOnly + SameSite
- * seguram exfiltração via JS/cross-site); se um dia precisar de revogação de
- * verdade, a infra de denylist dos tokens MCP (mcpTokens.ts) é o molde.
+ * Sai da conta web: revoga o `jti` no servidor ANTES de expirar o cookie. Assim
+ * uma cópia feita antes do logout também para de funcionar imediatamente.
  */
-export function logoutWeb(res: Response): void {
-  setCookie(res, SESSION_COOKIE, '', 0, SESSION_PATH);
-  // Também derruba sessões emitidas antes do escopo /app entrar em vigor.
-  setCookie(res, SESSION_COOKIE, '', 0, '/');
+export function logoutWeb(req: Request, res: Response): void {
+  const token = verify<WebUser>(readCookie(req, SESSION_COOKIE), config.cookieSecret);
+  try {
+    if (token?.typ === 'session' && typeof token.jti === 'string' && token.jti) revokeWebSession(token.jti);
+  } finally {
+    setCookie(res, SESSION_COOKIE, '', 0, SESSION_PATH);
+    // Também derruba sessões emitidas antes do escopo /app entrar em vigor.
+    setCookie(res, SESSION_COOKIE, '', 0, '/');
+  }
 }
 
 /**
- * Migra transparentemente uma sessão antiga (Path=/) para o namespace privado.
- * O token mantém a expiração original: navegar não renova os 7 dias.
+ * Mantém uma sessão ativa no namespace privado e remove o cookie legado Path=/.
+ * Cookies anteriores ao registro de `jti` são encerrados deliberadamente; tokens
+ * novos preservam a expiração original, sem renovar os 7 dias ao navegar.
  */
 export function scopeWebSessionToApp(req: Request, res: Response): void {
   const raw = readCookie(req, SESSION_COOKIE);
@@ -146,10 +155,19 @@ export function scopeWebSessionToApp(req: Request, res: Response): void {
     user.typ !== 'session' ||
     typeof user.id !== 'string' ||
     !user.id ||
+    typeof user.jti !== 'string' ||
+    !user.jti ||
     !Number.isFinite(user.exp) ||
-    user.exp <= Date.now()
-  )
+    user.exp <= Date.now() ||
+    !isActiveWebSession(user.jti, user.id)
+  ) {
+    // Cookies antigos (sem jti) e sessões revogadas não são migrados.
+    if (raw) {
+      setCookie(res, SESSION_COOKIE, '', 0, SESSION_PATH);
+      setCookie(res, SESSION_COOKIE, '', 0, '/');
+    }
     return;
+  }
   setCookie(res, SESSION_COOKIE, raw, user.exp - Date.now(), SESSION_PATH);
   setCookie(res, SESSION_COOKIE, '', 0, '/');
 }
@@ -183,7 +201,7 @@ export function beginLogin(res: Response, next: string): void {
   const state = crypto.randomBytes(16).toString('hex');
   // apenas caminhos locais: "//evil.com" e "/\evil.com" são redirects externos no navegador
   const safeNext = /^\/(?![/\\])/.test(next) && !next.includes('\\') ? next : '/';
-  const stateToken: StateToken = { typ: 'state', state, next: safeNext };
+  const stateToken: StateToken = { typ: 'state', state, next: safeNext, exp: Date.now() + 10 * 60 * 1000 };
   setCookie(res, STATE_COOKIE, sign(stateToken, config.cookieSecret), 10 * 60 * 1000, STATE_PATH);
   const params = new URLSearchParams({
     client_id: config.applicationId,
@@ -202,7 +220,16 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
   const { code, state } = req.query as { code?: string; state?: string };
   const saved = verify<StateToken>(readCookie(req, STATE_COOKIE), config.cookieSecret);
   clearStateCookie(res); // consome o state: não fica vivo 10 min no navegador
-  if (!code || !state || !saved || saved.typ !== 'state' || saved.state !== state) return undefined;
+  if (
+    !code ||
+    !state ||
+    !saved ||
+    saved.typ !== 'state' ||
+    saved.state !== state ||
+    !Number.isFinite(saved.exp) ||
+    saved.exp <= Date.now()
+  )
+    return undefined;
 
   const tokenResp = await fetch('https://discord.com/api/oauth2/token', {
     method: 'POST',
@@ -214,12 +241,14 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
       code,
       redirect_uri: redirectUri(),
     }),
+    signal: AbortSignal.timeout(10_000),
   });
   if (!tokenResp.ok) return undefined;
   const token = (await tokenResp.json()) as { access_token: string };
 
   const meResp = await fetch('https://discord.com/api/users/@me', {
     headers: { Authorization: `Bearer ${token.access_token}` },
+    signal: AbortSignal.timeout(10_000),
   });
   if (!meResp.ok) return undefined;
   const me = (await meResp.json()) as {
@@ -230,12 +259,14 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
   };
 
   if (!me.id) return undefined;
+  const exp = Date.now() + SESSION_TTL_MS;
   const user: WebUser = {
     typ: 'session',
     id: me.id,
     name: me.global_name || me.username,
     avatar: me.avatar ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png?size=64` : null,
-    exp: Date.now() + SESSION_TTL_MS,
+    exp,
+    jti: createWebSession(me.id, exp),
   };
   setCookie(res, SESSION_COOKIE, sign(user, config.cookieSecret), SESSION_TTL_MS, SESSION_PATH);
   // Remove um eventual cookie legado Path=/ com o mesmo nome.

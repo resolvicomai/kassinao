@@ -1,20 +1,39 @@
 import type { Request, Response } from 'express';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { normalizeBaseUrl, parseConfiguredNumber, validateSecret } from '../src/config';
-import { beginLogin, isAllowedWebMutation, logoutWeb } from '../src/web/auth';
+import { config, normalizeBaseUrl, parseConfiguredNumber, validateSecret } from '../src/config';
+import { beginLogin, getWebUser, isAllowedWebMutation, logoutWeb, WebUser } from '../src/web/auth';
 import { landingPage } from '../src/web/landing';
 import { recordingPage } from '../src/web/page';
 import { normalizedSearchTerms, recordingIncludesUser } from '../src/web/api';
 import type { RecordingMeta } from '../src/store';
 import { isLoopbackAddress } from '../src/util';
+import { createWebSession, isActiveWebSession } from '../src/web/webSessions';
 
 function fakeRequest(method: string, headers: Record<string, string> = {}): Request {
   return {
     method,
+    headers,
     get(name: string) {
       return headers[name.toLowerCase()];
+    },
+  } as unknown as Request;
+}
+
+function sessionRequest(user: WebUser): Request {
+  return signedSessionRequest(user);
+}
+
+function signedSessionRequest(payload: object): Request {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const mac = crypto.createHmac('sha256', config.cookieSecret).update(body).digest('base64url');
+  return {
+    method: 'POST',
+    headers: { cookie: `kassinao_session=${encodeURIComponent(`${body}.${mac}`)}` },
+    get() {
+      return undefined;
     },
   } as unknown as Request;
 }
@@ -40,9 +59,45 @@ describe('cookies e CSRF da superfície web privada', () => {
     expect(login.cookies.some((c) => c.includes('kassinao_state=') && c.includes('Path=/auth;'))).toBe(true);
 
     const logout = cookieResponse();
-    logoutWeb(logout.res);
+    logoutWeb(fakeRequest('POST'), logout.res);
     expect(logout.cookies.some((c) => c.includes('kassinao_session=') && c.includes('Path=/app;'))).toBe(true);
     expect(logout.cookies.some((c) => c.includes('kassinao_session=') && c.includes('Path=/;'))).toBe(true);
+  });
+
+  it('logout revoga também uma cópia do cookie no servidor', () => {
+    const exp = Date.now() + 60_000;
+    const user: WebUser = {
+      typ: 'session',
+      id: 'web-user',
+      name: 'Alice',
+      avatar: null,
+      exp,
+      jti: createWebSession('web-user', exp),
+    };
+    const req = sessionRequest(user);
+    expect(getWebUser(req)?.id).toBe('web-user');
+
+    const logout = cookieResponse();
+    logoutWeb(req, logout.res);
+    expect(getWebUser(req)).toBeUndefined();
+  });
+
+  it('cookie HMAC antigo sem jti não sobrevive ao upgrade', () => {
+    const req = signedSessionRequest({
+      typ: 'session',
+      id: 'legacy-user',
+      name: 'Legacy',
+      avatar: null,
+      exp: Date.now() + 60_000,
+    });
+    expect(getWebUser(req)).toBeUndefined();
+  });
+
+  it('limita sessões web por usuário para a persistência não virar DoS', () => {
+    const exp = Date.now() + 60_000;
+    const ids = Array.from({ length: 11 }, () => createWebSession('cap-user', exp));
+    expect(isActiveWebSession(ids[0], 'cap-user')).toBe(false);
+    expect(isActiveWebSession(ids[10], 'cap-user')).toBe(true);
   });
 
   it('aceita a origem exata e rejeita subdomínio irmão/cross-site', () => {
@@ -86,6 +141,13 @@ describe('configuração fail-fast', () => {
 });
 
 describe('regressões de privacidade e acessibilidade da web', () => {
+  it('backup nunca empacota segredos nem registros de sessão', () => {
+    const script = fs.readFileSync(path.join(process.cwd(), 'scripts', 'backup.sh'), 'utf8');
+    expect(script).toContain("--exclude='*/.cookie-secret'");
+    expect(script).toContain("--exclude='*/.web-sessions.json'");
+    expect(script).toContain("--exclude='*/.mcp-sessions.json'");
+  });
+
   it('landing pública não contém URL privada e rotula os fixtures', () => {
     const html = landingPage('pt');
     expect(html).not.toContain('href="/app');
@@ -105,6 +167,26 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).toContain('aria-labelledby="tab-ata"');
     expect(html).toContain("e.key === 'ArrowRight'");
     expect(html).toContain('tabindex="-1"');
+  });
+
+  it('logout do app é POST protegido, nunca link GET mutável', () => {
+    const dir = path.join(process.cwd(), 'docs', 'example');
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;
+    const html = recordingPage(meta, {
+      live: false,
+      canDelete: false,
+      lang: 'pt',
+      user: {
+        typ: 'session',
+        id: 'u1',
+        name: 'Alice',
+        avatar: null,
+        exp: Date.now() + 60_000,
+        jti: 'sid',
+      },
+    });
+    expect(html).toContain('method="post" action="/app/logout"');
+    expect(html).not.toContain('href="/auth/logout"');
   });
 });
 

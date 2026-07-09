@@ -53,7 +53,7 @@ Every AI notetaker guesses who's talking from voice patterns alone — and the g
 ## Yours, with real control
 
 - Self-hosted: it runs on your own Docker, and your recordings never touch a third-party SaaS.
-- Access is gated by Discord login plus real participation — a leaked link opens nothing for a stranger.
+- Access requires current Discord-server membership. Private calls stay limited to their participants, starter, and current admins — a leaked link opens nothing for a stranger.
 - Retention is a dial, not a default: expire audio on a schedule, keep the searchable text longer, or turn expiry off entirely.
 - Open source under AGPL-3.0-or-later — read it, fork it, self-host a modified version; just pass the source along too.
 - Runs behind HTTPS with no open inbound ports, via the bundled Cloudflare Tunnel profile.
@@ -168,7 +168,7 @@ More knobs — disk guard, disk-full alerts, off-site backup via rclone — are 
 
 Anyone can record and stop. `/autorecord` and `/config` require **Manage Server**. `/mcp` only exists when the connector is on (`MCP_SECRET` set). Deleting a recording (from its page) is limited to the initiator or admins.
 
-The MCP connector applies the exact same access check as the web page, meeting by meeting: each person sees only what they'd already see on the site. Read-only, no audio, revocable at any time. Client setup and full docs: [`mcp/`](mcp/).
+The MCP connector applies the exact same access check as the web page, meeting by meeting: current members see only what they'd already see on the site. Private-channel history never opens retroactively just because someone gained channel access later. Read-only, no audio, revocable at any time. Client setup and full docs: [`mcp/`](mcp/).
 
 ### Transcription backends
 
@@ -215,7 +215,7 @@ flowchart LR
 
 Recording voice is processing personal data, so access control isn't a feature bullet here — it's the thing to actually verify:
 
-- Every page request is authenticated via Discord OAuth and then re-checked live against who was actually in the call, who can see the channel, and who's an admin — not a cached role, not "whoever has the link." The full check is one file: [`src/web/access.ts`](src/web/access.ts).
+- Every page request is authenticated via Discord OAuth and requires current membership in the recording's server. Private calls are restricted to their starter/participants and current admins; only a channel that was public to `@everyone` when recording began may also follow its current `View Channel` audience. Destructive actions bypass the short membership cache and re-check Discord via REST. The full policy is one file: [`src/web/access.ts`](src/web/access.ts).
 - Nothing leaves your server for transcription unless you configure a cloud provider — and even then, only the VAD-trimmed speech segments go out, never full raw audio you didn't intend to transcribe.
 - Prefer zero retention on the wire: turn on your provider's Zero Data Retention option (Groq offers one), or skip the cloud path entirely with the local `command` transcription backend.
 - Secrets (`DISCORD_TOKEN`, `MCP_SECRET`, API keys) live only in your own `.env`, which ships git-ignored — never committed, never sent anywhere by the bot itself.

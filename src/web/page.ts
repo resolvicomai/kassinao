@@ -445,6 +445,8 @@ const APP_CSS = `
               justify-content: flex-end; }
   .topbar .tl { color: var(--text); text-decoration: none; }
   .topbar .tl:hover { color: var(--text-strong); }
+  .logout-form { display: inline; margin: 0; }
+  .logout-form .tl { border: 0; padding: 0; background: transparent; font: inherit; cursor: pointer; }
   .topbar .user { display: inline-flex; align-items: center; gap: 6px; color: #c9c7c5; }
   .topbar img { width: 22px; height: 22px; border-radius: 50%; }
   /* tabelas do app (gravações, conexões): scroll próprio no celular, nunca no body */
@@ -637,7 +639,7 @@ function shell(
   const signIn = `<a class="tl" href="/auth/login?next=%2Fapp">${pt ? 'Entrar' : 'Sign in'}</a>`;
   const right =
     !opts.demo && opts.user
-      ? `${themeBtn}${langToggle}<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</span><a class="tl" href="/auth/logout">${pt ? 'Sair' : 'Sign out'}</a>`
+      ? `${themeBtn}${langToggle}<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : ''}${esc(opts.user.name)}</span><form class="logout-form" method="post" action="/app/logout"><button class="tl" type="submit">${pt ? 'Sair' : 'Sign out'}</button></form>`
       : `${themeBtn}${langToggle}${signIn}`;
   const userbar = `<header class="topbar">${brand}${nav}<span class="topnav-r">${right}</span></header>`;
   const foot = opts.demo

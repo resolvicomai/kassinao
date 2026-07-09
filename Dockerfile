@@ -1,5 +1,5 @@
 # --- build ---
-FROM node:22-bookworm-slim AS build
+FROM node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf AS build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
@@ -11,7 +11,7 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 # --- runtime ---
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf
 WORKDIR /app
 ENV NODE_ENV=production
 

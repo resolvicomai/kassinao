@@ -65,11 +65,6 @@ const MSG = {
     pt: 'Esta gravação não existe, expirou ou foi apagada.',
     en: 'This recording does not exist, has expired or was deleted.',
   },
-  forbiddenTitle: { pt: 'Sem acesso', en: 'No access' },
-  forbidden: {
-    pt: 'Esta gravação é restrita. Você abre se participou da call, se enxerga o canal de voz de origem, ou se administra o servidor — caso contrário, peça o acesso a quem iniciou.',
-    en: 'This recording is restricted. You can open it if you joined the call, can see the source voice channel, or manage the server — otherwise ask whoever started it for access.',
-  },
   loginFailTitle: { pt: 'Falha no login', en: 'Login failed' },
   loginFail: {
     pt: 'Não deu para confirmar seu login no Discord. Tente abrir o link da gravação de novo.',
@@ -81,11 +76,6 @@ const MSG = {
   cookError: {
     pt: 'Não consegui gerar esse formato. Tente de novo em instantes.',
     en: 'Could not generate that format. Try again in a moment.',
-  },
-  deleteDeniedTitle: { pt: 'Sem permissão', en: 'No permission' },
-  deleteDenied: {
-    pt: 'Só quem iniciou a gravação ou administra o servidor pode apagá-la.',
-    en: 'Only whoever started the recording or a server manager can delete it.',
   },
   deleteLiveTitle: { pt: 'Gravação em andamento', en: 'Recording in progress' },
   deleteLive: { pt: 'Pare a gravação antes de apagá-la.', en: 'Stop the recording before deleting it.' },
@@ -104,11 +94,6 @@ const MSG = {
     en: '🔇 Space freed — the audio was deleted; transcript, minutes and notes remain.',
   },
   deletedFlash: { pt: '🗑️ Gravação apagada para sempre.', en: '🗑️ Recording deleted forever.' },
-  freeDeniedTitle: { pt: 'Sem permissão', en: 'No permission' },
-  freeDenied: {
-    pt: 'Só quem iniciou a gravação ou administra o servidor pode liberar o espaço dela.',
-    en: 'Only whoever started the recording or a server manager can free its space.',
-  },
   freeLiveTitle: { pt: 'Gravação em andamento', en: 'Recording in progress' },
   freeLive: { pt: 'Pare a gravação antes de liberar o espaço.', en: 'Stop the recording before freeing space.' },
   freeBusyTitle: { pt: 'Em uso agora', en: 'Busy right now' },
@@ -127,6 +112,14 @@ const MSG = {
     en: 'Kassinão is connecting to Discord. Reload in a few seconds.',
   },
 } as const;
+
+/** Inexistente e sem acesso são deliberadamente indistinguíveis. */
+function sendRecordingUnavailable(res: Response, l: Locale, user: WebUser): void {
+  res
+    .status(404)
+    .type('html')
+    .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+}
 
 /**
  * Gate de prontidão: enquanto o gateway não está pronto, os caches de guild/canal
@@ -170,10 +163,9 @@ export function startWebServer(): void {
     next();
   });
 
-  // Migração transparente: sessões antigas tinham Path=/ e viajavam também
-  // para landing/demo/health. Reemite o MESMO token com Path=/app e apaga o
-  // legado; sessões novas já nascem restritas ao namespace privado.
-  app.use((req, res, next) => {
+  // Remove o cookie legado Path=/ e mantém apenas sessões registradas com jti.
+  // Tokens antigos sem revogação server-side são encerrados no primeiro acesso.
+  app.use('/app', (req, res, next) => {
     if ((req.headers.cookie ?? '').includes('kassinao_session=')) scopeWebSessionToApp(req, res);
     next();
   });
@@ -205,7 +197,11 @@ export function startWebServer(): void {
     // /APP/rec/... chegaria ao handler sem passar pelo contador
     if (!/^\/(app|rec|auth|demo|conectar-ia|gravacoes)\b/i.test(req.path)) return next();
     const now = Date.now();
-    if (webHits.size > 5000) for (const [k, v] of webHits) if (v.reset < now) webHits.delete(k);
+    if (webHits.size > 5000) {
+      for (const [k, v] of webHits) if (v.reset < now) webHits.delete(k);
+      // Mesmo sob ataque distribuído, o mapa não cresce sem limite.
+      while (webHits.size > 5000) webHits.delete(webHits.keys().next().value as string);
+    }
     const ip = req.ip ?? 'unknown';
     const h = webHits.get(ip);
     if (!h || h.reset < now) {
@@ -408,11 +404,10 @@ export function startWebServer(): void {
     beginLogin(res, String(req.query.next ?? '/'));
   });
 
-  // Sair: expira o cookie de sessão e volta pra vitrine. O "Sair" do topo do
-  // app é a ÚNICA ponte app→site (o inverso da ponte de login da landing).
+  // Compatibilidade com favoritos antigos: GET nunca muda estado nem encerra a
+  // sessão (evita logout CSRF). O controle novo usa POST dentro de /app.
   app.get('/auth/logout', (_req, res) => {
-    logoutWeb(res);
-    res.redirect('/');
+    res.redirect(303, '/app');
   });
 
   app.get('/auth/callback', async (req, res) => {
@@ -434,6 +429,13 @@ export function startWebServer(): void {
         .type('html')
         .send(messagePage(MSG.errorTitle[l], MSG.loginError[l], undefined, l));
     }
+  });
+
+  // A rota vive em /app para o cookie Path=/app viajar na requisição e para
+  // herdar a proteção de Origin/Sec-Fetch aplicada a todas as mutações privadas.
+  app.post('/app/logout', (req, res) => {
+    logoutWeb(req, res);
+    res.redirect(303, '/');
   });
 
   /** Home do app ("minhas gravações"): tudo que ESTA pessoa pode abrir, em todos
@@ -503,18 +505,12 @@ export function startWebServer(): void {
     if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
-      res
-        .status(404)
-        .type('html')
-        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      sendRecordingUnavailable(res, l, user);
       return;
     }
     const access = await checkAccess(user, meta);
     if (!access.view) {
-      res
-        .status(403)
-        .type('html')
-        .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      sendRecordingUnavailable(res, l, user);
       return;
     }
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
@@ -534,18 +530,19 @@ export function startWebServer(): void {
     }
     if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
-    if (!meta || meta.participants.length === 0) {
-      res.status(404).send('sem áudio');
+    if (!meta) {
+      sendRecordingUnavailable(res, l, user);
       return;
     }
     // checkAccess ANTES de qualquer checagem de estado (ao-vivo) — não vaza a
     // quem não tem acesso se a gravação existe/está ao vivo (oráculo de enumeração).
     const access = await checkAccess(user, meta);
     if (!access.view) {
-      res
-        .status(403)
-        .type('html')
-        .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      sendRecordingUnavailable(res, l, user);
+      return;
+    }
+    if (meta.participants.length === 0) {
+      res.status(404).send('sem áudio');
       return;
     }
     // ao vivo: o mix seria parcial e não-cacheável (re-cozinha a cada hit) — bloqueia
@@ -589,19 +586,13 @@ export function startWebServer(): void {
     if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
-      res
-        .status(404)
-        .type('html')
-        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      sendRecordingUnavailable(res, l, user);
       return;
     }
     // checkAccess ANTES de olhar o estado da ata — senão vaza a terceiros se a ata já ficou pronta
     const access = await checkAccess(user, meta);
     if (!access.view) {
-      res
-        .status(403)
-        .type('html')
-        .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      sendRecordingUnavailable(res, l, user);
       return;
     }
     const minutes = meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
@@ -628,19 +619,13 @@ export function startWebServer(): void {
     if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
-      res
-        .status(404)
-        .type('html')
-        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      sendRecordingUnavailable(res, l, user);
       return;
     }
     // checkAccess ANTES do estado da transcrição — não vaza a terceiros se já ficou pronta
     const access = await checkAccess(user, meta);
     if (!access.view) {
-      res
-        .status(403)
-        .type('html')
-        .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      sendRecordingUnavailable(res, l, user);
       return;
     }
     if (!transcriptReady(meta)) {
@@ -673,18 +658,12 @@ export function startWebServer(): void {
     }
     const meta = readMeta(req.params.id);
     if (!meta) {
-      res
-        .status(404)
-        .type('html')
-        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      sendRecordingUnavailable(res, l, user);
       return;
     }
     const access = await checkAccess(user, meta);
     if (!access.view) {
-      res
-        .status(403)
-        .type('html')
-        .send(messagePage(MSG.forbiddenTitle[l], MSG.forbidden[l], user, l));
+      sendRecordingUnavailable(res, l, user);
       return;
     }
     // ao vivo: cada formato cozinharia um snapshot completo dos masters (sem dedupe
@@ -744,18 +723,12 @@ export function startWebServer(): void {
     if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
-      res
-        .status(404)
-        .type('html')
-        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      sendRecordingUnavailable(res, l, user);
       return;
     }
-    const access = await checkAccess(user, meta);
+    const access = await checkAccess(user, meta, { freshMember: true });
     if (!access.delete) {
-      res
-        .status(403)
-        .type('html')
-        .send(messagePage(MSG.freeDeniedTitle[l], MSG.freeDenied[l], user, l));
+      sendRecordingUnavailable(res, l, user);
       return;
     }
     if (meta.status === 'recording') {
@@ -794,18 +767,12 @@ export function startWebServer(): void {
     if (notReady(res, l, user)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
-      res
-        .status(404)
-        .type('html')
-        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+      sendRecordingUnavailable(res, l, user);
       return;
     }
-    const access = await checkAccess(user, meta);
+    const access = await checkAccess(user, meta, { freshMember: true });
     if (!access.delete) {
-      res
-        .status(403)
-        .type('html')
-        .send(messagePage(MSG.deleteDeniedTitle[l], MSG.deleteDenied[l], user, l));
+      sendRecordingUnavailable(res, l, user);
       return;
     }
     if (meta.status === 'recording') {

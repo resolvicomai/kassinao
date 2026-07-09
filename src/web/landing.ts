@@ -537,8 +537,8 @@ export function landingPage(lang: Locale): string {
       ${fict}
     </figure>
     <p class="mcpnote">${T(
-      'Prefere perguntar de fora do Discord? O conector <code>kassinao-mcp</code> liga <b>qualquer assistente de IA com MCP</b> (Claude, Cursor…) nas mesmas reuniões — cada pessoa só enxerga o que já pode ver.',
-      'Rather ask from outside Discord? The <code>kassinao-mcp</code> connector plugs <b>any MCP-capable AI assistant</b> (Claude, Cursor…) into the same meetings — each person only sees what they already can.',
+      'Prefere perguntar de fora do Discord? O conector <code>kassinao-mcp</code> liga <b>qualquer assistente de IA com MCP</b> (Claude, Cursor…) nas mesmas reuniões — com membership e acesso revalidados no Discord.',
+      'Rather ask from outside Discord? The <code>kassinao-mcp</code> connector plugs <b>any MCP-capable AI assistant</b> (Claude, Cursor…) into the same meetings — with membership and access revalidated against Discord.',
     )}</p>
   </div></section>`;
 
