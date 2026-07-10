@@ -31,6 +31,8 @@ export class UserTrack {
   private logicalSamples = 0;
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
+  private writeFailed = false;
+  private finalizePromise?: Promise<boolean>;
 
   constructor(
     userId: string,
@@ -62,6 +64,7 @@ export class UserTrack {
     });
     this.proc.stdin?.on('error', () => {
       // EPIPE se o ffmpeg morrer — não derruba o processo do bot
+      this.writeFailed = true;
     });
   }
 
@@ -96,7 +99,9 @@ export class UserTrack {
   }
 
   private enqueue(task: () => Promise<void>): void {
-    this.queue = this.queue.then(task).catch(() => {});
+    this.queue = this.queue.then(task).catch(() => {
+      this.writeFailed = true;
+    });
   }
 
   /** Escreve respeitando o backpressure do pipe. */
@@ -118,8 +123,12 @@ export class UserTrack {
   }
 
   /** Preenche com silêncio até o fim da gravação, esvazia a fila e fecha o encoder. */
-  async finalize(sessionEndMs: number): Promise<void> {
-    if (this.closed) return;
+  finalize(sessionEndMs: number): Promise<boolean> {
+    if (!this.finalizePromise) this.finalizePromise = this.doFinalize(sessionEndMs);
+    return this.finalizePromise;
+  }
+
+  private async doFinalize(sessionEndMs: number): Promise<boolean> {
     this.closed = true;
     const target = Math.floor(((sessionEndMs - this.sessionStartMs) * SAMPLE_RATE) / 1000);
     // Silêncio de CAUDA capado em 60s: quem falou na hora 1 de uma call de 6h
@@ -141,23 +150,24 @@ export class UserTrack {
     }
     await this.queue;
 
-    await new Promise<void>((resolve) => {
+    const cleanExit = await new Promise<boolean>((resolve) => {
       if (!this.proc.stdin || this.proc.exitCode !== null) {
-        resolve();
+        resolve(this.proc.exitCode === 0 && !this.writeFailed);
         return;
       }
       const timeout = setTimeout(() => {
         console.warn(`ffmpeg da faixa ${this.userId} demorou para fechar — master pode estar incompleto.`);
         this.proc.kill('SIGKILL');
-        resolve();
+        resolve(false);
         // 20s: precisa caber DENTRO do stop_grace_period do Docker (30s), senão
         // o SIGKILL externo derruba o node antes de os outros FLACs fecharem
       }, 20_000);
-      this.proc.once('close', () => {
+      this.proc.once('close', (code, signal) => {
         clearTimeout(timeout);
-        resolve();
+        resolve(code === 0 && signal === null && !this.writeFailed);
       });
       this.proc.stdin.end();
     });
+    return cleanExit;
   }
 }

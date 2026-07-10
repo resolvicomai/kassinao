@@ -29,12 +29,27 @@ import { pageUrl, RecordingMeta, saveMeta, tracksDir } from '../store';
 import { safeSlice } from '../util';
 import { UserTrack } from './UserTrack';
 
-export type StopReason = 'manual' | 'tempo-maximo' | 'canal-vazio' | 'desconectado' | 'disco-cheio' | 'reinicio';
+export type StopReason =
+  | 'manual'
+  | 'tempo-maximo'
+  | 'canal-vazio'
+  | 'abaixo-minimo'
+  | 'desconectado'
+  | 'canal-alterado'
+  | 'disco-cheio'
+  | 'reinicio';
 
 export const STOP_BUTTON_ID = 'kassinao_stop';
 export const NOTE_BUTTON_ID = 'kassinao_note';
 export const MARK_BUTTON_ID = 'kassinao_mark';
 export const MAX_NOTE_LENGTH = 500;
+
+export class RecordingStartCancelledError extends Error {
+  constructor() {
+    super('recording start cancelled');
+    this.name = 'RecordingStartCancelledError';
+  }
+}
 
 const SILENCE_WARN_MS = 5 * 60 * 1000;
 const PANEL_EDIT_MIN_INTERVAL_MS = 2500;
@@ -50,7 +65,7 @@ export class RecordingSession {
   readonly id: string;
   readonly guild: Guild;
   readonly voiceChannel: VoiceBasedChannel;
-  readonly startedAt: number;
+  startedAt: number;
   readonly meta: RecordingMeta;
   readonly locale: Locale;
   /** true quando iniciada pelo auto-record (afeta a regra de parada por população). */
@@ -59,10 +74,13 @@ export class RecordingSession {
   /** Chamado quando a gravação termina sem interação direta (limite, canal vazio, queda). */
   onAutoStop?: (session: RecordingSession, reason: StopReason) => void;
 
-  private connection!: VoiceConnection;
+  private connection?: VoiceConnection;
   private tracks = new Map<string, UserTrack>();
   private activeStreams = new Set<string>();
   private stopping = false;
+  private captureStarted = false;
+  private startPromise?: Promise<void>;
+  private abortPromise?: Promise<void>;
   private stopPromise?: Promise<RecordingMeta>;
   private maxDurationTimer?: NodeJS.Timeout;
   private silenceTimer?: NodeJS.Timeout;
@@ -90,7 +108,6 @@ export class RecordingSession {
     this.startedAt = Date.now();
     this.lastAudioAt = this.startedAt;
 
-    fs.mkdirSync(tracksDir(this.id), { recursive: true });
     this.meta = {
       id: this.id,
       guildId: this.guild.id,
@@ -116,7 +133,6 @@ export class RecordingSession {
         ? t(this.locale, 'event.started', { name: safeName(opts.startedBy.name) })
         : t(this.locale, 'event.started-auto'),
     );
-    saveMeta(this.meta);
   }
 
   get pageUrl(): string {
@@ -131,76 +147,148 @@ export class RecordingSession {
     return this.meta.participants.map((p) => p.name);
   }
 
-  /** Canal onde o bot está de fato agora (ele pode ter sido arrastado após o início). */
-  get currentChannelId(): string {
-    return this.guild.members.me?.voice.channelId ?? this.voiceChannel.id;
+  get isStopping(): boolean {
+    return this.stopping;
   }
 
-  async start(): Promise<void> {
-    // Defesa em profundidade: @discordjs/voice mantém UMA conexão por guild —
-    // entrar de novo moveria a conexão de uma gravação em andamento.
-    if (getVoiceConnection(this.guild.id)) {
-      fs.rmSync(path.dirname(tracksDir(this.id)), { recursive: true, force: true });
-      throw new Error(
-        this.locale === 'pt'
-          ? 'já existe uma conexão de voz neste servidor'
-          : 'there is already a voice connection in this server',
-      );
-    }
+  /** Identidade imutável da gravação. Se o bot for movido, a sessão é encerrada. */
+  get currentChannelId(): string {
+    return this.voiceChannel.id;
+  }
 
-    this.connection = joinVoiceChannel({
-      channelId: this.voiceChannel.id,
-      guildId: this.guild.id,
-      adapterCreator: this.guild.voiceAdapterCreator,
-      selfDeaf: false,
-      selfMute: true,
-    });
+  /** Início idempotente e transacional: qualquer falha desfaz conexão, painel e arquivos. */
+  start(signal?: AbortSignal): Promise<void> {
+    if (!this.startPromise) this.startPromise = this.doStart(signal);
+    return this.startPromise;
+  }
 
+  private async doStart(signal?: AbortSignal): Promise<void> {
     try {
-      await entersState(this.connection, VoiceConnectionStatus.Ready, 20_000);
-    } catch {
-      this.connection.destroy();
-      fs.rmSync(path.dirname(tracksDir(this.id)), { recursive: true, force: true });
-      throw new Error(
-        this.locale === 'pt' ? 'não consegui conectar no canal a tempo' : 'could not connect to the channel in time',
-      );
-    }
-
-    this.connection.on('error', (err) => console.error(`Erro na conexão de voz (${this.id}):`, err.message));
-    this.connection.receiver.speaking.on('start', (userId) => this.onSpeakingStart(userId));
-
-    // Se o bot for desconectado (kick, canal apagado...), tenta se recuperar;
-    // se não conseguir em 5 s, finaliza a gravação para não perder o áudio.
-    this.connection.on(VoiceConnectionStatus.Disconnected, async () => {
-      if (this.stopping) return;
-      try {
-        await Promise.race([
-          entersState(this.connection, VoiceConnectionStatus.Signalling, 5_000),
-          entersState(this.connection, VoiceConnectionStatus.Connecting, 5_000),
-        ]);
-      } catch {
-        await this.stop('desconectado').catch(() => {});
-        this.onAutoStop?.(this, 'desconectado');
+      throwIfStartCancelled(signal);
+      // Defesa em profundidade: @discordjs/voice mantém UMA conexão por guild —
+      // entrar de novo moveria a conexão de uma gravação em andamento.
+      if (getVoiceConnection(this.guild.id)) {
+        throw new Error(
+          this.locale === 'pt'
+            ? 'já existe uma conexão de voz neste servidor'
+            : 'there is already a voice connection in this server',
+        );
       }
-    });
 
-    this.maxDurationTimer = setTimeout(
-      async () => {
-        await this.stop('tempo-maximo').catch(() => {});
-        this.onAutoStop?.(this, 'tempo-maximo');
-      },
-      config.maxRecordingHours * 60 * 60 * 1000,
-    );
+      fs.mkdirSync(tracksDir(this.id), { recursive: true });
 
-    this.silenceTimer = setInterval(() => this.checkSilence(), 30_000);
+      const connection = joinVoiceChannel({
+        channelId: this.voiceChannel.id,
+        guildId: this.guild.id,
+        adapterCreator: this.guild.voiceAdapterCreator,
+        selfDeaf: false,
+        selfMute: true,
+      });
+      this.connection = connection;
 
-    // Presença: quem JÁ está na sala entra no registro agora (mesmo que nunca
-    // desmute) — presença na call dá acesso à gravação, falar não é requisito.
-    this.snapshotPresence();
+      try {
+        await abortable(entersState(connection, VoiceConnectionStatus.Ready, 20_000), signal);
+      } catch (err) {
+        if (err instanceof RecordingStartCancelledError) throw err;
+        throw new Error(
+          this.locale === 'pt' ? 'não consegui conectar no canal a tempo' : 'could not connect to the channel in time',
+          { cause: err },
+        );
+      }
 
-    await this.setRecordingNickname();
-    await this.createPanel();
-    this.sendStartDM();
+      connection.on('error', (err) => console.error(`Erro na conexão de voz (${this.id}):`, err.message));
+
+      // Se o bot for desconectado (kick, canal apagado...), tenta se recuperar;
+      // se não conseguir em 5 s, finaliza a gravação para não perder o áudio.
+      connection.on(VoiceConnectionStatus.Disconnected, async () => {
+        if (this.stopping) return;
+        try {
+          await Promise.race([
+            entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+            entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+          ]);
+        } catch {
+          if (!this.captureStarted) {
+            await this.abortStart().catch(() => {});
+            return;
+          }
+          this.requestAutoStop('desconectado');
+        }
+      });
+
+      // Antes de captar qualquer áudio, o aviso precisa estar visível no próprio
+      // canal. Os awaits têm teto e respeitam cancelamento; promessas REST tardias
+      // se autocorrigem em setRecordingNickname/createPanel.
+      const startupTimeout =
+        this.locale === 'pt'
+          ? 'o Discord demorou demais para iniciar a gravação'
+          : 'Discord took too long to start recording';
+      await startStep(this.setRecordingNickname(), signal, 5_000, startupTimeout);
+      // O relógio público e o alinhamento das faixas começam junto do aviso,
+      // não nos segundos gastos conectando ao Discord.
+      this.startedAt = Date.now();
+      this.lastAudioAt = this.startedAt;
+      this.meta.startedAt = this.startedAt;
+      for (const event of this.meta.events) event.atMs = 0;
+      const panelVisible = await startStep(this.createPanel(), signal, 10_000, startupTimeout);
+      if (!panelVisible) {
+        throw new Error(
+          this.locale === 'pt'
+            ? 'não consegui publicar o aviso no chat do canal (preciso de Enviar Mensagens, Inserir Links e Ler Histórico)'
+            : 'could not post the recording notice in the channel chat (I need Send Messages, Embed Links, and Read Message History)',
+        );
+      }
+      throwIfStartCancelled(signal);
+
+      this.captureStarted = true;
+      // Primeiro estado persistido = painel visível e captura pronta. Uma queda
+      // antes disso deixa só um diretório órfão, nunca uma gravação fantasma.
+      saveMeta(this.meta);
+      connection.receiver.speaking.on('start', (userId) => this.onSpeakingStart(userId));
+      this.maxDurationTimer = setTimeout(
+        () => this.requestAutoStop('tempo-maximo'),
+        config.maxRecordingHours * 60 * 60 * 1000,
+      );
+      this.silenceTimer = setInterval(() => this.checkSilence(), 30_000);
+
+      // Presença: quem JÁ está na sala entra no registro agora (mesmo que nunca
+      // desmute) — presença na call dá acesso à gravação, falar não é requisito.
+      this.snapshotPresence();
+      this.sendStartDM();
+    } catch (err) {
+      await this.abortStart();
+      throw err;
+    }
+  }
+
+  /** Rollback idempotente de uma inicialização que ainda não virou sessão ativa. */
+  abortStart(): Promise<void> {
+    if (!this.abortPromise) {
+      this.stopping = true;
+      this.abortPromise = this.doAbortStart();
+    }
+    return this.abortPromise;
+  }
+
+  private async doAbortStart(): Promise<void> {
+    clearTimeout(this.maxDurationTimer);
+    clearInterval(this.silenceTimer);
+    if (this.panelEditPending) clearTimeout(this.panelEditPending);
+    this.panelEditPending = undefined;
+    try {
+      this.connection?.destroy();
+    } catch {
+      // já destruída
+    }
+    await Promise.all([...this.tracks.values()].map((track) => track.finalize(Date.now()).catch(() => false)));
+    await withTimeout(this.restoreNickname(), 5_000);
+    try {
+      await this.panelMessage?.delete();
+    } catch {
+      // painel já removido/sem permissão
+    }
+    this.panelMessage = undefined;
+    fs.rmSync(path.dirname(tracksDir(this.id)), { recursive: true, force: true });
   }
 
   // ---------- presença (quem está na call, falando ou não) ----------
@@ -280,10 +368,14 @@ export class RecordingSession {
       // corta por code points — apelido com emoji não pode ser partido ao meio
       const nick = [...`${tag} ${this.originalNickname ?? me.user.username}`].slice(0, 32).join('');
       await me.setNickname(nick);
+      // A chamada REST pode terminar depois do timeout/cancelamento. Nesse caso,
+      // não deixa o indicador preso num início que já foi desfeito.
+      if (this.stopping) await me.setNickname(this.originalNickname).catch(() => {});
     } catch {
+      if (this.stopping) return;
       this.originalNickname = undefined; // sem permissão (ou outra falha) — segue sem o indicador
       this.addEvent(t(this.locale, 'event.no-nickname'));
-      saveMeta(this.meta);
+      if (this.captureStarted) saveMeta(this.meta);
     }
   }
 
@@ -330,20 +422,22 @@ export class RecordingSession {
     const l = this.locale;
     const endedAt = this.meta.endedAt ?? Date.now();
     const empty = this.meta.participants.length === 0;
-    const desc = empty
-      ? t(l, 'dm.desc-stop-empty', { channel: `#${safeName(this.voiceChannel.name)}` })
-      : t(l, config.audioRetentionUnlimited ? 'dm.desc-stop-unlimited' : 'dm.desc-stop', {
-          channel: `#${safeName(this.voiceChannel.name)}`,
-          duration: formatDuration(endedAt - this.startedAt),
-          url: this.pageUrl,
-          expires: `<t:${Math.floor((this.meta.expiresAt ?? endedAt) / 1000)}:D>`,
-        });
+    const desc = this.meta.audioIncomplete
+      ? t(l, 'dm.desc-stop-incomplete', { channel: `#${safeName(this.voiceChannel.name)}`, url: this.pageUrl })
+      : empty
+        ? t(l, 'dm.desc-stop-empty', { channel: `#${safeName(this.voiceChannel.name)}` })
+        : t(l, config.audioRetentionUnlimited ? 'dm.desc-stop-unlimited' : 'dm.desc-stop', {
+            channel: `#${safeName(this.voiceChannel.name)}`,
+            duration: formatDuration(endedAt - this.startedAt),
+            url: this.pageUrl,
+            expires: `<t:${Math.floor((this.meta.expiresAt ?? endedAt) / 1000)}:D>`,
+          });
     // users.send funciona mesmo se a pessoa saiu do servidor (members.fetch não)
     this.guild.client.users
       .send(startedBy.id, {
         embeds: [
           new EmbedBuilder()
-            .setColor(empty ? 0x949ba4 : 0x57f287)
+            .setColor(this.meta.audioIncomplete ? 0xfee75c : empty ? 0x949ba4 : 0x57f287)
             .setTitle(t(l, 'dm.title-stop'))
             .setDescription(desc)
             .setFooter({ text: t(l, 'panel.footer') }),
@@ -401,7 +495,7 @@ export class RecordingSession {
     if (this.activeStreams.has(userId)) return;
     this.activeStreams.add(userId);
 
-    const opusStream = this.connection.receiver.subscribe(userId, {
+    const opusStream = this.connection!.receiver.subscribe(userId, {
       end: { behavior: EndBehaviorType.AfterSilence, duration: 1000 },
     });
     const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
@@ -479,13 +573,11 @@ export class RecordingSession {
     // Guarda de disco: se o espaço estiver acabando, encerra AGORA — melhor uma
     // gravação curta e íntegra do que uma faixa cortada/corrompida sem aviso.
     if (freeMB() < config.minFreeMbAbort) {
-      this.addEvent(t(this.locale, 'event.stopped-disco-cheio'));
-      saveMeta(this.meta);
       void alertOwners(
         'disk-abort',
         `Encerrei uma gravação em **#${this.voiceChannel.name}** porque o disco está quase cheio (**${freeMB()} MB** livres).`,
       );
-      void this.stop('disco-cheio').then(() => this.onAutoStop?.(this, 'disco-cheio'));
+      this.requestAutoStop('disco-cheio');
       return;
     }
     if (this.silenceWarned) return;
@@ -495,6 +587,12 @@ export class RecordingSession {
       saveMeta(this.meta);
       this.schedulePanelUpdate();
     }
+  }
+
+  private requestAutoStop(reason: StopReason): void {
+    if (this.stopping) return;
+    if (this.onAutoStop) this.onAutoStop(this, reason);
+    else void this.stop(reason).catch((err) => console.error(`Erro encerrando ${this.id}:`, err));
   }
 
   // ---------- eventos e painel ----------
@@ -512,18 +610,30 @@ export class RecordingSession {
     this.meta.events.push({ atMs: Date.now() - this.startedAt, text });
   }
 
-  private async createPanel(): Promise<void> {
+  private async createPanel(): Promise<boolean> {
     const payload = this.buildPanelPayload();
     // O painel vai no chat do próprio canal de voz: só quem enxerga o canal vê o link.
+    let sent: Message | undefined;
     try {
       if (this.voiceChannel.isTextBased()) {
-        this.panelMessage = await this.voiceChannel.send(payload);
-        return;
+        sent = await this.voiceChannel.send(payload);
+        // Uma resposta REST tardia não pode ressuscitar um painel de uma sessão
+        // cujo início já foi cancelado/abortado.
+        if (this.stopping) {
+          await sent.delete().catch(() => {});
+          return false;
+        }
+        this.panelMessage = sent;
+        this.meta.panelChannelId = sent.channelId;
+        this.meta.panelMessageId = sent.id;
+        return true;
       }
     } catch {
-      // sem permissão de enviar no chat do canal de voz — segue sem painel
+      await sent?.delete().catch(() => {});
+      // sem permissão de enviar no chat do canal de voz — o início falha fechado
     }
     this.panelMessage = undefined;
+    return false;
   }
 
   private buildPanelPayload() {
@@ -582,17 +692,17 @@ export class RecordingSession {
     if (!isDone) {
       row.addComponents(
         new ButtonBuilder()
-          .setCustomId(STOP_BUTTON_ID)
+          .setCustomId(`${STOP_BUTTON_ID}:${this.id}`)
           .setLabel(t(l, 'panel.btn-stop'))
           .setEmoji('⏹️')
           .setStyle(ButtonStyle.Danger),
         new ButtonBuilder()
-          .setCustomId(MARK_BUTTON_ID)
+          .setCustomId(`${MARK_BUTTON_ID}:${this.id}`)
           .setLabel(t(l, 'panel.btn-mark'))
           .setEmoji('📌')
           .setStyle(ButtonStyle.Secondary),
         new ButtonBuilder()
-          .setCustomId(NOTE_BUTTON_ID)
+          .setCustomId(`${NOTE_BUTTON_ID}:${this.id}`)
           .setLabel(t(l, 'panel.btn-note'))
           .setEmoji('📝')
           .setStyle(ButtonStyle.Secondary),
@@ -607,9 +717,11 @@ export class RecordingSession {
     // Gravação vazia (ninguém falou) não promete ata/transcrição.
     const empty = this.meta.participants.length === 0;
     const greetingKey = isDone
-      ? empty
-        ? 'panel.greeting-done-empty'
-        : 'panel.greeting-done'
+      ? this.meta.audioIncomplete
+        ? 'panel.greeting-done-incomplete'
+        : empty
+          ? 'panel.greeting-done-empty'
+          : 'panel.greeting-done'
       : 'panel.greeting-recording';
     const content = t(l, greetingKey);
     return { content, embeds: [embed], components: [row] };
@@ -657,7 +769,7 @@ export class RecordingSession {
     this.panelEditPending = undefined;
 
     try {
-      this.connection.destroy();
+      this.connection?.destroy();
     } catch {
       // conexão já destruída
     }
@@ -666,7 +778,11 @@ export class RecordingSession {
     // processo for morto (SIGKILL após o grace do Docker). REST do Discord
     // (apelido/painel) vem depois, cada um com teto — um rate-limit pendurado
     // não pode segurar o shutdown até o SIGKILL.
-    await Promise.all([...this.tracks.values()].map(StopTrack(endedAt)));
+    const trackResults = await Promise.all([...this.tracks.values()].map(StopTrack(endedAt)));
+    if (trackResults.some((complete) => !complete)) {
+      this.meta.audioIncomplete = true;
+      this.addEvent(t(this.locale, 'event.audio-incomplete'), true);
+    }
 
     await withTimeout(this.restoreNickname(), 5_000);
 
@@ -712,7 +828,7 @@ export class RecordingSession {
           try {
             if (this.voiceChannel.isTextBased()) {
               await this.voiceChannel.send(
-                t(this.locale, 'record.stopped-link', {
+                t(this.locale, this.meta.audioIncomplete ? 'record.stopped-link-incomplete' : 'record.stopped-link', {
                   duration: formatDuration(endedAt - this.startedAt),
                   url: this.pageUrl,
                 }),
@@ -736,9 +852,43 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | void> {
   return Promise.race([p, new Promise<void>((r) => setTimeout(r, ms))]);
 }
 
+function throwIfStartCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new RecordingStartCancelledError();
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  throwIfStartCancelled(signal);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new RecordingStartCancelledError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
+async function startStep<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+  ms: number,
+  timeoutMessage: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(timeoutMessage)), ms);
+  });
+  try {
+    return await abortable(Promise.race([promise, timeout]), signal);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function StopTrack(endedAt: number) {
   return (track: UserTrack) =>
-    track.finalize(endedAt).catch((err) => console.error(`Erro finalizando faixa ${track.userId}:`, err));
+    track.finalize(endedAt).catch((err) => {
+      console.error(`Erro finalizando faixa ${track.userId}:`, err);
+      return false;
+    });
 }
 
 /** Junta nomes com limite — calls grandes não estouram os limites de tamanho do Discord. */

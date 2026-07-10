@@ -2,7 +2,14 @@ import { config } from '../config';
 import { Locale } from '../i18n';
 import { msToClock } from '../processing/transcribe';
 import { formatDuration, formatOffset } from '../recorder/RecordingSession';
-import { audioExpiryOf, MeetingMinutes, RecordingMeta, textExpiryOf, TranscriptSegment } from '../store';
+import {
+  audioExpiryOf,
+  MeetingMinutes,
+  RecordingMeta,
+  textExpiryOf,
+  TranscriptSegment,
+  transcriptionNeedsAudio,
+} from '../store';
 import { shortError } from '../util';
 import type { WebUser } from './auth';
 import type { SessionSummary } from './mcpTokens';
@@ -119,6 +126,10 @@ const P: Record<string, { pt: string; en: string }> = {
   audioExpired: {
     pt: '🔇 O áudio desta gravação foi liberado (expirou ou alguém liberou o espaço). A transcrição, a ata e as notas continuam aqui.',
     en: '🔇 The audio of this recording was released (it expired or someone freed the space). Transcript, minutes and notes remain here.',
+  },
+  audioIncomplete: {
+    pt: '⚠️ Pelo menos uma faixa não fechou limpa. O áudio disponível foi preservado, mas pode estar parcial.',
+    en: '⚠️ At least one track did not close cleanly. Available audio was preserved, but it may be partial.',
   },
   textExpires: {
     pt: '⏳ Transcrição e ata expiram em {date}. O áudio já expirou.',
@@ -762,6 +773,10 @@ export function recordingPage(
 
   const liveNote = live ? `<div class="note">${p(l, 'livenote')}</div>` : '';
   const demoNote = demo ? `<div class="note">${p(l, 'demoBanner')}</div>` : '';
+  const incompleteNote =
+    !demo && meta.audioIncomplete
+      ? `<div class="note" style="border-left-color:#f0b232">${p(l, 'audioIncomplete')}</div>`
+      : '';
 
   const minutes = renderMinutes(meta, opts.minutes, l, seekable);
   const transcription = renderTranscription(meta, opts.transcript, l, seekable);
@@ -798,7 +813,7 @@ export function recordingPage(
     opts.canDelete && !live && !demo
       ? `<div class="dangerzone">
         ${
-          !audioGone
+          !audioGone && !transcriptionNeedsAudio(meta)
             ? `<form method="post" action="/app/rec/${meta.id}/liberar-audio"
                  onsubmit="return confirm('${p(l, 'ixFreeSpaceConfirm')}')">
                  <button class="softdanger" type="submit">${p(l, 'ixFreeSpace')}</button><span class="why">${p(l, 'freeWhy')}</span>
@@ -874,6 +889,7 @@ export function recordingPage(
      ${subline}
      ${demoNote}
      ${liveNote}
+     ${incompleteNote}
      ${people}
      ${presentAlso}
      ${playerFlow}
@@ -1432,7 +1448,7 @@ export function recordingsIndexPage(
       const actions =
         canDelete && !live
           ? `${
-              !m.audioDeleted
+              !m.audioDeleted && !transcriptionNeedsAudio(m)
                 ? `<form method="post" action="/app/rec/${m.id}/liberar-audio?back=index" onsubmit="return confirm('${p(l, 'ixFreeSpaceConfirm')}')">
                      <button type="submit" class="rbtn" title="${p(l, 'ixFreeSpace')}" aria-label="${p(l, 'ixFreeSpace')}">🔇</button></form>`
                 : ''
