@@ -83,7 +83,8 @@ Then **invite the bot** (step 1 below) and run **`/record`** in a Discord voice 
 3. **Bot** → **Reset Token** → `DISCORD_TOKEN` (no privileged intents needed).
 4. **OAuth2** → copy **Client Secret** → `DISCORD_CLIENT_SECRET`; add `BASE_URL/auth/callback` under **Redirects**.
 5. Invite it (replace `APP_ID`):
-   `https://discord.com/oauth2/authorize?client_id=APP_ID&scope=bot%20applications.commands&permissions=68176896`
+   `https://discord.com/oauth2/authorize?client_id=APP_ID&scope=bot%20applications.commands&permissions=68242432`
+   Permissions: View Channels, Send Messages, Embed Links, Read Message History, Connect, Change Nickname.
 
 ### 2. Make it reachable
 
@@ -166,7 +167,7 @@ More knobs — disk guard, disk-full alerts, off-site backup via rclone — are 
 | `/help` | Interactive onboarding guide (also replies in DMs) |
 | `/about` | Author, license, and source code |
 
-Anyone can record and stop. `/autorecord` and `/config` require **Manage Server**. `/mcp` only exists when the connector is on (`MCP_SECRET` set). Deleting a recording (from its page) is limited to the initiator or admins.
+Any member can start a recording in the channel they are currently in; people with **Manage Server** may also target another channel they can see. Stopping and annotating require continued access to the recorded channel; `/autorecord` and `/config` require **Manage Server**. `/mcp` only exists when the connector is on (`MCP_SECRET` set). Deleting a recording (from its page) is limited to the initiator or admins.
 
 The MCP connector applies the exact same access check as the web page, meeting by meeting: current members see only what they'd already see on the site. Private-channel history never opens retroactively just because someone gained channel access later. Read-only, no audio, revocable at any time. Client setup and full docs: [`mcp/`](mcp/).
 

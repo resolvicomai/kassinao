@@ -97,6 +97,9 @@ export interface RecordingMeta {
   guildName: string;
   voiceChannelId: string;
   voiceChannelName: string;
+  /** Painel do Discord, persistido para neutralização após crash/restart. */
+  panelChannelId?: string;
+  panelMessageId?: string;
   /**
    * O canal de voz era visível a @everyone no INÍCIO da gravação (audiência do
    * consentimento). Fallback da entrega da ata quando o canal (efêmero) já foi
@@ -115,6 +118,8 @@ export interface RecordingMeta {
   presence?: PresenceEntry[];
   events: RecordingEvent[];
   notes: RecordingNote[];
+  /** Pelo menos um encoder não fechou limpo; conteúdo parcial pode existir. */
+  audioIncomplete?: boolean;
   transcription?: TranscriptionState;
   minutes?: MinutesState;
   /** Quando o ÁUDIO expira (faixas + cache). Texto vive até textExpiresAt. */
@@ -338,12 +343,19 @@ export function transcriptReady(meta: RecordingMeta): boolean {
   return s === 'done' || s === 'partial';
 }
 
+/** A fila/retry ainda precisa reler as faixas de áudio desta gravação. */
+export function transcriptionNeedsAudio(meta: RecordingMeta): boolean {
+  const status = meta.transcription?.status;
+  return meta.transcription?.retryScheduled === true || status === 'pending' || status === 'running';
+}
+
 /**
  * Recuperação pós-queda: gravações que ficaram com status "recording"
  * após um reinício são marcadas como encerradas (os masters FLAC
  * continuam legíveis mesmo com o ffmpeg morto no meio).
  */
-export function recoverInterruptedRecordings(): void {
+export function recoverInterruptedRecordings(): RecordingMeta[] {
+  const recovered: RecordingMeta[] = [];
   for (const meta of listMetas()) {
     if (meta.status !== 'recording') continue;
     let endedAt = meta.startedAt;
@@ -357,6 +369,7 @@ export function recoverInterruptedRecordings(): void {
     }
     meta.status = 'done';
     meta.endedAt = endedAt;
+    if (meta.participants.length > 0) meta.audioIncomplete = true;
     // retenção ilimitada: nada de data de morte no meta (delete é 100% manual)
     if (!config.audioRetentionUnlimited) meta.expiresAt = endedAt + config.retentionDays * 24 * 60 * 60 * 1000;
     if (!config.textRetentionUnlimited) meta.textExpiresAt = endedAt + config.textRetentionDays * 24 * 60 * 60 * 1000;
@@ -367,7 +380,17 @@ export function recoverInterruptedRecordings(): void {
         'event.stopped-reinicio',
       ),
     });
+    // A limpeza roda antes do client ficar pronto. Persistir a intenção agora
+    // impede que a retenção apague o áudio antes de o boot re-enfileirar.
+    if (!meta.transcription) {
+      meta.transcription =
+        meta.participants.length > 0 && config.transcribeProvider !== 'none'
+          ? { status: 'pending', attempts: 0 }
+          : { status: 'disabled' };
+    }
     saveMeta(meta);
+    recovered.push(meta);
     console.log(`Gravação ${meta.id} recuperada após reinício (marcada como encerrada).`);
   }
+  return recovered;
 }

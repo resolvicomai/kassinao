@@ -40,10 +40,17 @@ import { startCleanupJob } from './cleanup';
 import { freeMB } from './disk';
 import { client } from './discord/client';
 import { markClientReady } from './discord/ready';
-import { startMonitor } from './monitor';
+import { alertOwners, startMonitor } from './monitor';
 import { Locale, localeOf, t } from './i18n';
 import { autoRecordStore, isArmed, setArmed } from './recorder/autorecord';
 import { sessionManager } from './recorder/manager';
+import {
+  BoundedIdSet,
+  canManuallyStartRecording,
+  controlSessionId,
+  MarkClickDeduper,
+  shouldRearmAutoRecord,
+} from './recorder/lifecycle';
 import { cook } from './processing/cook';
 import {
   formatDuration,
@@ -51,6 +58,7 @@ import {
   MARK_BUTTON_ID,
   MAX_NOTE_LENGTH,
   NOTE_BUTTON_ID,
+  RecordingStartCancelledError,
   RecordingSession,
   STOP_BUTTON_ID,
   StopReason,
@@ -60,6 +68,7 @@ import {
   enqueueTranscription,
   killPendingTranscriptions,
   MAX_TRANSCRIPTION_ATTEMPTS,
+  transcriptionEnabled,
   validateTranscriptionConfig,
 } from './processing/transcribe';
 import { safeName } from './sanitize';
@@ -82,6 +91,8 @@ import { startWebServer } from './web/server';
 
 const NOTE_MODAL_ID = 'kassinao_note_modal';
 const NOTE_INPUT_ID = 'kassinao_note_text';
+let shuttingDown = false;
+let recoveredRecordings: RecordingMeta[] = [];
 
 // Código-fonte oficial. Exibido no /sobre para creditar a autoria e cumprir a
 // obrigação da AGPL §13 (oferecer o fonte a quem interage com o bot pela rede).
@@ -206,7 +217,8 @@ function buildCommands() {
         'en-GB': 'Show configured auto-records',
       });
       return sc;
-    });
+    })
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
   localized(autorecord, 'autorecord', '🤖 Automatic recording when people join a voice channel');
 
   const sobre = new SlashCommandBuilder()
@@ -338,16 +350,21 @@ async function registerCommands(): Promise<void> {
 
 // ---------- ciclo de vida das sessões ----------
 
-/**
- * Reserva síncrona por guild: fecha a janela entre a checagem e o registro
- * no manager (session.start() leva segundos aguardando a conexão de voz).
- * Sem isso, dois /gravar ou um /gravar + auto-record simultâneos disputariam
- * a mesma VoiceConnection do guild.
- */
-const startingGuilds = new Set<string>();
-
 function guildBusy(guildId: string): boolean {
-  return sessionManager.get(guildId) !== undefined || startingGuilds.has(guildId);
+  return sessionManager.isBusy(guildId);
+}
+
+class RecordingBusyError extends Error {
+  constructor(readonly phase: 'starting' | 'recording' | 'stopping') {
+    super(`recording ${phase}`);
+    this.name = 'RecordingBusyError';
+  }
+}
+
+function currentBusyError(guildId: string): RecordingBusyError {
+  if (sessionManager.startingInfo(guildId)) return new RecordingBusyError('starting');
+  if (sessionManager.stoppingSession(guildId)) return new RecordingBusyError('stopping');
+  return new RecordingBusyError('recording');
 }
 
 async function startSession(opts: {
@@ -357,53 +374,78 @@ async function startSession(opts: {
   locale: Locale;
   auto: boolean;
 }): Promise<RecordingSession> {
-  if (guildBusy(opts.guild.id)) {
-    throw new Error(
-      opts.locale === 'pt' ? 'já existe uma gravação neste servidor' : 'a recording already exists in this server',
-    );
+  if (shuttingDown) {
+    throw new Error(opts.locale === 'pt' ? 'o bot está reiniciando' : 'the bot is restarting');
   }
-  // Guarda de disco: não começa uma gravação que vai corromper por falta de espaço.
-  const free = freeMB();
-  if (free < config.minFreeMbStart) {
-    throw new Error(
-      opts.locale === 'pt'
-        ? `sem espaço em disco suficiente no servidor (${free} MB livres) — apague gravações antigas primeiro`
-        : `not enough disk space on the server (${free} MB free) — delete old recordings first`,
-    );
-  }
-  startingGuilds.add(opts.guild.id);
+  // Reserva ANTES do primeiro await. Dois /gravar, manual + automático ou duas
+  // regras no mesmo guild nunca atravessam juntos esta fronteira.
+  const reservation = sessionManager.reserveStart(opts.guild.id, opts.voiceChannel.id, opts.voiceChannel.name);
+  if (!reservation) throw currentBusyError(opts.guild.id);
+  let session: RecordingSession | undefined;
   try {
-    const session = new RecordingSession(opts);
-    session.onAutoStop = (s, reason) => {
-      if (sessionManager.get(s.guild.id) === s) sessionManager.delete(s.guild.id);
-      afterSessionEnd(s, reason);
-    };
-    await session.start();
-    // se o bot foi expulso durante o próprio start, não registra sessão morta
-    if (session.meta.status === 'recording') {
-      sessionManager.set(opts.guild.id, session);
-      // quem entrou no canal DURANTE o start (~1-2s de REST) não disparou o
-      // handler de presença (a sessão ainda não estava no manager) — completa agora
-      session.snapshotPresence();
-      // start() leva até ~20s; se o canal esvaziou nesse meio-tempo, nenhum
-      // voiceStateUpdate futuro virá — reavalia agora para não gravar sala vazia
-      scheduleAutoRecordCheck(opts.guild, session.currentChannelId);
+    // Guarda de disco: não começa uma gravação que vai corromper por falta de espaço.
+    const free = freeMB();
+    if (free < config.minFreeMbStart) {
+      throw new Error(
+        opts.locale === 'pt'
+          ? `sem espaço em disco suficiente no servidor (${free} MB livres) — apague gravações antigas primeiro`
+          : `not enough disk space on the server (${free} MB free) — delete old recordings first`,
+      );
     }
+
+    session = new RecordingSession(opts);
+    if (!sessionManager.attachStarting(reservation, session)) throw new RecordingStartCancelledError();
+    session.onAutoStop = (s, reason) => {
+      void stopSession(s, reason).catch((err) => console.error(`Erro encerrando ${s.id}:`, err));
+    };
+    await session.start(reservation.signal);
+    if (shuttingDown || reservation.signal.aborted) throw new RecordingStartCancelledError();
+    if (opts.guild.members.me?.voice.channelId !== opts.voiceChannel.id) {
+      throw new Error(
+        opts.locale === 'pt'
+          ? 'fui movido para outro canal durante o início; não gravei nenhum dos dois'
+          : 'I was moved to another channel while starting; neither channel was recorded',
+      );
+    }
+    if (session.meta.status !== 'recording' || !sessionManager.commitStart(reservation, session)) {
+      throw new RecordingStartCancelledError();
+    }
+
+    // Uma regra automática no mesmo canal fica desarmada mesmo quando o início
+    // foi manual. Assim /parar não religa a gravação enquanto a sala segue cheia.
+    if (autoRecordStore.get(opts.guild.id, opts.voiceChannel.id)) {
+      setArmed(opts.guild.id, opts.voiceChannel.id, false);
+    }
+    // quem entrou DURANTE o start não disparou presença (a sessão ainda não
+    // estava ativa no manager) — completa agora e reavalia sala vazia.
+    session.snapshotPresence();
+    scheduleAutoRecordCheck(opts.guild, session.currentChannelId);
     return session;
+  } catch (err) {
+    if (session && sessionManager.get(opts.guild.id) === session) {
+      sessionManager.delete(opts.guild.id, session);
+    }
+    if (session?.meta.status === 'recording') await session.abortStart().catch(() => {});
+    throw err;
   } finally {
-    startingGuilds.delete(opts.guild.id);
+    sessionManager.releaseStart(reservation);
   }
 }
 
 /** Sessões já processadas por afterSessionEnd — o hook não é idempotente sozinho
  *  (stopSession e onAutoStop podem correr para a mesma sessão). */
-const endedSessions = new Set<string>();
+const endedSessions = new BoundedIdSet(500);
 
 /** Pós-fim de gravação: rearma o auto-record quando faz sentido, reavalia os canais e transcreve. */
 function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
-  if (endedSessions.has(session.id)) return; // roda uma única vez por sessão
-  endedSessions.add(session.id);
-  if (endedSessions.size > 500) endedSessions.clear(); // teto de memória; ids são únicos
+  if (!endedSessions.addOnce(session.id)) return; // roda uma única vez por sessão
+
+  // O shutdown não inicia trabalho novo, mas deixa a intenção persistida antes
+  // de sair. A limpeza não pode apagar o áudio no intervalo até o próximo boot.
+  if (session.meta.participants.length > 0 && !session.meta.transcription) {
+    session.meta.transcription = transcriptionEnabled() ? { status: 'pending', attempts: 0 } : { status: 'disabled' };
+    saveMeta(session.meta);
+  }
 
   // Em SHUTDOWN nada de trabalho novo: nem rearme de auto-record (dispararia uma
   // sessão-fantasma que morre no exit), nem cook/transcrição (queimaria attempts).
@@ -412,10 +454,16 @@ function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
 
   const channelId = session.voiceChannel.id;
   // Limite de horas com a reunião ainda rolando: rearma para recomeçar sozinha
-  // e cobrir o resto (o Craig simplesmente para). Idem se o bot foi arrastado
-  // para fora: o canal da regra pode seguir cheio e precisa ser reavaliado.
-  if (session.auto && (reason === 'tempo-maximo' || reason === 'canal-vazio')) {
+  // e cobrir o resto. Kick/movimento não rearma: pode ser ação de moderação.
+  const channelHasAutoRule = autoRecordStore.get(session.guild.id, channelId) !== undefined;
+  if (shouldRearmAutoRecord(session.auto || channelHasAutoRule, reason)) {
     setArmed(session.guild.id, channelId, true);
+  }
+  if (channelHasAutoRule && (reason === 'desconectado' || reason === 'canal-alterado')) {
+    void alertOwners(
+      `autorecord-interrupted:${session.guild.id}:${channelId}`,
+      `A gravação em **#${safeName(session.voiceChannel.name)}** (canal com auto-record) foi ${reason === 'canal-alterado' ? 'interrompida porque moveram o bot' : 'encerrada após desconexão'}. Não reiniciei sozinho para respeitar uma possível ação de moderação.`,
+    );
   }
   // Reavalia o canal da sessão E todas as regras do guild: enquanto este servidor
   // estava ocupado, outro canal com auto-record pode ter enchido sem disparar.
@@ -553,25 +601,32 @@ async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise
       saveMeta(fresh);
     }
   }
-  // webhook do operador (env) — integrações self-hosted (n8n → Notion/Jira...).
-  // Dedupe persistido SÓ após sucesso: falha de rede num deploy não pode
-  // significar "nunca mais tenta"; o resume pós-reinício re-dispara.
-  if (minutesDone && config.minutesWebhookUrl) {
+  if (minutesDone) await deliverMinutesWebhookIfNeeded(meta);
+}
+
+const webhookDeliveries = new Map<string, Promise<void>>();
+
+/** Webhook persistente e idempotente em memória; o boot retoma os não confirmados. */
+function deliverMinutesWebhookIfNeeded(meta: RecordingMeta): Promise<void> {
+  if (!config.minutesWebhookUrl || meta.minutes?.status !== 'done') return Promise.resolve();
+  const existing = webhookDeliveries.get(meta.id);
+  if (existing) return existing;
+  const task = (async () => {
     const fresh = readMeta(meta.id);
-    if (fresh && !fresh.webhookSentAt) {
-      postMinutesWebhook(meta)
-        .then(() => {
-          const ok = readMeta(meta.id);
-          if (ok) {
-            ok.webhookSentAt = Date.now();
-            saveMeta(ok);
-          }
-        })
-        .catch((err) =>
-          console.warn(`Webhook da ata (${meta.id}) falhou (vai retentar no resume):`, (err as Error).message),
-        );
+    if (!fresh || fresh.webhookSentAt) return;
+    try {
+      await postMinutesWebhook(fresh);
+      const ok = readMeta(meta.id);
+      if (ok && !ok.webhookSentAt) {
+        ok.webhookSentAt = Date.now();
+        saveMeta(ok);
+      }
+    } catch (err) {
+      console.warn(`Webhook da ata (${meta.id}) falhou (vai retentar no próximo boot):`, (err as Error).message);
     }
-  }
+  })().finally(() => webhookDeliveries.delete(meta.id));
+  webhookDeliveries.set(meta.id, task);
+  return task;
 }
 
 /** Embed com o essencial da ata (resumo + decisões + ações), truncado com folga. */
@@ -619,7 +674,7 @@ function buildMinutesEmbed(meta: RecordingMeta, locale: Locale): EmbedBuilder[] 
 async function postMinutesWebhook(meta: RecordingMeta): Promise<void> {
   const minutes = readMinutes(meta.id);
   if (!minutes) return;
-  await fetch(config.minutesWebhookUrl, {
+  const response = await fetch(config.minutesWebhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -635,6 +690,7 @@ async function postMinutesWebhook(meta: RecordingMeta): Promise<void> {
     }),
     signal: AbortSignal.timeout(10_000),
   });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
 }
 
 // ---------- /config (por servidor, admin) ----------
@@ -744,9 +800,13 @@ async function stopSession(
   reason: StopReason,
   stoppedBy?: { id: string; name: string },
 ): Promise<void> {
-  if (sessionManager.get(session.guild.id) === session) sessionManager.delete(session.guild.id);
-  await session.stop(reason, stoppedBy);
-  afterSessionEnd(session, reason);
+  const claim = sessionManager.beginStop(session.guild.id, session);
+  try {
+    await session.stop(reason, stoppedBy);
+    afterSessionEnd(session, reason);
+  } finally {
+    if (claim === 'claimed') sessionManager.finishStop(session.guild.id, session);
+  }
 }
 
 // ---------- handlers de comandos ----------
@@ -769,16 +829,57 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
     return;
   }
   const existing = sessionManager.get(interaction.guild.id);
-  if (existing || guildBusy(interaction.guild.id)) {
+  if (existing) {
     await interaction.reply({
-      content: t(l, 'err.already-recording', { channel: `#${existing?.voiceChannel.name ?? '?'}` }),
+      content: canAnnotate(existing, member)
+        ? t(l, 'err.already-recording', { channel: `#${existing.voiceChannel.name}` })
+        : t(l, 'err.recording-busy'),
       ephemeral: true,
     });
     return;
   }
-  if (!voiceChannel.joinable) {
+  const starting = sessionManager.startingInfo(interaction.guild.id);
+  if (starting) {
+    const startingChannel = interaction.guild.channels.cache.get(starting.channelId);
+    const canSeeStarting = startingChannel?.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel) ?? false;
     await interaction.reply({
-      content: t(l, 'err.cannot-join', { channel: `#${voiceChannel.name}` }),
+      content: canSeeStarting
+        ? t(l, 'err.recording-starting', { channel: `#${starting.channelName}` })
+        : t(l, 'err.recording-busy'),
+      ephemeral: true,
+    });
+    return;
+  }
+  const stoppingSession = sessionManager.stoppingSession(interaction.guild.id);
+  if (stoppingSession) {
+    await interaction.reply({
+      content: canAnnotate(stoppingSession, member) ? t(l, 'err.recording-stopping') : t(l, 'err.recording-busy'),
+      ephemeral: true,
+    });
+    return;
+  }
+  const manualAccess = {
+    canView: voiceChannel.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel) ?? false,
+    isPresent: member.voice.channelId === voiceChannel.id,
+    canManageGuild: member.permissions.has(PermissionFlagsBits.ManageGuild),
+  };
+  if (!manualAccess.canView) {
+    await interaction.reply({
+      content: t(l, 'err.record-no-access', { channel: `#${voiceChannel.name}` }),
+      ephemeral: true,
+    });
+    return;
+  }
+  if (!canManuallyStartRecording(manualAccess)) {
+    await interaction.reply({
+      content: t(l, 'err.must-join-target', { channel: `#${voiceChannel.name}` }),
+      ephemeral: true,
+    });
+    return;
+  }
+  if (!recordingChannelReady(voiceChannel)) {
+    await interaction.reply({
+      content: t(l, 'err.cannot-record-here', { channel: `#${voiceChannel.name}` }),
       ephemeral: true,
     });
     return;
@@ -800,7 +901,34 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
         : t(l, 'record.started-no-panel', { channel: `#${voiceChannel.name}`, url: session.pageUrl }),
     );
   } catch (err) {
-    await interaction.editReply(t(l, 'err.join-failed', { reason: (err as Error).message }));
+    if (err instanceof RecordingStartCancelledError) {
+      await interaction.editReply(t(l, 'record.start-cancelled'));
+    } else if (err instanceof RecordingBusyError) {
+      const info = sessionManager.startingInfo(interaction.guild.id);
+      if (err.phase === 'recording') {
+        const active = sessionManager.get(interaction.guild.id);
+        await interaction.editReply(
+          active && canAnnotate(active, member)
+            ? t(l, 'err.already-recording', { channel: `#${active.voiceChannel.name}` })
+            : t(l, 'err.recording-busy'),
+        );
+      } else {
+        if (err.phase === 'starting' && info) {
+          const channel = interaction.guild.channels.cache.get(info.channelId);
+          const canSee = channel?.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel) ?? false;
+          await interaction.editReply(
+            canSee ? t(l, 'err.recording-starting', { channel: `#${info.channelName}` }) : t(l, 'err.recording-busy'),
+          );
+        } else {
+          const stopping = sessionManager.stoppingSession(interaction.guild.id);
+          await interaction.editReply(
+            stopping && canAnnotate(stopping, member) ? t(l, 'err.recording-stopping') : t(l, 'err.recording-busy'),
+          );
+        }
+      }
+    } else {
+      await interaction.editReply(t(l, 'err.join-failed', { reason: (err as Error).message }));
+    }
   }
 }
 
@@ -810,27 +938,100 @@ async function handleParar(interaction: ChatInputCommandInteraction | ButtonInte
     await interaction.reply({ content: t(l, 'err.guild-only'), ephemeral: true });
     return;
   }
+  const expectedSessionId = interaction.isButton() ? controlSessionId(interaction.customId, STOP_BUTTON_ID) : undefined;
+  if (interaction.isButton() && !expectedSessionId) {
+    await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
+    return;
+  }
+
   const session = sessionManager.get(interaction.guild.id);
+  if (session && expectedSessionId && session.id !== expectedSessionId) {
+    await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
+    return;
+  }
   if (!session) {
+    const starting = sessionManager.startingInfo(interaction.guild.id);
+    const controlsThisStart =
+      !interaction.isButton() || (expectedSessionId !== undefined && starting?.session?.id === expectedSessionId);
+    if (starting && controlsThisStart) {
+      const member = interaction.member as GuildMember | null;
+      const channel = interaction.guild.channels.cache.get(starting.channelId);
+      if (!member || !channel?.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel)) {
+        await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
+        return;
+      }
+      const cancelled = sessionManager.cancelStart(interaction.guild.id);
+      if (cancelled?.session) void cancelled.session.abortStart().catch(() => {});
+      await interaction.reply({ content: t(l, 'record.start-cancelled'), ephemeral: true });
+      return;
+    }
+    if (starting && interaction.isButton()) {
+      await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
+      return;
+    }
+    const stopping = sessionManager.stoppingSession(interaction.guild.id);
+    if (stopping) {
+      if (expectedSessionId && stopping.id !== expectedSessionId) {
+        await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
+        return;
+      }
+      const member = interaction.member as GuildMember | null;
+      await interaction.reply({
+        content: canAnnotate(stopping, member) ? t(l, 'record.stopping') : t(l, 'err.no-recording'),
+        ephemeral: true,
+      });
+      return;
+    }
+    if (interaction.isButton()) {
+      await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
+      return;
+    }
     await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
     return;
   }
   const member = interaction.member as GuildMember | null;
   // Encerrar é destrutivo e irreversível — exige o mesmo acesso do /nota (ver o canal).
   if (!canAnnotate(session, member)) {
-    await interaction.reply({
-      content: t(l, 'err.stop-no-access', { channel: `#${session.voiceChannel.name}` }),
-      ephemeral: true,
-    });
+    await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
     return;
   }
-  await interaction.deferReply({ ephemeral: true });
   const empty = session.participantNames.length === 0;
-  await stopSession(session, 'manual', {
+  // A chamada entra no estado "encerrando" sincronamente, antes do primeiro
+  // await. Dois /parar não podem ambos assumir a mesma sessão.
+  const stopping = stopSession(session, 'manual', {
     id: interaction.user.id,
     name: member?.displayName ?? interaction.user.username,
   });
-  await interaction.editReply(t(l, empty ? 'record.stopped-empty' : 'record.stopped', { url: session.pageUrl }));
+  await interaction.deferReply({ ephemeral: true });
+  try {
+    await stopping;
+    const key = session.meta.audioIncomplete
+      ? 'record.stopped-incomplete'
+      : empty
+        ? 'record.stopped-empty'
+        : 'record.stopped';
+    await interaction.editReply(t(l, key, { url: session.pageUrl }));
+  } catch (err) {
+    console.error(`Erro encerrando ${session.id}:`, err);
+    await interaction.editReply(t(l, 'record.stop-failed', { url: session.pageUrl }));
+  }
+}
+
+/** Permissões mínimas para entrar E avisar visivelmente antes de captar áudio. */
+function recordingChannelReady(channel: VoiceBasedChannel): boolean {
+  const me = channel.guild.members.me;
+  if (!me || !channel.joinable || !channel.isTextBased()) return false;
+  return (
+    channel
+      .permissionsFor(me)
+      ?.has([
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.Connect,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.EmbedLinks,
+        PermissionFlagsBits.ReadMessageHistory,
+      ]) ?? false
+  );
 }
 
 /**
@@ -855,10 +1056,7 @@ async function handleNota(interaction: ChatInputCommandInteraction): Promise<voi
   }
   const member = interaction.member as GuildMember;
   if (!canAnnotate(session, member)) {
-    await interaction.reply({
-      content: t(l, 'note.no-access', { channel: `#${session.voiceChannel.name}` }),
-      ephemeral: true,
-    });
+    await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
     return;
   }
   const offset = formatOffset(session.durationMs);
@@ -869,19 +1067,27 @@ async function handleNota(interaction: ChatInputCommandInteraction): Promise<voi
   await interaction.reply({ content: t(l, added ? 'note.added' : 'note.discarded', { offset }), ephemeral: true });
 }
 
+const markClicks = new MarkClickDeduper();
+
 /** 📌 de um toque: marca o momento SEM modal/digitação — a fricção mata o bookmark. */
 async function handleMarkButton(interaction: ButtonInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
+  const expectedSessionId = controlSessionId(interaction.customId, MARK_BUTTON_ID);
+  if (!expectedSessionId) {
+    await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
+    return;
+  }
   const session = interaction.guild ? sessionManager.get(interaction.guild.id) : undefined;
-  if (!session) {
-    await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
+  if (!session || session.id !== expectedSessionId) {
+    await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
     return;
   }
   if (!canAnnotate(session, interaction.member as GuildMember)) {
-    await interaction.reply({
-      content: t(l, 'note.no-access', { channel: `#${session.voiceChannel.name}` }),
-      ephemeral: true,
-    });
+    await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
+    return;
+  }
+  if (!markClicks.accept(session.id, interaction.user.id)) {
+    await interaction.reply({ content: t(l, 'note.mark-duplicate'), ephemeral: true });
     return;
   }
   const atMs = session.durationMs;
@@ -899,16 +1105,18 @@ async function handleMarkButton(interaction: ButtonInteraction): Promise<void> {
 
 async function handleNoteButton(interaction: ButtonInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
+  const expectedSessionId = controlSessionId(interaction.customId, NOTE_BUTTON_ID);
+  if (!expectedSessionId) {
+    await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
+    return;
+  }
   const session = interaction.guild ? sessionManager.get(interaction.guild.id) : undefined;
-  if (!session) {
-    await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
+  if (!session || session.id !== expectedSessionId) {
+    await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
     return;
   }
   if (!canAnnotate(session, interaction.member as GuildMember)) {
-    await interaction.reply({
-      content: t(l, 'note.no-access', { channel: `#${session.voiceChannel.name}` }),
-      ephemeral: true,
-    });
+    await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
     return;
   }
   const modal = new ModalBuilder()
@@ -937,11 +1145,16 @@ async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<voi
     await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
     return;
   }
+  const member = interaction.member as GuildMember | null;
+  // A permissão pode mudar entre abrir e enviar o modal. Revalida no submit.
+  if (!canAnnotate(session, member)) {
+    await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
+    return;
+  }
   const clickAt = Number(rawAt);
   const atMs = Number.isFinite(clickAt)
     ? Math.min(Math.max(0, Math.trunc(clickAt)), session.durationMs)
     : session.durationMs;
-  const member = interaction.member as GuildMember | null;
   const added = session.addNote(
     (member && 'displayName' in member ? member.displayName : null) ?? interaction.user.username,
     interaction.fields.getTextInputValue(NOTE_INPUT_ID),
@@ -1042,6 +1255,37 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
   await interaction.deferReply({ ephemeral: true });
   const session = sessionManager.get(interaction.guild.id);
   if (!session) {
+    const member = interaction.member as GuildMember | null;
+    const starting = sessionManager.startingInfo(interaction.guild.id);
+    if (starting) {
+      const channel = interaction.guild.channels.cache.get(starting.channelId);
+      const startingSession = starting.session;
+      const canAccess =
+        !!member &&
+        (startingSession
+          ? memberCanAccessRecording(member, startingSession.meta, interaction.guild)
+          : (channel?.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel) ?? false));
+      if (!canAccess) {
+        await interaction.editReply(t(l, 'status.none'));
+      } else {
+        await interaction.editReply(t(l, 'status.starting', { channel: `#${safeName(starting.channelName)}` }));
+      }
+      return;
+    }
+    const stopping = sessionManager.stoppingSession(interaction.guild.id);
+    if (stopping) {
+      await interaction.editReply(
+        member && memberCanAccessRecording(member, stopping.meta, interaction.guild)
+          ? t(l, 'record.stopping')
+          : t(l, 'status.none'),
+      );
+      return;
+    }
+    await interaction.editReply(t(l, 'status.none'));
+    return;
+  }
+  const member = interaction.member as GuildMember | null;
+  if (!member || !memberCanAccessRecording(member, session.meta, interaction.guild)) {
     await interaction.editReply(t(l, 'status.none'));
     return;
   }
@@ -1139,21 +1383,37 @@ async function handleAutorecord(interaction: ChatInputCommandInteraction): Promi
     return;
   }
   const sub = interaction.options.getSubcommand();
-  if (sub !== 'ver') {
-    // configurar gravação automática é decisão de servidor, não de membro
-    const member = interaction.member as GuildMember;
-    if (!member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-      await interaction.reply({ content: t(l, 'autorecord.no-permission'), ephemeral: true });
-      return;
-    }
+  // Regras podem revelar canais privados e controlam gravação sem ação humana:
+  // ligar, desligar E listar exigem Gerenciar Servidor.
+  const member = interaction.member as GuildMember;
+  if (!member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+    await interaction.reply({ content: t(l, 'autorecord.no-permission'), ephemeral: true });
+    return;
   }
   if (sub === 'ligar') {
     const channel = interaction.options.getChannel('canal', true);
+    const voiceChannel = interaction.guild.channels.cache.get(channel.id);
     const minimum = interaction.options.getInteger('minimo') ?? 1;
-    autoRecordStore.set(interaction.guild.id, { channelId: channel.id, minimum, createdBy: interaction.user.id });
-    setArmed(interaction.guild.id, channel.id, true);
+    if (!voiceChannel?.isVoiceBased() || !recordingChannelReady(voiceChannel)) {
+      await interaction.reply({
+        content: t(l, 'err.cannot-record-here', { channel: `#${channel.name}` }),
+        ephemeral: true,
+      });
+      return;
+    }
+    const existed = autoRecordStore.get(interaction.guild.id, voiceChannel.id) !== undefined;
+    autoRecordStore.set(interaction.guild.id, {
+      channelId: voiceChannel.id,
+      minimum,
+      createdBy: interaction.user.id,
+    });
+    const activeHere =
+      sessionManager.get(interaction.guild.id)?.voiceChannel.id === voiceChannel.id ||
+      sessionManager.startingInfo(interaction.guild.id)?.channelId === voiceChannel.id ||
+      sessionManager.stoppingSession(interaction.guild.id)?.voiceChannel.id === voiceChannel.id;
+    setArmed(interaction.guild.id, voiceChannel.id, !activeHere);
     await interaction.reply({
-      content: t(l, 'autorecord.enabled', {
+      content: t(l, existed ? 'autorecord.updated' : 'autorecord.enabled', {
         channel: `#${channel.name}`,
         min: minimum,
         hours: config.maxRecordingHours,
@@ -1236,6 +1496,7 @@ const pendingChecks = new Map<string, NodeJS.Timeout>(); // `${guildId}:${channe
 const AUTO_DEBOUNCE_MS = 2000;
 
 function scheduleAutoRecordCheck(guild: Guild, channelId: string): void {
+  if (shuttingDown) return;
   const key = `${guild.id}:${channelId}`;
   const existing = pendingChecks.get(key);
   if (existing) clearTimeout(existing);
@@ -1249,6 +1510,7 @@ function scheduleAutoRecordCheck(guild: Guild, channelId: string): void {
 }
 
 async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
+  if (shuttingDown) return;
   const channel = guild.channels.cache.get(channelId);
   if (!channel || !channel.isVoiceBased()) return;
   const humans = channel.members.filter((m) => !m.user.bot).size;
@@ -1262,7 +1524,7 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
   if (session && session.currentChannelId === channelId) {
     const belowMinimum = session.auto && rule && humans < rule.minimum;
     if (humans === 0 || belowMinimum) {
-      await stopSession(session, 'canal-vazio');
+      await stopSession(session, humans === 0 ? 'canal-vazio' : 'abaixo-minimo');
     }
     return;
   }
@@ -1278,11 +1540,51 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
       // rearma para tentar de novo no próximo movimento do canal
       setArmed(guild.id, channelId, true);
       console.error(`Auto-record falhou em #${channel.name}:`, err);
+      void alertOwners(
+        `autorecord-start:${guild.id}:${channelId}`,
+        `O auto-record não conseguiu iniciar em **#${safeName(channel.name)}** (${safeName(guild.name)}): ${shortError((err as Error).message, locale)}`,
+      );
     }
   }
 }
 
 // ---------- eventos do Discord ----------
+
+async function repairRecoveredSurfaces(): Promise<void> {
+  // Crash pode deixar o apelido [GRAVANDO] preso. Remove apenas o prefixo
+  // conhecido; não inventa qual era o apelido anterior.
+  const recoveredGuilds = new Set(recoveredRecordings.map((meta) => meta.guildId));
+  for (const guild of client.guilds.cache.values()) {
+    if (!recoveredGuilds.has(guild.id)) continue;
+    const me = guild.members.me;
+    const nick = me?.nickname;
+    const clean = nick?.replace(/^(?:\[GRAVANDO\]|\[RECORDING\])\s*/u, '');
+    if (me && nick && clean !== nick) await me.setNickname(clean || null).catch(() => {});
+  }
+
+  // Sessões criadas nesta versão persistem a mensagem do painel. Depois de um
+  // crash, neutraliza o painel vermelho e remove todos os controles antigos.
+  for (const meta of recoveredRecordings) {
+    if (!meta.panelChannelId || !meta.panelMessageId) continue;
+    try {
+      const channel = await client.channels.fetch(meta.panelChannelId);
+      const sameGuild = channel && 'guildId' in channel && channel.guildId === meta.guildId;
+      if (!sameGuild || !channel || !('messages' in channel)) continue;
+      const message = await channel.messages.fetch(meta.panelMessageId);
+      const l: Locale = meta.locale === 'en' ? 'en' : meta.locale === 'pt' ? 'pt' : config.defaultLocale;
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setLabel(t(l, 'panel.btn-page')).setStyle(ButtonStyle.Link).setURL(pageUrl(meta.id)),
+      );
+      await message.edit({
+        content: t(l, 'panel.recovered-after-restart', { url: pageUrl(meta.id) }),
+        embeds: [],
+        components: [row],
+      });
+    } catch (err) {
+      console.warn(`Não consegui neutralizar painel recuperado de ${meta.id}:`, (err as Error).message);
+    }
+  }
+}
 
 client.once(Events.ClientReady, async () => {
   // Marca ANTES de qualquer await: a partir daqui os caches de guild/canal são
@@ -1290,6 +1592,7 @@ client.once(Events.ClientReady, async () => {
   markClientReady();
   startMonitor(); // alertas por DM ao dono (disco, etc.)
   console.log(`Kassinão online como ${client.user?.tag} 🎙️`);
+  await repairRecoveredSurfaces();
   await registerCommands().catch((err) => console.error('Falha ao registrar comandos:', err));
   // canais que já estavam cheios quando o bot subiu disparam o auto-record
   for (const guild of client.guilds.cache.values()) {
@@ -1311,7 +1614,11 @@ client.once(Events.ClientReady, async () => {
     } else if (st === 'partial' && tries < MAX_TRANSCRIPTION_ATTEMPTS) {
       // rodada agendada morreu com o reinício — retoma só as faixas que faltam
       enqueueTranscription(meta.id, (m) => notifyTranscription(m, loc));
-    } else if (st === 'error' && tries < MAX_TRANSCRIPTION_ATTEMPTS && recent) {
+    } else if (
+      st === 'error' &&
+      tries < MAX_TRANSCRIPTION_ATTEMPTS &&
+      (meta.transcription?.retryScheduled === true || recent)
+    ) {
       // erro com tentativas sobrando (ex.: 429 em cadeia + deploy no meio):
       // sem isso a gravação ficaria em erro pra sempre, em silêncio
       enqueueTranscription(meta.id, (m) => notifyTranscription(m, loc));
@@ -1332,6 +1639,9 @@ client.once(Events.ClientReady, async () => {
         // metas antigas do upgrade não têm notifiedAt e JÁ foram avisadas — não spamear)
         void notifyTranscription(meta, loc);
       }
+    }
+    if (meta.minutes?.status === 'done' && !meta.webhookSentAt) {
+      void deliverMinutesWebhookIfNeeded(meta);
     }
   }
 });
@@ -1374,11 +1684,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await handleSobre(interaction);
           break;
       }
-    } else if (interaction.isButton() && interaction.customId === STOP_BUTTON_ID) {
+    } else if (
+      interaction.isButton() &&
+      (interaction.customId === STOP_BUTTON_ID || interaction.customId.startsWith(`${STOP_BUTTON_ID}:`))
+    ) {
       await handleParar(interaction);
-    } else if (interaction.isButton() && interaction.customId === NOTE_BUTTON_ID) {
+    } else if (
+      interaction.isButton() &&
+      (interaction.customId === NOTE_BUTTON_ID || interaction.customId.startsWith(`${NOTE_BUTTON_ID}:`))
+    ) {
       await handleNoteButton(interaction);
-    } else if (interaction.isButton() && interaction.customId === MARK_BUTTON_ID) {
+    } else if (
+      interaction.isButton() &&
+      (interaction.customId === MARK_BUTTON_ID || interaction.customId.startsWith(`${MARK_BUTTON_ID}:`))
+    ) {
       await handleMarkButton(interaction);
     } else if (interaction.isButton() && interaction.customId.startsWith(`${HELP_BUTTON_PREFIX}:`)) {
       await handleHelpButton(interaction);
@@ -1467,6 +1786,20 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   // Presença na gravação ativa: entrar/sair do canal gravado vira registro no
   // meta (acesso à gravação) + evento na linha do tempo — mesmo sem desmutar.
   const session = sessionManager.get(guild.id);
+  // Mover o bot não pode trocar silenciosamente a fonte de áudio mantendo
+  // metadados/ACL do canal antigo. Mudança para outro canal encerra na hora;
+  // desconexão para `null` mantém a janela de recuperação de 5 s da sessão.
+  if (
+    session &&
+    newState.id === guild.members.me?.id &&
+    oldState.channelId === session.voiceChannel.id &&
+    newState.channelId !== null &&
+    newState.channelId !== session.voiceChannel.id
+  ) {
+    void stopSession(session, 'canal-alterado').catch((err) =>
+      console.error(`Erro encerrando ${session.id} após mudança de canal:`, err),
+    );
+  }
   if (session && newState.member && !newState.member.user.bot) {
     const recordedChannel = session.currentChannelId;
     const name = newState.member.displayName;
@@ -1504,16 +1837,22 @@ client.on(Events.GuildMemberRemove, (member) => {
 
 // ---------- shutdown gracioso ----------
 
-let shuttingDown = false;
 async function gracefulShutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`Recebido ${signal}: encerrando gravações ativas antes de sair...`);
   killPendingTranscriptions();
+  for (const timeout of pendingChecks.values()) clearTimeout(timeout);
+  pendingChecks.clear();
+  const starts = sessionManager.cancelAllStarts();
+  await Promise.all(starts.map((s) => s.abortStart().catch((err) => console.error(`Erro abortando ${s.id}:`, err))));
   const actives = sessionManager.all();
+  const alreadyStopping = sessionManager.allStopping();
   await Promise.all(
     // 'reinicio' e não 'desconectado': a timeline conta a história certa pro usuário
-    actives.map((s) => stopSession(s, 'reinicio').catch((err) => console.error(`Erro ao encerrar ${s.id}:`, err))),
+    [...actives.map((s) => stopSession(s, 'reinicio')), ...alreadyStopping.map((s) => s.stop('reinicio'))].map((p) =>
+      p.catch((err) => console.error('Erro ao encerrar sessão no shutdown:', err)),
+    ),
   );
   try {
     client.destroy();
@@ -1536,7 +1875,7 @@ if (transcribeConfigError) {
   process.exit(1);
 }
 
-recoverInterruptedRecordings();
+recoveredRecordings = recoverInterruptedRecordings();
 startWebServer();
 startCleanupJob();
 client.login(config.token).catch((err) => {

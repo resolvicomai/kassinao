@@ -9,7 +9,7 @@ import {
   listMetas,
   deleteRecording,
   saveMeta,
-  RecordingMeta,
+  transcriptionNeedsAudio,
 } from './store';
 import { hasActiveDownloads } from './web/tracker';
 
@@ -19,10 +19,7 @@ import { hasActiveDownloads } from './web/tracker';
  * memória (isTranscribing=false), mas `retryScheduled` fica persistido no meta.json;
  * pending/running cobrem uma queda antes do recovery de boot re-enfileirar.
  */
-export function transcriptionBlocksAudioTrim(meta: RecordingMeta): boolean {
-  const s = meta.transcription?.status;
-  return meta.transcription?.retryScheduled === true || s === 'pending' || s === 'running';
-}
+export const transcriptionBlocksAudioTrim = transcriptionNeedsAudio;
 
 /** Apaga gravações expiradas e diretórios órfãos. Roda a cada hora. */
 export function startCleanupJob(): void {
@@ -52,10 +49,18 @@ export function startCleanupJob(): void {
         }
 
         if (textExpiresAt && textExpiresAt < now) {
-          deleteRecording(meta.id);
-          forgetAudioBytes(meta.id);
-          removed++;
-          continue;
+          if (transcriptionBlocksAudioTrim(meta)) {
+            // O bot pode ter ficado desligado além da retenção. Não apaga tudo
+            // antes de o recovery reler o áudio; concede a mesma carência de 7
+            // dias usada na migração de metas antigas.
+            meta.textExpiresAt = now + 7 * 24 * 60 * 60 * 1000;
+            saveMeta(meta);
+          } else {
+            deleteRecording(meta.id);
+            forgetAudioBytes(meta.id);
+            removed++;
+            continue;
+          }
         }
       }
       // Não trimar o áudio enquanto a transcrição ainda vai reler as faixas (ver a função).

@@ -21,6 +21,7 @@ import {
   readMinutes,
   readTranscript,
   RecordingMeta,
+  transcriptionNeedsAudio,
   transcriptReady,
 } from '../store';
 import { checkAccess } from './access';
@@ -738,7 +739,7 @@ export function startWebServer(): void {
         .send(messagePage(MSG.freeLiveTitle[l], MSG.freeLive[l], user, l));
       return;
     }
-    if (hasActiveDownloads(meta.id) || isTranscribing(meta.id)) {
+    if (hasActiveDownloads(meta.id) || isTranscribing(meta.id) || transcriptionNeedsAudio(meta)) {
       res
         .status(409)
         .type('html')

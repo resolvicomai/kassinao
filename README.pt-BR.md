@@ -87,10 +87,10 @@ Depois **convide o bot** (passo 1) e rode **`/gravar`** num canal de voz. Pronto
 5. **OAuth2 → Redirects** → adicione `SUA_BASE_URL/auth/callback` (ex.: `https://kassinao.seu-dominio.com/auth/callback`). Sem isso, o login da página falha.
 6. Convide o bot (troque `SEU_APP_ID`):
    ```
-   https://discord.com/oauth2/authorize?client_id=SEU_APP_ID&scope=bot%20applications.commands&permissions=68176896
+   https://discord.com/oauth2/authorize?client_id=SEU_APP_ID&scope=bot%20applications.commands&permissions=68242432
    ```
-   Permissões: Ver Canais, Enviar Mensagens, Inserir Links, Conectar, Alterar Apelido.
-   > Em canais **restritos**, libere o bot no próprio canal (Ver Canal + Conectar), ou dê a ele um cargo com acesso.
+   Permissões: Ver Canais, Enviar Mensagens, Inserir Links, Ler Histórico de Mensagens, Conectar, Alterar Apelido.
+   > Em canais **restritos**, libere no próprio canal todas as permissões acima, ou dê ao bot um cargo com esse acesso.
 
 ### 2. Deixar o bot acessível (escolha um)
 
@@ -216,7 +216,7 @@ No Docker, construa com Python + faster-whisper na imagem: `docker compose build
 | `/ajuda` | `/help` | Guia interativo (também responde por DM) |
 | `/sobre` | `/about` | Autor, licença e link do código-fonte |
 
-Qualquer membro grava e para. `/autorecord` e `/config` exigem **Gerenciar Servidor**. Apagar uma gravação (pela página) é restrito a quem iniciou ou a admins. `/mcp` só existe quando o conector está ligado (`MCP_SECRET` definido).
+Qualquer membro pode iniciar uma gravação no canal em que está; quem tem **Gerenciar Servidor** também pode indicar outro canal que enxergue. Parar e anotar exige continuar enxergando o canal gravado; `/autorecord` e `/config` exigem **Gerenciar Servidor**. Apagar uma gravação (pela página) é restrito a quem iniciou ou a admins. `/mcp` só existe quando o conector está ligado (`MCP_SECRET` definido).
 
 ### Motores de transcrição
 

@@ -29,6 +29,34 @@ const STRINGS: Strings = {
     pt: '⚠️ Já estou gravando **{channel}** neste servidor. Use `/parar` para encerrar primeiro.',
     en: '⚠️ I am already recording **{channel}** in this server. Use `/stop` to end it first.',
   },
+  'err.recording-starting': {
+    pt: '⏳ Já estou iniciando uma gravação em **{channel}**. Não criei outra.',
+    en: '⏳ I am already starting a recording in **{channel}**. I did not create another one.',
+  },
+  'err.recording-stopping': {
+    pt: '⏳ A gravação anterior ainda está sendo encerrada. Espere a confirmação antes de começar outra.',
+    en: '⏳ The previous recording is still stopping. Wait for confirmation before starting another one.',
+  },
+  'err.recording-busy': {
+    pt: '⚠️ O gravador deste servidor já está ocupado. Não criei outra gravação.',
+    en: '⚠️ This server recorder is already busy. I did not create another recording.',
+  },
+  'err.record-no-access': {
+    pt: '🔒 Você não pode iniciar uma gravação em **{channel}** porque não enxerga esse canal.',
+    en: '🔒 You cannot start a recording in **{channel}** because you cannot see that channel.',
+  },
+  'err.must-join-target': {
+    pt: '🎧 Para gravar **{channel}**, entre nesse canal primeiro. Só quem gerencia o servidor pode iniciar uma gravação remotamente.',
+    en: '🎧 Join **{channel}** before recording it. Only people who manage the server can start a recording remotely.',
+  },
+  'err.cannot-record-here': {
+    pt: '🔒 Não consigo gravar em **{channel}** com aviso visível e recuperável. Preciso de Ver Canal, Conectar, Enviar Mensagens, Inserir Links e Ler Histórico de Mensagens.',
+    en: '🔒 I cannot record in **{channel}** with a visible, recoverable notice. I need View Channel, Connect, Send Messages, Embed Links, and Read Message History.',
+  },
+  'err.stale-control': {
+    pt: '⌛ Esse botão pertence a uma gravação antiga e não controla a call atual.',
+    en: '⌛ This button belongs to an older recording and cannot control the current call.',
+  },
   'err.cannot-join': {
     pt: '🔒 Não tenho permissão para entrar em **{channel}** (preciso de Ver canal + Conectar).',
     en: '🔒 I do not have permission to join **{channel}** (I need View Channel + Connect).',
@@ -64,6 +92,26 @@ const STRINGS: Strings = {
     pt: '⏹️ Encerrei, mas ninguém falou nessa — então não vou gerar transcrição nem ata. Se foi engano, é só gravar de novo. 🙂',
     en: "⏹️ Stopped, but nobody spoke — so there's no transcript or minutes to generate. If that was a mistake, just record again. 🙂",
   },
+  'record.stopped-incomplete': {
+    pt: '⚠️ Encerrei, mas pelo menos uma faixa não fechou limpa. Preservei o áudio recuperável e sinalizei a gravação aqui: {url}',
+    en: '⚠️ Stopped, but at least one track did not close cleanly. I preserved recoverable audio and flagged the recording here: {url}',
+  },
+  'record.start-cancelled': {
+    pt: '🛑 Cancelei a inicialização. Nenhum áudio foi gravado.',
+    en: '🛑 I cancelled startup. No audio was recorded.',
+  },
+  'record.stopping': {
+    pt: '⏳ Essa gravação já está sendo encerrada. Não vou finalizar duas vezes.',
+    en: '⏳ This recording is already stopping. I will not finalize it twice.',
+  },
+  'record.stop-failed': {
+    pt: '⚠️ A captura parou, mas houve uma falha ao fechar todos os arquivos. Preservei o que consegui aqui: {url}',
+    en: '⚠️ Capture stopped, but some files failed to close cleanly. I preserved what I could here: {url}',
+  },
+  'record.stopped-link-incomplete': {
+    pt: '⚠️ Gravação encerrada após **{duration}**, mas uma faixa pode estar parcial. Preservei o que foi possível: {url}',
+    en: '⚠️ Recording stopped after **{duration}**, but one track may be partial. I preserved what was recoverable: {url}',
+  },
 
   // painel
   'panel.title-recording': { pt: '🔴 Gravando • {channel}', en: '🔴 Recording • {channel}' },
@@ -80,6 +128,10 @@ const STRINGS: Strings = {
   'panel.greeting-done-empty': {
     pt: '⏹️ **Gravação encerrada.** Ninguém falou, então não há transcrição nem ata — só gravar de novo quando quiser. 🙂',
     en: "⏹️ **Recording finished.** Nobody spoke, so there's no transcript or minutes — just record again anytime. 🙂",
+  },
+  'panel.greeting-done-incomplete': {
+    pt: '⚠️ **Gravação encerrada com áudio parcial.** Pelo menos uma faixa não fechou limpa; preservei o que foi possível na página.',
+    en: '⚠️ **Recording finished with partial audio.** At least one track did not close cleanly; I preserved what was recoverable on the page.',
   },
   'panel.by-user': { pt: 'a pedido de {user}', en: 'requested by {user}' },
   'panel.by-auto': { pt: 'automaticamente (auto-record)', en: 'automatically (auto-record)' },
@@ -104,6 +156,10 @@ const STRINGS: Strings = {
   'panel.btn-mark': { pt: 'Marcar momento', en: 'Mark moment' },
   'panel.btn-page': { pt: 'Página da gravação', en: 'Recording page' },
   'panel.footer': { pt: 'Kassinão 🎙️', en: 'Kassinão 🎙️' },
+  'panel.recovered-after-restart': {
+    pt: '⏹️ **A gravação foi encerrada por um reinício do bot.** Removi os controles antigos para eles não afetarem outra call.\n📥 {url}',
+    en: '⏹️ **The recording was stopped by a bot restart.** I removed the old controls so they cannot affect another call.\n📥 {url}',
+  },
 
   // DM para quem iniciou
   'dm.title-start': { pt: '🔴 Gravação iniciada', en: '🔴 Recording started' },
@@ -128,6 +184,10 @@ const STRINGS: Strings = {
     pt: 'Fechei a gravação de **{channel}** — mas ninguém falou, então não gerei transcrição nem ata. Se foi engano, é só gravar de novo. 🙂',
     en: "I wrapped up the **{channel}** recording — but nobody spoke, so I didn't generate a transcript or minutes. If that was a mistake, just record again. 🙂",
   },
+  'dm.desc-stop-incomplete': {
+    pt: 'Fechei a gravação de **{channel}**, mas pelo menos uma faixa ficou incompleta. Preservei o que deu e sinalizei o problema aqui: {url}',
+    en: 'I closed the **{channel}** recording, but at least one track is incomplete. I preserved what I could and flagged the problem here: {url}',
+  },
 
   // notas
   'note.modal-title': { pt: 'Adicionar nota à gravação', en: 'Add a note to the recording' },
@@ -145,6 +205,10 @@ const STRINGS: Strings = {
   'note.marked': {
     pt: '📌 Momento **{offset}** marcado! Ele vira um marcador na página e entra na ata.',
     en: '📌 Moment **{offset}** marked! It becomes a marker on the page and goes into the minutes.',
+  },
+  'note.mark-duplicate': {
+    pt: '📌 Esse clique já entrou. Ignorei a repetição para não criar dois marcadores iguais.',
+    en: '📌 That click was already recorded. I ignored the repeat to avoid duplicate markers.',
   },
 
   // /config (por servidor)
@@ -209,9 +273,17 @@ const STRINGS: Strings = {
     pt: '⏹️ Canal esvaziou — gravação encerrada',
     en: '⏹️ Channel became empty — recording stopped',
   },
+  'event.stopped-abaixo-minimo': {
+    pt: '⏹️ O canal ficou abaixo do mínimo do auto-record — gravação encerrada',
+    en: '⏹️ The channel dropped below the auto-record minimum — recording stopped',
+  },
   'event.stopped-desconectado': {
     pt: '⏹️ Fui desconectado do canal — gravação encerrada',
     en: '⏹️ I was disconnected — recording stopped',
+  },
+  'event.stopped-canal-alterado': {
+    pt: '⏹️ Fui movido para outro canal — encerrei para não misturar áudio e permissões',
+    en: '⏹️ I was moved to another channel — stopped to avoid mixing audio and permissions',
   },
   'event.stopped-reinicio': { pt: '⏹️ Encerrada por reinício do bot', en: '⏹️ Stopped due to bot restart' },
   'event.stopped-disco-cheio': {
@@ -221,6 +293,10 @@ const STRINGS: Strings = {
   'event.track-cap': {
     pt: '⚠️ Limite de {max} faixas atingido — novos falantes não estão sendo gravados nesta sessão',
     en: '⚠️ {max}-track limit reached — new speakers are not being recorded in this session',
+  },
+  'event.audio-incomplete': {
+    pt: '⚠️ Pelo menos uma faixa de áudio não fechou limpa e pode estar parcial',
+    en: '⚠️ At least one audio track did not close cleanly and may be partial',
   },
   'event.no-nickname': {
     pt: '⚠️ Sem permissão "Alterar apelido" — gravando sem o indicador [GRAVANDO]',
@@ -357,6 +433,14 @@ const STRINGS: Strings = {
     pt: '💤 Nenhuma gravação rolando agora. Entre num canal de voz e use **/gravar** pra começar.',
     en: '💤 No recording right now. Join a voice channel and use **/record** to start.',
   },
+  'status.hidden': {
+    pt: '💤 Nenhuma gravação que você possa acompanhar está rolando agora.',
+    en: '💤 No recording you can follow is running right now.',
+  },
+  'status.starting': {
+    pt: '⏳ Estou preparando a gravação em **{channel}**. O áudio só começa depois que o aviso aparecer no canal.',
+    en: '⏳ I am preparing the recording in **{channel}**. Audio starts only after the notice appears in the channel.',
+  },
   'status.recording': {
     pt: '🔴 Gravando **{channel}** há **{duration}**\n👥 {inRoom} na sala · 🎙️ {spoke} já falaram · 📝 {notes} nota(s)\n▶️ Iniciada por **{starter}**\n📥 {url}',
     en: '🔴 Recording **{channel}** for **{duration}**\n👥 {inRoom} in the room · 🎙️ {spoke} spoke · 📝 {notes} note(s)\n▶️ Started by **{starter}**\n📥 {url}',
@@ -389,8 +473,12 @@ const STRINGS: Strings = {
     en: 'You need the **Manage Server** permission to configure auto-record.',
   },
   'autorecord.enabled': {
-    pt: '✅ Auto-record ligado em **{channel}**: começo quando **{min}+** pessoa(s) entram e paro quando esvazia. Se passar de {hours}h, encerro e recomeço automaticamente pra cobrir o resto.',
-    en: '✅ Auto-record enabled in **{channel}**: I start when **{min}+** person(s) join and stop when it empties. Past {hours}h I stop and start again automatically to cover the rest.',
+    pt: '✅ Auto-record ligado em **{channel}**: começo com **{min}+** pessoa(s) e paro quando ficar abaixo desse mínimo. Se passar de {hours}h, encerro e recomeço automaticamente pra cobrir o resto.',
+    en: '✅ Auto-record enabled in **{channel}**: I start with **{min}+** person(s) and stop when it drops below that minimum. Past {hours}h I stop and restart automatically to cover the rest.',
+  },
+  'autorecord.updated': {
+    pt: '✅ Regra de auto-record atualizada em **{channel}**: agora o mínimo é **{min}**. Uma gravação já ativa não será reiniciada por esta alteração.',
+    en: '✅ Auto-record rule updated in **{channel}**: the minimum is now **{min}**. An active recording will not be restarted by this change.',
   },
   'autorecord.disabled': {
     pt: '🛑 Auto-record desligado em **{channel}**.',
