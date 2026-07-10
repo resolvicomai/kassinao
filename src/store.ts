@@ -250,13 +250,18 @@ export interface SearchTranscriptRead {
 /** Leitura usada por busca/RAG: arquivo fora do teto fica para a ata estruturada. */
 export function readTranscriptForSearch(id: string, maxBytes: number): SearchTranscriptRead | undefined {
   if (!VALID_ID.test(id) || !Number.isFinite(maxBytes) || maxBytes <= 0) return undefined;
+  let descriptor: number | undefined;
   try {
-    const file = transcriptPath(id);
-    const bytes = fs.statSync(file).size;
+    descriptor = fs.openSync(transcriptPath(id), 'r');
+    if (fs.fstatSync(descriptor).size > maxBytes) return undefined;
+    const raw = fs.readFileSync(descriptor, 'utf8');
+    const bytes = Buffer.byteLength(raw, 'utf8');
     if (bytes > maxBytes) return undefined;
-    return { segments: JSON.parse(fs.readFileSync(file, 'utf8')) as TranscriptSegment[], bytes };
+    return { segments: JSON.parse(raw) as TranscriptSegment[], bytes };
   } catch {
     return undefined;
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
 }
 

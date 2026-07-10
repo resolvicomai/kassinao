@@ -1003,7 +1003,7 @@ function safeEvidenceForDiscord(value: string): string {
     )
     .replace(/[<>]/g, (character) => (character === '<' ? '‹' : '›'))
     .replace(/@(everyone|here)/gi, '@\u200b$1');
-  return escapeMarkdown(withoutLinks).replace(/[[\]()]/g, '\\$&');
+  return escapeMarkdown(withoutLinks, { maskedLink: true });
 }
 
 /**

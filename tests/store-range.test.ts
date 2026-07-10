@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { deleteRecording, listGuildMetasInRange, RecordingMeta, saveMeta } from '../src/store';
+import {
+  deleteRecording,
+  listGuildMetasInRange,
+  readTranscriptForSearch,
+  RecordingMeta,
+  saveMeta,
+  saveTranscript,
+} from '../src/store';
 
 const created: string[] = [];
 
@@ -81,5 +88,14 @@ describe('listGuildMetasInRange', () => {
       Date.parse('2026-07-11T00:00:00Z'),
     );
     expect(result.map((item) => item.id)).toContain('2026-07-09-crossed-midnight');
+  });
+
+  it('mede e lê a mesma versão da transcrição dentro do teto', () => {
+    const value = meta('2026-07-09-transcript-bound', '2026-07-09T12:00:00Z');
+    saveTranscript(value.id, [{ startMs: 0, endMs: 1_000, speaker: 'Ana', text: 'Projeto Zéfiro' }]);
+    const result = readTranscriptForSearch(value.id, 1_024);
+    expect(result?.segments[0].text).toBe('Projeto Zéfiro');
+    expect(result?.bytes).toBeGreaterThan(0);
+    expect(readTranscriptForSearch(value.id, (result?.bytes ?? 1) - 1)).toBeUndefined();
   });
 });
