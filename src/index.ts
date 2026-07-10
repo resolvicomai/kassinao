@@ -33,7 +33,7 @@ import {
 } from 'discord.js';
 import { config } from './config';
 import { answerQuestion, authorizeAskMetas, resolveAskTemporalIntent } from './ask';
-import { AskLimiter } from './askLimiter';
+import { AskLimiter, AskRateLimitError } from './askLimiter';
 import { guildConfigStore } from './guildConfig';
 import { minutesEnabled } from './processing/minutes';
 import { allowMinutesBroadcast, safeSlice, shortError } from './util';
@@ -76,6 +76,7 @@ import { safeName } from './sanitize';
 import {
   audioExpiryOf,
   listGuildMetas,
+  listGuildMetasInRange,
   listMetas,
   pageUrl,
   readMeta,
@@ -738,11 +739,17 @@ async function handleConfig(interaction: ChatInputCommandInteraction): Promise<v
 
 /** Teto de concorrência e custo por processo (o bot roda em uma única instância). */
 const MAX_CONCURRENT_ASKS = 2;
+const MAX_ASK_ATTEMPTS_PER_HOUR = 30;
+const MAX_ASK_ATTEMPTS_PER_HOUR_GUILD = 120;
 const MAX_ASKS_PER_HOUR = 10;
+const MAX_ASKS_PER_HOUR_GUILD = 30;
 const MAX_ASKS_PER_HOUR_GLOBAL = 60;
 const askLimiter = new AskLimiter({
   maxConcurrent: MAX_CONCURRENT_ASKS,
+  maxAttemptsPerUser: MAX_ASK_ATTEMPTS_PER_HOUR,
+  maxAttemptsPerGuild: MAX_ASK_ATTEMPTS_PER_HOUR_GUILD,
   maxPerUser: MAX_ASKS_PER_HOUR,
+  maxPerGuild: MAX_ASKS_PER_HOUR_GUILD,
   maxGlobal: MAX_ASKS_PER_HOUR_GLOBAL,
   windowMs: 60 * 60 * 1000,
 });
@@ -759,7 +766,7 @@ async function handlePerguntar(interaction: ChatInputCommandInteraction): Promis
   }
   const question = interaction.options.getString('pergunta', true);
   const days = interaction.options.getInteger('dias') ?? 30;
-  const admission = askLimiter.acquire(interaction.user.id);
+  const admission = askLimiter.reserve(interaction.user.id, interaction.guild.id);
   if (admission !== 'accepted') {
     const key = admission.startsWith('rate-') ? 'ask.rate-limit' : 'ask.busy';
     await interaction.reply({ content: t(l, key), ephemeral: true });
@@ -774,9 +781,8 @@ async function handlePerguntar(interaction: ChatInputCommandInteraction): Promis
     const range = temporal.range ?? resolveRange({ last: `${days}d` }, nowMs, config.timezone);
     // MESMA regra de acesso da web: só reuniões que essa pessoa pode abrir
     // A data escrita na pergunta vence a opção `dias`; sem data, vale a janela do comando.
-    const candidates = listGuildMetas(interaction.guild.id, Number.MAX_SAFE_INTEGER)
+    const candidates = listGuildMetasInRange(interaction.guild.id, range.fromMs, range.toMs)
       .filter((m) => m.status === 'done')
-      .filter((m) => m.startedAt >= range.fromMs && m.startedAt < range.toMs)
       .filter((m) => transcriptReady(m));
     const authorized = authorizeAskMetas(candidates, (meta) =>
       memberCanAccessRecording(member, meta, interaction.guild!),
@@ -792,6 +798,10 @@ async function handlePerguntar(interaction: ChatInputCommandInteraction): Promis
       timezone: config.timezone,
       fallbackRange: range,
       fallbackPeriodLabel: period,
+      beforeLlm: () => {
+        const charge = askLimiter.charge(interaction.user.id, interaction.guild!.id);
+        if (charge !== 'accepted') throw new AskRateLimitError(charge);
+      },
     });
     if (!result.answer) {
       await interaction.editReply(t(l, 'ask.no-evidence'));
@@ -802,6 +812,10 @@ async function handlePerguntar(interaction: ChatInputCommandInteraction): Promis
     );
     await interaction.editReply(`${result.answer}\n\n${t(l, 'ask.footer', { n: result.meetingsUsed, period })}`);
   } catch (err) {
+    if (err instanceof AskRateLimitError) {
+      await interaction.editReply(t(l, 'ask.rate-limit')).catch(() => {});
+      return;
+    }
     console.error('Erro no /perguntar:', err);
     await interaction.editReply(t(l, 'ask.error', { error: shortError((err as Error).message, l) })).catch(() => {});
   } finally {

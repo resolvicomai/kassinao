@@ -25,7 +25,7 @@ import { freeMB } from '../disk';
 import { Locale, t } from '../i18n';
 import { alertOwners } from '../monitor';
 import { safeName } from '../sanitize';
-import { pageUrl, RecordingMeta, saveMeta, tracksDir } from '../store';
+import { deleteRecording, pageUrl, RecordingMeta, saveMeta, tracksDir } from '../store';
 import { safeSlice } from '../util';
 import { UserTrack } from './UserTrack';
 
@@ -288,7 +288,7 @@ export class RecordingSession {
       // painel já removido/sem permissão
     }
     this.panelMessage = undefined;
-    fs.rmSync(path.dirname(tracksDir(this.id)), { recursive: true, force: true });
+    deleteRecording(this.id);
   }
 
   // ---------- presença (quem está na call, falando ou não) ----------

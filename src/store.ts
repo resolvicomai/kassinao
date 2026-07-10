@@ -153,6 +153,50 @@ function metaPath(id: string): string {
 }
 
 const VALID_ID = /^[a-zA-Z0-9-]+$/;
+let metaCache: Map<string, RecordingMeta> | undefined;
+let guildMetaIds: Map<string, Set<string>> | undefined;
+
+function cloneMeta(meta: RecordingMeta): RecordingMeta {
+  return structuredClone(meta);
+}
+
+function cacheMeta(meta: RecordingMeta): void {
+  if (!metaCache || !guildMetaIds) return;
+  const previous = metaCache.get(meta.id);
+  if (previous && previous.guildId !== meta.guildId) guildMetaIds.get(previous.guildId)?.delete(meta.id);
+  metaCache.set(meta.id, cloneMeta(meta));
+  const ids = guildMetaIds.get(meta.guildId) ?? new Set<string>();
+  ids.add(meta.id);
+  guildMetaIds.set(meta.guildId, ids);
+}
+
+function ensureMetaCache(): void {
+  if (metaCache && guildMetaIds) return;
+  const cache = new Map<string, RecordingMeta>();
+  const byGuild = new Map<string, Set<string>>();
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = fs.readdirSync(config.recordingsDir, { withFileTypes: true });
+  } catch {
+    // Diretório ainda inexistente = arquivo vazio; saveMeta o criará depois.
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !VALID_ID.test(entry.name)) continue;
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaPath(entry.name), 'utf8')) as RecordingMeta;
+      if (meta.id !== entry.name || !VALID_ID.test(meta.id)) continue;
+      meta.notes ??= [];
+      cache.set(meta.id, meta);
+      const ids = byGuild.get(meta.guildId) ?? new Set<string>();
+      ids.add(meta.id);
+      byGuild.set(meta.guildId, ids);
+    } catch {
+      // Diretório incompleto/corrompido não entra no índice.
+    }
+  }
+  metaCache = cache;
+  guildMetaIds = byGuild;
+}
 
 // Fail-closed: os writes recebem ids gerados pelo servidor, então um id fora do
 // padrão é bug/ataque (path traversal) — barramos antes de tocar o filesystem.
@@ -167,10 +211,15 @@ export function saveMeta(meta: RecordingMeta): void {
   const tmp = metaPath(meta.id) + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(meta, null, 2));
   fs.renameSync(tmp, metaPath(meta.id));
+  cacheMeta(meta);
 }
 
 export function readMeta(id: string): RecordingMeta | undefined {
   if (!VALID_ID.test(id)) return undefined;
+  if (metaCache) {
+    const cached = metaCache.get(id);
+    return cached ? cloneMeta(cached) : undefined;
+  }
   try {
     const meta = JSON.parse(fs.readFileSync(metaPath(id), 'utf8')) as RecordingMeta;
     meta.notes ??= []; // gravações de versões antigas
@@ -188,6 +237,24 @@ export function readTranscript(id: string): TranscriptSegment[] | undefined {
   if (!VALID_ID.test(id)) return undefined;
   try {
     return JSON.parse(fs.readFileSync(transcriptPath(id), 'utf8')) as TranscriptSegment[];
+  } catch {
+    return undefined;
+  }
+}
+
+export interface SearchTranscriptRead {
+  segments: TranscriptSegment[];
+  bytes: number;
+}
+
+/** Leitura usada por busca/RAG: arquivo fora do teto fica para a ata estruturada. */
+export function readTranscriptForSearch(id: string, maxBytes: number): SearchTranscriptRead | undefined {
+  if (!VALID_ID.test(id) || !Number.isFinite(maxBytes) || maxBytes <= 0) return undefined;
+  try {
+    const file = transcriptPath(id);
+    const bytes = fs.statSync(file).size;
+    if (bytes > maxBytes) return undefined;
+    return { segments: JSON.parse(fs.readFileSync(file, 'utf8')) as TranscriptSegment[], bytes };
   } catch {
     return undefined;
   }
@@ -223,22 +290,14 @@ export function saveMinutes(id: string, minutes: MeetingMinutes): void {
 export function deleteRecording(id: string): void {
   if (!VALID_ID.test(id)) return;
   fs.rmSync(recordingDir(id), { recursive: true, force: true });
+  const previous = metaCache?.get(id);
+  if (previous) guildMetaIds?.get(previous.guildId)?.delete(id);
+  metaCache?.delete(id);
 }
 
 export function listMetas(): RecordingMeta[] {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(config.recordingsDir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const metas: RecordingMeta[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const meta = readMeta(entry.name);
-    if (meta) metas.push(meta);
-  }
-  return metas;
+  ensureMetaCache();
+  return [...(metaCache?.values() ?? [])].map(cloneMeta);
 }
 
 export function listGuildMetas(guildId: string, limit = 5): RecordingMeta[] {
@@ -246,6 +305,34 @@ export function listGuildMetas(guildId: string, limit = 5): RecordingMeta[] {
     .filter((m) => m.guildId === guildId)
     .sort((a, b) => b.startedAt - a.startedAt)
     .slice(0, limit);
+}
+
+export interface ListGuildMetasRangeOptions {
+  /** Quantas metas podem sair da consulta, já ordenadas da mais recente. */
+  limit?: number;
+}
+
+/**
+ * Consulta o índice em memória montado no boot e mantido por saveMeta/delete.
+ * Assim, uma guild barulhenta não ocupa um corte global de diretórios nem força
+ * releitura de meta.json enquanto outra guild está gravando.
+ */
+export function listGuildMetasInRange(
+  guildId: string,
+  fromMs: number,
+  toMs: number,
+  options: ListGuildMetasRangeOptions = {},
+): RecordingMeta[] {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs) return [];
+  const limit = options.limit === undefined ? Number.MAX_SAFE_INTEGER : Math.max(1, Math.floor(options.limit));
+  ensureMetaCache();
+  const ids = guildMetaIds?.get(guildId) ?? new Set<string>();
+  return [...ids]
+    .map((id) => metaCache?.get(id))
+    .filter((meta): meta is RecordingMeta => Boolean(meta && meta.startedAt >= fromMs && meta.startedAt < toMs))
+    .sort((a, b) => b.startedAt - a.startedAt)
+    .slice(0, limit)
+    .map(cloneMeta);
 }
 
 export function pageUrl(id: string): string {

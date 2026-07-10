@@ -19,7 +19,7 @@ vi.mock('@discordjs/voice', async (importOriginal) => {
 });
 
 import { RecordingSession, RecordingStartCancelledError } from '../src/recorder/RecordingSession';
-import { tracksDir } from '../src/store';
+import { listMetas, readMeta, tracksDir } from '../src/store';
 
 function fakeConnection() {
   return {
@@ -125,6 +125,9 @@ describe('RecordingSession.start — transação real de início', () => {
   });
 
   it('cancela durante painel pendente sem captar áudio e apaga resposta REST tardia', async () => {
+    // Inicializa o índice em memória antes de saveMeta para reproduzir o caminho
+    // real do bot após o boot. O abort precisa apagar disco e cache juntos.
+    listMetas();
     const f = fixture();
     let resolvePanel!: (value: typeof f.message) => void;
     f.channel.send.mockImplementation(
@@ -152,6 +155,7 @@ describe('RecordingSession.start — transação real de início', () => {
     await expect(starting).rejects.toBeInstanceOf(RecordingStartCancelledError);
     expect(f.connection.destroy).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(recordingDir(session))).toBe(false);
+    expect(readMeta(session.id)).toBeUndefined();
 
     resolvePanel(f.message);
     await vi.waitFor(() => expect(f.message.delete).toHaveBeenCalledTimes(1));
