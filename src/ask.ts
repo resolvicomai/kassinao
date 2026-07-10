@@ -719,11 +719,12 @@ export interface AskResult extends Omit<AskContextResult, 'context' | 'sources'>
 export function renderAskAnswer(raw: string, sources: AskSource[], maxChars = 1700): string {
   const sourceMap = new Map(sources.map((source) => [source.id, source]));
   const sanitized = neutralizeFences(cleanText(raw))
+    // Neutraliza delimitadores numa única passagem ANTES de remover links. Isso
+    // impede que padrões aninhados se concatenem e formem uma tag depois.
+    .replace(/[<>]/g, (character) => (character === '<' ? '‹' : '›'))
     .replace(/\[([^\]\n]{0,300})\]\([^\n)]*\)/g, '$1')
-    .replace(/<[a-z][a-z0-9+.-]*:[^>\s]+>/gi, '')
     .replace(/\b(?:[a-z][a-z0-9+.-]*:\/\/|mailto:)[^\s<>()]+/gi, '')
     .replace(/\bwww\.[^\s<>()]+/gi, '')
-    .replace(/<[@#][!&]?\d+>/g, '')
     .replace(/@(everyone|here)/gi, '@\u200b$1');
   const pieces = sanitized.split(/(\[S\d{3}\])/g);
   let output = '';
