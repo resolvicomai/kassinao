@@ -47,7 +47,7 @@ A maioria das ferramentas de IA para reunião infere quem está falando a partir
 
 - Ata por IA: resumo, decisões e itens de ação com responsável e prazo, gerada sozinha depois de cada reunião.
 - A ata chega no canal do Discord assim que fica pronta — sem precisar abrir a página.
-- `/perguntar` responde dentro do próprio Discord, com citação `[hh:mm:ss]` clicável, usando só as reuniões que você pode ver.
+- `/perguntar` entende tema, pessoa, data da call e prazo da ação (como “ações da Ana que vencem hoje”). A IA só seleciona as fontes; o bot exibe a evidência real da ata/transcrição com link autorizado. A opção `dias` vale quando a pergunta não informa um período da call.
 - Índice web com busca full-text em transcrições, atas e notas — cada resultado linka pro segundo exato.
 - O mesmo acervo conecta no Claude Desktop, Cursor ou outro assistente compatível, via MCP.
 
@@ -209,7 +209,7 @@ No Docker, construa com Python + faster-whisper na imagem: `docker compose build
 | `/nota <texto>` | `/note <text>` | Marca uma nota no tempo atual (ou botão 📝 do painel) |
 | `/status` | `/status` | Estado da gravação em andamento |
 | `/gravacoes` | `/recordings` | Suas últimas gravações, com links (filtradas por acesso) — também linka pro índice web com busca full-text |
-| `/perguntar <pergunta> [dias]` | `/ask <question> [days]` | Pergunte às suas reuniões — a IA responde (só você vê) com citações no segundo exato, usando as transcrições que você pode acessar |
+| `/perguntar <pergunta> [dias]` | `/ask <question> [days]` | Pergunte por tema, pessoa, data da call ou prazo — só você vê evidências reais das reuniões que pode acessar |
 | `/config ata-canal/ver` | `/config minutes-channel/view` | Admin: escolhe o canal de texto onde a ata resumida é postada (padrão: chat do canal de voz) |
 | `/autorecord ligar/desligar/ver` | `/autorecord on/off/view` | Gravação automática por canal (admin) |
 | `/mcp novo/revogar-tudo` | `/mcp new/revoke-all` | Só o dono do bot (`OWNER_IDS`): gera ou revoga o código de conexão do assistente de IA — membros comuns se conectam sozinhos em `/app/conectar-ia` |

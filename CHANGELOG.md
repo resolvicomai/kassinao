@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `/ask` now resolves meeting dates separately from action deadlines (including relative deadlines such as `today`, `tomorrow`, and weekdays), ranks eligible meetings before applying context limits, and searches structured minutes fields including decisions, actions, owners, due dates, topics, attendance, and per-participant notes.
 - `kassinao-mcp` 1.0.3 pins saved refresh tokens to their issuing instance, isolates multiple local connections, serializes concurrent refreshes, preserves sessions across transient 429/5xx responses, and reports its package version to MCP clients.
 - Private web/API responses are `no-store`; session cookies are scoped to `/app`; state cookies are scoped to `/auth`; app mutations validate the exact request origin.
 - Recording access now requires current server membership. Private-channel history is limited to its starter/participants and current admins; only channels public to `@everyone` when recording began may follow their current audience.
@@ -20,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `/ask` no longer drops relevant older meetings behind recency/count cuts, bounds archive/transcript work before the LLM, isolates cost quotas per user/guild, and lets the model select source IDs only; the server renders the exact sanitized evidence and authorized links.
 - MCP `participantId` filtering now includes people who attended a call without speaking.
 - Invalid numeric environment settings, weak manually configured signing secrets, and malformed `BASE_URL` values now fail fast instead of silently weakening sessions or disabling retention, disk guards, timeouts, or token expiry.
 - Recording tabs expose complete ARIA relationships and keyboard navigation.

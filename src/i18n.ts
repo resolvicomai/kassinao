@@ -240,18 +240,31 @@ const STRINGS: Strings = {
     pt: '🔇 Não encontrei nenhuma reunião transcrita que você possa acessar nos últimos {days} dias.',
     en: '🔇 I found no transcribed meetings you can access in the last {days} days.',
   },
+  'ask.no-period': {
+    pt: '🔇 Não encontrei nenhuma reunião transcrita que você possa acessar no período **{period}**.',
+    en: '🔇 I found no transcribed meetings you can access in **{period}**.',
+  },
+  'ask.no-evidence': {
+    pt: '🔎 Encontrei reuniões nesse período, mas não achei evidência suficiente para responder com segurança.',
+    en: '🔎 I found meetings in that period, but not enough evidence to answer safely.',
+  },
   'ask.busy': {
-    pt: '⏳ Calma aí — ainda estou respondendo sua pergunta anterior.',
-    en: '⏳ Hold on — I am still answering your previous question.',
+    pt: '⏳ Já estou processando o limite de perguntas agora. Tente de novo em instantes.',
+    en: '⏳ I am already processing the current question limit. Try again in a moment.',
+  },
+  'ask.rate-limit': {
+    pt: '⏳ O limite temporário do /perguntar foi atingido. Tente novamente mais tarde.',
+    en: '⏳ The temporary /ask limit was reached. Try again later.',
   },
   'ask.error': {
     pt: '⚠️ Não consegui responder agora: {error}',
     en: '⚠️ I could not answer right now: {error}',
   },
   'ask.footer': {
-    pt: '-# Baseado em {n} reunião(ões) que você pode acessar. Confira na fonte: os links pulam pro segundo exato.',
-    en: '-# Based on {n} meeting(s) you can access. Check the source — links jump to the exact second.',
+    pt: '-# Período: {period}. Baseado em {n} reunião(ões) que você pode acessar. Os links abrem a ata ou o segundo exato.',
+    en: '-# Period: {period}. Based on {n} meeting(s) you can access. Links open the minutes or exact second.',
   },
+  'ask.period-days': { pt: 'últimos {days} dias', en: 'last {days} days' },
 
   // eventos do log
   'event.started': { pt: '▶️ Gravação iniciada por {name}', en: '▶️ Recording started by {name}' },
@@ -377,8 +390,8 @@ const STRINGS: Strings = {
     en: "🎥 **How to record**\n1. Join a voice channel and type **/record** — I join and show as `[RECORDING]` in my nickname, so everyone sees the call is being recorded.\n2. Talk normally. Each person becomes a **separate track** (perfect speaker attribution).\n3. Mark moments with the **📌 Mark moment** button (one click, no typing) or **/note**/📝 for a text note — everything flows into the transcript, the minutes and the Audacity labels.\n4. End with **/stop** (or the button). The minutes summary lands in the channel — and you can **download even while** recording.\n\n⏹️ **I stop on my own** when: the channel **empties**, it hits the **{hours}h limit**, or I get **disconnected**. (If nobody speaks for ~5 min I only warn on the panel — I don't stop.)",
   },
   'help.topic-ask': {
-    pt: '💬 **Perguntar às reuniões**\n• **/perguntar** "o que decidimos sobre o deploy?" — eu respondo **só pra você**, com citações `[hh:mm:ss]` que pulam pro segundo exato do áudio. Opção `dias:` muda a janela (padrão 30).\n• Eu só uso as reuniões que **você pode acessar** — a mesma regra da página.\n• Na **web**: o índice em {url}/app lista tudo que você pode abrir, com **busca** em transcrições, atas e notas.\n• No seu **assistente de IA** (qualquer um com MCP: Claude, Cursor…): conector em {url}/app/conectar-ia — ações pendentes entre reuniões, quem disse o quê, busca por período.',
-    en: '💬 **Ask your meetings**\n• **/ask** "what did we decide about the deploy?" — I answer **only to you**, with `[hh:mm:ss]` citations that jump to the exact second of audio. The `days:` option changes the window (default 30).\n• I only use meetings **you can access** — same rule as the page.\n• On the **web**: the index at {url}/app lists everything you can open, with **search** across transcripts, minutes and notes.\n• In your **AI assistant** (anything MCP-capable: Claude, Cursor…): connector at {url}/app/conectar-ia — pending actions across meetings, who said what, time-window search.',
+    pt: '💬 **Perguntar às reuniões**\n• **/perguntar** entende tema, pessoa e data: "ações da Ana ontem", "o que decidimos semana passada?". A opção `dias:` define a janela quando você não cita uma data (padrão 30).\n• Eu respondo **só pra você** e só uso reuniões que **você pode acessar** — a mesma regra da página.\n• As fontes abrem a **ata** ou pulam pro **segundo exato** da transcrição.\n• Na **web**: o índice em {url}/app lista tudo que você pode abrir, com **busca** em transcrições, atas e notas.\n• No seu **assistente de IA** (qualquer um com MCP: Claude, Cursor…): conector em {url}/app/conectar-ia — ações pendentes entre reuniões, quem disse o quê, busca por período.',
+    en: '💬 **Ask your meetings**\n• **/ask** understands topic, person and date: "Ana\'s actions yesterday", "what did we decide last week?". The `days:` option defines the window when no date is mentioned (default 30).\n• I answer **only to you** and only use meetings **you can access** — same rule as the page.\n• Sources open the **minutes** or jump to the **exact second** in the transcript.\n• On the **web**: the index at {url}/app lists everything you can open, with **search** across transcripts, minutes and notes.\n• In your **AI assistant** (anything MCP-capable: Claude, Cursor…): connector at {url}/app/conectar-ia — pending actions across meetings, who said what, time-window search.',
   },
   'help.topic-downloads': {
     pt: '📥 **Downloads e ata** (na página da gravação)\n• **MP3** — uma faixa por pessoa (ZIP). Leve, abre em qualquer player.\n• **FLAC** — uma faixa por pessoa (ZIP), **sem perda** de qualidade; arquivos grandes, ideal pra edição/arquivo.\n• **Mix** — todo mundo junto num **MP3 único**; o player da página usa ele (com velocidade 1×/1.5×/2×).\n• **Audacity** — projeto (`.lof` + labels) que abre no Audacity com as faixas **já alinhadas** e suas notas marcadas.\n• **📝 Transcrição** (.md/.txt) — nome de quem falou, busca, filtro por pessoa e horários clicáveis.\n• **📋 Ata** — resumo, decisões, itens de ação (responsável/prazo) e o que cada um trouxe.\nTudo protegido por login. {retention} — a busca e o /perguntar continuam funcionando.',
