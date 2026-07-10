@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { allowMinutesBroadcast, safeSlice } from '../src/util';
 import { localeOf, t } from '../src/i18n';
 import { formatDuration, formatOffset, joinNames, sanitizeFilename } from '../src/recorder/RecordingSession';
-import { minutesToMarkdown, normalizeMinutes } from '../src/processing/minutes';
+import {
+  buildLlmRequestBody,
+  isOutputLimitReason,
+  minutesToMarkdown,
+  normalizeMinutes,
+} from '../src/processing/minutes';
 import { msToClock } from '../src/processing/transcribe';
 
 describe('safeSlice', () => {
@@ -107,6 +112,51 @@ describe('normalizeMinutes (parsing defensivo)', () => {
     expect(md).toContain('## Resumo');
     expect(md).toContain('## Itens de ação');
     expect(md).toContain('## Por participante');
+  });
+});
+
+describe('contrato de saída do LLM', () => {
+  const schema = {
+    name: 'ata_reuniao',
+    schema: {
+      type: 'object',
+      properties: { resumo: { type: 'string' } },
+      required: ['resumo'],
+      additionalProperties: false,
+    },
+  };
+
+  it('usa schema estrito, backend compatível e healing no OpenRouter', () => {
+    const body = buildLlmRequestBody(true, 'google/gemini-2.5-flash', 's', 'u', 8192, { schema });
+    expect(body).toMatchObject({
+      reasoning: { max_tokens: 0 },
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'ata_reuniao', strict: true, schema: schema.schema },
+      },
+      provider: { require_parameters: true },
+      plugins: [{ id: 'response-healing' }],
+    });
+  });
+
+  it('reserva os tokens para a resposta do /perguntar no Gemini 2.5 Flash', () => {
+    const body = buildLlmRequestBody(true, 'google/gemini-2.5-flash', 's', 'u', 700, { json: false });
+    expect(body).toMatchObject({ reasoning: { max_tokens: 0 }, max_tokens: 700 });
+    expect(body).not.toHaveProperty('response_format');
+    expect(body).not.toHaveProperty('plugins');
+  });
+
+  it('mantém JSON mode compatível no caminho Groq', () => {
+    const body = buildLlmRequestBody(false, 'llama-3.3-70b-versatile', 's', 'u', 4096, { schema });
+    expect(body).toMatchObject({ response_format: { type: 'json_object' } });
+    expect(body).not.toHaveProperty('reasoning');
+    expect(body).not.toHaveProperty('provider');
+  });
+
+  it('reconhece motivos de truncamento normalizados e nativos', () => {
+    expect(isOutputLimitReason('length')).toBe(true);
+    expect(isOutputLimitReason('stop', 'MAX_TOKENS')).toBe(true);
+    expect(isOutputLimitReason('stop', 'STOP')).toBe(false);
   });
 });
 
