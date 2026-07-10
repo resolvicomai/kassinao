@@ -317,7 +317,7 @@ describe('citações determinísticas do /perguntar', () => {
 
   it('só transforma IDs recuperados em links construídos pelo servidor', () => {
     const rendered = renderAskAnswer(
-      'Ação confirmada [S001] e fala [S002]. Inventada [S999]. [clique](https://evil.tld) https://evil.tld/x ftp://evil.tld @everyone',
+      'Ação confirmada [S001] e fala [S002]. Inventada [S999]. [clique](https://evil.tld) https://evil.tld/x ftp://evil.tld @everyone <scr<em>ipt>alert(1)</script>',
       sources,
     );
     expect(rendered).toContain('[ata](https://kassinao.example/app/rec/abc#ata)');
@@ -325,6 +325,7 @@ describe('citações determinísticas do /perguntar', () => {
     expect(rendered).not.toContain('S999');
     expect(rendered).not.toContain('evil.tld');
     expect(rendered).not.toContain('@everyone');
+    expect(rendered).not.toContain('<');
   });
 
   it('não corta um link do servidor pela metade no limite de tamanho', () => {
