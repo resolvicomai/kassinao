@@ -32,7 +32,8 @@ import {
   VoiceBasedChannel,
 } from 'discord.js';
 import { config } from './config';
-import { answerQuestion } from './ask';
+import { answerQuestion, authorizeAskMetas, resolveAskTemporalIntent } from './ask';
+import { AskLimiter } from './askLimiter';
 import { guildConfigStore } from './guildConfig';
 import { minutesEnabled } from './processing/minutes';
 import { allowMinutesBroadcast, safeSlice, shortError } from './util';
@@ -87,6 +88,7 @@ import {
 } from './store';
 import { allowsCurrentChannelGrant, forgetMember, recordingIdentityGrant } from './web/access';
 import { createExchangeCode, revokeUser } from './web/mcpTokens';
+import { resolveRange } from './web/range';
 import { startWebServer } from './web/server';
 
 const NOTE_MODAL_ID = 'kassinao_note_modal';
@@ -231,13 +233,13 @@ function buildCommands() {
     .setDescription('🤖 Pergunte às suas reuniões — a IA responde com base nas transcrições que você pode ver')
     .addStringOption((o) => {
       o.setName('pergunta')
-        .setDescription('O que você quer saber? (ex.: o que decidimos sobre o deploy?)')
+        .setDescription('Pergunte por tema, pessoa ou data (ex.: ações da Ana ontem)')
         .setMaxLength(300)
         .setRequired(true);
       o.setNameLocalizations({ 'en-US': 'question', 'en-GB': 'question' });
       o.setDescriptionLocalizations({
-        'en-US': 'What do you want to know? (e.g.: what did we decide about the deploy?)',
-        'en-GB': 'What do you want to know? (e.g.: what did we decide about the deploy?)',
+        'en-US': "Ask by topic, person or date (e.g.: Ana's actions yesterday)",
+        'en-GB': "Ask by topic, person or date (e.g.: Ana's actions yesterday)",
       });
       return o;
     })
@@ -734,22 +736,16 @@ async function handleConfig(interaction: ChatInputCommandInteraction): Promise<v
 
 // ---------- /perguntar (RAG nas reuniões, dentro do Discord) ----------
 
-/** Uma pergunta por pessoa por vez (chamada de LLM custa tempo/dinheiro). */
-const asking = new Set<string>();
-/** Teto GLOBAL de perguntas simultâneas + orçamento por pessoa/hora (LLM não é grátis). */
+/** Teto de concorrência e custo por processo (o bot roda em uma única instância). */
 const MAX_CONCURRENT_ASKS = 2;
 const MAX_ASKS_PER_HOUR = 10;
-const askHistory = new Map<string, number[]>();
-
-function askBudgetOk(userId: string): boolean {
-  const now = Date.now();
-  const hist = (askHistory.get(userId) ?? []).filter((ts) => now - ts < 60 * 60 * 1000);
-  if (hist.length >= MAX_ASKS_PER_HOUR) return false;
-  hist.push(now);
-  askHistory.set(userId, hist);
-  if (askHistory.size > 500) askHistory.clear(); // teto de memória
-  return true;
-}
+const MAX_ASKS_PER_HOUR_GLOBAL = 60;
+const askLimiter = new AskLimiter({
+  maxConcurrent: MAX_CONCURRENT_ASKS,
+  maxPerUser: MAX_ASKS_PER_HOUR,
+  maxGlobal: MAX_ASKS_PER_HOUR_GLOBAL,
+  windowMs: 60 * 60 * 1000,
+});
 
 async function handlePerguntar(interaction: ChatInputCommandInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
@@ -761,37 +757,55 @@ async function handlePerguntar(interaction: ChatInputCommandInteraction): Promis
     await interaction.reply({ content: t(l, 'ask.disabled'), ephemeral: true });
     return;
   }
-  if (asking.has(interaction.user.id) || asking.size >= MAX_CONCURRENT_ASKS || !askBudgetOk(interaction.user.id)) {
-    await interaction.reply({ content: t(l, 'ask.busy'), ephemeral: true });
-    return;
-  }
   const question = interaction.options.getString('pergunta', true);
   const days = interaction.options.getInteger('dias') ?? 30;
-  await interaction.deferReply({ ephemeral: true });
-  asking.add(interaction.user.id);
+  const admission = askLimiter.acquire(interaction.user.id);
+  if (admission !== 'accepted') {
+    const key = admission.startsWith('rate-') ? 'ask.rate-limit' : 'ask.busy';
+    await interaction.reply({ content: t(l, key), ephemeral: true });
+    return;
+  }
   try {
+    await interaction.deferReply({ ephemeral: true });
     const member = interaction.member as GuildMember;
-    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    const nowMs = Date.now();
+    const temporal = resolveAskTemporalIntent(question, nowMs, config.timezone, l);
+    const period = temporal.label ?? t(l, 'ask.period-days', { days });
+    const range = temporal.range ?? resolveRange({ last: `${days}d` }, nowMs, config.timezone);
     // MESMA regra de acesso da web: só reuniões que essa pessoa pode abrir
-    const metas = listGuildMetas(interaction.guild.id, 100)
-      .filter((m) => m.status === 'done' && m.startedAt >= cutoff)
-      .filter((m) => memberCanAccessRecording(member, m, interaction.guild!))
+    // A data escrita na pergunta vence a opção `dias`; sem data, vale a janela do comando.
+    const candidates = listGuildMetas(interaction.guild.id, Number.MAX_SAFE_INTEGER)
+      .filter((m) => m.status === 'done')
+      .filter((m) => m.startedAt >= range.fromMs && m.startedAt < range.toMs)
       .filter((m) => transcriptReady(m));
-    if (metas.length === 0) {
-      await interaction.editReply(t(l, 'ask.no-meetings', { days }));
+    const authorized = authorizeAskMetas(candidates, (meta) =>
+      memberCanAccessRecording(member, meta, interaction.guild!),
+    );
+    if (authorized.metas.length === 0) {
+      await interaction.editReply(
+        temporal.label ? t(l, 'ask.no-period', { period: temporal.label }) : t(l, 'ask.no-meetings', { days }),
+      );
       return;
     }
-    const result = await answerQuestion(question, metas, l);
+    const result = await answerQuestion(question, authorized, l, {
+      nowMs,
+      timezone: config.timezone,
+      fallbackRange: range,
+      fallbackPeriodLabel: period,
+    });
     if (!result.answer) {
-      await interaction.editReply(t(l, 'ask.no-meetings', { days }));
+      await interaction.editReply(t(l, 'ask.no-evidence'));
       return;
     }
-    await interaction.editReply(`${result.answer}\n\n${t(l, 'ask.footer', { n: result.meetingsUsed })}`);
+    console.log(
+      `Perguntar concluído: guild=${interaction.guild.id} período=${period} candidatas=${result.candidateMeetings} com-evidência=${result.matchedMeetings} reuniões=${result.meetingsUsed} chunks=${result.chunksUsed} contexto=${result.contextChars}`,
+    );
+    await interaction.editReply(`${result.answer}\n\n${t(l, 'ask.footer', { n: result.meetingsUsed, period })}`);
   } catch (err) {
     console.error('Erro no /perguntar:', err);
     await interaction.editReply(t(l, 'ask.error', { error: shortError((err as Error).message, l) })).catch(() => {});
   } finally {
-    asking.delete(interaction.user.id);
+    askLimiter.release(interaction.user.id);
   }
 }
 

@@ -45,7 +45,7 @@ Every AI notetaker guesses who's talking from voice patterns alone — and the g
 ## Becomes memory that answers
 
 - AI-generated meeting minutes: summary, decisions, and action items, each with an owner and a due date.
-- `/ask` right inside Discord — ask a question in plain language, get an answer with clickable `[hh:mm:ss]` citations.
+- `/ask` right inside Discord — ask by topic, person, or date (for example, “Ana's actions yesterday”), combining structured minutes and transcript evidence with clickable sources. `days` is the fallback window when the question has no period.
 - A web index with full-text search across every transcript, minutes doc, and note you're allowed to see.
 - An optional MCP connector plugs that same memory into Claude Desktop, Cursor, or any MCP-capable assistant.
 - Minutes get posted straight to a Discord channel the moment they're ready — no login required to read that summary.
@@ -160,7 +160,7 @@ More knobs — disk guard, disk-full alerts, off-site backup via rclone — are 
 | `/note <text>` | Mark a note at the current time (or the 📝 panel button) |
 | `/status` | Current recording status |
 | `/recordings` | Your latest recordings, filtered by access — also links to the web index with full-text search |
-| `/ask <question> [days]` | Ask your meetings a question — AI answers (only you see it), with timestamped citations, from transcripts you can access |
+| `/ask <question> [days]` | Ask by topic, person, or date — AI answers (only you see it) with minutes or exact-second sources, using only meetings you can access |
 | `/config minutes-channel` / `/config view` | Admin: pick the text channel where the minutes summary gets posted (default: the voice channel's own chat) |
 | `/autorecord on/off/view` | Automatic recording per channel (admin) |
 | `/mcp new` / `/mcp revoke-all` | Owner-only (`OWNER_IDS`): generate or revoke an AI-connector code — regular members self-serve at `/app/conectar-ia` on the web |
