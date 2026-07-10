@@ -27,6 +27,117 @@ const GROQ_BLOCK_PAUSE_MS = 65_000;
 const PARTIAL_NOTE_CHARS = 280;
 const PARTIAL_TOTAL_CHARS = 9_000;
 
+type JsonSchema = Record<string, unknown>;
+
+interface LlmChatOptions {
+  /** false = texto livre (ex.: /perguntar); padrão = JSON. */
+  json?: boolean;
+  /** No OpenRouter, força saída aderente ao schema em vez de só "algum JSON". */
+  schema?: { name: string; schema: JsonSchema };
+}
+
+const MINUTES_JSON_SCHEMA: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    resumo: { type: 'string' },
+    decisoes: { type: 'array', items: { type: 'string' } },
+    acoes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          tarefa: { type: 'string' },
+          responsavel: { type: 'string' },
+          prazo: { type: 'string' },
+        },
+        required: ['tarefa', 'responsavel', 'prazo'],
+      },
+    },
+    topicos: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { titulo: { type: 'string' }, inicio: { type: 'string' } },
+        required: ['titulo', 'inicio'],
+      },
+    },
+    porParticipante: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          nome: { type: 'string' },
+          pontos: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['nome', 'pontos'],
+      },
+    },
+  },
+  required: ['resumo', 'decisoes', 'acoes', 'topicos', 'porParticipante'],
+};
+
+const PARTIAL_NOTES_JSON_SCHEMA: JsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: { notas: { type: 'array', items: { type: 'string' } } },
+  required: ['notas'],
+};
+
+/**
+ * Corpo puro da chamada, exportado para regressão. O Gemini 2.5 Flash pensa de
+ * forma dinâmica por padrão; esses tokens contam no teto de saída e já fizeram
+ * respostas simples terminarem antes do JSON fechar. Para essa extração/Q&A,
+ * pensar é desperdício: reservamos o teto inteiro para a resposta útil.
+ */
+export function buildLlmRequestBody(
+  openrouter: boolean,
+  model: string,
+  system: string,
+  user: string,
+  maxTokens: number,
+  opts: LlmChatOptions = {},
+): Record<string, unknown> {
+  const wantsJson = opts.json !== false;
+  const strictSchema = openrouter && wantsJson && opts.schema;
+  const gemini25Flash = openrouter && /^google\/gemini-2\.5-flash(?:$|[-:])/.test(model);
+
+  return {
+    model,
+    temperature: 0.2,
+    max_tokens: maxTokens,
+    ...(gemini25Flash ? { reasoning: { max_tokens: 0 } } : {}),
+    ...(wantsJson
+      ? {
+          response_format: strictSchema
+            ? {
+                type: 'json_schema',
+                json_schema: { name: strictSchema.name, strict: true, schema: strictSchema.schema },
+              }
+            : { type: 'json_object' },
+        }
+      : {}),
+    // Sem require_parameters o OpenRouter pode escolher um backend que ignore
+    // response_format. Healing corrige vírgula/chave/fechamento malformados.
+    ...(strictSchema ? { provider: { require_parameters: true }, plugins: [{ id: 'response-healing' }] } : {}),
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+  };
+}
+
+/** Normaliza o motivo de parada entre OpenAI/OpenRouter e backends nativos. */
+export function isOutputLimitReason(...reasons: (string | undefined)[]): boolean {
+  return reasons.some((reason) => {
+    const normalized = String(reason ?? '').toLowerCase();
+    return normalized.includes('length') || normalized.includes('max_token');
+  });
+}
+
 /** A Ata liga sozinha quando há chave do provider escolhido, salvo MINUTES_ENABLED=false. */
 export function minutesEnabled(): boolean {
   if (config.minutesEnabled === 'false') return false;
@@ -41,7 +152,7 @@ export async function llmChat(
   system: string,
   user: string,
   maxTokens: number,
-  opts: { json?: boolean } = {},
+  opts: LlmChatOptions = {},
 ): Promise<string> {
   const openrouter = config.minutesProvider === 'openrouter';
   const url = openrouter
@@ -61,29 +172,40 @@ export async function llmChat(
     {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        model: config.minutesModel,
-        temperature: 0.2,
-        max_tokens: maxTokens,
-        ...(opts.json === false ? {} : { response_format: { type: 'json_object' } }),
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-      }),
+      body: JSON.stringify(buildLlmRequestBody(openrouter, config.minutesModel, system, user, maxTokens, opts)),
     },
     { attempts: 4, maxWaitMs: 90_000 },
   );
   const data = (await resp.json()) as {
-    choices?: { message?: { content?: string }; finish_reason?: string }[];
+    choices?: {
+      message?: { content?: string };
+      finish_reason?: string;
+      native_finish_reason?: string;
+    }[];
+    error?: { message?: string };
+    usage?: {
+      completion_tokens?: number;
+      completion_tokens_details?: { reasoning_tokens?: number };
+    };
   };
   const choice = data.choices?.[0];
-  // resposta cortada por limite de tokens = JSON truncado; erro claro em vez de parse quebrado
-  if (choice?.finish_reason === 'length') {
-    throw new Error('LLM cortou a ata por limite de tokens — aumente MINUTES_MAX_TOKENS (call muito longa?)');
+  const reasons = [choice?.finish_reason, choice?.native_finish_reason]
+    .filter(Boolean)
+    .map((r) => String(r).toLowerCase());
+  // Alguns backends usam "length", outros "MAX_TOKENS". Ambos significam
+  // resposta truncada (e, no caso da ata, JSON inevitavelmente incompleto).
+  if (isOutputLimitReason(...reasons)) {
+    console.warn(
+      `LLM atingiu o teto de saída: finish=${reasons.join('/') || '?'} max=${maxTokens} ` +
+        `completion=${data.usage?.completion_tokens ?? '?'} reasoning=${data.usage?.completion_tokens_details?.reasoning_tokens ?? '?'}`,
+    );
+    throw new Error('LLM cortou a resposta por limite de tokens');
   }
   const content = choice?.message?.content ?? '';
-  if (!content.trim()) throw new Error('LLM devolveu resposta vazia');
+  if (!content.trim()) {
+    if (data.error?.message) console.warn(`LLM devolveu erro sem conteúdo: ${data.error.message.slice(0, 300)}`);
+    throw new Error('LLM devolveu resposta vazia');
+  }
   return content;
 }
 
@@ -148,6 +270,7 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
       mapSystem,
       fenceUntrusted(`${header}\n[BLOCO ${i + 1}/${blocks.length}]\n${blocks[i]}`),
       1024,
+      { schema: { name: 'notas_parciais', schema: PARTIAL_NOTES_JSON_SCHEMA } },
     );
     try {
       const parsed = JSON.parse(content) as { notas?: unknown[] };
@@ -174,18 +297,19 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
 /**
  * Uma ata com retry de FORMATO: modelos (especialmente com reasoning) às vezes
  * respondem prosa apesar do response_format. Na falha de parse, tenta 1x com
- * lembrete explícito — e loga o começo da resposta pra diagnóstico.
+ * lembrete explícito — e loga só o tamanho, nunca conteúdo da reunião.
  */
 async function minutesWithRetry(system: string, user: string, maxTokens: number): Promise<MeetingMinutes> {
-  const first = await llmChat(system, user, maxTokens);
+  const structured = { schema: { name: 'ata_reuniao', schema: MINUTES_JSON_SCHEMA } };
+  const first = await llmChat(system, user, maxTokens, structured);
   try {
     return normalizeMinutes(first);
   } catch (err) {
     console.warn(
-      `Ata: resposta fora do formato (${(err as Error).message}) — início: ${JSON.stringify(first.slice(0, 200))}. Tentando de novo com lembrete.`,
+      `Ata: resposta fora do formato (${(err as Error).message}, ${first.length} chars). Tentando de novo com lembrete.`,
     );
     const reminded = `${system}\nLEMBRETE FINAL: responda APENAS o objeto JSON, começando com { e terminando com }. Nada de texto fora do JSON, nada de markdown.`;
-    return normalizeMinutes(await llmChat(reminded, user, maxTokens));
+    return normalizeMinutes(await llmChat(reminded, user, maxTokens, structured));
   }
 }
 
