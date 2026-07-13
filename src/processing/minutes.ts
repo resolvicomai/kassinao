@@ -280,7 +280,8 @@ export async function llmChat(
     Authorization: `Bearer ${key}`,
   };
   if (openrouter) {
-    headers['HTTP-Referer'] = config.baseUrl;
+    // Identifica publicamente o produto, sem expor a origem privada das gravações.
+    headers['HTTP-Referer'] = config.publicUrl;
     headers['X-Title'] = 'Kassinao';
   }
   const resp = await fetchWithRetry(

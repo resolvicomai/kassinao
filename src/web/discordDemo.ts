@@ -196,7 +196,7 @@ export function discordDemoPage(locale: Locale, phase: DiscordDemoPhase = 'auto'
       <span class="server small">+</span>
     </aside>
     <aside class="channels">
-      <div class="server-name">Resolvico Labs <span>⌄</span></div>
+      <div class="server-name">Produto &amp; IA <span>⌄</span></div>
       <div class="channel-list">
         <p class="category">${esc(T('Canais de texto', 'Text channels'))}</p>
         <div class="channel">${esc(T('geral', 'general'))}</div>

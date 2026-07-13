@@ -46,21 +46,50 @@ function numberEnv(name: string, fallback: number, rule: NumberRule): number {
   }
 }
 
-/** BASE_URL é origem, não prefixo de caminho: todas as rotas do app partem de /. */
-export function normalizeBaseUrl(raw: string): string {
+/** URLs públicas são origens, não prefixos: todas as rotas partem de /. */
+export function normalizeOrigin(name: string, raw: string): string {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    throw new Error(`BASE_URL precisa ser uma URL absoluta http(s) (recebido: ${JSON.stringify(raw)})`);
+    throw new Error(`${name} precisa ser uma URL absoluta http(s) (recebido: ${JSON.stringify(raw)})`);
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:')
-    throw new Error('BASE_URL aceita apenas http:// ou https://');
+    throw new Error(`${name} aceita apenas http:// ou https://`);
   if (url.username || url.password || url.search || url.hash)
-    throw new Error('BASE_URL não pode conter credenciais, query ou hash');
+    throw new Error(`${name} não pode conter credenciais, query ou hash`);
   if (url.pathname !== '/' && url.pathname !== '')
-    throw new Error('BASE_URL não pode conter caminho; use apenas a origem');
+    throw new Error(`${name} não pode conter caminho; use apenas a origem`);
   return url.origin;
+}
+
+/** Mantida como API pública para instalações e testes anteriores. */
+export function normalizeBaseUrl(raw: string): string {
+  return normalizeOrigin('BASE_URL', raw);
+}
+
+export interface ConfiguredOrigins {
+  appUrl: string;
+  publicUrl: string;
+  docsUrl: string;
+  mcpUrl: string;
+  legacyUrl?: string;
+}
+
+type OriginEnvironment = Partial<
+  Record<'APP_URL' | 'BASE_URL' | 'PUBLIC_URL' | 'DOCS_URL' | 'MCP_URL' | 'LEGACY_URL', string | undefined>
+>;
+
+/** Resolve a topologia sem estado global para que precedência e fallbacks sejam testáveis. */
+export function resolveConfiguredOrigins(source: OriginEnvironment, localUrl: string): ConfiguredOrigins {
+  const configured = (name: keyof typeof source, fallback: string): string =>
+    normalizeOrigin(name, source[name]?.trim() || fallback);
+  const appUrl = source.APP_URL?.trim() ? configured('APP_URL', localUrl) : configured('BASE_URL', localUrl);
+  const publicUrl = configured('PUBLIC_URL', appUrl);
+  const docsUrl = configured('DOCS_URL', publicUrl);
+  const mcpUrl = configured('MCP_URL', appUrl);
+  const legacyUrl = source.LEGACY_URL?.trim() ? configured('LEGACY_URL', appUrl) : undefined;
+  return { appUrl, publicUrl, docsUrl, mcpUrl, ...(legacyUrl ? { legacyUrl } : {}) };
 }
 
 /** Segredos HMAC fracos não podem parecer configuração válida. */
@@ -153,7 +182,13 @@ const textRetentionDaysRaw = numberEnv('TEXT_RETENTION_DAYS', 90, { min: 0 });
 const textRetentionUnlimited = audioRetentionUnlimited || textRetentionDaysRaw <= 0;
 
 const port = numberEnv('PORT', 8080, { min: 1, max: 65535, integer: true });
-const baseUrl = normalizeBaseUrl(process.env.BASE_URL || `http://localhost:${port}`);
+const localUrl = `http://localhost:${port}`;
+// APP_URL é a origem canônica do produto privado (OAuth, gravações e downloads).
+// BASE_URL continua aceito como alias retrocompatível para instalações existentes.
+const { appUrl, publicUrl, docsUrl, mcpUrl, legacyUrl } = resolveConfiguredOrigins(process.env, localUrl);
+// Vários módulos e integrações self-hosted ainda leem config.baseUrl. Seu
+// significado permanece sendo a origem do app, agora também exposta como appUrl.
+const baseUrl = appUrl;
 
 // Aviso de upgrade: quem rodava RETENTION_DAYS curto (privacidade/compliance) e NÃO
 // setou TEXT_RETENTION_DAYS passa a reter transcrição/ata/notas por 90 dias (o default
@@ -181,8 +216,18 @@ export const config = {
   /** Se definido, registra os comandos só nesse servidor (atualização instantânea). */
   guildId: process.env.GUILD_ID || undefined,
   port,
-  /** URL pública usada nos links (ex.: https://kassinao.suaempresa.com). */
+  /** Origem canônica do app privado, OAuth, gravações e downloads. Alias compatível de appUrl. */
   baseUrl,
+  /** Origem canônica do app privado. APP_URL cai para BASE_URL e depois localhost. */
+  appUrl,
+  /** Origem da landing e da demo pública. Cai para appUrl em instalações de origem única. */
+  publicUrl,
+  /** Origem da documentação. Cai para publicUrl; quando separada, PT vive em / e EN em /en. */
+  docsUrl,
+  /** Origem da API MCP. Cai para appUrl em instalações de origem única. */
+  mcpUrl,
+  /** Origem pública anterior mantida durante migrações. Ausente quando LEGACY_URL não foi configurada. */
+  legacyUrl,
   /** true quando o repo do GitHub está público — libera os links "GitHub"/access.ts e a afirmação "auditável" na landing. Padrão false pra nunca servir link 404. */
   repoPublic: process.env.REPO_PUBLIC === 'true',
   recordingsDir,
@@ -299,10 +344,10 @@ if (config.minFreeMbAbort > config.minFreeMbStart) {
   process.exit(1);
 }
 
-const baseHost = new URL(config.baseUrl).hostname;
-if (config.baseUrl.startsWith('http:') && !['localhost', '127.0.0.1', '::1'].includes(baseHost)) {
+const baseHost = new URL(config.appUrl).hostname;
+if (config.appUrl.startsWith('http:') && !['localhost', '127.0.0.1', '::1'].includes(baseHost)) {
   console.warn(
-    '⚠️  BASE_URL usa HTTP fora de localhost: cookies e OAuth ficam sem transporte seguro. Use HTTPS em produção.',
+    '⚠️  APP_URL/BASE_URL usa HTTP fora de localhost: cookies e OAuth ficam sem transporte seguro. Use HTTPS em produção.',
   );
 }
 

@@ -16,19 +16,30 @@ Bot open source e self-hosted com uma faixa por pessoa, transcrição com nomes,
 
 <br/>
 
-[![Ver a demo ao vivo](https://img.shields.io/badge/VER_A_DEMO_AO_VIVO-5865F2?style=for-the-badge)](https://kassinao.resolvicomai.app/demo)
-[![Ler a documentação](https://img.shields.io/badge/LER_A_DOCUMENTAÇÃO-313338?style=for-the-badge)](https://kassinao.resolvicomai.app/docs)
-[![Conector MCP](https://img.shields.io/badge/CONECTOR_MCP-313338?style=for-the-badge)](https://www.npmjs.com/package/kassinao-mcp)
+[![Ver a demo ao vivo](https://img.shields.io/badge/VER_A_DEMO_AO_VIVO-5865F2?style=for-the-badge)](https://kassinao.cloud/demo)
+[![Ler a documentação](https://img.shields.io/badge/LER_A_DOCUMENTAÇÃO-313338?style=for-the-badge)](https://docs.kassinao.cloud)
+[![Conector MCP](https://img.shields.io/badge/CONECTOR_MCP-313338?style=for-the-badge)](https://mcp.kassinao.cloud)
 
 <br/>
 
-<a href="https://kassinao.resolvicomai.app/demo"><img src="docs/brand/discord-demo-pt.gif" width="900" alt="Fluxo fictício do Kassinão dentro do Discord"></a>
+<a href="https://kassinao.cloud/demo"><img src="docs/brand/discord-demo-pt.gif" width="900" alt="Fluxo fictício do Kassinão dentro do Discord"></a>
 
 <sub>Demo fictícia, comandos e comportamento reais. Nenhum dado vem de um workspace de verdade.</sub>
 
 </div>
 
 ---
+
+As superfícies oficiais usam um domínio por responsabilidade:
+
+| Superfície | URL oficial | Função |
+|---|---|---|
+| Site e demo | [kassinao.cloud](https://kassinao.cloud) | Apresentação pública do produto e demo fictícia |
+| Documentação | [docs.kassinao.cloud](https://docs.kassinao.cloud) | Instalação, comandos, segurança e guias do MCP |
+| App privado | [app.kassinao.cloud](https://app.kassinao.cloud/app) | OAuth do Discord, gravações, transcrições e downloads |
+| API MCP | [mcp.kassinao.cloud](https://mcp.kassinao.cloud) | Origem oficial usada pelo `kassinao-mcp`; a raiz leva à documentação |
+
+Uma instalação self-hosted não precisa de quatro domínios: basta definir `BASE_URL`, que vira o padrão de todas as superfícies. As variáveis opcionais para separar os domínios estão explicadas no [`.env.example`](.env.example).
 
 A maioria dos bots de reunião começa com um áudio misturado e usa diarização para inferir quem falou. O Kassinão recebe uma stream separada do Discord por pessoa, então a identidade vem da conta que produziu a faixa, não de um palpite pelo padrão de voz.
 
@@ -64,7 +75,7 @@ A maioria dos bots de reunião começa com um áudio misturado e usa diarizaçã
 
 ## Veja a reunião pronta
 
-[![Reunião fictícia renderizada pela interface real do Kassinão](docs/brand/meeting-demo-pt.png)](https://kassinao.resolvicomai.app/demo)
+[![Reunião fictícia renderizada pela interface real do Kassinão](docs/brand/meeting-demo-pt.png)](https://kassinao.cloud/demo)
 
 A demo pública usa dados fictícios e o mesmo renderer de uma gravação real. O idioma da interface pode mudar; o conteúdo original da reunião nunca é traduzido silenciosamente.
 
@@ -112,7 +123,7 @@ Depois **convide o bot** (passo 1) e rode **`/gravar`** num canal de voz. Pronto
 2. **General Information**: copie o **Application ID** → `APPLICATION_ID`.
 3. **Bot** → **Reset Token** → copie → `DISCORD_TOKEN`. (Nenhuma _privileged intent_ é necessária.)
 4. **OAuth2** → copie o **Client Secret** → `DISCORD_CLIENT_SECRET`.
-5. **OAuth2 → Redirects** → adicione `SUA_BASE_URL/auth/callback` (ex.: `https://kassinao.seu-dominio.com/auth/callback`). Sem isso, o login da página falha.
+5. **OAuth2 → Redirects** → adicione `SUA_APP_URL/auth/callback` (`SUA_BASE_URL/auth/callback` quando `APP_URL` não estiver definida). Sem isso, o login da página falha.
 6. Convide o bot (troque `SEU_APP_ID`):
    ```
    https://discord.com/oauth2/authorize?client_id=SEU_APP_ID&scope=bot%20applications.commands&permissions=68242432
@@ -129,6 +140,7 @@ Depois **convide o bot** (passo 1) e rode **`/gravar`** num canal de voz. Pronto
 3. Em **Public Hostname**: subdomínio + seu domínio, **Type = HTTP**, **URL = `kassinao:8080`**.
 4. No `.env`, defina **as duas** variáveis: `BASE_URL=https://SEU_SUBDOMINIO.seu-dominio.com` **e** `COMPOSE_PROFILES=tunnel`.
    O serviço `cloudflared` do compose fica sob o profile `tunnel` e **não sobe sozinho** — sem o `COMPOSE_PROFILES=tunnel` (ou `docker compose --profile tunnel up -d`), o túnel simplesmente não inicia.
+   Num deploy com domínios separados, aponte cada hostname configurado para o mesmo serviço e defina `APP_URL`, `PUBLIC_URL`, `DOCS_URL` e `MCP_URL`; num self-host comum, deixe essas quatro vazias.
 
 **Opção B — IP direto (só dev/teste, sem HTTPS)**
 
@@ -189,7 +201,12 @@ Todas as opções estão comentadas, uma a uma, em [`.env.example`](.env.example
 | `APPLICATION_ID` | — | ID da aplicação |
 | `DISCORD_CLIENT_SECRET` | — | Client Secret (login OAuth da página) |
 | `GUILD_ID` | — | Registra comandos na hora nesse servidor (sem ele, usa os servidores em que o bot está) |
-| `BASE_URL` | `http://localhost:8080` | URL pública dos links e do OAuth |
+| `BASE_URL` | `http://localhost:8080` | Origem única herdada por todas as superfícies públicas |
+| `APP_URL` | `BASE_URL` | App privado, OAuth do Discord, gravações, transcrições e downloads |
+| `PUBLIC_URL` | `APP_URL` / `BASE_URL` | Landing pública e demo |
+| `DOCS_URL` | `PUBLIC_URL` | Origem da documentação |
+| `MCP_URL` | `APP_URL` / `BASE_URL` | Origem da API consumida pelo `kassinao-mcp` |
+| `LEGACY_URL` | — | Origem anterior opcional, mantida temporariamente durante uma migração |
 | `REPO_PUBLIC` | `false` | `true` exibe links de código/instalação dentro das páginas privadas; a landing pública sempre aponta para este repositório |
 | `TUNNEL_TOKEN` | — | Token do Cloudflare Tunnel (Opção A; defina também `COMPOSE_PROFILES=tunnel`) |
 | `PORT` | `8080` | Porta do servidor web |
@@ -201,6 +218,13 @@ Todas as opções estão comentadas, uma a uma, em [`.env.example`](.env.example
 | `COOKIE_SECRET` | gerado | Segredo dos cookies de sessão (mín. 32 bytes se definido manualmente) |
 | `TZ` | `America/Sao_Paulo` | Fuso das datas (a página usa o do navegador) |
 | `DEFAULT_LOCALE` | `en` | Idioma padrão quando não há locale do usuário (ex.: DM); dentro dos servidores, cada pessoa vê no idioma do próprio Discord |
+
+### Migrar uma instância existente para outro domínio
+
+1. Mantenha a origem anterior em `LEGACY_URL` enquanto DNS, links antigos e clientes MCP são migrados. Sessões do navegador não atravessam domínios, então cada pessoa entra novamente uma vez na nova `APP_URL`.
+2. Cadastre a nova `APP_URL/auth/callback` no OAuth do Discord antes de virar a produção. Mantenha o callback anterior durante a transição.
+3. Tokens MCP ficam vinculados à origem que os emitiu. Eles podem continuar usando a `LEGACY_URL` durante a janela de compatibilidade; para passar à nova `MCP_URL`, gere uma conexão nova no app e troque `KASSINAO_URL` e o token juntos.
+4. Remova `LEGACY_URL` e o callback antigo só depois da janela de compatibilidade escolhida e da migração dos clientes ativos.
 | `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
 | `TRANSCRIBE_MODEL` | por provider | Ex.: `universal-3-5-pro` (assemblyai), `whisper-large-v3` (groq) |
 | `TRANSCRIBE_LANGUAGE` | `pt` | Idioma falado nas calls |
@@ -313,7 +337,7 @@ Issues e PRs são bem-vindos. Rode `npm run build` antes de abrir um PR.
 
 ## Licença
 
-[GNU AGPL-3.0-or-later](LICENSE) © 2026 Mauro Marques (resolvicomai).
+[GNU AGPL-3.0-or-later](LICENSE) © 2026 Mauro Marques.
 
 Software livre e de código aberto: você pode usar, estudar, modificar e
 compartilhar — mas se rodar uma versão modificada como serviço de rede (ex.:

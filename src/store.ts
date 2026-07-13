@@ -356,7 +356,7 @@ export function listGuildMetasInRange(
 export function pageUrl(id: string): string {
   // /app/* é o namespace privado (nunca linkado do markup público); o caminho
   // antigo /rec/:id segue vivo por redirect 308 no server (links já enviados).
-  return `${config.baseUrl}/app/rec/${id}`;
+  return `${config.appUrl}/app/rec/${id}`;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
