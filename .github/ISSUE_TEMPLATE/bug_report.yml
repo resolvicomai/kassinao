@@ -14,7 +14,7 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. Ran /gravar in ...
+        1. Ran /record (shown as /gravar in pt-BR) in ...
         2. ...
         3. See error
     validations:
@@ -26,7 +26,7 @@ body:
       options:
         - Docker (docker compose)
         - Local (npm run dev)
-        - One-click deploy (Render/Railway)
+        - One-click deploy (Render)
         - Other
     validations:
       required: true
@@ -40,4 +40,4 @@ body:
     id: version
     attributes:
       label: Version / commit
-      placeholder: "v1.0.0 or commit sha"
+      placeholder: "v1.3.0 or commit sha"

@@ -754,7 +754,7 @@ async function whisperApi(url: string, apiKey: string, model: string, file: stri
 // ---------- Gemini ----------
 
 async function geminiTranscribe(file: string): Promise<RawSegment[]> {
-  const model = config.transcribeModel || 'gemini-2.0-flash';
+  const model = config.transcribeModel || 'gemini-3.5-flash';
   const audio = fs.readFileSync(file).toString('base64');
   const prompt =
     `Transcreva este áudio (idioma: ${config.transcribeLanguage}). Responda SOMENTE um array JSON, sem markdown, ` +
@@ -856,18 +856,38 @@ async function commandTranscribe(file: string, work: string, chunkSec: number): 
 
 /** Render em Markdown: [hh:mm:ss] **Nome:** texto */
 export function transcriptToMarkdown(meta: RecordingMeta, segments: TranscriptSegment[]): string {
+  // Gravações antigas não tinham locale e historicamente geravam arquivos em PT-BR.
+  const locale = meta.locale?.toLowerCase().startsWith('en') ? 'en' : 'pt';
+  const labels =
+    locale === 'en'
+      ? {
+          dateLocale: 'en-US',
+          title: 'Transcript',
+          recording: 'Recording',
+          partial: 'Partial transcript',
+          missingTracks: 'tracks not transcribed',
+          notes: 'Recording notes',
+        }
+      : {
+          dateLocale: 'pt-BR',
+          title: 'Transcrição',
+          recording: 'Gravação',
+          partial: 'Transcrição parcial',
+          missingTracks: 'faixas não transcritas',
+          notes: 'Notas da gravação',
+        };
   // fuso explícito: o arquivo é estático (sem navegador para reescrever a data)
-  const when = new Date(meta.startedAt).toLocaleString('pt-BR', { timeZone: config.timezone });
+  const when = new Date(meta.startedAt).toLocaleString(labels.dateLocale, { timeZone: config.timezone });
   const lines = [
-    `# Transcrição — ${cleanInline(meta.voiceChannelName)} (${when})`,
+    `# ${labels.title} — ${cleanInline(meta.voiceChannelName)} (${when})`,
     '',
-    `Gravação \`${meta.id}\` • ${meta.participants.map((p) => cleanInline(p.name)).join(', ')}`,
+    `${labels.recording} \`${meta.id}\` • ${meta.participants.map((p) => cleanInline(p.name)).join(', ')}`,
     '',
   ];
   // quem arquiva o .md precisa SABER que está incompleto (faixas fora por rate limit)
   if (meta.transcription?.status === 'partial') {
     const missing = (meta.transcription.pendingTracks ?? []).map((n) => cleanInline(n)).join(', ');
-    lines.push(`> ⚠️ **Transcrição parcial** — faixas não transcritas: ${missing || '?'}.`, '');
+    lines.push(`> ⚠️ **${labels.partial}** — ${labels.missingTracks}: ${missing || '?'}.`, '');
   }
   for (const seg of segments) {
     // fala/apelido são entrada adversarial: limpa controle/ANSI e neutraliza fences
@@ -877,7 +897,7 @@ export function transcriptToMarkdown(meta: RecordingMeta, segments: TranscriptSe
     lines.push('');
   }
   if (meta.notes.length > 0) {
-    lines.push('---', '', '## Notas da gravação', '');
+    lines.push('---', '', `## ${labels.notes}`, '');
     for (const note of meta.notes) {
       lines.push(
         `- **[${msToClock(note.atMs)}]** ${cleanInline(note.author)}: ${neutralizeFences(cleanInline(note.text))}`,

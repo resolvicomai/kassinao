@@ -5,8 +5,9 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { config, normalizeBaseUrl, parseConfiguredNumber, validateSecret } from '../src/config';
 import { beginLogin, getWebUser, isAllowedWebMutation, logoutWeb, WebUser } from '../src/web/auth';
+import { discordDemoPage } from '../src/web/discordDemo';
 import { landingPage } from '../src/web/landing';
-import { recordingPage } from '../src/web/page';
+import { connectPage, recordingPage, recordingsIndexPage } from '../src/web/page';
 import { normalizedSearchTerms, recordingIncludesUser } from '../src/web/api';
 import type { RecordingMeta } from '../src/store';
 import { isLoopbackAddress } from '../src/util';
@@ -148,12 +149,82 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(script).toContain("--exclude='*/.mcp-sessions.json'");
   });
 
-  it('landing pública não contém URL privada e rotula os fixtures', () => {
+  it('landing pública expõe apenas destinos públicos e rotula o exemplo', () => {
     const html = landingPage('pt');
     expect(html).not.toContain('href="/app');
     expect(html).not.toContain('/app/rec/');
-    expect(html).toContain('/auth/login?next=%2Fapp');
-    expect((html.match(/exemplo fictício/g) ?? []).length).toBeGreaterThanOrEqual(4);
+    expect(html).not.toContain('/auth/login');
+    expect(html).toContain('href="/demo"');
+    expect(html).toContain('Demo pública com dados fictícios, sem login.');
+    expect(html).not.toContain('Entrar');
+    expect(html).toContain('https://www.npmjs.com/package/kassinao-mcp');
+    expect(html).toContain('https://github.com/resolvicomai/kassinao');
+    expect(html).toContain('/assets/discord-demo-pt.webm');
+    expect(html).toContain('/assets/meeting-demo-pt.png');
+    expect(html).toContain('--accent: #5865f2');
+    expect(html).not.toContain('#c53f28');
+    expect(html).toContain('href="/en"');
+    expect(html).not.toMatch(/[—–]/u);
+  });
+
+  it('landing inglesa traduz a jornada inteira sem trocar os destinos públicos', () => {
+    const html = landingPage('en');
+    expect(html).toContain('<html lang="en">');
+    expect(html).toContain("Your call ends. The decisions don't disappear.");
+    expect(html).toContain('Speaker identity is not a guess.');
+    expect(html).toContain('Ask later. Get the source.');
+    expect(html).toContain('Your server. Your history. Your rules.');
+    expect(html).toContain('Install it on your server. Keep control.');
+    expect(html).toContain('/assets/discord-demo-en.webm');
+    expect(html).toContain('/assets/meeting-demo-en.png');
+    expect(html).not.toContain('Sua call termina. As decisões não somem.');
+    expect(html).not.toContain('href="/app');
+    expect(html).not.toMatch(/[—–]/u);
+  });
+
+  it('demo visual do Discord usa comandos reais e possui versões PT e EN', () => {
+    const pt = discordDemoPage('pt', 4);
+    const en = discordDemoPage('en', 4);
+    expect(pt).toContain('/gravar');
+    expect(pt).toContain('/perguntar');
+    expect(pt).toContain('demo fictícia');
+    expect(en).toContain('/record');
+    expect(en).toContain('/ask');
+    expect(en).toContain('>general</div>');
+    expect(en).toContain('fictional demo');
+    expect(en).not.toContain('/gravar');
+    expect(en).not.toContain('>geral</div>');
+  });
+
+  it('demo pública traduz eventos automáticos e volta para a home do idioma atual', () => {
+    const dir = path.join(process.cwd(), 'docs', 'example');
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;
+    const transcript = JSON.parse(fs.readFileSync(path.join(dir, 'transcript.json'), 'utf8'));
+    const minutes = JSON.parse(fs.readFileSync(path.join(dir, 'minutes.json'), 'utf8'));
+    const pt = recordingPage(meta, { live: false, canDelete: false, lang: 'pt', transcript, minutes, demo: true });
+    const en = recordingPage(meta, { live: false, canDelete: false, lang: 'en', transcript, minutes, demo: true });
+    expect(pt).toContain('Gravação iniciada por Priya');
+    expect(pt).not.toContain('Recording started by Priya');
+    expect(en).toContain('Recording started by Priya');
+    expect(en).toContain('href="/en">Back home</a>');
+  });
+
+  it('app privado renderiza EN completo e preserva query ao trocar idioma', () => {
+    const user: WebUser = {
+      typ: 'session',
+      id: 'u-en',
+      name: 'English user',
+      avatar: null,
+      exp: Date.now() + 60_000,
+      jti: 'sid-en',
+    };
+    const html = recordingsIndexPage([], { user, lang: 'en' });
+    expect(html).toContain('<html lang="en">');
+    expect(html).toContain('<h1>My recordings</h1>');
+    expect(html).toContain('Search your meetings');
+    expect(html).toContain('data-app-locale="en"');
+    expect(html).toContain('new URL(location.href)');
+    expect(html).not.toContain('<h1>Minhas gravações</h1>');
   });
 
   it('abas associam controles/painéis e implementam teclado', () => {
@@ -167,6 +238,97 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).toContain('aria-labelledby="tab-ata"');
     expect(html).toContain("e.key === 'ArrowRight'");
     expect(html).toContain('tabindex="-1"');
+  });
+
+  it('estado ao vivo mantém o mapa da reunião e não oferece downloads bloqueados pelo servidor', () => {
+    const dir = path.join(process.cwd(), 'docs', 'example');
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;
+    meta.status = 'recording';
+    delete meta.endedAt;
+    meta.transcription = { status: 'running' };
+    meta.minutes = { status: 'pending' };
+    const html = recordingPage(meta, { live: true, canDelete: true, lang: 'pt' });
+    expect(html).toContain('id="tab-ata"');
+    expect(html).toContain('id="tab-transcricao"');
+    expect(html).toContain('id="tab-timeline"');
+    expect(html).toContain('id="tab-notas"');
+    expect(html).toContain('id="tab-exportar"');
+    expect(html).toContain('Arquivos disponíveis ao encerrar');
+    expect(html).not.toContain('/app/rec/' + meta.id + '/download/');
+    expect(html).not.toContain('action="/app/rec/' + meta.id + '/delete"');
+    expect(html).toContain('function check()');
+    expect(html).toContain('setTimeout(check,interval)');
+    expect(html).toContain('!p.paused&&!p.ended');
+  });
+
+  it('não revela corpo, credenciais ou detalhes crus do provedor na página da gravação', () => {
+    const dir = path.join(process.cwd(), 'docs', 'example');
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;
+    const providerError = 'HTTP 500: upstream failed at /internal/provider?api_key=sk-super-secret';
+    meta.transcription = { status: 'error', error: providerError };
+    meta.minutes = { status: 'error', error: providerError };
+
+    const html = recordingPage(meta, { live: false, canDelete: false, lang: 'pt' });
+
+    expect(html).not.toContain(providerError);
+    expect(html).not.toContain('sk-super-secret');
+    expect(html).not.toContain('detalhes técnicos');
+    expect(html).toContain('o serviço de IA encontrou um erro interno');
+  });
+
+  it('canais com o mesmo nome em servidores diferentes têm filtros independentes', () => {
+    const dir = path.join(process.cwd(), 'docs', 'example');
+    const base = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;
+    const first = structuredClone(base);
+    first.id = 'same-name-a';
+    first.guildId = 'guild-a';
+    first.guildName = 'Servidor A';
+    first.voiceChannelId = 'channel-a';
+    first.voiceChannelName = 'geral';
+    const second = structuredClone(base);
+    second.id = 'same-name-b';
+    second.guildId = 'guild-b';
+    second.guildName = 'Servidor B';
+    second.voiceChannelId = 'channel-b';
+    second.voiceChannelName = 'geral';
+    const user: WebUser = {
+      typ: 'session',
+      id: 'u-filter',
+      name: 'Alice',
+      avatar: null,
+      exp: Date.now() + 60_000,
+      jti: 'sid-filter',
+    };
+    const html = recordingsIndexPage(
+      [
+        { meta: first, canDelete: false },
+        { meta: second, canDelete: false },
+      ],
+      { user, lang: 'pt' },
+    );
+    expect(html).toContain('data-ch="guild-a:channel-a"');
+    expect(html).toContain('data-ch="guild-b:channel-b"');
+    expect(html).toContain('#geral · Servidor A');
+    expect(html).toContain('#geral · Servidor B');
+  });
+
+  it('não oferece troca de idioma no estado que exibe o token MCP uma única vez', () => {
+    const user: WebUser = {
+      typ: 'session',
+      id: 'u-token',
+      name: 'Alice',
+      avatar: null,
+      exp: Date.now() + 60_000,
+      jti: 'sid-token',
+    };
+    const html = connectPage({
+      lang: 'pt',
+      user,
+      refreshToken: 'preview-token',
+      label: 'Claude',
+    });
+    expect(html).toContain('Copie esta configuração agora.');
+    expect(html).not.toContain('data-app-locale');
   });
 
   it('logout do app é POST protegido, nunca link GET mutável', () => {
@@ -186,6 +348,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
       },
     });
     expect(html).toContain('method="post" action="/app/logout"');
+    expect(html).toContain('<span class="mobile-logout"><form class="logout-form"');
     expect(html).not.toContain('href="/auth/logout"');
   });
 });

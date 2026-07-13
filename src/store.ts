@@ -205,12 +205,29 @@ function assertValidId(id: string): void {
   if (!VALID_ID.test(id)) throw new Error(`store: id de gravação inválido: ${JSON.stringify(id)}`);
 }
 
+function ensurePrivateDirectory(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') fs.chmodSync(dir, 0o700);
+}
+
+function writePrivateJsonAtomic(file: string, value: unknown, pretty = false): void {
+  ensurePrivateDirectory(path.dirname(file));
+  const tmp = `${file}.${process.pid}.tmp`;
+  const fd = fs.openSync(tmp, 'w', 0o600);
+  try {
+    if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
+    fs.writeFileSync(fd, JSON.stringify(value, null, pretty ? 2 : undefined));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmp, file);
+  if (process.platform !== 'win32') fs.chmodSync(file, 0o600);
+}
+
 export function saveMeta(meta: RecordingMeta): void {
   assertValidId(meta.id);
-  fs.mkdirSync(recordingDir(meta.id), { recursive: true });
-  const tmp = metaPath(meta.id) + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(meta, null, 2));
-  fs.renameSync(tmp, metaPath(meta.id));
+  writePrivateJsonAtomic(metaPath(meta.id), meta, true);
   cacheMeta(meta);
 }
 
@@ -267,9 +284,7 @@ export function readTranscriptForSearch(id: string, maxBytes: number): SearchTra
 
 export function saveTranscript(id: string, segments: TranscriptSegment[]): void {
   assertValidId(id);
-  const tmp = transcriptPath(id) + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(segments));
-  fs.renameSync(tmp, transcriptPath(id));
+  writePrivateJsonAtomic(transcriptPath(id), segments);
 }
 
 export function minutesPath(id: string): string {
@@ -287,9 +302,7 @@ export function readMinutes(id: string): MeetingMinutes | undefined {
 
 export function saveMinutes(id: string, minutes: MeetingMinutes): void {
   assertValidId(id);
-  const tmp = minutesPath(id) + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(minutes));
-  fs.renameSync(tmp, minutesPath(id));
+  writePrivateJsonAtomic(minutesPath(id), minutes);
 }
 
 export function deleteRecording(id: string): void {

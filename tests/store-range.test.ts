@@ -1,11 +1,16 @@
+import fs from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   deleteRecording,
   listGuildMetasInRange,
+  minutesPath,
   readTranscriptForSearch,
+  recordingDir,
   RecordingMeta,
   saveMeta,
+  saveMinutes,
   saveTranscript,
+  transcriptPath,
 } from '../src/store';
 
 const created: string[] = [];
@@ -38,6 +43,24 @@ afterEach(() => {
 });
 
 describe('listGuildMetasInRange', () => {
+  it('persiste diretório e artefatos da gravação somente para o dono', () => {
+    if (process.platform === 'win32') return;
+    const value = meta('2026-07-09-private-files', '2026-07-09T12:00:00Z');
+    saveTranscript(value.id, [{ startMs: 0, endMs: 1_000, speaker: 'Ana', text: 'segredo' }]);
+    saveMinutes(value.id, {
+      resumo: 'Resumo privado',
+      decisoes: [],
+      acoes: [],
+      topicos: [],
+      porParticipante: [],
+    });
+
+    expect(fs.statSync(recordingDir(value.id)).mode & 0o777).toBe(0o700);
+    for (const file of [`${recordingDir(value.id)}/meta.json`, transcriptPath(value.id), minutesPath(value.id)]) {
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    }
+  });
+
   it('respeita a janela real mesmo quando o dia local cruza dois prefixos UTC', () => {
     meta('2026-07-09-range-before', '2026-07-09T02:59:59Z');
     meta('2026-07-09-range-start', '2026-07-09T03:00:00Z');

@@ -3,6 +3,7 @@ import path from 'node:path';
 import express, { NextFunction, Request, Response } from 'express';
 import { config } from '../config';
 import { freeMB } from '../disk';
+import { client } from '../discord/client';
 import { isClientReady } from '../discord/ready';
 import { Locale } from '../i18n';
 import { cook, CookBusyError, CookFormat, COOK_FORMATS } from '../processing/cook';
@@ -25,7 +26,7 @@ import {
   transcriptReady,
 } from '../store';
 import { checkAccess } from './access';
-import { mountMcpApi } from './api';
+import { FixedWindowRateLimiter, mountMcpApi } from './api';
 import {
   beginLogin,
   finishLogin,
@@ -36,7 +37,8 @@ import {
   signMcpRefresh,
   WebUser,
 } from './auth';
-import { createSession, listUserSessions, revokeUser, revokeUserSession } from './mcpTokens';
+import { applyCspNonce, contentSecurityPolicy, createCspNonce } from './csp';
+import { createSession, listUserSessions, McpSessionCapacityError, revokeUser, revokeUserSession } from './mcpTokens';
 import {
   connectPage,
   messagePage,
@@ -46,18 +48,35 @@ import {
   RecordingsSort,
 } from './page';
 import { landingPage } from './landing';
+import { docsPage } from './docs';
 import { searchRecordings } from './search';
+import { localeCookie, localeFromValue, resolveWebLocale } from './site';
 import { beginDownload, endDownload, hasActiveDownloads } from './tracker';
 
-/** Idioma da página pelo Accept-Language do navegador (pt-BR ou inglês). */
-// Idioma da página: escolha explícita (?lang) > cookie salvo > PADRÃO INGLÊS.
-// Inglês por padrão pra não misturar idiomas; o usuário troca no toggle e fica salvo.
+const SPACE_GROTESK_FONT =
+  require.resolve('@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2');
+const BRAND_DIR = path.join(process.cwd(), 'docs', 'brand');
+const BRAND_MARK = path.join(BRAND_DIR, 'kassinao-mark-64.png');
+const FAVICON = path.join(BRAND_DIR, 'favicon-32.png');
+const APPLE_TOUCH_ICON = path.join(BRAND_DIR, 'apple-touch-icon-180.png');
+const PUBLIC_VISUALS = [
+  ['discord-demo-pt.webm', 'video/webm'],
+  ['discord-demo-en.webm', 'video/webm'],
+  ['discord-demo-pt.png', 'image/png'],
+  ['discord-demo-en.png', 'image/png'],
+  ['discord-demo-pt.gif', 'image/gif'],
+  ['discord-demo-en.gif', 'image/gif'],
+  ['meeting-demo-pt.png', 'image/png'],
+  ['meeting-demo-en.png', 'image/png'],
+] as const;
+
 function pageLang(req: Request): Locale {
-  const q = String(req.query.lang ?? '').toLowerCase();
-  if (q === 'pt' || q === 'en') return q;
-  const m = (req.headers.cookie ?? '').match(/(?:^|;\s*)kassinao_lang=(pt|en)\b/);
-  if (m) return m[1] as Locale;
-  return 'en';
+  return resolveWebLocale({
+    query: req.query.lang,
+    cookie: req.headers.cookie,
+    acceptLanguage: req.headers['accept-language'],
+    fallback: config.defaultLocale,
+  });
 }
 
 const MSG = {
@@ -112,6 +131,37 @@ const MSG = {
     pt: 'O Kassinão está conectando ao Discord. Recarregue em alguns segundos.',
     en: 'Kassinão is connecting to Discord. Reload in a few seconds.',
   },
+  tooManyRequests: {
+    pt: 'Muitas requisições. Tente de novo em instantes.',
+    en: 'Too many requests. Try again shortly.',
+  },
+  noAudio: { pt: 'Sem áudio disponível.', en: 'No audio available.' },
+  recordingInProgress: { pt: 'Gravação em andamento.', en: 'Recording in progress.' },
+  audioExpired: { pt: 'O áudio desta gravação expirou.', en: 'This recording audio has expired.' },
+  processingBusy: {
+    pt: 'Muitas gravações estão sendo processadas agora. Tente de novo em instantes.',
+    en: 'Too many recordings are being processed right now. Try again shortly.',
+  },
+  audioPrepareError: { pt: 'Erro ao preparar o áudio.', en: 'Could not prepare the audio.' },
+  invalidFormat: { pt: 'Formato inválido.', en: 'Invalid format.' },
+  downloadAfterStop: {
+    pt: 'Gravação em andamento. Baixe depois de encerrar.',
+    en: 'Recording in progress. Download it after stopping.',
+  },
+  audioExpiredTextKept: {
+    pt: 'O áudio desta gravação expirou. A transcrição e a ata continuam na página.',
+    en: 'This recording audio has expired. The transcript and meeting notes remain available.',
+  },
+  mcpMembershipTitle: { pt: 'Servidor do Discord necessário', en: 'Discord server required' },
+  mcpMembership: {
+    pt: 'Sua conta precisa ser membro atual de pelo menos um servidor onde o Kassinão está instalado.',
+    en: 'Your account must currently belong to at least one server where Kassinão is installed.',
+  },
+  mcpCapacityTitle: { pt: 'Limite de conexões atingido', en: 'Connection limit reached' },
+  mcpCapacity: {
+    pt: 'O limite global de conexões foi atingido. Tente novamente mais tarde.',
+    en: 'The global connection limit has been reached. Try again later.',
+  },
 } as const;
 
 /** Inexistente e sem acesso são deliberadamente indistinguíveis. */
@@ -139,6 +189,43 @@ function notReady(res: Response, l: Locale, user?: WebUser): boolean {
   return true;
 }
 
+interface MembershipGuild {
+  members: {
+    fetch(options: { user: string; force: true; cache: true }): Promise<unknown>;
+  };
+}
+
+export type CurrentGuildMembership = 'member' | 'not-member' | 'unavailable';
+
+/** Confirma membership pela REST do Discord; cache local nunca autoriza a criação. */
+export async function currentGuildMembership(
+  userId: string,
+  guilds: Iterable<MembershipGuild> = client.guilds.cache.values(),
+): Promise<CurrentGuildMembership> {
+  let unavailable = false;
+  for (const guild of guilds) {
+    try {
+      await guild.members.fetch({ user: userId, force: true, cache: true });
+      return 'member';
+    } catch (err) {
+      const code = err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
+      if (code !== 10007 && code !== 10013) unavailable = true;
+    }
+  }
+  return unavailable ? 'unavailable' : 'not-member';
+}
+
+/** Destino canônico para HTTP público; undefined mantém HTTPS e probes locais. */
+export function httpsRedirectTarget(req: Request, baseUrl = config.baseUrl): string | undefined {
+  if (!baseUrl.startsWith('https://') || req.secure || isLoopbackAddress(req.socket.remoteAddress)) return undefined;
+  const requestPath = req.originalUrl.startsWith('/') ? req.originalUrl : '/';
+  return `${baseUrl}${requestPath}`;
+}
+
+export function isRateLimitedWebPath(pathname: string): boolean {
+  return /^\/(app|rec|auth|demo|conectar-ia|gravacoes)\b/i.test(pathname);
+}
+
 export function startWebServer(): void {
   const app = express();
   app.disable('x-powered-by');
@@ -146,21 +233,39 @@ export function startWebServer(): void {
   // pra o rate-limit por IP não ser burlado forjando X-Forwarded-For.
   app.set('trust proxy', 1);
 
-  // Headers de segurança (defesa em profundidade barata). CSP permite o próprio
-  // site + avatares do Discord + estilos/scripts inline (a página usa inline).
+  // Cloudflare pode aceitar HTTP mesmo quando a origem canônica é HTTPS. O
+  // destino usa BASE_URL, nunca Host controlado pelo cliente; probes locais do
+  // container continuam funcionando em HTTP.
+  app.use((req, res, next) => {
+    const target = httpsRedirectTarget(req);
+    if (target) {
+      res.redirect(308, target);
+      return;
+    }
+    next();
+  });
+
+  // Um nonce diferente por resposta libera apenas os scripts que os templates
+  // marcaram deliberadamente. Conteúdo injetado com <script> não recebe nonce.
   app.use((_req, res, next) => {
+    const nonce = createCspNonce();
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader(
-      'Content-Security-Policy',
-      "default-src 'self'; img-src 'self' https://cdn.discordapp.com data:; media-src 'self'; " +
-        "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; " +
-        "base-uri 'none'; form-action 'self'; object-src 'none'",
-    );
+    res.setHeader('Content-Security-Policy', contentSecurityPolicy(nonce));
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     if (config.baseUrl.startsWith('https')) {
       res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     }
+
+    const originalSend = res.send;
+    res.send = function (this: Response, body: Parameters<Response['send']>[0]): Response {
+      const contentType = String(res.getHeader('Content-Type') ?? '');
+      const securedBody =
+        typeof body === 'string' && contentType.toLowerCase().startsWith('text/html')
+          ? applyCspNonce(body, nonce)
+          : body;
+      return originalSend.call(this, securedBody);
+    } as Response['send'];
     next();
   });
 
@@ -177,6 +282,31 @@ export function startWebServer(): void {
     res.set('Cache-Control', 'no-store').json({ ok: true, ready: isClientReady() });
   });
 
+  // Fonte da interface servida localmente. Mantém a página independente de CDN
+  // e permite cache imutável porque a versão do arquivo acompanha o lockfile.
+  app.get('/assets/space-grotesk.woff2', (_req, res) => {
+    res.type('font/woff2').set('Cache-Control', 'public, max-age=31536000, immutable').sendFile(SPACE_GROTESK_FONT);
+  });
+  app.get('/assets/kassinao-mark.png', (_req, res) => {
+    res.type('png').set('Cache-Control', 'public, max-age=31536000, immutable').sendFile(BRAND_MARK);
+  });
+  app.get('/favicon-32.png', (_req, res) => {
+    res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(FAVICON);
+  });
+  app.get('/assets/apple-touch-icon.png', (_req, res) => {
+    res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(APPLE_TOUCH_ICON);
+  });
+  for (const [fileName, contentType] of PUBLIC_VISUALS) {
+    app.get(`/assets/${fileName}`, (_req, res) => {
+      const file = path.join(BRAND_DIR, fileName);
+      if (!fs.existsSync(file)) {
+        res.status(404).end();
+        return;
+      }
+      res.type(contentType).set('Cache-Control', 'public, max-age=31536000, immutable').sendFile(file);
+    });
+  }
+
   // Diagnóstico usado antes de deploy/restart, acessível só DENTRO do container
   // (`docker exec ... fetch(localhost/health/details)`). Mantém o stop seguro sem
   // anunciar ao mundo se há uma call ativa nem quanto disco resta.
@@ -192,23 +322,14 @@ export function startWebServer(): void {
 
   // Rate-limit leve por IP nas rotas web (a API /api/* tem o dela). Segura
   // brute-force/reconhecimento sem incomodar uso real.
-  const webHits = new Map<string, { n: number; reset: number }>();
+  const webRateLimiter = new FixedWindowRateLimiter();
   app.use((req: Request, res: Response, next: NextFunction) => {
     // /i: o roteamento do Express é case-insensitive por padrão — sem a flag,
     // /APP/rec/... chegaria ao handler sem passar pelo contador
-    if (!/^\/(app|rec|auth|demo|conectar-ia|gravacoes)\b/i.test(req.path)) return next();
-    const now = Date.now();
-    if (webHits.size > 5000) {
-      for (const [k, v] of webHits) if (v.reset < now) webHits.delete(k);
-      // Mesmo sob ataque distribuído, o mapa não cresce sem limite.
-      while (webHits.size > 5000) webHits.delete(webHits.keys().next().value as string);
-    }
+    if (!isRateLimitedWebPath(req.path)) return next();
     const ip = req.ip ?? 'unknown';
-    const h = webHits.get(ip);
-    if (!h || h.reset < now) {
-      webHits.set(ip, { n: 1, reset: now + 60_000 });
-    } else if (++h.n > 120) {
-      res.status(429).set('Retry-After', '30').send('Muitas requisições — tente de novo em instantes.');
+    if (webRateLimiter.consume(ip, 120, 60_000)) {
+      res.status(429).set('Retry-After', '30').send(MSG.tooManyRequests[pageLang(req)]);
       return;
     }
     next();
@@ -216,11 +337,8 @@ export function startWebServer(): void {
 
   // Persiste a escolha de idioma (?lang=en|pt) num cookie de 1 ano.
   app.use((req, res, next) => {
-    const q = String(req.query.lang ?? '').toLowerCase();
-    if (q === 'pt' || q === 'en') {
-      const secure = config.baseUrl.startsWith('https') ? '; Secure' : '';
-      res.append('Set-Cookie', `kassinao_lang=${q}; Path=/; Max-Age=31536000; SameSite=Lax${secure}`);
-    }
+    const q = localeFromValue(req.query.lang);
+    if (q) res.append('Set-Cookie', localeCookie(q, config.baseUrl.startsWith('https')));
     next();
   });
 
@@ -233,6 +351,11 @@ export function startWebServer(): void {
   };
   app.use('/app', privateNoStore);
   app.use('/auth', privateNoStore);
+  app.use('/app', (req, res, next) => {
+    const locale = pageLang(req);
+    res.set('Content-Language', locale === 'pt' ? 'pt-BR' : 'en');
+    next();
+  });
 
   // SameSite=Lax não basta contra um subdomínio irmão comprometido (same-site).
   // Toda mutação web autenticada exige o Origin exato do Kassinão quando o
@@ -279,28 +402,64 @@ export function startWebServer(): void {
       );
     });
 
-    app.post('/app/conectar-ia/gerar', express.urlencoded({ extended: false, limit: '2kb' }), (req, res) => {
-      const l = pageLang(req);
-      const user = getWebUser(req);
-      if (!user) {
-        beginLogin(res, '/app/conectar-ia');
-        return;
-      }
-      // apelido opcional ("Claude do notebook") — só exibição na lista de gestão
-      const label = String((req.body as Record<string, unknown>)?.label ?? '')
-        .trim()
-        .slice(0, 40);
-      // O usuário recebe um REFRESH token (o conector troca por access via /api/mcp/refresh).
-      const s = createSession(user.id, user.name, label);
-      const refreshToken = signMcpRefresh({ id: user.id, name: user.name, exp: s.exp, jti: s.sid, gen: s.gen });
-      console.log(
-        `MCP: sessão ${s.sid} criada para ${cleanInline(user.name)} (${user.id}) via web${label ? ` — "${cleanInline(label)}"` : ''}.`,
-      );
-      res
-        .set('Cache-Control', 'no-store')
-        .type('html')
-        .send(connectPage({ lang: l, user, refreshToken, label }));
-    });
+    app.post(
+      '/app/conectar-ia/gerar',
+      express.urlencoded({ extended: false, limit: '2kb' }),
+      async (req, res, next) => {
+        try {
+          const l = pageLang(req);
+          const user = getWebUser(req);
+          if (!user) {
+            beginLogin(res, '/app/conectar-ia');
+            return;
+          }
+          if (notReady(res, l, user)) return;
+          const membership = await currentGuildMembership(user.id);
+          if (membership === 'unavailable') {
+            res
+              .status(503)
+              .set('Retry-After', '5')
+              .type('html')
+              .send(messagePage(MSG.startingTitle[l], MSG.starting[l], user, l));
+            return;
+          }
+          if (membership === 'not-member') {
+            res
+              .status(403)
+              .type('html')
+              .send(messagePage(MSG.mcpMembershipTitle[l], MSG.mcpMembership[l], user, l));
+            return;
+          }
+          // apelido opcional ("Claude do notebook") — só exibição na lista de gestão
+          const label = String((req.body as Record<string, unknown>)?.label ?? '')
+            .trim()
+            .slice(0, 40);
+          // O usuário recebe um REFRESH token (o conector troca por access via /api/mcp/refresh).
+          let s;
+          try {
+            s = createSession(user.id, user.name, label);
+          } catch (err) {
+            if (!(err instanceof McpSessionCapacityError)) throw err;
+            res
+              .status(503)
+              .set('Retry-After', '60')
+              .type('html')
+              .send(messagePage(MSG.mcpCapacityTitle[l], MSG.mcpCapacity[l], user, l));
+            return;
+          }
+          const refreshToken = signMcpRefresh({ id: user.id, name: user.name, exp: s.exp, jti: s.sid, gen: s.gen });
+          console.log(
+            `MCP: sessão ${s.sid} criada para ${cleanInline(user.name)} (${cleanInline(user.id)}) via web${label ? ` — "${cleanInline(label)}"` : ''}.`,
+          );
+          res
+            .set('Cache-Control', 'no-store')
+            .type('html')
+            .send(connectPage({ lang: l, user, refreshToken, label }));
+        } catch (err) {
+          next(err);
+        }
+      },
+    );
 
     // revoga UMA conexão — só do próprio usuário (revokeUserSession valida o dono)
     app.post('/app/conectar-ia/revogar/:sid', (req, res) => {
@@ -314,7 +473,7 @@ export function startWebServer(): void {
       // sendo logado só quando pertence ao usuário, não entra cru no log
       if (ok)
         console.log(
-          `MCP: sessão ${cleanInline(req.params.sid)} revogada por ${cleanInline(user.name)} (${user.id}) via web.`,
+          `MCP: sessão ${cleanInline(req.params.sid)} revogada por ${cleanInline(user.name)} (${cleanInline(user.id)}) via web.`,
         );
       res.redirect(ok ? '/app/conectar-ia?revoked=one' : '/app/conectar-ia');
     });
@@ -326,7 +485,7 @@ export function startWebServer(): void {
         return;
       }
       const n = revokeUser(user.id);
-      console.log(`MCP: ${n} sessão(ões) revogada(s) por ${cleanInline(user.name)} (${user.id}) via web.`);
+      console.log(`MCP: ${n} sessão(ões) revogada(s) por ${cleanInline(user.name)} (${cleanInline(user.id)}) via web.`);
       res.redirect('/app/conectar-ia?revoked=1');
     });
 
@@ -339,61 +498,118 @@ export function startWebServer(): void {
     });
   }
 
+  const sendPublicPage = (res: Response, locale: Locale, html: string): void => {
+    res
+      .append('Set-Cookie', localeCookie(locale, config.baseUrl.startsWith('https')))
+      .set('Content-Language', locale === 'pt' ? 'pt-BR' : 'en')
+      .type('html')
+      .send(html);
+  };
+
   app.get('/', (req, res) => {
-    // landing = vitrine pública, cega pra sessão de propósito: a única ponte
-    // público→app é o "entrar" do rodapé. O app (/app/*) é mundo à parte.
-    res.type('html').send(landingPage(pageLang(req)));
+    if (localeFromValue(req.query.lang) === 'en') {
+      res.redirect(302, '/en');
+      return;
+    }
+    sendPublicPage(res, 'pt', landingPage('pt'));
   });
 
-  // Demo PÚBLICA (sem login) — serve SOMENTE os dados fictícios de docs/example.
-  // Totalmente separada das rotas /rec/:id (gravações reais), que continuam protegidas.
-  const DEMO_DIR = path.join(process.cwd(), 'docs', 'example');
-  const readDemo = () => {
+  app.get('/en', (_req, res) => {
+    sendPublicPage(res, 'en', landingPage('en'));
+  });
+
+  app.get('/docs', (req, res) => {
+    if (localeFromValue(req.query.lang) === 'en') {
+      res.redirect(302, '/en/docs');
+      return;
+    }
+    sendPublicPage(res, 'pt', docsPage('pt'));
+  });
+
+  app.get('/en/docs', (_req, res) => {
+    sendPublicPage(res, 'en', docsPage('en'));
+  });
+
+  // A demo pública usa somente o fixture fictício versionado em docs/example.
+  // Gravações reais continuam exclusivamente sob /app/*, com login e checkAccess.
+  const demoDir = path.join(process.cwd(), 'docs', 'example');
+  const readDemo = (
+    locale: Locale,
+  ): {
+    meta: RecordingMeta;
+    transcript: ReturnType<typeof readTranscript>;
+    minutes: ReturnType<typeof readMinutes>;
+  } | null => {
     try {
       return {
-        meta: JSON.parse(fs.readFileSync(path.join(DEMO_DIR, 'meta.json'), 'utf8')) as RecordingMeta,
-        transcript: JSON.parse(fs.readFileSync(path.join(DEMO_DIR, 'transcript.json'), 'utf8')),
-        minutes: JSON.parse(fs.readFileSync(path.join(DEMO_DIR, 'minutes.json'), 'utf8')),
+        meta: JSON.parse(fs.readFileSync(path.join(demoDir, 'meta.json'), 'utf8')) as RecordingMeta,
+        transcript: JSON.parse(
+          fs.readFileSync(path.join(demoDir, locale === 'pt' ? 'transcript.pt.json' : 'transcript.json'), 'utf8'),
+        ),
+        minutes: JSON.parse(
+          fs.readFileSync(path.join(demoDir, locale === 'pt' ? 'minutes.pt.json' : 'minutes.json'), 'utf8'),
+        ),
       };
     } catch {
       return null;
     }
   };
 
-  app.get('/demo', (req, res) => {
-    const l = pageLang(req);
-    const d = readDemo();
-    if (!d) {
+  const sendDemo = (res: Response, locale: Locale): void => {
+    const demo = readDemo(locale);
+    if (!demo) {
       res
         .status(404)
         .type('html')
-        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], undefined, l));
+        .send(messagePage(MSG.notFoundTitle[locale], MSG.notFound[locale], undefined, locale));
       return;
     }
-    res.type('html').send(
-      recordingPage(d.meta, {
+    sendPublicPage(
+      res,
+      locale,
+      recordingPage(demo.meta, {
         live: false,
         canDelete: false,
-        lang: l,
-        transcript: d.transcript,
-        minutes: d.minutes,
+        lang: locale,
+        transcript: demo.transcript,
+        minutes: demo.minutes,
         demo: true,
       }),
     );
+  };
+
+  app.get('/demo', (req, res) => {
+    if (localeFromValue(req.query.lang) === 'en') {
+      res.redirect(302, '/en/demo');
+      return;
+    }
+    sendDemo(res, 'pt');
+  });
+
+  app.get('/en/demo', (_req, res) => {
+    sendDemo(res, 'en');
   });
 
   app.get('/demo/audio', (_req, res) => {
-    const f = path.join(DEMO_DIR, 'sample-audio.mp3');
-    if (!fs.existsSync(f)) {
+    const sample = path.join(demoDir, 'sample-audio.mp3');
+    if (!fs.existsSync(sample)) {
       res.status(404).send('sem áudio de amostra');
       return;
     }
-    res.sendFile(f);
+    res.type('audio/mpeg').set('Cache-Control', 'public, max-age=86400').sendFile(sample);
   });
 
-  // Cartão de social share (Open Graph / Twitter) da landing — asset estático.
+  // Cartão de social share (Open Graph / Twitter) da landing.
   app.get('/og.png', (_req, res) => {
     const f = path.join(process.cwd(), 'docs', 'og.png');
+    if (!fs.existsSync(f)) {
+      res.status(404).send('sem og');
+      return;
+    }
+    res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(f);
+  });
+  app.get('/og-:locale(pt|en).png', (req, res) => {
+    const f = path.join(process.cwd(), 'docs', `og-${req.params.locale}.png`);
     if (!fs.existsSync(f)) {
       res.status(404).send('sem og');
       return;
@@ -472,6 +688,10 @@ export function startWebServer(): void {
         // transitório: melhor omitir do índice do que travar a página
       }
     }
+    // A busca usa sempre as 100 mais recentes, independentemente da ordenação
+    // escolhida para a biblioteca. Ordenar por antigas/tamanho não pode mudar
+    // silenciosamente o universo pesquisado.
+    const searchableMetas = items.slice(0, 100).map((item) => item.meta);
     // ordenação server-side; "maiores" precisa dos bytes, então é só pro dono
     const sortQ = String(req.query.sort ?? 'recent');
     const sort: RecordingsSort = sortQ === 'oldest' ? 'oldest' : sortQ === 'largest' && owner ? 'largest' : 'recent';
@@ -479,7 +699,7 @@ export function startWebServer(): void {
     else if (sort === 'largest') items.sort((a, b) => (b.audioBytes ?? 0) - (a.audioBytes ?? 0));
     // busca lê transcript.json (síncrono) — limita às 100 mais recentes pra não
     // segurar o event loop (que também recebe o áudio das gravações ao vivo)
-    const hits = q ? searchRecordings(items.map((i) => i.meta).slice(0, 100), q) : undefined;
+    const hits = q ? searchRecordings(searchableMetas, q) : undefined;
     const flash = req.query.freed === '1' ? MSG.freedFlash[l] : req.query.deleted === '1' ? MSG.deletedFlash[l] : '';
     res.type('html').send(
       recordingsIndexPage(items, {
@@ -543,18 +763,18 @@ export function startWebServer(): void {
       return;
     }
     if (meta.participants.length === 0) {
-      res.status(404).send('sem áudio');
+      res.status(404).send(MSG.noAudio[l]);
       return;
     }
     // ao vivo: o mix seria parcial e não-cacheável (re-cozinha a cada hit) — bloqueia
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
     if (live) {
-      res.status(409).send('gravação em andamento');
+      res.status(409).send(MSG.recordingInProgress[l]);
       return;
     }
     // retenção em camadas: o áudio pode já ter expirado (texto continua na página)
     if (meta.audioDeleted) {
-      res.status(410).send('o áudio desta gravação expirou');
+      res.status(410).send(MSG.audioExpired[l]);
       return;
     }
     // marca ANTES do cook (que pode levar minutos): delete/cleanup não apagam no meio
@@ -569,11 +789,11 @@ export function startWebServer(): void {
     } catch (err) {
       endDownload(meta.id);
       if (err instanceof CookBusyError) {
-        res.status(503).set('Retry-After', '20').send('processando muitas gravações agora — tente em instantes');
+        res.status(503).set('Retry-After', '20').send(MSG.processingBusy[l]);
         return;
       }
       console.error(`Erro servindo áudio ${meta.id}:`, err);
-      res.status(500).send('erro ao preparar o áudio');
+      res.status(500).send(MSG.audioPrepareError[l]);
     }
   });
 
@@ -654,7 +874,7 @@ export function startWebServer(): void {
     if (notReady(res, l, user)) return;
     const format = req.params.format as CookFormat;
     if (!COOK_FORMATS.includes(format)) {
-      res.status(400).send('Formato inválido / invalid format.');
+      res.status(400).send(MSG.invalidFormat[l]);
       return;
     }
     const meta = readMeta(req.params.id);
@@ -671,11 +891,11 @@ export function startWebServer(): void {
     // entre formatos), enchendo o disco. Bloqueia igual à rota /audio até encerrar.
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
     if (live) {
-      res.status(409).send('gravação em andamento — baixe depois de encerrar');
+      res.status(409).send(MSG.downloadAfterStop[l]);
       return;
     }
     if (meta.audioDeleted) {
-      res.status(410).send('o áudio desta gravação expirou (a transcrição e a ata continuam na página)');
+      res.status(410).send(MSG.audioExpiredTextKept[l]);
       return;
     }
     // marca ANTES do cook: o processamento (minutos, em gravações longas) já
@@ -754,7 +974,7 @@ export function startWebServer(): void {
     deleteAudioOnly(meta);
     // cleanInline: nome vem do Discord (controlado pelo usuário) — sem quebra de
     // linha/ANSI forjando entradas de log (log injection)
-    console.log(`Áudio da gravação ${meta.id} liberado por ${cleanInline(user.name)} (${user.id}).`);
+    console.log(`Áudio da gravação ${meta.id} liberado por ${cleanInline(user.name)} (${cleanInline(user.id)}).`);
     res.redirect(req.query.back === 'index' ? '/app?freed=1' : `/app/rec/${meta.id}`);
   });
 
@@ -792,7 +1012,7 @@ export function startWebServer(): void {
     }
     deleteRecording(meta.id);
     forgetAudioBytes(meta.id);
-    console.log(`Gravação ${meta.id} apagada por ${cleanInline(user.name)} (${user.id}).`);
+    console.log(`Gravação ${meta.id} apagada por ${cleanInline(user.name)} (${cleanInline(user.id)}).`);
     // veio do índice de gestão → volta pra lá (com flash); da página → mensagem clássica
     if (req.query.back === 'index') {
       res.redirect('/app?deleted=1');

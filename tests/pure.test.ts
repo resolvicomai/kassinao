@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { allowMinutesBroadcast, safeSlice } from '../src/util';
-import { localeOf, t } from '../src/i18n';
+import { localeOf, localizeEvent, t } from '../src/i18n';
 import { formatDuration, formatOffset, joinNames, sanitizeFilename } from '../src/recorder/RecordingSession';
 import {
   buildLlmRequestBody,
+  buildMinutesPrompts,
   isOutputLimitReason,
   minutesToMarkdown,
   normalizeMinutes,
 } from '../src/processing/minutes';
-import { msToClock } from '../src/processing/transcribe';
+import { msToClock, transcriptToMarkdown } from '../src/processing/transcribe';
 
 describe('safeSlice', () => {
   it('não corta strings curtas', () => {
@@ -32,6 +33,11 @@ describe('i18n', () => {
     expect(t('pt', 'note.added', { offset: '00:10' })).toContain('00:10');
     // nomes com $& não podem corromper a mensagem
     expect(t('pt', 'event.joined', { name: 'a$&b' })).toContain('a$&b');
+  });
+  it('reapresenta eventos automáticos no idioma da interface sem alterar texto desconhecido', () => {
+    expect(localizeEvent('▶️ Recording started by Priya', 'pt')).toBe('▶️ Gravação iniciada por Priya');
+    expect(localizeEvent('🔊 Tobias entrou na call', 'en')).toBe('🔊 Tobias joined the call');
+    expect(localizeEvent('📌 observação escrita por uma pessoa', 'en')).toBe('📌 observação escrita por uma pessoa');
   });
 });
 
@@ -112,6 +118,62 @@ describe('normalizeMinutes (parsing defensivo)', () => {
     expect(md).toContain('## Resumo');
     expect(md).toContain('## Itens de ação');
     expect(md).toContain('## Por participante');
+  });
+  it('gera headings e labels em inglês sem traduzir o conteúdo da ata', () => {
+    const md = minutesToMarkdown({ voiceChannelName: 'Planning', locale: 'en', notes: [] } as never, {
+      resumo: 'Preço definido em R$ 49.',
+      decisoes: ['Manter o nome Zéfiro.'],
+      acoes: [{ tarefa: 'Enviar a proposta.', responsavel: 'João', prazo: 'sexta' }],
+      topicos: [{ titulo: 'Orçamento', inicioMs: 90000 }],
+      porParticipante: [{ nome: 'João', pontos: ['Aprovou o valor.'] }],
+    });
+    expect(md).toContain('# Meeting minutes — Planning');
+    expect(md).toContain('## Summary');
+    expect(md).toContain('## Action items');
+    expect(md).toContain('(owner: João • due: sexta)');
+    expect(md).toContain('Preço definido em R$ 49.');
+    expect(md).toContain('Manter o nome Zéfiro.');
+    expect(md).not.toContain('## Resumo');
+  });
+});
+
+describe('locale das saídas compartilhadas', () => {
+  it('monta prompts em inglês sem alterar as chaves públicas do schema', () => {
+    const prompts = buildMinutesPrompts({ locale: 'en' });
+    expect(prompts.locale).toBe('en');
+    expect(prompts.system).toContain('MEETING MINUTES in English');
+    expect(prompts.mapSystem).toContain('transcript EXCERPT into English');
+    expect(prompts.system).toContain('"resumo"');
+    expect(prompts.system).toContain('"porParticipante"');
+    expect(prompts.system).toContain('do not translate speech or quoted excerpts');
+  });
+
+  it('mantém PT-BR como fallback para gravações antigas sem locale', () => {
+    const prompts = buildMinutesPrompts({});
+    expect(prompts.locale).toBe('pt');
+    expect(prompts.system).toContain('ATA DE REUNIÃO em português do Brasil');
+  });
+
+  it('gera transcrição em inglês e mantém falas, nomes e notas intactos', () => {
+    const md = transcriptToMarkdown(
+      {
+        id: 'meeting-1',
+        locale: 'en',
+        startedAt: Date.UTC(2026, 6, 13, 15, 0, 0),
+        voiceChannelName: 'Product room',
+        participants: [{ name: 'João' }],
+        transcription: { status: 'partial', pendingTracks: ['Lívia'] },
+        notes: [{ atMs: 14_000, author: 'João', text: 'Plano de R$ 49 até sexta.' }],
+      } as never,
+      [{ startMs: 1_000, endMs: 2_000, speaker: 'João', text: 'Vamos manter o nome Zéfiro.' }],
+    );
+    expect(md).toContain('# Transcript — Product room');
+    expect(md).toContain('Recording `meeting-1`');
+    expect(md).toContain('**Partial transcript** — tracks not transcribed: Lívia.');
+    expect(md).toContain('## Recording notes');
+    expect(md).toContain('Vamos manter o nome Zéfiro.');
+    expect(md).toContain('Plano de R$ 49 até sexta.');
+    expect(md).not.toContain('## Notas da gravação');
   });
 });
 

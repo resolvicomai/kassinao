@@ -1,3 +1,4 @@
+import './privateUmask';
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -71,6 +72,14 @@ export function validateSecret(name: string, value: string, minBytes = 32): stri
 }
 
 const recordingsDir = path.resolve(process.env.RECORDINGS_DIR || './recordings');
+
+try {
+  fs.mkdirSync(recordingsDir, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') fs.chmodSync(recordingsDir, 0o700);
+} catch (err) {
+  console.error(`Não foi possível proteger o diretório de gravações ${recordingsDir}: ${(err as Error).message}`);
+  process.exit(1);
+}
 
 /**
  * Segredo usado para assinar os cookies de sessão da página web.
@@ -191,6 +200,15 @@ export const config = {
   /** true quando texto (transcrição/ata/meta) nunca expira sozinho. */
   textRetentionUnlimited,
   maxRecordingHours: numberEnv('MAX_RECORDING_HOURS', 6, { min: Number.EPSILON }),
+  /** Cooldown global por membro comum entre inícios manuais; admin ignora. */
+  manualRecordUserCooldownSec: numberEnv('MANUAL_RECORD_USER_COOLDOWN_SEC', 60, { min: 0, integer: true }),
+  /** Cooldown do servidor entre inícios manuais de membros comuns; admin ignora. */
+  manualRecordGuildCooldownSec: numberEnv('MANUAL_RECORD_GUILD_COOLDOWN_SEC', 15, { min: 0, integer: true }),
+  /** Teto móvel de 24h para inícios manuais por servidor; admin ignora e não consome quota. */
+  manualRecordGuildStartsPer24h: numberEnv('MANUAL_RECORD_GUILD_STARTS_PER_24H', 48, {
+    min: 1,
+    integer: true,
+  }),
   mp3Bitrate: process.env.MP3_BITRATE || '192k',
   cookieSecret: loadCookieSecret(),
   /** Fuso para datas no transcript .md e fallback da página (o navegador tem prioridade na web). */

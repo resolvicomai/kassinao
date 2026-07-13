@@ -12,9 +12,8 @@ import { AccessIdentity } from './auth';
  *  - iniciou a gravação OU esteve na call (falando ou mutado) → vê
  *  - tem "Gerenciar Servidor" AGORA → vê e apaga
  *  - quem iniciou também apaga
- *  - se o canal era público para @everyone no INÍCIO da gravação, quem ainda
- *    enxerga o canal pode ver; canal privado nunca libera o histórico para quem
- *    ganhou permissão só depois da call
+ *  - a permissão atual de Ver Canal nunca libera histórico: quem não estava na
+ *    call precisa de grant explícito de iniciador ou administrador
  */
 
 export interface Access {
@@ -46,7 +45,19 @@ function isUnknownMember(err: unknown): boolean {
 // cascata de members.fetch ao listar N gravações e protege a gravação ao vivo.
 // member === null = "confirmado NÃO-membro". Erro transitório não é cacheado.
 const MEMBER_TTL_MS = 45_000;
+export const MEMBER_CACHE_MAX_ENTRIES = 5_000;
 const memberCache = new Map<string, { member: GuildMember | null; at: number }>();
+
+function cacheMember(key: string, member: GuildMember | null): void {
+  // delete + set atualiza a ordem LRU também quando a entrada já existia.
+  memberCache.delete(key);
+  memberCache.set(key, { member, at: Date.now() });
+  while (memberCache.size > MEMBER_CACHE_MAX_ENTRIES) {
+    const oldest = memberCache.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    memberCache.delete(oldest);
+  }
+}
 
 async function fetchMemberCached(guildId: string, userId: string, forceRefresh = false): Promise<GuildMember | null> {
   const guild = client.guilds.cache.get(guildId);
@@ -61,11 +72,11 @@ async function fetchMemberCached(guildId: string, userId: string, forceRefresh =
     // revogada poderia sobreviver indefinidamente. Toda renovação deste cache é
     // portanto autoritativa via REST.
     const member = await guild.members.fetch({ user: userId, force: true, cache: true });
-    memberCache.set(key, { member, at: Date.now() });
+    cacheMember(key, member);
     return member;
   } catch (err) {
     if (isUnknownMember(err)) {
-      memberCache.set(key, { member: null, at: Date.now() }); // saiu do servidor
+      cacheMember(key, null); // saiu do servidor
       return null;
     }
     throw new TransientAccessError('members.fetch falhou (transitório)');
@@ -85,14 +96,15 @@ export function recordingIdentityGrant(userId: string, meta: RecordingMeta): Acc
   return { view: isInitiator || isParticipant || wasPresent, delete: isInitiator };
 }
 
-/** Só calls públicas no início aceitam o ViewChannel atual como grant histórico. */
-export function allowsCurrentChannelGrant(meta: RecordingMeta): boolean {
-  return meta.sourceEveryoneViewable === true;
-}
-
 /** Invalida o cache de um membro (chamado no guildMemberRemove). */
 export function forgetMember(guildId: string, userId: string): void {
   memberCache.delete(`${guildId}:${userId}`);
+}
+
+/** Remove todas as identidades de um servidor quando o bot sai dele. */
+export function forgetGuildMembers(guildId: string): void {
+  const prefix = `${guildId}:`;
+  for (const key of memberCache.keys()) if (key.startsWith(prefix)) memberCache.delete(key);
 }
 
 async function computeAccess(
@@ -130,23 +142,7 @@ async function computeAccess(
     del = true;
   }
 
-  let channelUnknown = false;
-  // Participante/iniciador/admin já tem resposta; call privada jamais usa a
-  // audiência atual. Só consulta o canal quando ele ainda pode mudar o veredito.
-  if (!view && allowsCurrentChannelGrant(meta)) {
-    let channel = guild.channels.cache.get(meta.voiceChannelId) ?? null;
-    if (!channel) {
-      try {
-        channel = await guild.channels.fetch(meta.voiceChannelId);
-      } catch (err) {
-        // canal apagado (10003) = sem grant por canal; transitório = desconhecido
-        if (!(err && typeof err === 'object' && (err as { code?: unknown }).code === 10003)) channelUnknown = true;
-      }
-    }
-    if (channel?.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel)) view = true;
-  }
-
-  return { view, delete: del, serverLayersUnknown: channelUnknown && !view };
+  return { view, delete: del, serverLayersUnknown: false };
 }
 
 /**

@@ -33,30 +33,93 @@ interface Session {
 const FILE = path.join(config.recordingsDir, '.mcp-sessions.json');
 const sessions = new Map<string, Session>();
 let loaded = false;
+const MAX_SESSIONS_PER_USER = 10;
+const MAX_SESSIONS_TOTAL = 5_000;
+
+export class McpSessionCapacityError extends Error {
+  constructor() {
+    super('limite global de sessões MCP atingido');
+    this.name = 'McpSessionCapacityError';
+  }
+}
+
+interface CapacitySession {
+  sid: string;
+  userId: string;
+  createdAt: number;
+}
+
+/**
+ * Planeja a admissão sem revogar terceiros: o usuário pode substituir suas
+ * próprias conexões antigas, mas um registro global cheio recusa novos donos.
+ */
+export function planSessionCapacity(
+  existing: readonly CapacitySession[],
+  userId: string,
+  limits = { perUser: MAX_SESSIONS_PER_USER, total: MAX_SESSIONS_TOTAL },
+): { canCreate: boolean; evictSids: string[] } {
+  const owned = existing.filter((session) => session.userId === userId).sort((a, b) => a.createdAt - b.createdAt);
+  const evictSids = owned.slice(0, Math.max(0, owned.length - limits.perUser + 1)).map((session) => session.sid);
+  if (existing.length - evictSids.length >= limits.total) return { canCreate: false, evictSids: [] };
+  return { canCreate: true, evictSids };
+}
 
 function load(): void {
   if (loaded) return;
   loaded = true;
   try {
-    const arr = JSON.parse(fs.readFileSync(FILE, 'utf8')) as Session[];
-    for (const s of arr) if (s && typeof s.sid === 'string') sessions.set(s.sid, s);
+    const parsed = JSON.parse(fs.readFileSync(FILE, 'utf8')) as unknown;
+    if (!Array.isArray(parsed)) return;
+    const now = Date.now();
+    const valid = parsed
+      .filter((value): value is Session => {
+        if (!value || typeof value !== 'object') return false;
+        const s = value as Partial<Session>;
+        return (
+          typeof s.sid === 'string' &&
+          s.sid.length > 0 &&
+          typeof s.userId === 'string' &&
+          s.userId.length > 0 &&
+          typeof s.name === 'string' &&
+          Number.isInteger(s.gen) &&
+          (s.gen as number) >= 0 &&
+          typeof s.exp === 'number' &&
+          Number.isFinite(s.exp) &&
+          s.exp > now &&
+          typeof s.createdAt === 'number' &&
+          Number.isFinite(s.createdAt)
+        );
+      })
+      .sort((a, b) => b.createdAt - a.createdAt);
+    const perUser = new Map<string, number>();
+    for (const session of valid) {
+      if (sessions.size >= MAX_SESSIONS_TOTAL) break;
+      const owned = perUser.get(session.userId) ?? 0;
+      if (owned >= MAX_SESSIONS_PER_USER || sessions.has(session.sid)) continue;
+      sessions.set(session.sid, session);
+      perUser.set(session.userId, owned + 1);
+    }
+    if (sessions.size !== parsed.length) persist();
   } catch {
     // primeiro uso — arquivo ainda não existe
   }
-  gcSessions();
 }
 
 function persist(): void {
-  fs.mkdirSync(path.dirname(FILE), { recursive: true });
+  const dir = path.dirname(FILE);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') fs.chmodSync(dir, 0o700);
   const tmp = `${FILE}.${process.pid}.tmp`;
   const fd = fs.openSync(tmp, 'w', 0o600);
   try {
+    if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
     fs.writeSync(fd, JSON.stringify([...sessions.values()]));
     fs.fsyncSync(fd); // durabilidade: revogação não pode "voltar" após um crash
   } finally {
     fs.closeSync(fd);
   }
   fs.renameSync(tmp, FILE);
+  if (process.platform !== 'win32') fs.chmodSync(FILE, 0o600);
 }
 
 /** Descarta sessões expiradas. Retorna quantas saíram. */
@@ -64,7 +127,7 @@ export function gcSessions(): number {
   const now = Date.now();
   let removed = 0;
   for (const [sid, s] of sessions) {
-    if (s.exp < now) {
+    if (s.exp <= now) {
       sessions.delete(sid);
       removed++;
     }
@@ -82,6 +145,12 @@ export interface NewSession {
 /** Cria uma nova sessão de conector para um usuário (label = apelido opcional). */
 export function createSession(userId: string, name: string, label?: string): NewSession {
   load();
+  gcSessions();
+  // Criar tokens repetidamente não pode fazer o registro crescer sem limite.
+  // Mantém as conexões mais recentes do próprio usuário, sem afetar terceiros.
+  const capacity = planSessionCapacity([...sessions.values()], userId);
+  if (!capacity.canCreate) throw new McpSessionCapacityError();
+  for (const sid of capacity.evictSids) sessions.delete(sid);
   const sid = crypto.randomUUID();
   const exp = Date.now() + config.mcpRefreshTtlDays * 86400000;
   sessions.set(sid, { sid, userId, name, gen: 0, exp, createdAt: Date.now(), label: label || undefined });
@@ -93,7 +162,13 @@ export function createSession(userId: string, name: string, label?: string): New
 export function isActiveSession(sid: string): boolean {
   load();
   const s = sessions.get(sid);
-  return !!s && s.exp >= Date.now();
+  if (!s) return false;
+  if (s.exp <= Date.now()) {
+    sessions.delete(sid);
+    persist();
+    return false;
+  }
+  return true;
 }
 
 export type RotateResult =
@@ -107,7 +182,12 @@ export type RotateResult =
 export function rotateSession(sid: string, presentedGen: number): RotateResult {
   load();
   const s = sessions.get(sid);
-  if (!s || s.exp < Date.now()) return { ok: false, reason: 'unknown' };
+  if (!s) return { ok: false, reason: 'unknown' };
+  if (s.exp <= Date.now()) {
+    sessions.delete(sid);
+    persist();
+    return { ok: false, reason: 'unknown' };
+  }
   if (presentedGen !== s.gen) {
     sessions.delete(sid);
     persist();
