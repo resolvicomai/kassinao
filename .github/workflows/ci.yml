@@ -30,7 +30,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: |
             package-lock.json
-            mcp/package-lock.json
+            mcp/npm-shrinkwrap.json
       - name: Install root dependencies
         run: npm ci
       - name: Audit root dependencies

@@ -57,10 +57,11 @@ describe('documentation page', () => {
     expect(html).toContain('Default: disabled');
     expect(html).toContain('YOUR_APP_ID');
     expect(html).toContain('https://YOUR-KASSINAO');
-    expect(html).toContain('PASTE_THE_TOKEN');
+    expect(html).toContain('PROFILE_PRINTED_BY_THE_COMMAND');
+    expect(html).not.toContain('KASSINAO_REFRESH_TOKEN');
     expect(html).not.toContain('SEU_APP_ID');
     expect(html).not.toContain('https://SEU-KASSINAO');
-    expect(html).not.toContain('COLE_O_TOKEN');
+    expect(html).not.toContain('PERFIL_IMPRESSO_PELO_COMANDO');
     expect(html).not.toMatch(/Default: (?:obrigat.ria|vazio|desligado|gerado e persistido)/iu);
     expect(html).not.toContain('Default: padrão do provider');
     expect(html).not.toContain('Default: openrouter ou groq');

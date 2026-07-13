@@ -28,6 +28,8 @@ interface Session {
   label?: string;
   /** último refresh bem-sucedido = conector em uso (sessões antigas não têm). */
   lastSeenAt?: number;
+  /** Retry idempotente da rotação mais recente, sem guardar nenhum token. */
+  lastRefreshAttempt?: { id: string; fromGen: number; replayUntil: number };
 }
 
 const FILE = path.join(config.recordingsDir, '.mcp-sessions.json');
@@ -87,7 +89,16 @@ function load(): void {
           Number.isFinite(s.exp) &&
           s.exp > now &&
           typeof s.createdAt === 'number' &&
-          Number.isFinite(s.createdAt)
+          Number.isFinite(s.createdAt) &&
+          (s.lastRefreshAttempt === undefined ||
+            (typeof s.lastRefreshAttempt === 'object' &&
+              s.lastRefreshAttempt !== null &&
+              isRefreshAttemptId(s.lastRefreshAttempt.id) &&
+              Number.isInteger(s.lastRefreshAttempt.fromGen) &&
+              s.lastRefreshAttempt.fromGen >= 0 &&
+              s.lastRefreshAttempt.fromGen < (s.gen as number) &&
+              typeof s.lastRefreshAttempt.replayUntil === 'number' &&
+              Number.isFinite(s.lastRefreshAttempt.replayUntil)))
         );
       })
       .sort((a, b) => b.createdAt - a.createdAt);
@@ -109,17 +120,30 @@ function persist(): void {
   const dir = path.dirname(FILE);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (process.platform !== 'win32') fs.chmodSync(dir, 0o700);
-  const tmp = `${FILE}.${process.pid}.tmp`;
-  const fd = fs.openSync(tmp, 'w', 0o600);
+  const tmp = `${FILE}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  const noFollow = process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW;
   try {
-    if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
-    fs.writeSync(fd, JSON.stringify([...sessions.values()]));
-    fs.fsyncSync(fd); // durabilidade: revogação não pode "voltar" após um crash
+    const fd = fs.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow, 0o600);
+    try {
+      if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
+      fs.writeSync(fd, JSON.stringify([...sessions.values()]));
+      fs.fsyncSync(fd); // durabilidade: revogação não pode "voltar" após um crash
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, FILE);
+    if (process.platform !== 'win32') {
+      fs.chmodSync(FILE, 0o600);
+      const directoryFd = fs.openSync(dir, fs.constants.O_RDONLY);
+      try {
+        fs.fsyncSync(directoryFd);
+      } finally {
+        fs.closeSync(directoryFd);
+      }
+    }
   } finally {
-    fs.closeSync(fd);
+    fs.rmSync(tmp, { force: true });
   }
-  fs.renameSync(tmp, FILE);
-  if (process.platform !== 'win32') fs.chmodSync(FILE, 0o600);
 }
 
 /** Descarta sessões expiradas. Retorna quantas saíram. */
@@ -172,14 +196,21 @@ export function isActiveSession(sid: string): boolean {
 }
 
 export type RotateResult =
-  { ok: true; gen: number; userId: string; name: string; exp: number } | { ok: false; reason: 'unknown' | 'reuse' };
+  | { ok: true; gen: number; userId: string; name: string; exp: number; replayed: boolean }
+  | { ok: false; reason: 'unknown' | 'reuse' };
+
+export function isRefreshAttemptId(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
+}
+
+const REFRESH_REPLAY_TTL_MS = 5 * 60_000;
 
 /**
  * Rotaciona o refresh: confere a geração apresentada, detecta reuso e emite a
  * próxima geração. `reuse` = alguém apresentou um refresh antigo (roubado) →
  * a sessão inteira é morta por segurança.
  */
-export function rotateSession(sid: string, presentedGen: number): RotateResult {
+export function rotateSession(sid: string, presentedGen: number, attemptId?: string): RotateResult {
   load();
   const s = sessions.get(sid);
   if (!s) return { ok: false, reason: 'unknown' };
@@ -188,16 +219,32 @@ export function rotateSession(sid: string, presentedGen: number): RotateResult {
     persist();
     return { ok: false, reason: 'unknown' };
   }
+  if (
+    presentedGen === s.gen - 1 &&
+    attemptId !== undefined &&
+    s.lastRefreshAttempt?.id === attemptId &&
+    s.lastRefreshAttempt.fromGen === presentedGen &&
+    Date.now() <= s.lastRefreshAttempt.replayUntil
+  ) {
+    // A resposta anterior se perdeu depois da persistência. Reemite a mesma
+    // geração em vez de interpretar o retry idêntico como roubo.
+    s.lastSeenAt = Date.now();
+    persist();
+    return { ok: true, gen: s.gen, userId: s.userId, name: s.name, exp: s.exp, replayed: true };
+  }
   if (presentedGen !== s.gen) {
     sessions.delete(sid);
     persist();
     return { ok: false, reason: 'reuse' };
   }
+  const fromGen = s.gen;
   s.gen += 1;
   s.exp = Date.now() + config.mcpRefreshTtlDays * 86400000; // janela deslizante
   s.lastSeenAt = Date.now(); // refresh bem-sucedido = conector em uso
+  s.lastRefreshAttempt =
+    attemptId === undefined ? undefined : { id: attemptId, fromGen, replayUntil: Date.now() + REFRESH_REPLAY_TTL_MS };
   persist();
-  return { ok: true, gen: s.gen, userId: s.userId, name: s.name, exp: s.exp };
+  return { ok: true, gen: s.gen, userId: s.userId, name: s.name, exp: s.exp, replayed: false };
 }
 
 /** Revoga uma sessão específica pelo sid. */
@@ -274,29 +321,51 @@ export function revokeUserSession(userId: string, sid: string): boolean {
 interface PendingCode {
   userId: string;
   name: string;
+  label?: string;
   exp: number;
 }
 
 const codes = new Map<string, PendingCode>();
+const codeByUser = new Map<string, string>();
 const CODE_TTL_MS = 5 * 60 * 1000;
+export const MAX_PENDING_EXCHANGE_CODES = 5_000;
+
+export class McpExchangeCodeCapacityError extends Error {
+  constructor() {
+    super('limite global de códigos MCP pendentes atingido');
+    this.name = 'McpExchangeCodeCapacityError';
+  }
+}
 
 function gcCodes(): void {
   const now = Date.now();
-  for (const [code, c] of codes) if (c.exp < now) codes.delete(code);
+  for (const [code, c] of codes) {
+    if (c.exp >= now) continue;
+    codes.delete(code);
+    if (codeByUser.get(c.userId) === code) codeByUser.delete(c.userId);
+  }
 }
 
 /** Cria um código curto de uso único (~5 min) que o binário MCP troca por tokens. */
-export function createExchangeCode(userId: string, name: string): string {
+export function createExchangeCode(userId: string, name: string, label?: string): string {
   gcCodes();
+  const previous = codeByUser.get(userId);
+  if (previous) codes.delete(previous);
+  if (codes.size >= MAX_PENDING_EXCHANGE_CODES) {
+    codeByUser.delete(userId);
+    throw new McpExchangeCodeCapacityError();
+  }
   const code = crypto.randomBytes(24).toString('base64url');
-  codes.set(code, { userId, name, exp: Date.now() + CODE_TTL_MS });
+  codes.set(code, { userId, name, label: label || undefined, exp: Date.now() + CODE_TTL_MS });
+  codeByUser.set(userId, code);
   return code;
 }
 
 /** Consome o código (uso único: apagado em qualquer tentativa). undefined se inválido/expirado. */
-export function consumeExchangeCode(code: string): { userId: string; name: string } | undefined {
+export function consumeExchangeCode(code: string): { userId: string; name: string; label?: string } | undefined {
   const c = codes.get(code);
   if (c) codes.delete(code);
+  if (c && codeByUser.get(c.userId) === code) codeByUser.delete(c.userId);
   if (!c || c.exp < Date.now()) return undefined;
-  return { userId: c.userId, name: c.name };
+  return { userId: c.userId, name: c.name, label: c.label };
 }

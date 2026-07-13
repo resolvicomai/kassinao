@@ -371,7 +371,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).toContain('#geral · Servidor B');
   });
 
-  it('não oferece troca de idioma no estado que exibe o token MCP uma única vez', () => {
+  it('não oferece troca de idioma nem põe refresh token no estado do código MCP', () => {
     const user: WebUser = {
       typ: 'session',
       id: 'u-token',
@@ -383,10 +383,14 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     const html = connectPage({
       lang: 'pt',
       user,
-      refreshToken: 'preview-token',
+      exchangeCode: 'preview-one-time-code',
       label: 'Claude',
     });
-    expect(html).toContain('Copie esta configuração agora.');
+    expect(html).toContain('Use este código agora.');
+    expect(html).toContain('preview-one-time-code');
+    expect(html).toContain('exchange --stdin --url');
+    expect(html).not.toContain('exchange preview-one-time-code');
+    expect(html).not.toContain('KASSINAO_REFRESH_TOKEN');
     expect(html).not.toContain('data-app-locale');
   });
 
