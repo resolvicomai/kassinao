@@ -4,9 +4,6 @@ export interface ManualRecordingStartLimits {
   maxStartsPerGuild24h: number;
 }
 
-export type ManualStartAdmission =
-  { ok: true } | { ok: false; reason: 'user-cooldown' | 'guild-cooldown' | 'guild-daily-limit'; retryAfterMs: number };
-
 export type ManualStartReservation =
   | { ok: true; commit(): void; rollback(): void }
   | { ok: false; reason: 'user-cooldown' | 'guild-cooldown' | 'guild-daily-limit'; retryAfterMs: number };
@@ -77,13 +74,6 @@ export class ManualRecordingStartLimiter {
         this.pending.delete(reservationId);
       },
     };
-  }
-
-  admit(guildId: string, userId: string, isAdmin: boolean, now = Date.now()): ManualStartAdmission {
-    const reservation = this.reserve(guildId, userId, isAdmin, now);
-    if (!reservation.ok) return reservation;
-    reservation.commit();
-    return { ok: true };
   }
 
   private latestStart(

@@ -26,7 +26,7 @@ import {
   transcriptionNeedsAudio,
   transcriptReady,
 } from '../store';
-import { checkAccess } from './access';
+import { checkAccess, createAccessRequestContext } from './access';
 import { mountMcpApi } from './api';
 import {
   beginLogin,
@@ -192,7 +192,7 @@ function notReady(res: Response, l: Locale, user?: WebUser): boolean {
 
 interface MembershipGuild {
   members: {
-    fetch(options: { user: string; force: true; cache: true }): Promise<unknown>;
+    fetch(options: { user: string; force: true; cache: false }): Promise<unknown>;
   };
 }
 
@@ -460,7 +460,7 @@ export async function currentGuildMembership(
   let unavailable = false;
   for (const guild of guilds) {
     try {
-      await guild.members.fetch({ user: userId, force: true, cache: true });
+      await guild.members.fetch({ user: userId, force: true, cache: false });
       return 'member';
     } catch (err) {
       const code = err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
@@ -779,9 +779,9 @@ export function startWebServer(): void {
             .trim()
             .slice(0, 40);
           // O usuário recebe um REFRESH token (o conector troca por access via /api/mcp/refresh).
-          let s;
+          let session;
           try {
-            s = createSession(user.id, user.name, label);
+            session = createSession(user.id, user.name, label);
           } catch (err) {
             if (!(err instanceof McpSessionCapacityError)) throw err;
             res
@@ -791,9 +791,15 @@ export function startWebServer(): void {
               .send(messagePage(MSG.mcpCapacityTitle[l], MSG.mcpCapacity[l], user, l));
             return;
           }
-          const refreshToken = signMcpRefresh({ id: user.id, name: user.name, exp: s.exp, jti: s.sid, gen: s.gen });
+          const refreshToken = signMcpRefresh({
+            id: user.id,
+            name: user.name,
+            exp: session.exp,
+            jti: session.sid,
+            gen: session.gen,
+          });
           console.log(
-            `MCP: sessão ${s.sid} criada para ${cleanInline(user.name)} (${cleanInline(user.id)}) via web${label ? ` — "${cleanInline(label)}"` : ''}.`,
+            `MCP: sessão ${session.sid} criada para ${cleanInline(user.name)} (${cleanInline(user.id)}) via web${label ? ` — "${cleanInline(label)}"` : ''}.`,
           );
           res
             .set('Cache-Control', 'no-store')
@@ -955,7 +961,7 @@ export function startWebServer(): void {
   const sendLocalizedOpenGraph = (res: Response, locale: Locale): void => {
     const f = path.join(process.cwd(), 'docs', locale === 'pt' ? 'og-pt.png' : 'og-en.png');
     if (!fs.existsSync(f)) {
-      res.status(404).send('sem og');
+      res.status(404).send(locale === 'pt' ? 'imagem social indisponível' : 'social image unavailable');
       return;
     }
     res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(f);
@@ -1019,8 +1025,8 @@ export function startWebServer(): void {
       return;
     }
     if (notReady(res, l, user)) return;
-    // mesma regra da página individual (checkAccess) aplicada meta a meta —
-    // o cache de membership (45s) segura o custo pra listas de um time pequeno
+    // mesma regra da página individual (checkAccess) aplicada meta a meta. A
+    // confirmação REST é deduplicada só durante este request, nunca entre requests.
     const all = listMetas()
       .filter((m) => !m.demo)
       .sort((a, b) => b.startedAt - a.startedAt)
@@ -1029,9 +1035,10 @@ export function startWebServer(): void {
     // "quanto custa cada gravação" não é da conta de quem só participou da call
     const owner = config.ownerIds.includes(user.id);
     const items: RecordingIndexItem[] = [];
+    const accessRequest = createAccessRequestContext();
     for (const m of all) {
       try {
-        const access = await checkAccess(user, m);
+        const access = await checkAccess(user, m, { requestContext: accessRequest });
         if (access.view)
           items.push({ meta: m, canDelete: access.delete, audioBytes: owner ? audioBytesOf(m.id) : undefined });
       } catch {

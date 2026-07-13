@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { ManualRecordingStartLimiter } from '../src/recorder/manualStartLimiter';
+import { ManualRecordingStartLimiter, ManualStartReservation } from '../src/recorder/manualStartLimiter';
+
+function commitStart(
+  limiter: ManualRecordingStartLimiter,
+  guildId: string,
+  userId: string,
+  isAdmin: boolean,
+  now: number,
+): { ok: true } | Exclude<ManualStartReservation, { ok: true }> {
+  const reservation = limiter.reserve(guildId, userId, isAdmin, now);
+  if (!reservation.ok) return reservation;
+  reservation.commit();
+  return { ok: true };
+}
 
 describe('limites de início manual de gravação', () => {
   it('desfaz a reserva quando a gravação falha e só cobra quando o início confirma', () => {
@@ -35,18 +48,18 @@ describe('limites de início manual de gravação', () => {
       maxStartsPerGuild24h: 10,
     });
 
-    expect(limiter.admit('guild-a', 'alice', false, 1_000)).toEqual({ ok: true });
-    expect(limiter.admit('guild-b', 'alice', false, 2_000)).toEqual({
+    expect(commitStart(limiter, 'guild-a', 'alice', false, 1_000)).toEqual({ ok: true });
+    expect(commitStart(limiter, 'guild-b', 'alice', false, 2_000)).toEqual({
       ok: false,
       reason: 'user-cooldown',
       retryAfterMs: 59_000,
     });
-    expect(limiter.admit('guild-a', 'bob', false, 2_000)).toEqual({
+    expect(commitStart(limiter, 'guild-a', 'bob', false, 2_000)).toEqual({
       ok: false,
       reason: 'guild-cooldown',
       retryAfterMs: 9_000,
     });
-    expect(limiter.admit('guild-b', 'alice', false, 61_000)).toEqual({ ok: true });
+    expect(commitStart(limiter, 'guild-b', 'alice', false, 61_000)).toEqual({ ok: true });
   });
 
   it('limita inícios por servidor numa janela móvel de 24 horas', () => {
@@ -56,14 +69,14 @@ describe('limites de início manual de gravação', () => {
       maxStartsPerGuild24h: 2,
     });
 
-    expect(limiter.admit('guild-a', 'alice', false, 1_000)).toEqual({ ok: true });
-    expect(limiter.admit('guild-a', 'bob', false, 2_000)).toEqual({ ok: true });
-    expect(limiter.admit('guild-a', 'carol', false, 3_000)).toEqual({
+    expect(commitStart(limiter, 'guild-a', 'alice', false, 1_000)).toEqual({ ok: true });
+    expect(commitStart(limiter, 'guild-a', 'bob', false, 2_000)).toEqual({ ok: true });
+    expect(commitStart(limiter, 'guild-a', 'carol', false, 3_000)).toEqual({
       ok: false,
       reason: 'guild-daily-limit',
       retryAfterMs: 86_398_000,
     });
-    expect(limiter.admit('guild-a', 'carol', false, 86_401_000)).toEqual({ ok: true });
+    expect(commitStart(limiter, 'guild-a', 'carol', false, 86_401_000)).toEqual({ ok: true });
   });
 
   it('não limita nem contabiliza administradores', () => {
@@ -73,13 +86,13 @@ describe('limites de início manual de gravação', () => {
       maxStartsPerGuild24h: 1,
     });
 
-    expect(limiter.admit('guild-a', 'admin', true, 1_000)).toEqual({ ok: true });
-    expect(limiter.admit('guild-a', 'alice', false, 2_000)).toEqual({ ok: true });
-    expect(limiter.admit('guild-a', 'bob', false, 3_000)).toMatchObject({
+    expect(commitStart(limiter, 'guild-a', 'admin', true, 1_000)).toEqual({ ok: true });
+    expect(commitStart(limiter, 'guild-a', 'alice', false, 2_000)).toEqual({ ok: true });
+    expect(commitStart(limiter, 'guild-a', 'bob', false, 3_000)).toMatchObject({
       ok: false,
       reason: 'guild-cooldown',
     });
-    expect(limiter.admit('guild-a', 'admin', true, 3_000)).toEqual({ ok: true });
+    expect(commitStart(limiter, 'guild-a', 'admin', true, 3_000)).toEqual({ ok: true });
   });
 
   it('mantém o estado em memória limitado e remove a identidade mais antiga', () => {
@@ -90,9 +103,9 @@ describe('limites de início manual de gravação', () => {
     });
 
     for (let i = 0; i <= 5_000; i++) {
-      expect(limiter.admit(`guild-${i}`, `user-${i}`, false, i + 1)).toEqual({ ok: true });
+      expect(commitStart(limiter, `guild-${i}`, `user-${i}`, false, i + 1)).toEqual({ ok: true });
     }
 
-    expect(limiter.admit('guild-new', 'user-0', false, 6_000)).toEqual({ ok: true });
+    expect(commitStart(limiter, 'guild-new', 'user-0', false, 6_000)).toEqual({ ok: true });
   });
 });

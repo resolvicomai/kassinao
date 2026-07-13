@@ -48,8 +48,8 @@ describe('criação de conexão MCP', () => {
     const missing = guildFetch('missing');
     const member = guildFetch('member');
     await expect(currentGuildMembership('user', [missing.guild, member.guild])).resolves.toBe('member');
-    expect(missing.fetch).toHaveBeenCalledWith({ user: 'user', force: true, cache: true });
-    expect(member.fetch).toHaveBeenCalledWith({ user: 'user', force: true, cache: true });
+    expect(missing.fetch).toHaveBeenCalledWith({ user: 'user', force: true, cache: false });
+    expect(member.fetch).toHaveBeenCalledWith({ user: 'user', force: true, cache: false });
 
     await expect(currentGuildMembership('user', [guildFetch('missing').guild])).resolves.toBe('not-member');
     await expect(currentGuildMembership('user', [guildFetch('transient').guild])).resolves.toBe('unavailable');

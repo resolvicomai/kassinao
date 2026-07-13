@@ -68,7 +68,7 @@ Most meeting bots start from one mixed recording and use diarization to infer wh
 - `/ask` right inside Discord — ask by topic, person, meeting date, or action deadline (for example, “Ana's actions due today”). The model selects relevant source IDs; the bot itself renders the real minutes/transcript evidence with authorized links. `days` is the fallback meeting window when the question has no period.
 - A web index with full-text search across every transcript, minutes doc, and note you're allowed to see.
 - An optional MCP connector plugs that same memory into Claude Desktop, Cursor, or any MCP-capable assistant.
-- Minutes get posted straight to a Discord channel the moment they're ready — no login required to read that summary.
+- The Discord channel receives only a generic completion notice; authorized participants receive the private link and minutes by DM.
 
 ## See the finished meeting
 
@@ -211,7 +211,7 @@ More knobs — disk guard, disk-full alerts, off-site backup via rclone — are 
 | `/status` | Current recording status |
 | `/recordings` | Your latest recordings, filtered by access — also links to the web index with full-text search |
 | `/ask <question> [days]` | Ask by topic, person, meeting date, or deadline — only you see server-rendered evidence from meetings you can access |
-| `/config minutes-channel` / `/config view` | Admin: pick the text channel where the minutes summary gets posted (default: the voice channel's own chat) |
+| `/config minutes-channel` / `/config view` | Admin: pick the text channel for the generic processing notice (details and links go only to authorized DMs) |
 | `/autorecord on/off/view` | Automatic recording per channel (admin) |
 | `/mcp new` / `/mcp revoke-all` | Owner-only (`OWNER_IDS`): generate or revoke an AI-connector code — regular members self-serve at `/app/conectar-ia` on the web |
 | `/help` | Interactive onboarding guide (also replies in DMs) |
@@ -266,7 +266,7 @@ flowchart LR
 
 Recording voice is processing personal data, so access control isn't a feature bullet here — it's the thing to actually verify:
 
-- Every page request is authenticated via Discord OAuth and requires current membership in the recording's server. Recordings are restricted to their starter, people who were present in the call, and current admins; being able to view the channel today never unlocks historical recordings. Destructive actions bypass the short membership cache and re-check Discord via REST. The full policy is one file: [`src/web/access.ts`](src/web/access.ts).
+- Every page request is authenticated via Discord OAuth and confirms current server membership through Discord REST. Recordings are restricted to their starter, people who were present in the call, and current admins; being able to view the channel today never unlocks historical recordings. A listing deduplicates that confirmation only inside its own request, while destructive actions always force a separate check. The full policy is one file: [`src/web/access.ts`](src/web/access.ts).
 - Nothing leaves your server for transcription unless you configure a cloud provider — and even then, only the VAD-trimmed speech segments go out, never full raw audio you didn't intend to transcribe.
 - Prefer zero retention on the wire: turn on your provider's Zero Data Retention option (Groq offers one), or skip the cloud path entirely with the local `command` transcription backend.
 - Secrets (`DISCORD_TOKEN`, `MCP_SECRET`, API keys) live only in your own `.env`, which ships git-ignored — never committed, never sent anywhere by the bot itself.
@@ -285,8 +285,8 @@ modified version as a network service (e.g. host the bot for others), the AGPL
 requires you to offer those users the corresponding source code. The bot's
 `/about` (`/sobre`) command links to this repository to satisfy that.
 
-Uses [ffmpeg](https://ffmpeg.org/) (via `ffmpeg-static`, GPL/LGPL) as a separate
-external binary; its own license applies to that binary.
+Uses [ffmpeg](https://ffmpeg.org/) as a separate external binary (installed from
+the signed Debian repository in Docker); its own GPL/LGPL license applies.
 
 ---
 

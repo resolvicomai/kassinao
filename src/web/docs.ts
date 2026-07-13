@@ -68,7 +68,10 @@ const COMMANDS: CommandDoc[] = [
       pt: 'Encerra a gravação, libera o link privado e inicia a fila de transcrição e ata.',
       en: 'Ends the recording, provides the private link, and starts the transcript and minutes queue.',
     },
-    access: { pt: 'Quem ainda enxerga o canal gravado', en: 'Anyone who can still see the recorded channel' },
+    access: {
+      pt: 'Iniciador, quem esteve na call ou admin atual',
+      en: 'Starter, call participants, or current admins',
+    },
   },
   {
     pt: '/nota <texto>',
@@ -77,7 +80,10 @@ const COMMANDS: CommandDoc[] = [
       pt: 'Salva uma nota no segundo atual. O painel também oferece ações para marcar um momento ou escrever uma nota.',
       en: 'Saves a note at the current second. The panel also includes actions to mark a moment or write a note.',
     },
-    access: { pt: 'Quem ainda enxerga o canal gravado', en: 'Anyone who can still see the recorded channel' },
+    access: {
+      pt: 'Iniciador, quem esteve na call ou admin atual',
+      en: 'Starter, call participants, or current admins',
+    },
   },
   {
     pt: '/status',
@@ -119,8 +125,8 @@ const COMMANDS: CommandDoc[] = [
     pt: '/config ata-canal|ver',
     en: '/config minutes-channel|view',
     description: {
-      pt: 'Escolhe o canal de texto onde a ata resumida será publicada ou consulta a configuração atual.',
-      en: 'Chooses the text channel where the minutes summary will be posted or displays the current configuration.',
+      pt: 'Escolhe o canal do aviso genérico de processamento ou consulta a configuração atual. Detalhes e links ficam nas DMs autorizadas.',
+      en: 'Chooses the channel for the generic processing notice or displays the current configuration. Details and links stay in authorized DMs.',
     },
     access: { pt: 'Gerenciar Servidor', en: 'Manage Server' },
   },
@@ -1765,7 +1771,8 @@ export function docsPage(lang: DocsLang = 'pt'): string {
     l === 'pt' ? 'Terminal' : 'Terminal',
     `git clone https://github.com/resolvicomai/kassinao.git
 cd kassinao
-cp .env.example .env`,
+cp .env.example .env && chmod 600 .env
+mkdir -p recordings && chmod 700 recordings`,
     copyLabel,
   );
   const start = codeBlock(
@@ -1795,7 +1802,7 @@ WHISPER_MODEL=small`,
   "mcpServers": {
     "kassinao": {
       "command": "npx",
-      "args": ["-y", "kassinao-mcp"],
+      "args": ["-y", "kassinao-mcp@1.0.3"],
       "env": {
         "KASSINAO_URL": "${T('https://SEU-KASSINAO', 'https://YOUR-KASSINAO')}",
         "KASSINAO_REFRESH_TOKEN": "${T('COLE_O_TOKEN', 'PASTE_THE_TOKEN')}"
@@ -2123,8 +2130,8 @@ WHISPER_MODEL=small`,
         ${codeBlock(
           l === 'pt' ? 'Terminal' : 'Terminal',
           T(
-            'KASSINAO_URL=https://SEU-KASSINAO npx -y kassinao-mcp exchange CODIGO',
-            'KASSINAO_URL=https://YOUR-KASSINAO npx -y kassinao-mcp exchange CODE',
+            'KASSINAO_URL=https://SEU-KASSINAO npx -y kassinao-mcp@1.0.3 exchange CODIGO',
+            'KASSINAO_URL=https://YOUR-KASSINAO npx -y kassinao-mcp@1.0.3 exchange CODE',
           ),
           copyLabel,
         )}

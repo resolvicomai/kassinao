@@ -91,6 +91,55 @@ export interface MinutesState {
   finishedAt?: number;
 }
 
+export type DiscordSurfaceAuditSource = 'persisted-panel' | 'discovered-url';
+export type DiscordSurfaceAuditOutcome = 'planned' | 'sanitized' | 'missing' | 'not-owned' | 'wrong-guild';
+
+export interface DiscordSurfaceAuditEntry {
+  channelId: string;
+  messageId: string;
+  source: DiscordSurfaceAuditSource;
+  outcome: DiscordSurfaceAuditOutcome;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DiscordSurfaceDiscoveryState {
+  channelId: string;
+  beforeMessageId?: string;
+  messagesScanned: number;
+  updatedAt: number;
+  completedAt?: number;
+  outcome?: 'complete' | 'missing' | 'wrong-guild';
+}
+
+export interface DiscordSurfaceMigrationState {
+  audits: DiscordSurfaceAuditEntry[];
+  discovery: DiscordSurfaceDiscoveryState[];
+  updatedAt: number;
+  completedAt?: number;
+  retryAttempt?: number;
+  nextRetryAt?: number;
+}
+
+/** Inventário por servidor: independe das metas, que podem já ter expirado. */
+export interface DiscordGuildSurfaceMigrationState {
+  guildId: string;
+  policyVersion?: number;
+  audits: DiscordSurfaceAuditEntry[];
+  discovery: DiscordSurfaceDiscoveryState[];
+  /** Próximo canal da rotação; evita starvation por histórico muito grande. */
+  nextDiscoveryIndex?: number;
+  channelsInventoriedAt?: number;
+  updatedAt: number;
+  completedAt?: number;
+  retryAttempt?: number;
+  nextRetryAt?: number;
+}
+
+export interface DiscordGuildSurfaceMigrationStore {
+  guilds: Record<string, DiscordGuildSurfaceMigrationState>;
+}
+
 export interface RecordingMeta {
   id: string;
   guildId: string;
@@ -100,11 +149,7 @@ export interface RecordingMeta {
   /** Painel do Discord, persistido para neutralização após crash/restart. */
   panelChannelId?: string;
   panelMessageId?: string;
-  /**
-   * O canal de voz era visível a @everyone no INÍCIO da gravação (audiência do
-   * consentimento). Fallback da entrega da ata quando o canal (efêmero) já foi
-   * apagado na hora de postar. Gravações antigas não têm este campo (= desconhecido).
-   */
+  /** Campo legado; preservado ao ler metas antigas, mas nunca concede acesso nem autoriza broadcast. */
   sourceEveryoneViewable?: boolean;
   /** Quem iniciou; null quando iniciada pelo auto-record. */
   startedBy: { id: string; name: string } | null;
@@ -130,6 +175,27 @@ export interface RecordingMeta {
   audioDeleted?: boolean;
   /** Quando o webhook da ata foi disparado (dedupe entre reinícios). */
   webhookSentAt?: number;
+  /** Fluxo de notificação durável; presente desde a criação nas gravações novas. */
+  notificationPolicyVersion?: number;
+  /** Quando o aviso genérico no canal foi confirmado. */
+  publicNotifiedAt?: number;
+  /** DMs privadas confirmadas; permite retomar falhas sem duplicar as já entregues. */
+  privateNotifiedUserIds?: string[];
+  /** Próxima identidade histórica ainda não percorrida pelo fanout privado. */
+  privateNotificationCursor?: number;
+  /** Identidades cuja confirmação autoritativa ou DM falhou e precisa de retry. */
+  privateNotificationPendingUserIds?: string[];
+  /** Quando todos os destinatários privados elegíveis foram avaliados sem falha transitória. */
+  privateNotifiedAt?: number;
+  /** Backoff persistido do aviso final; o sweep em processo retoma quando vencer. */
+  notificationRetryAttempt?: number;
+  notificationNextRetryAt?: number;
+  /** Falhas transitórias já foram tentadas até o orçamento; preserva estado sem retry infinito. */
+  notificationRetryExhaustedAt?: number;
+  /** Versão da política que garante ausência de detalhes/links em canais do Discord. */
+  discordSurfacePolicyVersion?: number;
+  /** Cursor e trilha de auditoria da neutralização das mensagens históricas do bot. */
+  discordSurfaceMigration?: DiscordSurfaceMigrationState;
   /** Quando o aviso final (canal/DM) foi enviado — o boot re-notifica se o processo morreu antes. */
   notifiedAt?: number;
   /** true apenas para a gravação de exemplo servida publicamente em /demo. */
@@ -155,23 +221,43 @@ function metaPath(id: string): string {
 const VALID_ID = /^[a-zA-Z0-9-]+$/;
 let metaCache: Map<string, RecordingMeta> | undefined;
 let guildMetaIds: Map<string, Set<string>> | undefined;
+/** IDs ordenados por startedAt desc; permite janelas limitadas sem varrer o arquivo inteiro. */
+let metaTimelineIds: string[] | undefined;
 
 function cloneMeta(meta: RecordingMeta): RecordingMeta {
   return structuredClone(meta);
 }
 
 function cacheMeta(meta: RecordingMeta): void {
-  if (!metaCache || !guildMetaIds) return;
+  if (!metaCache || !guildMetaIds || !metaTimelineIds) return;
   const previous = metaCache.get(meta.id);
   if (previous && previous.guildId !== meta.guildId) guildMetaIds.get(previous.guildId)?.delete(meta.id);
   metaCache.set(meta.id, cloneMeta(meta));
   const ids = guildMetaIds.get(meta.guildId) ?? new Set<string>();
   ids.add(meta.id);
   guildMetaIds.set(meta.guildId, ids);
+  if (!previous) {
+    metaTimelineIds.push(meta.id);
+    sortMetaTimeline();
+  } else if (previous.startedAt !== meta.startedAt) {
+    const index = metaTimelineIds.indexOf(meta.id);
+    if (index >= 0) metaTimelineIds.splice(index, 1);
+    metaTimelineIds.push(meta.id);
+    sortMetaTimeline();
+  }
+}
+
+function sortMetaTimeline(): void {
+  metaTimelineIds?.sort((leftId, rightId) => {
+    const left = metaCache?.get(leftId);
+    const right = metaCache?.get(rightId);
+    const byTime = (right?.startedAt ?? 0) - (left?.startedAt ?? 0);
+    return byTime || leftId.localeCompare(rightId);
+  });
 }
 
 function ensureMetaCache(): void {
-  if (metaCache && guildMetaIds) return;
+  if (metaCache && guildMetaIds && metaTimelineIds) return;
   const cache = new Map<string, RecordingMeta>();
   const byGuild = new Map<string, Set<string>>();
   let entries: fs.Dirent[] = [];
@@ -196,6 +282,8 @@ function ensureMetaCache(): void {
   }
   metaCache = cache;
   guildMetaIds = byGuild;
+  metaTimelineIds = [...cache.keys()];
+  sortMetaTimeline();
 }
 
 // Fail-closed: os writes recebem ids gerados pelo servidor, então um id fora do
@@ -223,6 +311,24 @@ function writePrivateJsonAtomic(file: string, value: unknown, pretty = false): v
   }
   fs.renameSync(tmp, file);
   if (process.platform !== 'win32') fs.chmodSync(file, 0o600);
+}
+
+const discordSurfaceInventoryPath = (): string => path.join(config.recordingsDir, '.discord-surface-inventory.json');
+
+export function readDiscordSurfaceInventory(): DiscordGuildSurfaceMigrationStore {
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(discordSurfaceInventoryPath(), 'utf8'),
+    ) as Partial<DiscordGuildSurfaceMigrationStore>;
+    if (!parsed.guilds || typeof parsed.guilds !== 'object' || Array.isArray(parsed.guilds)) return { guilds: {} };
+    return structuredClone({ guilds: parsed.guilds });
+  } catch {
+    return { guilds: {} };
+  }
+}
+
+export function saveDiscordSurfaceInventory(state: DiscordGuildSurfaceMigrationStore): void {
+  writePrivateJsonAtomic(discordSurfaceInventoryPath(), state, true);
 }
 
 export function saveMeta(meta: RecordingMeta): void {
@@ -311,11 +417,58 @@ export function deleteRecording(id: string): void {
   const previous = metaCache?.get(id);
   if (previous) guildMetaIds?.get(previous.guildId)?.delete(id);
   metaCache?.delete(id);
+  const timelineIndex = metaTimelineIds?.indexOf(id) ?? -1;
+  if (timelineIndex >= 0) metaTimelineIds?.splice(timelineIndex, 1);
 }
 
 export function listMetas(): RecordingMeta[] {
   ensureMetaCache();
-  return [...(metaCache?.values() ?? [])].map(cloneMeta);
+  return (metaTimelineIds ?? []).flatMap((id) => {
+    const meta = metaCache?.get(id);
+    return meta ? [cloneMeta(meta)] : [];
+  });
+}
+
+export interface ListMetasRangeResult {
+  metas: RecordingMeta[];
+  /** Existem metas adicionais na janela depois do teto solicitado. */
+  truncated: boolean;
+}
+
+/**
+ * Lê uma janela global já ordenada com busca binária e teto rígido. O chamador
+ * pode então aplicar filtros/ACL sem transformar uma consulta desde epoch em
+ * uma ordenação e clonagem O(arquivo inteiro).
+ */
+export function listMetasInRange(fromMs: number, toMs: number, limit: number): ListMetasRangeResult {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs) return { metas: [], truncated: false };
+  const safeLimit = Math.max(1, Math.floor(limit));
+  ensureMetaCache();
+  const timeline = metaTimelineIds ?? [];
+
+  // Primeira meta estritamente anterior ao limite superior da janela.
+  let low = 0;
+  let high = timeline.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const startedAt = metaCache?.get(timeline[middle])?.startedAt ?? 0;
+    if (startedAt >= toMs) low = middle + 1;
+    else high = middle;
+  }
+
+  const metas: RecordingMeta[] = [];
+  let truncated = false;
+  for (let index = low; index < timeline.length; index++) {
+    const meta = metaCache?.get(timeline[index]);
+    if (!meta) continue;
+    if (meta.startedAt < fromMs) break;
+    if (metas.length >= safeLimit) {
+      truncated = true;
+      break;
+    }
+    metas.push(cloneMeta(meta));
+  }
+  return { metas, truncated };
 }
 
 export function listGuildMetas(guildId: string, limit = 5): RecordingMeta[] {

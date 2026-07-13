@@ -19,16 +19,15 @@
  * Env:
  *   KASSINAO_URL             e.g. https://kassinao.example.com (required)
  *   KASSINAO_REFRESH_TOKEN   token generated in /app/conectar-ia (first use only; then stored)
+ *   KASSINAO_PROFILE         non-secret local profile id printed by `exchange`
  */
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readApiJson } from './apiResponse.js';
 import { loadCredentialStore } from './credentialStore.js';
 import {
+  createTokenProfileId,
   mayFallbackToEnvToken,
   normalizeKassinaoUrl,
   selectBootstrapRefreshToken,
@@ -51,9 +50,20 @@ function configuredUrl(): string {
 
 const URL_BASE = configuredUrl();
 const ENV_REFRESH_TOKEN = process.env.KASSINAO_REFRESH_TOKEN || '';
+const EXPLICIT_PROFILE = process.env.KASSINAO_PROFILE?.trim() || '';
+const PACKAGE_VERSION = (
+  JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+).version;
 const STORE_DIR = path.join(os.homedir(), '.config', 'kassinao-mcp');
 const LEGACY_STORE_FILE = path.join(STORE_DIR, 'token.json');
-const STORE_FILE = path.join(STORE_DIR, tokenStoreFileName(URL_BASE, ENV_REFRESH_TOKEN));
+const STORE_FILE = (() => {
+  try {
+    return path.join(STORE_DIR, tokenStoreFileName(URL_BASE, ENV_REFRESH_TOKEN, EXPLICIT_PROFILE));
+  } catch (err) {
+    console.error((err as Error).message);
+    process.exit(1);
+  }
+})();
 
 function syncStoreFile(file: string): void {
   const fd = fs.openSync(file, 'r+');
@@ -103,10 +113,10 @@ function loadStore(): StoredCredentials {
 
 // Store the refresh token on disk with mode 0600. An OS vault such as Keychain,
 // DPAPI, or libsecret is a future improvement; the README documents the current model.
-function saveStore(s: StoredCredentials): void {
+function saveStore(s: StoredCredentials, file = STORE_FILE): void {
   fs.mkdirSync(STORE_DIR, { recursive: true, mode: 0o700 });
   if (process.platform !== 'win32') fs.chmodSync(STORE_DIR, 0o700);
-  const tmp = `${STORE_FILE}.${process.pid}.tmp`;
+  const tmp = `${file}.${process.pid}.tmp`;
   try {
     const fd = fs.openSync(tmp, 'w', 0o600);
     try {
@@ -118,7 +128,7 @@ function saveStore(s: StoredCredentials): void {
     } finally {
       fs.closeSync(fd);
     }
-    fs.renameSync(tmp, STORE_FILE);
+    fs.renameSync(tmp, file);
     syncStoreDir(); // also makes the rename durable across a power failure
   } finally {
     fs.rmSync(tmp, { force: true });
@@ -336,14 +346,24 @@ async function runExchange(code: string): Promise<void> {
     process.exit(1);
   }
   const data = (await readApiJson(r)) as TokenResponse;
-  saveStore({ url: URL_BASE, refreshToken: data.refresh_token });
+  const profile = createTokenProfileId();
+  const profileStoreFile = path.join(STORE_DIR, tokenStoreFileName(URL_BASE, '', profile));
+  saveStore({ url: URL_BASE, refreshToken: data.refresh_token }, profileStoreFile);
   // The refresh token is already stored on disk with mode 0600; the config does not need it.
   const cfg = JSON.stringify(
-    { mcpServers: { kassinao: { command: 'npx', args: ['-y', 'kassinao-mcp'], env: { KASSINAO_URL: URL_BASE } } } },
+    {
+      mcpServers: {
+        kassinao: {
+          command: 'npx',
+          args: ['-y', `kassinao-mcp@${PACKAGE_VERSION}`],
+          env: { KASSINAO_URL: URL_BASE, KASSINAO_PROFILE: profile },
+        },
+      },
+    },
     null,
     2,
   );
-  console.error(`Connected. Token stored at ~/.config/kassinao-mcp/${path.basename(STORE_FILE)} (0600).`);
+  console.error(`Connected. Token stored at ~/.config/kassinao-mcp/${path.basename(profileStoreFile)} (0600).`);
   console.error('Paste this block into claude_desktop_config.json (or the Cursor equivalent), then restart the app:\n');
   console.log(cfg); // stdout contains only the copy-ready config
 }
@@ -351,12 +371,12 @@ async function runExchange(code: string): Promise<void> {
 // ---------- MCP server ----------
 
 async function runServer(): Promise<void> {
-  const packageVersion = (
-    JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-      version: string;
-    }
-  ).version;
-  const server = new Server({ name: 'kassinao', version: packageVersion }, { capabilities: { tools: {} } });
+  const [{ Server }, { StdioServerTransport }, { CallToolRequestSchema, ListToolsRequestSchema }] = await Promise.all([
+    import('@modelcontextprotocol/sdk/server/index.js'),
+    import('@modelcontextprotocol/sdk/server/stdio.js'),
+    import('@modelcontextprotocol/sdk/types.js'),
+  ]);
+  const server = new Server({ name: 'kassinao', version: PACKAGE_VERSION }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: TOOLS.map((t) => ({

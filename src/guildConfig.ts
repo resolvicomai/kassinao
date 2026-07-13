@@ -4,7 +4,7 @@ import { config } from './config';
 
 /** Configurações por servidor (persistidas em recordings/guildconfig.json). */
 export interface GuildConfig {
-  /** Canal de texto onde a ata resumida é postada quando fica pronta (além do chat do canal de voz). */
+  /** Canal de texto do aviso genérico de processamento; detalhes ficam nas DMs autorizadas. */
   minutesChannelId?: string;
   /** Quem configurou por último (auditoria). */
   updatedBy?: string;

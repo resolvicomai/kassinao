@@ -16,16 +16,18 @@ import {
   EmbedBuilder,
   Guild,
   Message,
-  PermissionFlagsBits,
+  MessageCreateOptions,
   VoiceBasedChannel,
 } from 'discord.js';
 import prism from 'prism-media';
 import { config } from '../config';
 import { freeMB } from '../disk';
+import { DISCORD_SURFACE_POLICY_VERSION } from '../discordSurfaceMigration';
 import { Locale, t } from '../i18n';
 import { alertOwners } from '../monitor';
 import { safeName } from '../sanitize';
 import { deleteRecording, pageUrl, RecordingMeta, saveMeta, tracksDir } from '../store';
+import { NOTIFICATION_POLICY_VERSION } from '../transcriptionNotification';
 import { safeSlice } from '../util';
 import { UserTrack } from './UserTrack';
 
@@ -53,7 +55,6 @@ export class RecordingStartCancelledError extends Error {
 
 const SILENCE_WARN_MS = 5 * 60 * 1000;
 const PANEL_EDIT_MIN_INTERVAL_MS = 2500;
-const MAX_PANEL_EVENTS = 10;
 /** Teto de faixas simultâneas (1 ffmpeg por falante) — protege CPU/processos num VPS pequeno. */
 const MAX_TRACKS = 25;
 /** Teto do log de eventos no meta (entra/sai em loop não pode inflar o JSON sem limite). */
@@ -63,6 +64,8 @@ const PRESENCE_EVENT_COOLDOWN_MS = 60_000;
 
 export class RecordingSession {
   readonly id: string;
+  /** Token efêmero dos controles Discord; nunca revela o id/URL da gravação. */
+  readonly controlToken: string;
   readonly guild: Guild;
   readonly voiceChannel: VoiceBasedChannel;
   startedAt: number;
@@ -101,6 +104,7 @@ export class RecordingSession {
     auto: boolean;
   }) {
     this.id = `${new Date().toISOString().slice(0, 10)}-${crypto.randomBytes(5).toString('hex')}`;
+    this.controlToken = crypto.randomBytes(12).toString('hex');
     this.guild = opts.guild;
     this.voiceChannel = opts.voiceChannel;
     this.locale = opts.locale;
@@ -114,11 +118,6 @@ export class RecordingSession {
       guildName: this.guild.name,
       voiceChannelId: this.voiceChannel.id,
       voiceChannelName: this.voiceChannel.name,
-      // snapshot no INÍCIO (audiência do consentimento): permissionsFor(role) é
-      // síncrono e vem do cache — se não der pra saber, fica undefined (desconhecido)
-      sourceEveryoneViewable: this.voiceChannel
-        .permissionsFor(this.guild.roles.everyone)
-        ?.has(PermissionFlagsBits.ViewChannel),
       startedBy: opts.startedBy,
       locale: this.locale,
       startedAt: this.startedAt,
@@ -127,6 +126,8 @@ export class RecordingSession {
       presence: [],
       events: [],
       notes: [],
+      notificationPolicyVersion: NOTIFICATION_POLICY_VERSION,
+      discordSurfacePolicyVersion: DISCORD_SURFACE_POLICY_VERSION,
     };
     this.addEvent(
       opts.startedBy
@@ -388,32 +389,38 @@ export class RecordingSession {
     }
   }
 
-  /** DM para quem iniciou, com o link da página (o acesso continua controlado pelo login). */
-  private sendStartDM(): void {
+  /** Confirma membership atual antes de colocar qualquer detalhe privado numa DM. */
+  private async sendStarterDM(payload: MessageCreateOptions): Promise<void> {
     const startedBy = this.meta.startedBy;
     if (!startedBy) return;
+    try {
+      await this.guild.members.fetch({ user: startedBy.id, force: true, cache: false });
+      await this.guild.client.users.send(startedBy.id, payload);
+    } catch {
+      // Saiu do servidor, Discord indisponível ou DM fechada: falha fechado.
+    }
+  }
+
+  /** DM para quem iniciou, com o link da página (o acesso continua controlado pelo login). */
+  private sendStartDM(): void {
     const l = this.locale;
-    this.guild.client.users
-      .send(startedBy.id, {
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0xed4245)
-            .setTitle(t(l, 'dm.title-start'))
-            .setDescription(
-              t(l, config.audioRetentionUnlimited ? 'dm.desc-start-unlimited' : 'dm.desc-start', {
-                channel: `#${safeName(this.voiceChannel.name)}`,
-                guild: safeName(this.guild.name),
-                url: this.pageUrl,
-                hours: config.maxRecordingHours,
-                expiresDays: config.retentionDays,
-              }),
-            )
-            .setFooter({ text: t(l, 'panel.footer') }),
-        ],
-      })
-      .catch(() => {
-        // DMs fechadas — o painel e o /gravacoes cobrem
-      });
+    void this.sendStarterDM({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xed4245)
+          .setTitle(t(l, 'dm.title-start'))
+          .setDescription(
+            t(l, config.audioRetentionUnlimited ? 'dm.desc-start-unlimited' : 'dm.desc-start', {
+              channel: `#${safeName(this.voiceChannel.name)}`,
+              guild: safeName(this.guild.name),
+              url: this.pageUrl,
+              hours: config.maxRecordingHours,
+              expiresDays: config.retentionDays,
+            }),
+          )
+          .setFooter({ text: t(l, 'panel.footer') }),
+      ],
+    });
   }
 
   private sendStopDM(): void {
@@ -432,18 +439,15 @@ export class RecordingSession {
             url: this.pageUrl,
             expires: `<t:${Math.floor((this.meta.expiresAt ?? endedAt) / 1000)}:D>`,
           });
-    // users.send funciona mesmo se a pessoa saiu do servidor (members.fetch não)
-    this.guild.client.users
-      .send(startedBy.id, {
-        embeds: [
-          new EmbedBuilder()
-            .setColor(this.meta.audioIncomplete ? 0xfee75c : empty ? 0x949ba4 : 0x57f287)
-            .setTitle(t(l, 'dm.title-stop'))
-            .setDescription(desc)
-            .setFooter({ text: t(l, 'panel.footer') }),
-        ],
-      })
-      .catch(() => {});
+    void this.sendStarterDM({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(this.meta.audioIncomplete ? 0xfee75c : empty ? 0x949ba4 : 0x57f287)
+          .setTitle(t(l, 'dm.title-stop'))
+          .setDescription(desc)
+          .setFooter({ text: t(l, 'panel.footer') }),
+      ],
+    });
   }
 
   /**
@@ -639,92 +643,44 @@ export class RecordingSession {
   private buildPanelPayload() {
     const l = this.locale;
     const isDone = this.meta.status === 'done';
+
+    // O canal serve para consentimento visível e controles durante a captura.
+    // Identidade, notas, eventos, id e URL ficam exclusivamente em superfícies
+    // autenticadas/DMs revalidadas, inclusive depois que a gravação termina.
+    if (isDone) {
+      return {
+        content: t(l, 'panel.greeting-done-private'),
+        embeds: [],
+        components: [],
+      };
+    }
+
     const embed = new EmbedBuilder()
-      .setColor(isDone ? 0x57f287 : 0xed4245)
-      .setTitle(
-        t(l, isDone ? 'panel.title-done' : 'panel.title-recording', {
-          channel: `#${safeName(this.voiceChannel.name)}`,
-        }),
-      )
+      .setColor(0xed4245)
+      .setTitle(t(l, 'panel.title-recording', { channel: `#${safeName(this.voiceChannel.name)}` }))
+      .setDescription(t(l, 'panel.desc-recording-private'))
       .setFooter({ text: t(l, 'panel.footer') });
 
-    if (isDone) {
-      const endedAt = this.meta.endedAt ?? Date.now();
-      embed.setDescription(
-        safeSlice(
-          t(l, config.audioRetentionUnlimited ? 'panel.desc-done-unlimited' : 'panel.desc-done', {
-            duration: formatDuration(endedAt - this.startedAt),
-            participants: joinNames(this.participantNames, l) || t(l, 'panel.no-participants'),
-            url: this.pageUrl,
-            expires: `<t:${Math.floor((this.meta.expiresAt ?? endedAt) / 1000)}:D>`,
-          }),
-          4000,
-        ),
-      );
-    } else {
-      embed.setDescription(
-        t(l, 'panel.desc-recording', {
-          rel: `<t:${Math.floor(this.startedAt / 1000)}:R>`,
-          starter: this.meta.startedBy
-            ? t(l, 'panel.by-user', { user: `<@${this.meta.startedBy.id}>` })
-            : t(l, 'panel.by-auto'),
-          url: this.pageUrl,
-        }),
-      );
-      embed.addFields(
-        { name: t(l, 'panel.field-id'), value: `\`${this.id}\``, inline: true },
-        { name: t(l, 'panel.field-limit'), value: `${config.maxRecordingHours}h`, inline: true },
-      );
-    }
-
-    // eventos mais recentes primeiro a entrar; corta por LINHA para não truncar no meio
-    const lines: string[] = [];
-    for (const e of this.meta.events.slice(-MAX_PANEL_EVENTS).reverse()) {
-      const line = safeSlice(`\`${formatOffset(e.atMs)}\` ${e.text}`, 180);
-      if (lines.join('\n').length + line.length + 1 > 1024) break;
-      lines.unshift(line);
-    }
-    if (lines.length > 0) {
-      embed.addFields({ name: t(l, 'panel.field-events'), value: lines.join('\n') });
-    }
-
     const row = new ActionRowBuilder<ButtonBuilder>();
-    if (!isDone) {
-      row.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`${STOP_BUTTON_ID}:${this.id}`)
-          .setLabel(t(l, 'panel.btn-stop'))
-          .setEmoji('⏹️')
-          .setStyle(ButtonStyle.Danger),
-        new ButtonBuilder()
-          .setCustomId(`${MARK_BUTTON_ID}:${this.id}`)
-          .setLabel(t(l, 'panel.btn-mark'))
-          .setEmoji('📌')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(`${NOTE_BUTTON_ID}:${this.id}`)
-          .setLabel(t(l, 'panel.btn-note'))
-          .setEmoji('📝')
-          .setStyle(ButtonStyle.Secondary),
-      );
-    }
     row.addComponents(
-      new ButtonBuilder().setLabel(t(l, 'panel.btn-page')).setStyle(ButtonStyle.Link).setURL(this.pageUrl),
+      new ButtonBuilder()
+        .setCustomId(`${STOP_BUTTON_ID}:${this.controlToken}`)
+        .setLabel(t(l, 'panel.btn-stop'))
+        .setEmoji('⏹️')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`${MARK_BUTTON_ID}:${this.controlToken}`)
+        .setLabel(t(l, 'panel.btn-mark'))
+        .setEmoji('📌')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`${NOTE_BUTTON_ID}:${this.controlToken}`)
+        .setLabel(t(l, 'panel.btn-note'))
+        .setEmoji('📝')
+        .setStyle(ButtonStyle.Secondary),
     );
 
-    // saudação amigável em texto puro ACIMA do embed (sem @menção, não faz ping).
-    // Deixa o time à vontade e explica o que está acontecendo — consentimento visível.
-    // Gravação vazia (ninguém falou) não promete ata/transcrição.
-    const empty = this.meta.participants.length === 0;
-    const greetingKey = isDone
-      ? this.meta.audioIncomplete
-        ? 'panel.greeting-done-incomplete'
-        : empty
-          ? 'panel.greeting-done-empty'
-          : 'panel.greeting-done'
-      : 'panel.greeting-recording';
-    const content = t(l, greetingKey);
-    return { content, embeds: [embed], components: [row] };
+    return { content: t(l, 'panel.greeting-recording'), embeds: [embed], components: [row] };
   }
 
   /** Edita o painel com throttle para não estourar o rate limit do Discord. */
@@ -801,9 +757,8 @@ export class RecordingSession {
     );
     saveMeta(this.meta);
 
-    // edição final do painel, sem throttle; se o painel sumiu, manda mensagem nova
-    // para o resumo (com o link) nunca se perder. Com teto: REST pendurado num
-    // shutdown não pode atrasar o processo até o SIGKILL.
+    // Edição final estritamente genérica. Link, participantes, eventos e notas
+    // seguem apenas por DM revalidada e nas superfícies autenticadas.
     await withTimeout(
       (async () => {
         try {
@@ -818,24 +773,6 @@ export class RecordingSession {
             if (this.voiceChannel.isTextBased()) await this.voiceChannel.send(this.buildPanelPayload());
           } catch {
             // sem permissão — o link continua acessível via /gravacoes
-          }
-        }
-
-        // O edit do painel é INVISÍVEL (a mensagem fica lá em cima no histórico):
-        // uma call que termina precisa de uma mensagem NOVA com o link, senão o
-        // time acha que a gravação se perdeu. Curta, sem embed — o painel é a fonte.
-        if (this.meta.participants.length > 0 && this.panelMessage) {
-          try {
-            if (this.voiceChannel.isTextBased()) {
-              await this.voiceChannel.send(
-                t(this.locale, this.meta.audioIncomplete ? 'record.stopped-link-incomplete' : 'record.stopped-link', {
-                  duration: formatDuration(endedAt - this.startedAt),
-                  url: this.pageUrl,
-                }),
-              );
-            }
-          } catch {
-            // sem permissão — painel/DM/gravacoes cobrem
           }
         }
       })(),

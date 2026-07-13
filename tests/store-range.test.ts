@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   deleteRecording,
   listGuildMetasInRange,
+  listMetasInRange,
   minutesPath,
   readTranscriptForSearch,
   recordingDir,
@@ -88,6 +89,25 @@ describe('listGuildMetasInRange', () => {
       { limit: 2 },
     );
     expect(result).toHaveLength(2);
+  });
+
+  it('limita a janela global em ordem recente e sinaliza continuação', () => {
+    for (let index = 0; index < 5; index++) {
+      meta(`2026-07-09-global-cap-${index}`, `2026-07-09T1${index}:00:00Z`);
+    }
+    const result = listMetasInRange(Date.parse('2026-07-09T00:00:00Z'), Date.parse('2026-07-10T00:00:00Z'), 2);
+
+    expect(result.metas.map((item) => item.id)).toEqual(['2026-07-09-global-cap-4', '2026-07-09-global-cap-3']);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('não confunde metas mais novas fora da janela com truncamento interno', () => {
+    meta('2026-07-10-newer-outside', '2026-07-10T12:00:00Z');
+    meta('2026-07-09-only-inside', '2026-07-09T12:00:00Z');
+    const result = listMetasInRange(Date.parse('2026-07-09T00:00:00Z'), Date.parse('2026-07-10T00:00:00Z'), 5);
+
+    expect(result.metas.map((item) => item.id)).toEqual(['2026-07-09-only-inside']);
+    expect(result.truncated).toBe(false);
   });
 
   it('não deixa gravações de outra guild ocuparem o corte', () => {

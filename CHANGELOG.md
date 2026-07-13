@@ -21,11 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The official hosted service now uses `kassinao.cloud` for the landing/demo, `docs.kassinao.cloud` for documentation, `app.kassinao.cloud` for OAuth and private recordings/transcripts, and `mcp.kassinao.cloud` for the connector API. Unconfigured or retired origins cannot access API, OAuth, or private routes.
+- Gemini transcription now defaults to `gemini-3.5-flash` because Google shut down `gemini-2.0-flash` on 2026-06-01. Operators using `TRANSCRIBE_PROVIDER=gemini` without an explicit `TRANSCRIBE_MODEL` should review the current Gemini pricing before upgrading.
 - `/ask` now resolves meeting dates separately from action deadlines (including relative deadlines such as `today`, `tomorrow`, and weekdays), ranks eligible meetings before applying context limits, and searches structured minutes fields including decisions, actions, owners, due dates, topics, attendance, and per-participant notes.
 - `kassinao-mcp` 1.0.3 pins saved refresh tokens to their issuing instance, isolates multiple local connections, serializes concurrent refreshes, preserves sessions across transient 429/5xx responses, and reports its package version to MCP clients.
 - Private web/API responses are `no-store`; session cookies are scoped to `/app`; state cookies are scoped to `/auth`; app mutations validate the exact request origin.
-- Recording access now requires current server membership. Private-channel history is limited to its starter/participants and current admins; only channels public to `@everyone` when recording began may follow their current audience.
-- Container capabilities are dropped and the Node, Cloudflare Tunnel, and autoheal images are pinned to immutable multi-architecture digests.
+- Recording access now requires current server membership. History is limited to its starter, people who were present, and current admins; channel completion notices never include recording content, identifiers, or links.
+- Container capabilities are dropped, the app runs without root, Node and Cloudflare Tunnel images are pinned to immutable multi-architecture digests, and socket-mounted autoheal is replaced by a restricted host watchdog.
+- Native Opus is compiled from the signed npm tarball and ffmpeg comes from the signed Debian repository; install scripts no longer fetch unverified executable assets. Generated MCP configs pin the exact published connector version, whose audited runtime dependency graph is bundled in the signed release artifact.
 
 ### Fixed
 
@@ -33,7 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP `participantId` filtering now includes people who attended a call without speaking.
 - Invalid numeric environment settings, weak manually configured signing secrets, and malformed `BASE_URL` values now fail fast instead of silently weakening sessions or disabling retention, disk guards, timeouts, or token expiry.
 - Recording tabs expose complete ARIA relationships and keyboard navigation.
-- Revoked Discord roles/membership can no longer survive indefinitely in the discord.js cache; membership refreshes use authoritative REST and destructive actions bypass the local TTL.
+- Revoked Discord roles/membership no longer survive in a cross-request cache; every content request confirms membership through authoritative REST, with deduplication limited to one listing request.
+- Live/final/recovered Discord panels now contain only generic consent/status text and opaque control tokens. Recording ids, links, participants, notes, and events stay in revalidated DMs or authenticated pages.
+- Private notification fanout is capped and resumable without duplicating successful DMs; starter DMs also revalidate current membership, and webhook failures never log credential-bearing URLs.
+- Aggregate MCP endpoints apply their 300-meeting safety cap after ACL and explicitly report `meetingsTruncated` plus `meetingScanLimit` when callers must narrow the time window.
 - Web logout revokes a persisted session id, cross-site GET can no longer log a user out, and unauthorized/nonexistent recording ids return indistinguishable responses.
 - Off-site backups exclude cookie secrets and web/MCP session registries, preventing a leaked or restored archive from forging or resurrecting access state.
 

@@ -66,7 +66,7 @@ A maioria dos bots de reunião começa com um áudio misturado e usa diarizaçã
 ## Vira memória que responde
 
 - Ata por IA: resumo, decisões e itens de ação, com responsável e prazo quando a transcrição sustenta essa informação.
-- A ata chega no canal do Discord assim que fica pronta — sem precisar abrir a página.
+- O canal do Discord recebe só um aviso genérico; participantes autorizados recebem o link privado e a ata por DM.
 - `/perguntar` entende tema, pessoa, data da call e prazo da ação (como “ações da Ana que vencem hoje”). A IA só seleciona as fontes; o bot exibe a evidência real da ata/transcrição com link autorizado. A opção `dias` vale quando a pergunta não informa um período da call.
 - Índice web com busca full-text em transcrições, atas e notas — cada resultado linka pro segundo exato.
 - O mesmo acervo conecta no Claude Desktop, Cursor ou outro assistente compatível, via MCP.
@@ -261,7 +261,7 @@ No Docker, construa com Python + faster-whisper na imagem: `docker compose build
 | `/status` | `/status` | Estado da gravação em andamento |
 | `/gravacoes` | `/recordings` | Suas últimas gravações, com links (filtradas por acesso) — também linka pro índice web com busca full-text |
 | `/perguntar <pergunta> [dias]` | `/ask <question> [days]` | Pergunte por tema, pessoa, data da call ou prazo — só você vê evidências reais das reuniões que pode acessar |
-| `/config ata-canal/ver` | `/config minutes-channel/view` | Admin: escolhe o canal de texto onde a ata resumida é postada (padrão: chat do canal de voz) |
+| `/config ata-canal/ver` | `/config minutes-channel/view` | Admin: escolhe o canal do aviso genérico; detalhes e links ficam nas DMs autorizadas |
 | `/autorecord ligar/desligar/ver` | `/autorecord on/off/view` | Gravação automática por canal (admin) |
 | `/mcp novo/revogar-tudo` | `/mcp new/revoke-all` | Só o dono do bot (`OWNER_IDS`): gera ou revoga o código de conexão do assistente de IA — membros comuns se conectam sozinhos em `/app/conectar-ia` |
 | `/ajuda` | `/help` | Guia interativo (também responde por DM) |
@@ -323,9 +323,11 @@ Gravar voz é tratar **dado pessoal** — o design parte disso, não é um adend
 
 ## Desenvolvimento
 
+Para rodar fora do Docker, instale **Node.js 22+**, deixe o **ffmpeg disponível no `PATH`** e tenha a toolchain exigida pelo `node-gyp`: **Python 3, `make` e um compilador C/C++** (no macOS, Xcode Command Line Tools).
+
 ```bash
-npm install
-cp .env.example .env
+npm ci --userconfig .npmrc.security
+cp .env.example .env && chmod 600 .env
 npm run dev     # reload automático
 npm run build   # compila para dist/
 ```
@@ -344,5 +346,5 @@ hospedar o bot para outras pessoas), a AGPL te obriga a oferecer o código-fonte
 correspondente a esses usuários. O comando `/sobre` do bot já linka este
 repositório para cumprir isso.
 
-Usa o [ffmpeg](https://ffmpeg.org/) (via `ffmpeg-static`, GPL/LGPL) como binário
-externo separado; a licença própria dele se aplica a esse binário.
+Usa o [ffmpeg](https://ffmpeg.org/) como binário externo separado (instalado pelo
+repositório Debian assinado no Docker); a licença GPL/LGPL própria dele se aplica.

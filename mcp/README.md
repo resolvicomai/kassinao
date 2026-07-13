@@ -16,7 +16,7 @@ The connector runs **on your machine** and is a **thin** HTTP client: it does **
 
 - **The bot admin must have enabled MCP** (`MCP_SECRET` set on the server). Without it, `/app/conectar-ia` and `/mcp` don't exist (404 / missing command).
 - **Node.js 20+** on your machine.
-- **The connector.** `npx -y kassinao-mcp` downloads and runs it on its own — nothing to install manually (you just need Node). Prefer running from source? `git clone` the repo, `cd mcp && npm install && npm run build`; in the config, replace `"command": "npx"` / `"args": ["-y","kassinao-mcp"]` with `"command": "node"`, `"args": ["/absolute/path/to/repo/mcp/dist/index.js"]`.
+- **The connector.** `npx -y kassinao-mcp@1.0.3` downloads and runs the pinned published release — nothing to install manually (you just need Node). Prefer running from source? `git clone` the repo, `cd mcp && npm ci --userconfig ../.npmrc.security && npm run build`; in the config, replace `"command": "npx"` / `"args": ["-y","kassinao-mcp@1.0.3"]` with `"command": "node"`, `"args": ["/absolute/path/to/repo/mcp/dist/index.js"]`.
 
 ## Setup
 
@@ -31,7 +31,7 @@ The connector runs **on your machine** and is a **thin** HTTP client: it does **
   "mcpServers": {
     "kassinao": {
       "command": "npx",
-      "args": ["-y", "kassinao-mcp"],
+      "args": ["-y", "kassinao-mcp@1.0.3"],
       "env": {
         "KASSINAO_URL": "https://mcp.kassinao.cloud",
         "KASSINAO_REFRESH_TOKEN": "PASTE_THE_TOKEN_HERE"
@@ -50,14 +50,14 @@ For a self-hosted instance, open `APP_URL/app/conectar-ia` and set `KASSINAO_URL
 On Discord, the owner runs **`/mcp new`** (shown as **`/mcp novo`** on pt-BR clients) — ephemeral reply with a single-use code valid for ~5 min. Then:
 
 ```bash
-KASSINAO_URL=https://mcp.kassinao.cloud npx -y kassinao-mcp exchange <code>
+KASSINAO_URL=https://mcp.kassinao.cloud npx -y kassinao-mcp@1.0.3 exchange <code>
 ```
 
-This stores the token locally. Configure your MCP client just like Option A (the `KASSINAO_REFRESH_TOKEN` env var becomes optional after the first use). Replace the URL with your instance's `MCP_URL` when self-hosting.
+This stores the token locally and prints a copy-ready config containing a non-secret `KASSINAO_PROFILE` id. Use that block as printed; it selects this connection's own token file without placing the refresh token in your client config. Replace the URL with your instance's `MCP_URL` when self-hosting.
 
 ## Where the token lives
 
-After first use, the refresh token (rotated on every renewal) is stored under `~/.config/kassinao-mcp/` in a `token-<profile>.json` file with `0600` permissions (`token.json` for the legacy exchange flow). Each generated connection gets an isolated profile automatically, so Claude and Cursor can coexist on the same computer when each uses its own token. Do not paste the same generated token into two clients. The connector does not sync or persist the meeting archive: it requests only the data needed for each tool response over HTTPS. Tokens are pinned to the configured `KASSINAO_URL`; changing instances requires a token issued by the new instance.
+After first use, the refresh token (rotated on every renewal) is stored under `~/.config/kassinao-mcp/` in a `token-<profile>.json` file with `0600` permissions. `token.json` is read only for safe compatibility with configs created by older connector releases. Each generated connection gets an isolated profile automatically, so Claude and Cursor can coexist on the same computer when each uses its own token. `KASSINAO_PROFILE` is only a non-secret local selector; the refresh token stays in its protected file. Do not paste the same generated token into two clients. The connector does not sync or persist the meeting archive: it requests only the data needed for each tool response over HTTPS. Tokens are pinned to the configured `KASSINAO_URL`; changing instances requires a token issued by the new instance.
 
 When an existing instance changes domain, do not edit `KASSINAO_URL` by itself. Generate a new connection in the app and replace the URL and refresh token together. Tokens issued by another origin are not reused.
 

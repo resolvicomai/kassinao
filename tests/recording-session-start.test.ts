@@ -19,7 +19,9 @@ vi.mock('@discordjs/voice', async (importOriginal) => {
 });
 
 import { RecordingSession, RecordingStartCancelledError } from '../src/recorder/RecordingSession';
+import { DISCORD_SURFACE_POLICY_VERSION } from '../src/discordSurfaceMigration';
 import { listMetas, readMeta, tracksDir } from '../src/store';
+import { NOTIFICATION_POLICY_VERSION } from '../src/transcriptionNotification';
 
 function fakeConnection() {
   return {
@@ -100,6 +102,8 @@ describe('RecordingSession.start — transação real de início', () => {
     expect(f.channel.send.mock.invocationCallOrder[0]).toBeLessThan(
       f.connection.receiver.speaking.on.mock.invocationCallOrder[0],
     );
+    expect(session.meta.discordSurfacePolicyVersion).toBe(DISCORD_SURFACE_POLICY_VERSION);
+    expect(readMeta(session.id)?.notificationPolicyVersion).toBe(NOTIFICATION_POLICY_VERSION);
 
     await session.stop('manual', { id: 'u1', name: 'Ana' });
     fs.rmSync(recordingDir(session), { recursive: true, force: true });
@@ -182,6 +186,66 @@ describe('RecordingSession.start — transação real de início', () => {
     expect(f.connection.destroy).toHaveBeenCalledTimes(1);
     expect(meta.events.some((event) => event.text.includes('Ana') && event.text.includes('parou'))).toBe(true);
     expect(meta.events.some((event) => event.text.includes('desconectado'))).toBe(false);
+    fs.rmSync(recordingDir(session), { recursive: true, force: true });
+  });
+
+  it('mantém o painel público genérico e envia detalhes somente por DM', async () => {
+    const f = fixture();
+    voice.joinVoiceChannel.mockReturnValue(f.connection);
+    voice.entersState.mockResolvedValue(f.connection);
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: { id: 'starter-secret', name: 'Iniciador Secreto' },
+      locale: 'pt',
+      auto: false,
+    });
+
+    await session.start();
+    session.meta.participants.push({
+      id: 'participant-secret',
+      name: 'Participante Secreta',
+      avatar: null,
+      trackFile: 'secret.flac',
+      index: 0,
+    });
+    session.addNote('Participante Secreta', 'Aquisição confidencial por R$ 10 milhões');
+    await session.stop('manual', { id: 'participant-secret', name: 'Participante Secreta' });
+
+    const publicPayloads = [f.channel.send.mock.calls[0]?.[0], f.message.edit.mock.calls.at(-1)?.[0]];
+    const serialized = JSON.stringify(publicPayloads);
+    expect(serialized).not.toContain(session.id);
+    expect(serialized).not.toContain('http');
+    expect(serialized).not.toContain('Iniciador Secreto');
+    expect(serialized).not.toContain('Participante Secreta');
+    expect(serialized).not.toContain('Aquisição confidencial');
+    expect(f.channel.send).toHaveBeenCalledTimes(1);
+    expect(f.guild.client.users.send).toHaveBeenCalled();
+
+    fs.rmSync(recordingDir(session), { recursive: true, force: true });
+  });
+
+  it('não envia link por DM quando membership atual não pode ser confirmada', async () => {
+    const f = fixture();
+    f.guild.members.fetch.mockRejectedValue(Object.assign(new Error('Unknown Member'), { code: 10007 }));
+    voice.joinVoiceChannel.mockReturnValue(f.connection);
+    voice.entersState.mockResolvedValue(f.connection);
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: { id: 'former-member', name: 'Ex-membro' },
+      locale: 'pt',
+      auto: false,
+    });
+
+    await session.start();
+    await vi.waitFor(() => expect(f.guild.members.fetch).toHaveBeenCalled());
+    expect(f.guild.client.users.send).not.toHaveBeenCalled();
+
+    await session.stop('manual', { id: 'admin', name: 'Admin' });
+    await vi.waitFor(() => expect(f.guild.members.fetch.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(f.guild.client.users.send).not.toHaveBeenCalled();
+
     fs.rmSync(recordingDir(session), { recursive: true, force: true });
   });
 });

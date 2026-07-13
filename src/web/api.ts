@@ -5,7 +5,8 @@ import { minutesToMarkdown } from '../processing/minutes';
 import { transcriptToMarkdown } from '../processing/transcribe';
 import { cleanInline, cleanText, neutralizeFences } from '../sanitize';
 import {
-  listMetas,
+  listGuildMetasInRange,
+  listMetasInRange,
   MeetingMinutes,
   pageUrl,
   readMeta,
@@ -17,7 +18,7 @@ import {
   transcriptReady,
   TranscriptSegment,
 } from '../store';
-import { checkAccessForMcp, TransientAccessError } from './access';
+import { checkAccessForMcp, createAccessRequestContext, TransientAccessError } from './access';
 import { getMcpUser, McpToken, signMcpAccess, signMcpRefresh, verifyMcpRefresh } from './auth';
 import {
   consumeExchangeCode,
@@ -43,6 +44,10 @@ import { formatInTz, RangeError as WindowError, RangeInput, resolveRange, Resolv
 
 const ACCESS_TTL_MS = config.mcpAccessTtlMin * 60000;
 const MAX_AGGREGATE_MEETINGS = 300;
+const MAX_LIST_MEETINGS = 1_000;
+const MAX_CANDIDATE_METAS_PER_REQUEST = 1_000;
+const MAX_ACCESS_GUILDS_PER_REQUEST = 25;
+const MAX_SCAN_REQUESTS_PER_MINUTE = 12;
 const MAX_ACTIONS_PER_MEETING = 200;
 const MAX_TRANSCRIPT_SEARCH_BYTES = 5 * 1024 * 1024;
 const MAX_SEARCH_SEGMENTS_PER_MEETING = 5_000;
@@ -50,18 +55,6 @@ const MAX_SEARCH_HITS_PER_MEETING = 30;
 const MAX_NOTES_PER_MEETING = 500;
 const MAX_TRANSCRIPT_BYTES_PER_REQUEST = 25 * 1024 * 1024;
 const MAX_SEARCH_SEGMENTS_PER_REQUEST = 25_000;
-
-// ---------- índice de metas em memória (evita varrer o disco a cada request) ----------
-
-let metaCache: { at: number; metas: RecordingMeta[] } | null = null;
-const META_TTL_MS = 10_000;
-
-function allMetas(): RecordingMeta[] {
-  if (metaCache && Date.now() - metaCache.at < META_TTL_MS) return metaCache.metas;
-  const metas = listMetas().filter((m) => !m.demo);
-  metaCache = { at: Date.now(), metas };
-  return metas;
-}
 
 // ---------- rate limit (janela fixa, por chave) ----------
 
@@ -231,28 +224,51 @@ async function visibleInWindow(
   user: McpToken,
   range: ResolvedRange,
   f: MetaFilters,
-  maxCandidates = Number.MAX_SAFE_INTEGER,
-): Promise<RecordingMeta[]> {
+  maxVisible = MAX_LIST_MEETINGS,
+): Promise<{ metas: RecordingMeta[]; truncated: boolean }> {
   const out: RecordingMeta[] = [];
   const candidates: RecordingMeta[] = [];
-  for (const m of allMetas()) {
-    if (m.startedAt < range.fromMs || m.startedAt >= range.toMs) continue;
+  const boundedWindow = f.guildId
+    ? (() => {
+        const guildMetas = listGuildMetasInRange(f.guildId, range.fromMs, range.toMs, {
+          limit: MAX_CANDIDATE_METAS_PER_REQUEST + 1,
+        });
+        return {
+          metas: guildMetas.slice(0, MAX_CANDIDATE_METAS_PER_REQUEST),
+          truncated: guildMetas.length > MAX_CANDIDATE_METAS_PER_REQUEST,
+        };
+      })()
+    : listMetasInRange(range.fromMs, range.toMs, MAX_CANDIDATE_METAS_PER_REQUEST);
+  let truncated = boundedWindow.truncated;
+  for (const m of boundedWindow.metas) {
+    if (m.demo) continue;
     if (f.guildId && m.guildId !== f.guildId) continue;
     if (f.channelId && m.voiceChannelId !== f.channelId) continue;
     if (f.status && m.status !== f.status) continue;
     if (f.participantId && !recordingIncludesUser(m, f.participantId)) continue;
     candidates.push(m);
-    // Mantém o conjunto intermediário limitado sem perder as mais recentes.
-    if (maxCandidates < Number.MAX_SAFE_INTEGER && candidates.length >= maxCandidates * 2) {
-      candidates.sort((a, b) => b.startedAt - a.startedAt).length = maxCandidates;
+  }
+  const requestContext = createAccessRequestContext();
+  const checkedGuilds = new Set<string>();
+  for (const m of candidates) {
+    if (!checkedGuilds.has(m.guildId)) {
+      if (checkedGuilds.size >= MAX_ACCESS_GUILDS_PER_REQUEST) {
+        truncated = true;
+        continue;
+      }
+      checkedGuilds.add(m.guildId);
+    }
+    const access = await checkAccessForMcp(user, m, { requestContext });
+    if (!access.view) continue;
+    out.push(m);
+    // Lê uma autorizada além do teto para poder declarar truncamento em vez de
+    // fazer reuniões antigas sumirem silenciosamente do contrato MCP.
+    if (out.length > maxVisible) {
+      out.length = maxVisible;
+      return { metas: out, truncated: true };
     }
   }
-  candidates.sort((a, b) => b.startedAt - a.startedAt).length = Math.min(candidates.length, maxCandidates);
-  for (const m of candidates) {
-    const access = await checkAccessForMcp(user, m);
-    if (access.view) out.push(m);
-  }
-  return out;
+  return { metas: out, truncated };
 }
 
 /** Resolve uma gravação SÓ se o usuário pode vê-la; senão 404 (igual a inexistente). */
@@ -360,6 +376,25 @@ function authGate(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
+/** Consultas que varrem janelas têm um orçamento menor que leituras por id. */
+function scanRateGate(_req: Request, res: Response, next: NextFunction): void {
+  const token = mcpUserOf(res);
+  if (rateLimited(`scan:${token.jti}`, MAX_SCAN_REQUESTS_PER_MINUTE, 60_000)) {
+    res.status(429).set('Retry-After', '30').json({ error: 'rate_limited' });
+    return;
+  }
+  next();
+}
+
+/** `/said?meetingId=` lê uma gravação por id; só a variante por janela consome scan. */
+function saidScanRateGate(req: Request, res: Response, next: NextFunction): void {
+  if (qstr(req, 'meetingId')) {
+    next();
+    return;
+  }
+  scanRateGate(req, res, next);
+}
+
 function audit(req: Request, res: Response, next: NextFunction): void {
   res.on('finish', () => {
     const u = res.locals.mcpUser as McpToken | undefined;
@@ -456,6 +491,7 @@ export function mountMcpApi(app: Express): void {
 
   authed.get(
     '/meetings',
+    scanRateGate,
     handle(async (req, res) => {
       const user = mcpUserOf(res);
       const range = resolveRange(rangeFromQuery(req), Date.now());
@@ -465,7 +501,12 @@ export function mountMcpApi(app: Express): void {
         participantId: qstr(req, 'participantId'),
         status: qstr(req, 'status'),
       };
-      const all = await visibleInWindow(user, range, filters);
+      const { metas: all, truncated: meetingsTruncated } = await visibleInWindow(
+        user,
+        range,
+        filters,
+        MAX_LIST_MEETINGS,
+      );
       const limit = qint(req, 'limit', 20, 100);
       const offset = qint(req, 'cursor', 1, 100000) - 1 || 0;
       const page = all.slice(offset, offset + limit);
@@ -474,6 +515,10 @@ export function mountMcpApi(app: Express): void {
         resolvedTo: range.toISO,
         label: range.label,
         total: all.length,
+        meetingsTruncated,
+        meetingScanLimit: MAX_LIST_MEETINGS,
+        candidateScanLimit: MAX_CANDIDATE_METAS_PER_REQUEST,
+        guildScanLimit: MAX_ACCESS_GUILDS_PER_REQUEST,
         meetings: page.map(meetingSummary),
         nextCursor: offset + limit < all.length ? String(offset + limit + 1) : null,
       });
@@ -599,12 +644,13 @@ export function mountMcpApi(app: Express): void {
 
   authed.get(
     '/actions',
+    scanRateGate,
     handle(async (req, res) => {
       const user = mcpUserOf(res);
       const now = Date.now();
       // janela das REUNIÕES a varrer (onde as ações nasceram); default 60 dias
       const meetingRange = resolveRange({ last: qstr(req, 'meetingsWithin') ?? '60d' }, now);
-      const metas = await visibleInWindow(
+      const { metas, truncated: meetingsTruncated } = await visibleInWindow(
         user,
         meetingRange,
         { guildId: qstr(req, 'guildId') },
@@ -672,6 +718,10 @@ export function mountMcpApi(app: Express): void {
       }
       res.json({
         scannedMeetings: metas.length,
+        meetingsTruncated,
+        meetingScanLimit: MAX_AGGREGATE_MEETINGS,
+        candidateScanLimit: MAX_CANDIDATE_METAS_PER_REQUEST,
+        guildScanLimit: MAX_ACCESS_GUILDS_PER_REQUEST,
         withinDays,
         total,
         returned,
@@ -683,6 +733,7 @@ export function mountMcpApi(app: Express): void {
 
   authed.get(
     '/search',
+    scanRateGate,
     handle(async (req, res) => {
       const user = mcpUserOf(res);
       const q = qstr(req, 'query');
@@ -698,7 +749,12 @@ export function mountMcpApi(app: Express): void {
       }
       const scope = new Set((qstr(req, 'scope') ?? 'transcript,minutes,notes').split(','));
       const range = resolveRange(rangeFromQuery(req), Date.now());
-      const metas = await visibleInWindow(user, range, { guildId: qstr(req, 'guildId') }, MAX_AGGREGATE_MEETINGS);
+      const { metas, truncated: meetingsTruncated } = await visibleInWindow(
+        user,
+        range,
+        { guildId: qstr(req, 'guildId') },
+        MAX_AGGREGATE_MEETINGS,
+      );
       const limit = qint(req, 'limit', 20, 100);
       const offset = qint(req, 'cursor', 1, 10_000) - 1;
 
@@ -773,6 +829,10 @@ export function mountMcpApi(app: Express): void {
         resolvedTo: range.toISO,
         query: q,
         scannedMeetings: metas.length,
+        meetingsTruncated,
+        meetingScanLimit: MAX_AGGREGATE_MEETINGS,
+        candidateScanLimit: MAX_CANDIDATE_METAS_PER_REQUEST,
+        guildScanLimit: MAX_ACCESS_GUILDS_PER_REQUEST,
         skippedTranscripts,
         transcriptBytesScanned,
         transcriptSegmentsScanned,
@@ -786,6 +846,7 @@ export function mountMcpApi(app: Express): void {
 
   authed.get(
     '/said',
+    saidScanRateGate,
     handle(async (req, res) => {
       const user = mcpUserOf(res);
       const q = qstr(req, 'query');
@@ -802,9 +863,13 @@ export function mountMcpApi(app: Express): void {
       const ctx = qint(req, 'contextSegments', 1, 5);
       const scopeId = qstr(req, 'meetingId');
       const range = resolveRange(rangeFromQuery(req), Date.now());
-      const metas = scopeId
-        ? [await getViewable(user, scopeId)].filter((m): m is RecordingMeta => !!m)
+      const visible = scopeId
+        ? {
+            metas: [await getViewable(user, scopeId)].filter((m): m is RecordingMeta => !!m),
+            truncated: false,
+          }
         : await visibleInWindow(user, range, { guildId: qstr(req, 'guildId') }, MAX_AGGREGATE_MEETINGS);
+      const metas = visible.metas;
 
       const limit = qint(req, 'limit', 50, 200);
       const offset = qint(req, 'cursor', 1, 10_000) - 1;
@@ -858,6 +923,10 @@ export function mountMcpApi(app: Express): void {
       res.json({
         query: q,
         scannedMeetings: metas.length,
+        meetingsTruncated: visible.truncated,
+        meetingScanLimit: scopeId ? 1 : MAX_AGGREGATE_MEETINGS,
+        candidateScanLimit: scopeId ? 1 : MAX_CANDIDATE_METAS_PER_REQUEST,
+        guildScanLimit: scopeId ? 1 : MAX_ACCESS_GUILDS_PER_REQUEST,
         skippedTranscripts,
         transcriptBytesScanned,
         transcriptSegmentsScanned,

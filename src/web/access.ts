@@ -41,54 +41,50 @@ function isUnknownMember(err: unknown): boolean {
   return code === 10007 || code === 10013;
 }
 
-// Cache de membership COMPARTILHADO entre requests (não só intra-request): evita
-// cascata de members.fetch ao listar N gravações e protege a gravação ao vivo.
-// member === null = "confirmado NÃO-membro". Erro transitório não é cacheado.
-const MEMBER_TTL_MS = 45_000;
-export const MEMBER_CACHE_MAX_ENTRIES = 5_000;
-const memberCache = new Map<string, { member: GuildMember | null; at: number }>();
-
-function cacheMember(key: string, member: GuildMember | null): void {
-  // delete + set atualiza a ordem LRU também quando a entrada já existia.
-  memberCache.delete(key);
-  memberCache.set(key, { member, at: Date.now() });
-  while (memberCache.size > MEMBER_CACHE_MAX_ENTRIES) {
-    const oldest = memberCache.keys().next().value as string | undefined;
-    if (oldest === undefined) break;
-    memberCache.delete(oldest);
-  }
+/**
+ * Deduplica a confirmação REST apenas durante UMA listagem HTTP. Nunca deve ser
+ * armazenado em módulo, sessão ou cache compartilhado entre requests: o client
+ * não usa GuildMembers intent e não recebe todas as revogações de membership/cargo.
+ */
+export interface AccessRequestContext {
+  readonly memberChecks: Map<string, Promise<GuildMember | null>>;
 }
 
-async function fetchMemberCached(guildId: string, userId: string, forceRefresh = false): Promise<GuildMember | null> {
+export function createAccessRequestContext(): AccessRequestContext {
+  return { memberChecks: new Map() };
+}
+
+async function fetchMemberFresh(guildId: string, userId: string): Promise<GuildMember | null> {
   const guild = client.guilds.cache.get(guildId);
   if (!guild) throw new TransientAccessError('guild fora do cache (gateway não pronto?)');
-  const key = `${guildId}:${userId}`;
-  const hit = memberCache.get(key);
-  if (!forceRefresh && hit && Date.now() - hit.at < MEMBER_TTL_MS) {
-    memberCache.delete(key);
-    memberCache.set(key, hit);
-    return hit.member;
-  }
   try {
-    // `members.fetch(userId)` SEM force devolve o GuildMember já presente no
-    // cache interno do discord.js. Sem a intent privilegiada GuildMembers, uma
-    // remoção de cargo/saída do servidor não atualiza esse objeto e a permissão
-    // revogada poderia sobreviver indefinidamente. Toda renovação deste cache é
-    // portanto autoritativa via REST.
-    const member = await guild.members.fetch({ user: userId, force: true, cache: false });
-    cacheMember(key, member);
-    return member;
+    // `cache:false` também impede que esta consulta autoritativa repovoe um
+    // GuildMember obsoleto no cache interno do discord.js.
+    return await guild.members.fetch({ user: userId, force: true, cache: false });
   } catch (err) {
-    if (isUnknownMember(err)) {
-      cacheMember(key, null); // saiu do servidor
-      return null;
-    }
+    if (isUnknownMember(err)) return null;
     throw new TransientAccessError('members.fetch falhou (transitório)');
   }
 }
 
+function fetchMemberForCheck(
+  guildId: string,
+  userId: string,
+  options: AccessCheckOptions,
+): Promise<GuildMember | null> {
+  if (options.freshMember || !options.requestContext) return fetchMemberFresh(guildId, userId);
+  const key = `${guildId}:${userId}`;
+  const existing = options.requestContext.memberChecks.get(key);
+  if (existing) return existing;
+  const check = fetchMemberFresh(guildId, userId);
+  options.requestContext.memberChecks.set(key, check);
+  return check;
+}
+
 export interface AccessCheckOptions {
-  /** Ignora também o TTL local. Obrigatório antes de apagar dados. */
+  /** Deduplica a confirmação por usuário+guild somente dentro desta listagem. */
+  requestContext?: AccessRequestContext;
+  /** Ignora até o contexto da listagem. Obrigatório antes de apagar dados. */
   freshMember?: boolean;
 }
 
@@ -98,17 +94,6 @@ export function recordingIdentityGrant(userId: string, meta: RecordingMeta): Acc
   const isParticipant = meta.participants.some((p) => p.id === userId);
   const wasPresent = meta.presence?.some((p) => p.id === userId) ?? false;
   return { view: isInitiator || isParticipant || wasPresent, delete: isInitiator };
-}
-
-/** Invalida o cache de um membro (chamado no guildMemberRemove). */
-export function forgetMember(guildId: string, userId: string): void {
-  memberCache.delete(`${guildId}:${userId}`);
-}
-
-/** Remove todas as identidades de um servidor quando o bot sai dele. */
-export function forgetGuildMembers(guildId: string): void {
-  const prefix = `${guildId}:`;
-  for (const key of memberCache.keys()) if (key.startsWith(prefix)) memberCache.delete(key);
 }
 
 async function computeAccess(
@@ -127,7 +112,7 @@ async function computeAccess(
 
   let member: GuildMember | null;
   try {
-    member = await fetchMemberCached(meta.guildId, user.id, options.freshMember);
+    member = await fetchMemberForCheck(meta.guildId, user.id, options);
   } catch {
     // Não dá para confirmar que ainda é membro: nenhum grant histórico é aceito.
     return { view: false, delete: false, serverLayersUnknown: true };

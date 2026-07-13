@@ -1,6 +1,9 @@
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readApiJson } from '../mcp/src/apiResponse';
 import { loadCredentialStore } from '../mcp/src/credentialStore';
@@ -14,6 +17,7 @@ import {
 import { createToolErrorResponse, MCP_UNTRUSTED_DESCRIPTION, markToolResultUntrusted } from '../mcp/src/toolOutput';
 
 const temporaryDirectories: string[] = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -94,6 +98,16 @@ describe('URL do conector MCP', () => {
 });
 
 describe('bootstrap do token do conector MCP', () => {
+  it('prioriza o perfil explícito sobre o hash do token inicial', () => {
+    expect(tokenStoreFileName('https://a.example', 'refresh-A-super-secreto', '0123456789abcdef01234567')).toBe(
+      'token-0123456789abcdef01234567.json',
+    );
+  });
+
+  it('rejeita perfil explícito que possa escapar do diretório de credenciais', () => {
+    expect(() => tokenStoreFileName('https://a.example', '', '../../outside')).toThrow(/profile/i);
+  });
+
   it('reusa o token salvo somente na mesma instância', () => {
     const stored = { url: 'https://a.example', refreshToken: 'saved-a' };
     expect(selectBootstrapRefreshToken(stored, 'https://a.example', 'env-a')).toBe('saved-a');
@@ -121,6 +135,69 @@ describe('bootstrap do token do conector MCP', () => {
     expect(tokenStoreFileName('https://a.example', 'refresh-A-super-secreto')).toBe(a);
     expect(tokenStoreFileName('https://a.example', '')).toBe('token.json');
   });
+});
+
+describe.skipIf(process.platform === 'win32')('exchange do conector MCP', () => {
+  it('gera configurações e cofres isolados para duas conexões na mesma instância', async () => {
+    let exchanges = 0;
+    const server = http.createServer((req, res) => {
+      if (req.method !== 'POST' || req.url !== '/api/mcp/exchange') {
+        res.writeHead(404).end();
+        return;
+      }
+      exchanges++;
+      res.setHeader('content-type', 'application/json');
+      res.end(
+        JSON.stringify({
+          access_token: `access-${exchanges}`,
+          access_expires_at: new Date(Date.now() + 60_000).toISOString(),
+          refresh_token: `refresh-${exchanges}`,
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kassinao-mcp-exchange-'));
+    temporaryDirectories.push(root);
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('porta de teste indisponível');
+      const baseUrl = `http://127.0.0.1:${address.port}`;
+      const env = { ...process.env, HOME: root, KASSINAO_URL: baseUrl };
+      delete env.KASSINAO_PROFILE;
+      delete env.KASSINAO_REFRESH_TOKEN;
+      const tsxCli = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
+      const runExchange = (code: string) =>
+        execFileAsync(process.execPath, [tsxCli, 'mcp/src/index.ts', 'exchange', code], {
+          cwd: process.cwd(),
+          env,
+          maxBuffer: 1024 * 1024,
+        });
+
+      const firstExchange = await runExchange('code-one');
+      const first = JSON.parse(firstExchange.stdout) as {
+        mcpServers: { kassinao: { env: { KASSINAO_PROFILE?: string } } };
+      };
+      const secondExchange = await runExchange('code-two');
+      const second = JSON.parse(secondExchange.stdout) as typeof first;
+      const firstProfile = first.mcpServers.kassinao.env.KASSINAO_PROFILE;
+      const secondProfile = second.mcpServers.kassinao.env.KASSINAO_PROFILE;
+
+      expect(firstProfile).toMatch(/^[a-f0-9]{24}$/);
+      expect(secondProfile).toMatch(/^[a-f0-9]{24}$/);
+      expect(secondProfile).not.toBe(firstProfile);
+      expect(firstExchange.stderr).toContain(`token-${firstProfile}.json`);
+      expect(secondExchange.stderr).toContain(`token-${secondProfile}.json`);
+      const storeDir = path.join(root, '.config', 'kassinao-mcp');
+      const stores = [firstProfile, secondProfile].map((profile) =>
+        JSON.parse(fs.readFileSync(path.join(storeDir, `token-${profile}.json`), 'utf8')),
+      ) as Array<{ refreshToken: string }>;
+      expect(stores.map((store) => store.refreshToken)).toEqual(['refresh-1', 'refresh-2']);
+      expect(fs.existsSync(path.join(storeDir, 'token.json'))).toBe(false);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  }, 20_000);
 });
 
 describe('refresh single-flight do conector MCP', () => {

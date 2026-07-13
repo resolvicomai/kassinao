@@ -30,8 +30,7 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '24'
-          cache: npm
-          cache-dependency-path: mcp/package-lock.json
+          package-manager-cache: false
       - name: Match the tag to package.json
         run: |
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
@@ -47,12 +46,27 @@ jobs:
             echo "kassinao-mcp@$version already exists on npm" >&2
             exit 1
           fi
-          node -e 'const [major, minor] = process.argv[1].split(".").map(Number); if (major < 11 || (major === 11 && minor < 5)) { throw new Error("npm >= 11.5 is required for Trusted Publishing") }' "$(npm --version)"
+          node -e 'const [major, minor, patch = 0] = process.argv[1].split(".").map(Number); if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) { throw new Error("npm >= 11.5.1 is required for Trusted Publishing") }' "$(npm --version)"
       - run: npm ci --ignore-scripts
       - run: npm audit --audit-level=high
       - run: npm audit signatures
       - run: npm run build
-      - run: npm pack --dry-run
+      - name: Verify the exact publish artifact
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          package="$RUNNER_TEMP/kassinao-mcp-$(node -p "JSON.parse(require('fs').readFileSync('package.json')).version").tgz"
+          tar -tzf "$package" | grep -qx 'package/npm-shrinkwrap.json'
+          tar -tzf "$package" | grep -qx 'package/node_modules/@modelcontextprotocol/sdk/package.json'
+          mkdir "$RUNNER_TEMP/consumer"
+          (
+            cd "$RUNNER_TEMP/consumer"
+            npm init -y
+            npm install --ignore-scripts --offline --cache "$RUNNER_TEMP/empty-npm-cache" "$package"
+            npm ls --all
+          )
       # npm Trusted Publishing must trust this repo, workflow and `npm`
       # environment. No long-lived NPM_TOKEN is stored or injected here.
-      - run: npm publish --access public --provenance
+      - name: Publish the verified artifact with OIDC
+        run: |
+          version="$(node -p "JSON.parse(require('fs').readFileSync('package.json')).version")"
+          npm publish "$RUNNER_TEMP/kassinao-mcp-$version.tgz" --access public --provenance

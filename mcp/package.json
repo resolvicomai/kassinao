@@ -6,7 +6,7 @@
   "homepage": "https://mcp.kassinao.cloud",
   "repository": {
     "type": "git",
-    "url": "https://github.com/resolvicomai/kassinao.git",
+    "url": "git+https://github.com/resolvicomai/kassinao.git",
     "directory": "mcp"
   },
   "bugs": {
@@ -20,7 +20,8 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "npm-shrinkwrap.json"
   ],
   "engines": {
     "node": ">=20"
@@ -45,6 +46,9 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.4.0"
   },
+  "bundleDependencies": [
+    "@modelcontextprotocol/sdk"
+  ],
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0"

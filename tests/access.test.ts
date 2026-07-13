@@ -1,13 +1,7 @@
 import { Collection, PermissionFlagsBits, type Guild, type GuildMember } from 'discord.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { client } from '../src/discord/client';
-import {
-  checkAccess,
-  forgetGuildMembers,
-  forgetMember,
-  MEMBER_CACHE_MAX_ENTRIES,
-  recordingIdentityGrant,
-} from '../src/web/access';
+import { checkAccess, createAccessRequestContext, recordingIdentityGrant } from '../src/web/access';
 import type { RecordingMeta } from '../src/store';
 
 const GUILD_ID = 'guild-access-test';
@@ -62,7 +56,6 @@ function installGuild(options: { admin?: boolean; seesChannel?: boolean; missing
 }
 
 afterEach(() => {
-  forgetGuildMembers(GUILD_ID);
   client.guilds.cache.delete(GUILD_ID);
 });
 
@@ -97,7 +90,7 @@ describe('ACL histórica das gravações', () => {
     });
   });
 
-  it('ações destrutivas podem ignorar o TTL e sempre usam REST com force', async () => {
+  it('ações destrutivas ignoram até o contexto da listagem e sempre usam REST com force', async () => {
     const { fetchMember } = installGuild({ admin: true });
     const recording = meta();
     const user = { id: USER_ID, name: 'Admin' };
@@ -109,30 +102,28 @@ describe('ACL histórica das gravações', () => {
     expect(fetchMember).toHaveBeenNthCalledWith(2, { user: USER_ID, force: true, cache: false });
   });
 
-  it('atualiza a recência no hit e remove a identidade realmente menos recente', async () => {
-    const fetchMember = vi.fn(async ({ user }: { user: string }) => ({
-      id: user,
-      permissions: { has: () => false },
-    }));
-    const guild = {
-      id: GUILD_ID,
-      members: { fetch: fetchMember },
-      channels: { cache: new Collection(), fetch: vi.fn() },
-    } as unknown as Guild;
-    client.guilds.cache.set(GUILD_ID, guild);
+  it('reconfirma membership pela REST em cada request de conteúdo', async () => {
+    const { fetchMember } = installGuild();
+    const recording = meta({ participants: [{ id: USER_ID, name: 'Alice' } as RecordingMeta['participants'][number]] });
+    const user = { id: USER_ID, name: 'Alice' };
 
-    for (let i = 0; i < MEMBER_CACHE_MAX_ENTRIES; i++) {
-      await checkAccess({ id: `member-${i}`, name: `Member ${i}` }, meta());
-    }
+    await expect(checkAccess(user, recording)).resolves.toEqual({ view: true, delete: false });
+    fetchMember.mockRejectedValueOnce(Object.assign(new Error('Unknown Member'), { code: 10007 }));
+    await expect(checkAccess(user, recording)).resolves.toEqual({ view: false, delete: false });
 
-    // member-0 vira o mais recente sem nova ida ao Discord.
-    await checkAccess({ id: 'member-0', name: 'Member 0' }, meta());
-    await checkAccess({ id: `member-${MEMBER_CACHE_MAX_ENTRIES}`, name: 'Member novo' }, meta());
+    expect(fetchMember).toHaveBeenCalledTimes(2);
+    expect(fetchMember).toHaveBeenNthCalledWith(1, { user: USER_ID, force: true, cache: false });
+    expect(fetchMember).toHaveBeenNthCalledWith(2, { user: USER_ID, force: true, cache: false });
+  });
 
-    // O hit anterior preserva member-0; a entrada realmente mais antiga (member-1) sai.
-    await checkAccess({ id: 'member-0', name: 'Member 0' }, meta());
-    await checkAccess({ id: 'member-1', name: 'Member 1' }, meta());
+  it('reutiliza a confirmação somente dentro da mesma listagem', async () => {
+    const { fetchMember } = installGuild();
+    const user = { id: USER_ID, name: 'Alice' };
+    const requestContext = createAccessRequestContext();
 
-    expect(fetchMember).toHaveBeenCalledTimes(MEMBER_CACHE_MAX_ENTRIES + 2);
+    await checkAccess(user, meta({ id: 'recording-a' }), { requestContext });
+    await checkAccess(user, meta({ id: 'recording-b' }), { requestContext });
+
+    expect(fetchMember).toHaveBeenCalledTimes(1);
   });
 });
