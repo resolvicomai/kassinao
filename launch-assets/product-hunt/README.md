@@ -16,7 +16,7 @@
 
 **Primary URL**
 
-> https://kassinao.resolvicomai.app/en
+> https://kassinao.cloud/en
 
 **Pricing**
 
@@ -64,7 +64,8 @@ Use a real local fixture and keep the “fictional demo” label visible. Higgsf
 
 ## Launch checklist
 
-- [ ] Deploy `/en`, `/en/docs`, `/en/demo`, assets, and Open Graph images.
+- [ ] Deploy the English landing/demo on `kassinao.cloud`, docs on `docs.kassinao.cloud`, the private app on `app.kassinao.cloud`, and MCP discovery/API on `mcp.kassinao.cloud`.
+- [ ] Verify canonical URLs, Open Graph images, HTTPS and cross-domain navigation on all four origins.
 - [ ] Verify the public demo without authentication in a clean browser.
 - [ ] Confirm the Product Hunt primary URL opens the English landing.
 - [ ] Upload the square thumbnail and at least two 1270×760 gallery images.

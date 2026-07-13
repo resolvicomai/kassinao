@@ -1,6 +1,6 @@
 /*
  * Kassinão — gravador de voz self-hosted para Discord.
- * Copyright (C) 2026 Mauro Marques (resolvicomai)
+ * Copyright (C) 2026 Mauro Marques
  *
  * Este programa é software livre: você pode redistribuí-lo e/ou modificá-lo sob
  * os termos da GNU Affero General Public License, publicada pela Free Software
@@ -1235,7 +1235,7 @@ function buildHelpEmbed(l: Locale): EmbedBuilder {
     );
   // só mostra o conector de IA quando ele está ligado neste servidor
   if (config.mcpEnabled) {
-    embed.addFields({ name: t(l, 'help.mcp-title'), value: t(l, 'help.mcp-body', { url: config.baseUrl }) });
+    embed.addFields({ name: t(l, 'help.mcp-title'), value: t(l, 'help.mcp-body', { url: config.appUrl }) });
   }
   return embed.setFooter({ text: t(l, 'help.footer') });
 }
@@ -1268,7 +1268,7 @@ async function handleHelpButton(interaction: ButtonInteraction): Promise<void> {
   const vars = {
     hours: config.maxRecordingHours,
     days,
-    url: config.baseUrl,
+    url: config.appUrl,
     retention: t(l, config.audioRetentionUnlimited ? 'help.retention-unlimited' : 'help.retention-limited', { days }),
     retentionPrivacy: t(
       l,
@@ -1286,7 +1286,7 @@ async function handleSobre(interaction: ChatInputCommandInteraction): Promise<vo
     .setTitle('🎙️ Kassinão')
     .setDescription(t(l, 'about.desc'))
     .addFields(
-      { name: t(l, 'about.author'), value: 'Mauro Marques (resolvicomai)' },
+      { name: t(l, 'about.author'), value: 'Mauro Marques' },
       { name: t(l, 'about.license'), value: 'GNU AGPL-3.0-or-later' },
       { name: t(l, 'about.source'), value: SOURCE_URL },
     )
@@ -1391,7 +1391,7 @@ async function handleGravacoes(interaction: ChatInputCommandInteraction): Promis
   let content = `**${t(l, 'recordings.title')}**\n${lines.join('\n')}`;
   if (all.length > metas.length) content += `\n${t(l, 'recordings.more', { n: all.length - metas.length })}`;
   // o índice web mostra TODAS (com busca) — aqui só cabem 5
-  content += `\n${t(l, 'recordings.web', { url: `${config.baseUrl}/app` })}`;
+  content += `\n${t(l, 'recordings.web', { url: `${config.appUrl}/app` })}`;
   content = safeSlice(content, 2000); // nomes de canal markdown-pesados estouram o limite do Discord
   await interaction.reply({ content, ephemeral: true });
 }
@@ -1514,8 +1514,8 @@ async function handleMcp(interaction: ChatInputCommandInteraction): Promise<void
   // "dono" de estar numa DM. Resposta SEMPRE efêmera; o código nunca é logado.
   if (!config.ownerIds.includes(interaction.user.id)) {
     await interaction.reply({
-      // o template já traz o caminho ({url}/app/conectar-ia): passa SÓ o baseUrl
-      content: t(l, 'mcp.web-only', { url: config.baseUrl }),
+      // o template já traz o caminho ({url}/app/conectar-ia): passa SÓ a origem do app
+      content: t(l, 'mcp.web-only', { url: config.appUrl }),
       ephemeral: true,
     });
     return;
@@ -1524,7 +1524,10 @@ async function handleMcp(interaction: ChatInputCommandInteraction): Promise<void
   const name = (member && 'displayName' in member ? member.displayName : null) ?? interaction.user.username;
   if (interaction.options.getSubcommand() === 'novo') {
     const code = createExchangeCode(interaction.user.id, name);
-    await interaction.reply({ content: t(l, 'mcp.new', { code, url: config.baseUrl }), ephemeral: true });
+    await interaction.reply({
+      content: t(l, 'mcp.new', { code, mcpUrl: config.mcpUrl, appUrl: config.appUrl }),
+      ephemeral: true,
+    });
   } else {
     const n = revokeUser(interaction.user.id);
     await interaction.reply({ content: t(l, 'mcp.revoked', { n }), ephemeral: true });
@@ -1816,7 +1819,7 @@ client.on(Events.MessageCreate, async (message) => {
     // o canal de DM pode chegar PARCIAL (Partials.Channel) — completa antes de enviar
     if (message.channel.partial) await message.channel.fetch();
     if (cmd) {
-      await message.channel.send(t(l, 'help.dm-command', { cmd: `/${cmd[1]}`, url: config.baseUrl }));
+      await message.channel.send(t(l, 'help.dm-command', { cmd: `/${cmd[1]}`, url: config.appUrl }));
       return;
     }
     await message.channel.send({ content: t(l, 'help.dm-hint'), ...buildHelpPayload(l) });

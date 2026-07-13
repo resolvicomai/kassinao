@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /*
  * Kassinão MCP - local connector for MCP clients.
- * Copyright (C) 2026 Mauro Marques (resolvicomai)
+ * Copyright (C) 2026 Mauro Marques
  * Free software under the GNU Affero General Public License v3 or later.
  * See <https://www.gnu.org/licenses/> for the full license text.
  */

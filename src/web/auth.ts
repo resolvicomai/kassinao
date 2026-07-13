@@ -53,6 +53,13 @@ const SESSION_PATH = '/app';
 const STATE_PATH = '/auth';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+type DomainConfig = typeof config & { appUrl?: string; legacyUrl?: string };
+
+function appOrigin(): string {
+  const domainConfig = config as DomainConfig;
+  return domainConfig.appUrl ?? domainConfig.baseUrl;
+}
+
 // ---------- assinatura de tokens (HMAC-SHA256) ----------
 
 // O SEGREDO é sempre parâmetro EXPLÍCITO — nunca capturado do escopo. Isso impede
@@ -99,7 +106,7 @@ function readCookie(req: Request, name: string): string | undefined {
 }
 
 function setCookie(res: Response, name: string, value: string, maxAgeMs: number, cookiePath: string): void {
-  const secure = config.baseUrl.startsWith('https') ? '; Secure' : '';
+  const secure = appOrigin().startsWith('https') ? '; Secure' : '';
   res.append(
     'Set-Cookie',
     `${name}=${encodeURIComponent(value)}; Path=${cookiePath}; Max-Age=${Math.floor(maxAgeMs / 1000)}; HttpOnly; SameSite=Lax${secure}`,
@@ -178,7 +185,7 @@ export function scopeWebSessionToApp(req: Request, res: Response): void {
  * exato do Kassinão. Clientes não-browser sem Origin continuam aceitos (eles
  * também não carregam automaticamente o cookie HttpOnly do navegador).
  */
-export function isAllowedWebMutation(req: Request, expectedBaseUrl = config.baseUrl): boolean {
+export function isAllowedWebMutation(req: Request, expectedBaseUrl = appOrigin()): boolean {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method.toUpperCase())) return true;
   if (req.get('sec-fetch-site') === 'cross-site') return false;
   const origin = req.get('origin');
@@ -193,8 +200,22 @@ export function isAllowedWebMutation(req: Request, expectedBaseUrl = config.base
 
 // ---------- fluxo OAuth2 do Discord ----------
 
-export function redirectUri(): string {
-  return `${config.baseUrl}/auth/callback`;
+function configuredCallbackOrigin(req?: Request): string {
+  const domainConfig = config as DomainConfig;
+  const canonicalApp = appOrigin();
+  if (!req || !domainConfig.legacyUrl) return canonicalApp;
+  const rawHost = req.get('host');
+  if (!rawHost || /[\s/\\]/.test(rawHost)) return canonicalApp;
+  try {
+    const requestHost = new URL(`http://${rawHost}`).host.toLowerCase();
+    return new URL(domainConfig.legacyUrl).host.toLowerCase() === requestHost ? domainConfig.legacyUrl : canonicalApp;
+  } catch {
+    return canonicalApp;
+  }
+}
+
+export function redirectUri(req?: Request): string {
+  return `${configuredCallbackOrigin(req)}/auth/callback`;
 }
 
 export function beginLogin(res: Response, next: string): void {
@@ -239,7 +260,7 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
       client_secret: config.clientSecret,
       grant_type: 'authorization_code',
       code,
-      redirect_uri: redirectUri(),
+      redirect_uri: redirectUri(req),
     }),
     signal: AbortSignal.timeout(10_000),
   });

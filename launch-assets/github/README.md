@@ -10,7 +10,7 @@ These files prepare the repository for launch. The settings below still require 
 
 **Website**
 
-> https://kassinao.resolvicomai.app/en
+> https://kassinao.cloud/en
 
 **Topics**
 
@@ -27,7 +27,7 @@ Upload `docs/brand/github-social-preview-1280x640.png` in Settings → General �
 - [ ] Protect `main`: require the CI check, prevent force pushes, and require the branch to be up to date.
 - [ ] Either enable Discussions or keep the removed Discussions contact link out of `.github/ISSUE_TEMPLATE/config.yml`.
 - [ ] Resolve failing Dependabot pull requests before advertising a fully green repository.
-- [ ] Publish the root `1.3.0` release and verify whether `kassinao-mcp@1.0.3` is on npm.
-- [ ] Verify README links for `/en`, `/en/docs`, and `/en/demo` after deploy.
+- [ ] Preserve the pre-migration `v1.3.0` tag, publish the domain migration as `v1.4.0`, and verify `kassinao-mcp@1.0.3` on npm.
+- [ ] Verify the English landing/demo on `kassinao.cloud`, docs on `docs.kassinao.cloud`, the private app on `app.kassinao.cloud`, and MCP discovery/API on `mcp.kassinao.cloud` after deploy.
 
 GitHub recommends a solid-background social preview at 1280×640 and under 1 MB. See [GitHub’s social preview documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/customizing-your-repositorys-social-media-preview).

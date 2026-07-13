@@ -16,19 +16,30 @@ Open-source, self-hosted Discord bot with one track per speaker, named transcrip
 
 <br/>
 
-[![View the live demo](https://img.shields.io/badge/VIEW_THE_LIVE_DEMO-5865F2?style=for-the-badge)](https://kassinao.resolvicomai.app/en/demo)
-[![Read the docs](https://img.shields.io/badge/READ_THE_DOCS-313338?style=for-the-badge)](https://kassinao.resolvicomai.app/en/docs)
-[![MCP connector](https://img.shields.io/badge/MCP_CONNECTOR-313338?style=for-the-badge)](https://www.npmjs.com/package/kassinao-mcp)
+[![View the live demo](https://img.shields.io/badge/VIEW_THE_LIVE_DEMO-5865F2?style=for-the-badge)](https://kassinao.cloud/en/demo)
+[![Read the docs](https://img.shields.io/badge/READ_THE_DOCS-313338?style=for-the-badge)](https://docs.kassinao.cloud/en)
+[![MCP connector](https://img.shields.io/badge/MCP_CONNECTOR-313338?style=for-the-badge)](https://mcp.kassinao.cloud)
 
 <br/>
 
-<a href="https://kassinao.resolvicomai.app/en/demo"><img src="docs/brand/discord-demo-en.gif" width="900" alt="Fictional Kassinão workflow inside Discord"></a>
+<a href="https://kassinao.cloud/en/demo"><img src="docs/brand/discord-demo-en.gif" width="900" alt="Fictional Kassinão workflow inside Discord"></a>
 
 <sub>Fictional demo, real commands and product behavior. Meeting data is never taken from a real workspace.</sub>
 
 </div>
 
 ---
+
+The official hosted surfaces use one domain per responsibility:
+
+| Surface | Official URL | Purpose |
+|---|---|---|
+| Website and demo | [kassinao.cloud](https://kassinao.cloud/en) | Public product story and fictional demo |
+| Documentation | [docs.kassinao.cloud](https://docs.kassinao.cloud/en) | Setup, commands, security and MCP guides |
+| Private app | [app.kassinao.cloud](https://app.kassinao.cloud/app) | Discord OAuth, recordings, transcripts and downloads |
+| MCP API | [mcp.kassinao.cloud](https://mcp.kassinao.cloud) | Official API origin used by `kassinao-mcp`; the root links to its docs |
+
+Self-hosted instances do not need four domains: set `BASE_URL` once and every surface inherits it. The optional split-domain variables are documented in [`.env.example`](.env.example).
 
 Most meeting bots start from one mixed recording and use diarization to infer who spoke. Kassinão receives a separate Discord audio stream for each person, so speaker attribution comes from the account that produced the track, not a voice-pattern guess.
 
@@ -61,7 +72,7 @@ Most meeting bots start from one mixed recording and use diarization to infer wh
 
 ## See the finished meeting
 
-[![Fictional meeting rendered by the real Kassinão interface](docs/brand/meeting-demo-en.png)](https://kassinao.resolvicomai.app/en/demo)
+[![Fictional meeting rendered by the real Kassinão interface](docs/brand/meeting-demo-en.png)](https://kassinao.cloud/en/demo)
 
 The public demo uses fictional meeting data and the same renderer as a real recording page. Interface language can change; the original meeting content is never silently translated.
 
@@ -109,14 +120,14 @@ Then **invite the bot** (step 1 below) and run **`/record`** in a Discord voice 
 1. <https://discord.com/developers/applications> → **New Application**.
 2. **General Information** → copy **Application ID** → `APPLICATION_ID`.
 3. **Bot** → **Reset Token** → `DISCORD_TOKEN` (no privileged intents needed).
-4. **OAuth2** → copy **Client Secret** → `DISCORD_CLIENT_SECRET`; add `BASE_URL/auth/callback` under **Redirects**.
+4. **OAuth2** → copy **Client Secret** → `DISCORD_CLIENT_SECRET`; add `APP_URL/auth/callback` under **Redirects** (`BASE_URL/auth/callback` when `APP_URL` is not set).
 5. Invite it (replace `APP_ID`):
    `https://discord.com/oauth2/authorize?client_id=APP_ID&scope=bot%20applications.commands&permissions=68242432`
    Permissions: View Channels, Send Messages, Embed Links, Read Message History, Connect, Change Nickname.
 
 ### 2. Make it reachable
 
-- **Recommended — Cloudflare Tunnel** (HTTPS, no open ports): create a tunnel, then in `.env` set `TUNNEL_TOKEN` **and** `COMPOSE_PROFILES=tunnel`, point the public hostname to `kassinao:8080`, set `BASE_URL=https://your-subdomain.your-domain.com`, and re-run `docker compose up -d`. The bundled tunnel service only starts under the `tunnel` profile, so it never crash-loops when you're not using it.
+- **Recommended — Cloudflare Tunnel** (HTTPS, no open ports): create a tunnel, then in `.env` set `TUNNEL_TOKEN` **and** `COMPOSE_PROFILES=tunnel`, point the public hostname to `kassinao:8080`, set `BASE_URL=https://your-subdomain.your-domain.com`, and re-run `docker compose up -d`. The bundled tunnel service only starts under the `tunnel` profile, so it never crash-loops when you're not using it. A split-domain deployment points each configured hostname to that same service and sets `APP_URL`, `PUBLIC_URL`, `DOCS_URL` and `MCP_URL`; a normal self-host leaves them empty.
 - **Direct IP (dev/test only — no HTTPS)**: uncomment `ports: ['8080:8080']` in `docker-compose.yml` and set `BASE_URL=http://YOUR_IP:8080`. Discord OAuth only accepts `https` (or `localhost`) redirects, so the login/download page won't work over a plain IP — use the tunnel (or any HTTPS proxy) for real use.
 
 ### 3. (Optional) Turn on transcription + minutes
@@ -160,7 +171,12 @@ All options live in [`.env.example`](.env.example). Key ones:
 | Variable | Default | Description |
 |---|---|---|
 | `DISCORD_TOKEN` · `APPLICATION_ID` · `DISCORD_CLIENT_SECRET` | — | Bot credentials (Developer Portal) |
-| `BASE_URL` | `http://localhost:8080` | Public URL for links and OAuth |
+| `BASE_URL` | `http://localhost:8080` | Single-origin fallback inherited by every public surface |
+| `APP_URL` | `BASE_URL` | Private app, Discord OAuth, recordings, transcripts and downloads |
+| `PUBLIC_URL` | `APP_URL` / `BASE_URL` | Public landing and demo |
+| `DOCS_URL` | `PUBLIC_URL` | Documentation origin |
+| `MCP_URL` | `APP_URL` / `BASE_URL` | API origin consumed by `kassinao-mcp` |
+| `LEGACY_URL` | — | Optional previous origin kept temporarily for migration compatibility |
 | `GUILD_ID` | — | Registers commands instantly in that server |
 | `TUNNEL_TOKEN` / `COMPOSE_PROFILES` | — | Cloudflare Tunnel token + the `tunnel` profile (recommended HTTPS path) |
 | `REPO_PUBLIC` | `false` | `true` shows source/install links inside private app pages; the public landing always links to this repository |
@@ -172,6 +188,13 @@ All options live in [`.env.example`](.env.example). Key ones:
 | `MINUTES_ENABLED` | `auto` | AI minutes: `auto` (on when an OpenRouter or Groq key exists) / `true` / `false` |
 | `MINUTES_PROVIDER` / `OPENROUTER_API_KEY` | `openrouter` when key set | Minutes LLM: `openrouter` (default `google/gemini-2.5-flash`) or `groq` (default `llama-3.3-70b-versatile`) |
 | `MINUTES_WEBHOOK_URL` | — | POSTs a JSON `minutes.ready` event per meeting to your own integration; env-only by design (no SSRF via Discord) |
+
+### Moving an existing instance to another domain
+
+1. Keep the previous origin in `LEGACY_URL` while DNS, old links, and existing MCP clients migrate. Browser sessions cannot cross domains, so users sign in once again on the new `APP_URL`.
+2. Add the new `APP_URL/auth/callback` to Discord OAuth before switching production. Keep the previous callback during the transition.
+3. Existing MCP tokens are pinned to the origin that issued them. They can continue on `LEGACY_URL` during the compatibility window; to move to the new `MCP_URL`, generate a new connection in the app and replace both `KASSINAO_URL` and its token.
+4. Remove `LEGACY_URL` and the old OAuth callback only after the chosen compatibility window and after active clients have migrated.
 | `MCP_SECRET` | — | Turns the MCP connector on; rotating it revokes every connector at once |
 | `OWNER_IDS` | — | Discord IDs allowed to use `/mcp` (CSV); regular members self-serve at `/app/conectar-ia` |
 | `DEFAULT_LOCALE` | `en` | Language for DMs/replies when no per-user locale is available (guild members still see their own Discord client's language) |
@@ -197,7 +220,7 @@ More knobs — disk guard, disk-full alerts, off-site backup via rclone — are 
 
 Any member can start a recording in the channel they are currently in; people with **Manage Server** may also target another channel they can see. Stopping and annotating require continued access to the recorded channel; `/autorecord` and `/config` require **Manage Server**. `/mcp` only exists when the connector is on (`MCP_SECRET` set). Deleting a recording (from its page) is limited to the initiator or admins.
 
-The MCP connector applies the exact same access check as the web page, meeting by meeting: current members see only what they'd already see on the site. Private-channel history never opens retroactively just because someone gained channel access later. Read-only, no audio, revocable at any time. Client setup and full docs: [`mcp/`](mcp/).
+The MCP connector applies the exact same access check as the web page, meeting by meeting: current members see only what they'd already see on the site. Private-channel history never opens retroactively just because someone gained channel access later. Read-only, no audio, revocable at any time. Client setup and full docs: [mcp.kassinao.cloud](https://mcp.kassinao.cloud) or [`mcp/`](mcp/) in this repository.
 
 ### Transcription backends
 
@@ -256,7 +279,7 @@ PRs and issues welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code 
 
 ## License
 
-[GNU AGPL-3.0-or-later](LICENSE) © 2026 Mauro Marques (resolvicomai).
+[GNU AGPL-3.0-or-later](LICENSE) © 2026 Mauro Marques.
 
 Free and open source. You may use, study, modify and share it — but if you run a
 modified version as a network service (e.g. host the bot for others), the AGPL

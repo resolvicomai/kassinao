@@ -4,15 +4,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.4.0] — 2026-07-13
 
 ### Added
 
 - Public marketing site and private `/app/*` workspace, with a fictional live demo, recordings table, tabbed meeting view, light/dark themes, and per-device MCP connection management.
 - Local-only `/health/details` for safe pre-deploy checks without exposing active-call or disk metadata publicly.
+- Split-origin deployment through `APP_URL`, `PUBLIC_URL`, `DOCS_URL`, `MCP_URL`, and optional `LEGACY_URL`, with host isolation, canonical metadata, per-surface robots/sitemaps, and migration-safe redirects.
 
 ### Changed
 
+- The official hosted service now uses `kassinao.cloud` for the landing/demo, `docs.kassinao.cloud` for documentation, `app.kassinao.cloud` for OAuth and private recordings/transcripts, and `mcp.kassinao.cloud` for the connector API. The previous origin remains API/callback compatible only during migration.
 - `/ask` now resolves meeting dates separately from action deadlines (including relative deadlines such as `today`, `tomorrow`, and weekdays), ranks eligible meetings before applying context limits, and searches structured minutes fields including decisions, actions, owners, due dates, topics, attendance, and per-participant notes.
 - `kassinao-mcp` 1.0.3 pins saved refresh tokens to their issuing instance, isolates multiple local connections, serializes concurrent refreshes, preserves sessions across transient 429/5xx responses, and reports its package version to MCP clients.
 - Private web/API responses are `no-store`; session cookies are scoped to `/app`; state cookies are scoped to `/auth`; app mutations validate the exact request origin.
@@ -102,6 +104,7 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
+[1.4.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.0
 [1.3.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.3.0
 [1.2.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.2.0
 [1.1.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.1.0

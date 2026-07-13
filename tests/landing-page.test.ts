@@ -22,9 +22,9 @@ describe('landing page do Kassinão', () => {
   it('mantém somente os destinos públicos pedidos', () => {
     for (const html of [landingPage('pt'), landingPage('en')]) {
       expect(html).toContain('https://github.com/resolvicomai/kassinao');
-      expect(html).toContain('https://www.npmjs.com/package/kassinao-mcp');
-      expect(html).toMatch(/href="\/(?:en\/)?docs"/);
-      expect(html).toMatch(/href="\/(?:en\/)?demo"/);
+      expect(html).toMatch(/href="http:\/\/localhost:8080\/(?:en\/)?docs#mcp"/);
+      expect(html).toMatch(/href="http:\/\/localhost:8080\/(?:en\/)?docs"/);
+      expect(html).toMatch(/href="http:\/\/localhost:8080\/(?:en\/)?demo"/);
       expect(html).not.toContain('href="/app');
       expect(html).not.toContain('/auth/login');
       expect(html).not.toContain('Entrar');

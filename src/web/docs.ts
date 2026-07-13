@@ -1,7 +1,7 @@
 import { config } from '../config';
 import { CSP_NONCE_ATTR } from './csp';
 import type { Locale } from '../i18n';
-import { PUBLIC_LINKS, publicPath } from './site';
+import { PUBLIC_LINKS, publicSite } from './site';
 
 type DocsLang = Locale;
 
@@ -186,11 +186,51 @@ const ENV_GROUPS: EnvGroup[] = [
         },
       },
       {
-        name: 'BASE_URL',
-        fallback: 'http://localhost:8080',
+        name: 'APP_URL',
+        fallback: { pt: 'BASE_URL ou http://localhost:8080', en: 'BASE_URL or http://localhost:8080' },
         description: {
-          pt: 'Origem pública sem caminho, query ou hash. Cadastre BASE_URL/auth/callback como redirect do Discord.',
-          en: 'Public origin without a path, query, or hash. Register BASE_URL/auth/callback as a Discord redirect.',
+          pt: 'Origem privada do app, OAuth, gravações e downloads. Cadastre APP_URL/auth/callback como redirect do Discord.',
+          en: 'Private origin for the app, OAuth, recordings, and downloads. Register APP_URL/auth/callback as a Discord redirect.',
+        },
+      },
+      {
+        name: 'BASE_URL',
+        fallback: { pt: 'vazio', en: 'empty' },
+        description: {
+          pt: 'Alias retrocompatível de APP_URL. Instalações novas devem preferir APP_URL.',
+          en: 'Backward-compatible alias for APP_URL. New installations should prefer APP_URL.',
+        },
+      },
+      {
+        name: 'PUBLIC_URL',
+        fallback: 'APP_URL',
+        description: {
+          pt: 'Origem da landing e da demo pública. Deixe igual ao app quando usar um único domínio.',
+          en: 'Origin for the landing page and public demo. Keep it equal to the app when using one domain.',
+        },
+      },
+      {
+        name: 'DOCS_URL',
+        fallback: 'PUBLIC_URL',
+        description: {
+          pt: 'Origem da documentação. Quando separada, português fica em / e inglês em /en.',
+          en: 'Documentation origin. When separate, Portuguese lives at / and English at /en.',
+        },
+      },
+      {
+        name: 'MCP_URL',
+        fallback: 'APP_URL',
+        description: {
+          pt: 'Origem pública da API MCP. O conector usa este valor em KASSINAO_URL.',
+          en: 'Public origin for the MCP API. The connector uses this value as KASSINAO_URL.',
+        },
+      },
+      {
+        name: 'LEGACY_URL',
+        fallback: { pt: 'vazio', en: 'empty' },
+        description: {
+          pt: 'Origem anterior durante migração. Mantém links e clientes antigos funcionando até a retirada planejada.',
+          en: 'Previous origin during a migration. Keeps old links and clients working until planned retirement.',
         },
       },
       {
@@ -1717,14 +1757,17 @@ function docsScript(lang: DocsLang): string {
 export function docsPage(lang: DocsLang = 'pt'): string {
   const l: DocsLang = lang === 'en' ? 'en' : 'pt';
   const T = (pt: string, en: string): string => (l === 'pt' ? pt : en);
-  const altDocs = publicPath('docs', l === 'pt' ? 'en' : 'pt');
+  const site = publicSite('docs', l, config);
+  const ptDocs = publicSite('docs', 'pt', config).canonicalUrl;
+  const enDocs = publicSite('docs', 'en', config).canonicalUrl;
+  const altDocs = site.links.alternate;
   const title = T('Documentação do Kassinão', 'Kassinão documentation');
   const copyLabel = T('Copiar', 'Copy');
   const description = T(
     'Instale e opere o bot de Discord que grava calls, transcreve cada pessoa e gera atas, decisões e tarefas.',
     'Install and operate the Discord bot that records calls, transcribes each person, and creates minutes, decisions, and tasks.',
   );
-  const canonical = `${config.baseUrl}${publicPath('docs', l)}`;
+  const canonical = site.canonicalUrl;
 
   const clone = codeBlock(
     l === 'pt' ? 'Terminal' : 'Terminal',
@@ -1744,7 +1787,7 @@ docker compose logs -f`,
     `DISCORD_TOKEN=${T('cole_o_token_do_bot', 'paste_the_bot_token')}
 APPLICATION_ID=${T('cole_o_id_da_aplicacao', 'paste_the_application_id')}
 DISCORD_CLIENT_SECRET=${T('cole_o_client_secret', 'paste_the_client_secret')}
-BASE_URL=${T('https://kassinao.seu-dominio.com', 'https://kassinao.your-domain.com')}`,
+APP_URL=${T('https://kassinao.seu-dominio.com', 'https://kassinao.your-domain.com')}`,
     copyLabel,
   );
   const localTranscription = codeBlock(
@@ -1793,9 +1836,12 @@ WHISPER_MODEL=small`,
 <title>${esc(title)} | Kassinão</title>
 <meta name="description" content="${esc(description)}">
 <link rel="canonical" href="${esc(canonical)}">
+<link rel="alternate" hreflang="pt-BR" href="${esc(ptDocs)}">
+<link rel="alternate" hreflang="en" href="${esc(enDocs)}">
+<link rel="alternate" hreflang="x-default" href="${esc(enDocs)}">
 <meta property="og:title" content="${esc(title)} | Kassinão">
 <meta property="og:description" content="${esc(description)}">
-<meta property="og:image" content="${esc(config.baseUrl)}/og-${l}.png">
+<meta property="og:image" content="${esc(config.publicUrl)}/og-${l}.png">
 <meta property="og:url" content="${esc(canonical)}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Kassinão">
@@ -1812,14 +1858,14 @@ WHISPER_MODEL=small`,
 <header class="topbar">
   <div class="topbar-inner">
     <button class="control mobile-menu" id="mobile-menu" type="button" aria-controls="docs-sidebar" aria-expanded="false">${esc(T('Menu', 'Menu'))}</button>
-    <a class="brand" href="${publicPath('home', l)}" aria-label="${esc(T('Kassinão, página inicial', 'Kassinão, home page'))}">
+    <a class="brand" href="${site.links.home}" aria-label="${esc(T('Kassinão, página inicial', 'Kassinão, home page'))}">
       <span class="brand-mark" aria-hidden="true">k/</span>
       <span>Kassinão</span><span class="brand-context">${esc(T('Documentação', 'Docs'))}</span>
     </a>
     <div class="topbar-actions">
       <div class="language" aria-label="${esc(T('Idioma', 'Language'))}">
-        <a href="${publicPath('docs', 'pt')}"${l === 'pt' ? ' aria-current="page"' : ''} lang="pt-BR">PT</a>
-        <a href="${publicPath('docs', 'en')}"${l === 'en' ? ' aria-current="page"' : ''} lang="en">EN</a>
+        <a href="${ptDocs}"${l === 'pt' ? ' aria-current="page"' : ''} lang="pt-BR">PT</a>
+        <a href="${enDocs}"${l === 'en' ? ' aria-current="page"' : ''} lang="en">EN</a>
       </div>
       <button class="control" id="theme-toggle" type="button" aria-label="${esc(T('Alternar tema claro e escuro', 'Toggle light and dark theme'))}" aria-pressed="false"><span class="theme-label">${esc(T('Tema', 'Theme'))}</span></button>
       <a class="primary-link" href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub</a>
@@ -1934,7 +1980,7 @@ WHISPER_MODEL=small`,
                 'No <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer">Discord Developer Portal</a>, crie uma aplicação. Copie o Application ID, gere o token do bot e copie o Client Secret em OAuth2.',
                 'In the <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer">Discord Developer Portal</a>, create an application. Copy the Application ID, generate the bot token, and copy the OAuth2 Client Secret.',
               )}</p>
-              <p>${esc(T('Cadastre exatamente BASE_URL/auth/callback em OAuth2 Redirects.', 'Register exactly BASE_URL/auth/callback under OAuth2 Redirects.'))}</p>
+              <p>${esc(T('Cadastre exatamente APP_URL/auth/callback em OAuth2 Redirects.', 'Register exactly APP_URL/auth/callback under OAuth2 Redirects.'))}</p>
             </div>
           </article>
           <article class="install-step">
@@ -2108,9 +2154,9 @@ WHISPER_MODEL=small`,
           <p>${esc(T('Comece sempre por docker compose logs -f. O bot valida a configuração no boot e explica as variáveis inválidas.', 'Always start with docker compose logs -f. The bot validates configuration on boot and explains invalid variables.'))}</p>
         </div>
         <div class="troubleshooting">
-          <details class="trouble"><summary>${esc(T('O container não fica online', 'The container does not stay online'))}</summary><div class="trouble-body"><p>${esc(T('Confirme DISCORD_TOKEN, APPLICATION_ID e DISCORD_CLIENT_SECRET. Verifique também se BASE_URL é uma origem HTTP ou HTTPS sem caminho, query ou hash.', 'Confirm DISCORD_TOKEN, APPLICATION_ID, and DISCORD_CLIENT_SECRET. Also verify that BASE_URL is an HTTP or HTTPS origin without a path, query, or hash.'))}</p><p><code>docker compose logs --tail=200 kassinao</code></p></div></details>
+          <details class="trouble"><summary>${esc(T('O container não fica online', 'The container does not stay online'))}</summary><div class="trouble-body"><p>${esc(T('Confirme DISCORD_TOKEN, APPLICATION_ID e DISCORD_CLIENT_SECRET. Verifique também se APP_URL é uma origem HTTP ou HTTPS sem caminho, query ou hash.', 'Confirm DISCORD_TOKEN, APPLICATION_ID, and DISCORD_CLIENT_SECRET. Also verify that APP_URL is an HTTP or HTTPS origin without a path, query, or hash.'))}</p><p><code>docker compose logs --tail=200 kassinao</code></p></div></details>
           <details class="trouble"><summary>${esc(T('Os comandos não aparecem', 'Commands do not appear'))}</summary><div class="trouble-body"><p>${esc(T('Confirme que o convite incluiu applications.commands e que o bot já está no servidor. Reinicie o bot. Se GUILD_ID estiver definido, os comandos só são registrados naquele servidor.', 'Confirm the invite included applications.commands and that the bot is already in the server. Restart the bot. If GUILD_ID is set, commands are registered only in that server.'))}</p></div></details>
-          <details class="trouble"><summary>${esc(T('O login do Discord volta com erro', 'Discord login returns an error'))}</summary><div class="trouble-body"><p>${esc(T('Cadastre exatamente BASE_URL/auth/callback em OAuth2 Redirects. Em produção, BASE_URL precisa usar HTTPS. Depois de mudar a origem, atualize o redirect e reinicie.', 'Register exactly BASE_URL/auth/callback under OAuth2 Redirects. In production, BASE_URL must use HTTPS. After changing the origin, update the redirect and restart.'))}</p></div></details>
+          <details class="trouble"><summary>${esc(T('O login do Discord volta com erro', 'Discord login returns an error'))}</summary><div class="trouble-body"><p>${esc(T('Cadastre exatamente APP_URL/auth/callback em OAuth2 Redirects. Em produção, APP_URL precisa usar HTTPS. Depois de mudar a origem, atualize o redirect e reinicie.', 'Register exactly APP_URL/auth/callback under OAuth2 Redirects. In production, APP_URL must use HTTPS. After changing the origin, update the redirect and restart.'))}</p></div></details>
           <details class="trouble"><summary>${esc(T('O Cloudflare Tunnel não sobe', 'Cloudflare Tunnel does not start'))}</summary><div class="trouble-body"><p>${esc(T('O serviço fica num profile. Defina COMPOSE_PROFILES=tunnel ou execute docker compose --profile tunnel up -d. No painel da Cloudflare, o destino interno é kassinao:8080.', 'The service is in a profile. Set COMPOSE_PROFILES=tunnel or run docker compose --profile tunnel up -d. In Cloudflare, the internal target is kassinao:8080.'))}</p></div></details>
           <details class="trouble"><summary>${esc(T('A gravação existe, mas não há transcrição', 'The recording exists, but there is no transcript'))}</summary><div class="trouble-body"><p>${esc(T('Confirme que TRANSCRIBE_PROVIDER não está como none e que a chave do provider existe. Consulte o log da fila. A gravação e os downloads continuam válidos mesmo sem IA.', 'Confirm TRANSCRIBE_PROVIDER is not none and that its provider key exists. Check queue logs. Recording and downloads remain valid without AI.'))}</p></div></details>
           <details class="trouble"><summary>${esc(T('A transcrição saiu, mas a ata não', 'The transcript is ready, but minutes are not'))}</summary><div class="trouble-body"><p>${esc(T('Com MINUTES_ENABLED=auto, a ata só liga quando OPENROUTER_API_KEY ou GROQ_API_KEY está definida. Confirme também MINUTES_PROVIDER e o limite do provider em calls longas.', 'With MINUTES_ENABLED=auto, minutes only enable when OPENROUTER_API_KEY or GROQ_API_KEY is set. Also verify MINUTES_PROVIDER and provider limits for long calls.'))}</p></div></details>
@@ -2127,7 +2173,7 @@ WHISPER_MODEL=small`,
           <p>${esc(T('Código, MCP, configuração e canais corretos para suporte.', 'Code, MCP, configuration, and the right support channels.'))}</p>
         </div>
         <div class="link-grid">
-          <a class="resource-link" href="${publicPath('demo', l)}"><strong>${esc(T('Demo pública', 'Public demo'))}</strong><span>${esc(T('Reunião fictícia na interface real do produto.', 'Fictional meeting in the real product interface.'))}</span></a>
+          <a class="resource-link" href="${site.links.demo}"><strong>${esc(T('Demo pública', 'Public demo'))}</strong><span>${esc(T('Reunião fictícia na interface real do produto.', 'Fictional meeting in the real product interface.'))}</span></a>
           <a class="resource-link" href="${NPM_URL}" target="_blank" rel="noopener noreferrer"><strong>kassinao-mcp</strong><span>${esc(T('Pacote publicado do conector MCP.', 'Published MCP connector package.'))}</span></a>
           <a class="resource-link" href="${REPO_URL}" target="_blank" rel="noreferrer"><strong>GitHub</strong><span>${esc(T('Código-fonte e README.', 'Source code and README.'))}</span></a>
           <a class="resource-link" href="${REPO_URL}/blob/main/.env.example" target="_blank" rel="noreferrer"><strong>.env.example</strong><span>${esc(T('Todas as opções comentadas.', 'Every option with comments.'))}</span></a>
@@ -2141,7 +2187,7 @@ WHISPER_MODEL=small`,
 
       <section class="no-results" id="no-results" hidden>
         <h2>${esc(T('Nada encontrado', 'Nothing found'))}</h2>
-        <p>${esc(T('Tente um comando como gravar, uma variável como BASE_URL ou um tema como privacidade.', 'Try a command such as record, a variable such as BASE_URL, or a topic such as privacy.'))}</p>
+        <p>${esc(T('Tente um comando como gravar, uma variável como APP_URL ou um tema como privacidade.', 'Try a command such as record, a variable such as APP_URL, or a topic such as privacy.'))}</p>
       </section>
 
       <footer class="docs-footer">

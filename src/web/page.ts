@@ -16,7 +16,7 @@ import { APP_CSS } from './appStyles';
 import { CSP_NONCE_ATTR } from './csp';
 import type { SessionSummary } from './mcpTokens';
 import type { WebSearchHit } from './search';
-import { PUBLIC_LINKS, publicPath } from './site';
+import { PUBLIC_LINKS, publicSite } from './site';
 
 function esc(s: string): string {
   return s
@@ -319,16 +319,19 @@ function shell(
 ): string {
   const lang = opts.lang === 'pt' ? 'pt' : 'en';
   const pt = lang === 'pt';
+  const publicContext = publicSite(opts.demo ? 'demo' : 'home', lang, config);
+  const demoEn = publicSite('demo', 'en', config).canonicalUrl;
+  const demoPt = publicSite('demo', 'pt', config).canonicalUrl;
   const langToggle = opts.lockLocale
     ? ''
     : opts.demo
-      ? `<div class="langtoggle" aria-label="${pt ? 'Idioma' : 'Language'}"><a href="${publicPath('demo', 'en')}"${lang === 'en' ? ' class="on" aria-current="page"' : ''} lang="en">EN</a><a href="${publicPath('demo', 'pt')}"${lang === 'pt' ? ' class="on" aria-current="page"' : ''} lang="pt-BR">PT</a></div>`
+      ? `<div class="langtoggle" aria-label="${pt ? 'Idioma' : 'Language'}"><a href="${demoEn}"${lang === 'en' ? ' class="on" aria-current="page"' : ''} lang="en">EN</a><a href="${demoPt}"${lang === 'pt' ? ' class="on" aria-current="page"' : ''} lang="pt-BR">PT</a></div>`
       : `<div class="langtoggle" aria-label="${pt ? 'Idioma' : 'Language'}"><a href="?lang=en" data-app-locale="en"${lang === 'en' ? ' class="on" aria-current="page"' : ''}>EN</a><a href="?lang=pt" data-app-locale="pt"${lang === 'pt' ? ' class="on" aria-current="page"' : ''}>PT</a></div>`;
   // A demo é uma prova pública com dados fictícios. O app continua isolado sob
   // /app, com autenticação, ACL e navegação próprias.
-  const brand = `<a class="brand" href="${opts.demo ? publicPath('home', lang) : '/app'}"><img src="/assets/kassinao-mark.png" width="26" height="26" alt=""><span>Kassinão</span></a>`;
+  const brand = `<a class="brand" href="${opts.demo ? publicContext.links.home : '/app'}"><img src="/assets/kassinao-mark.png" width="26" height="26" alt=""><span>Kassinão</span></a>`;
   const nav = opts.demo
-    ? `<nav aria-label="${pt ? 'Navegação principal' : 'Main navigation'}"><a href="${publicPath('docs', lang)}">Docs</a><a href="${PUBLIC_LINKS.mcp}" target="_blank" rel="noopener noreferrer">MCP</a><a href="${PUBLIC_LINKS.github}" target="_blank" rel="noopener noreferrer">GitHub</a></nav>`
+    ? `<nav aria-label="${pt ? 'Navegação principal' : 'Main navigation'}"><a href="${publicContext.links.docs}">Docs</a><a href="${publicContext.links.mcp}" target="_blank" rel="noopener noreferrer">MCP</a><a href="${PUBLIC_LINKS.github}" target="_blank" rel="noopener noreferrer">GitHub</a></nav>`
     : opts.user
       ? `<nav class="sidebar-nav" aria-label="${pt ? 'Navegação do app' : 'App navigation'}"><a href="/app"${opts.active === 'rec' ? ' aria-current="page"' : ''}>${pt ? 'Reuniões' : 'Meetings'}</a>${
           config.mcpEnabled
@@ -351,8 +354,8 @@ function shell(
       : `${themeBtn}${langToggle}${signIn}`;
   const userbar = `<header class="topbar">${brand}${nav}<span class="topnav-r">${right}</span></header>`;
   const foot = opts.demo
-    ? `<footer class="topfoot"><a href="${publicPath('home', lang)}">Kassinão</a>. <a href="${publicPath('docs', lang)}">Docs</a>. Open source. Self-hosted. AGPL-3.0.</footer>`
-    : `<footer class="topfoot"><a href="${publicPath('docs', lang)}">Docs</a>. Kassinão. AGPL-3.0.</footer>`;
+    ? `<footer class="topfoot"><a href="${publicContext.links.home}">Kassinão</a>. <a href="${publicContext.links.docs}">Docs</a>. Open source. Self-hosted. AGPL-3.0.</footer>`
+    : `<footer class="topfoot"><a href="${publicContext.links.docs}">Docs</a>. Kassinão. AGPL-3.0.</footer>`;
   const privateWorkspace = !!opts.user && !opts.demo;
   const shellOpen = privateWorkspace
     ? `<div class="app-shell">
@@ -363,7 +366,7 @@ function shell(
         <div class="sidebar-spacer"></div>
         <nav class="sidebar-resources" aria-label="${pt ? 'Recursos' : 'Resources'}">
           <span class="sidebar-label">${pt ? 'Recursos' : 'Resources'}</span>
-          <a href="${publicPath('docs', lang)}">Docs</a>
+          <a href="${publicContext.links.docs}">Docs</a>
           <a href="${PUBLIC_LINKS.github}" target="_blank" rel="noopener noreferrer">GitHub</a>
         </nav>
         <div class="sidebar-footer">${userIdentity}${logout}</div>
@@ -386,13 +389,17 @@ function shell(
     : 'Explore a fictional meeting processed by Kassinão, the Discord bot that records, transcribes, and organizes calls.';
   const publicMeta = opts.demo
     ? `<meta name="description" content="${esc(demoDescription)}">
+<link rel="canonical" href="${publicContext.canonicalUrl}">
+<link rel="alternate" hreflang="pt-BR" href="${demoPt}">
+<link rel="alternate" hreflang="en" href="${demoEn}">
+<link rel="alternate" hreflang="x-default" href="${demoEn}">
 <meta property="og:title" content="${esc(documentTitle)}">
 <meta property="og:description" content="${esc(demoDescription)}">
-<meta property="og:image" content="${config.baseUrl}/og-${lang}.png">
+<meta property="og:image" content="${config.publicUrl}/og-${lang}.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Kassinão Discord bot">
-<meta property="og:url" content="${config.baseUrl}${publicPath('demo', lang)}">
+<meta property="og:url" content="${publicSite('demo', lang, config).canonicalUrl}">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">`
     : '<meta name="robots" content="noindex">';
@@ -634,8 +641,8 @@ export function recordingPage(
           : 'The bot turns the call into a named transcript, meeting notes, decisions, and action items. <strong>Deploy your own:</strong> it is open source and runs on your infrastructure.'
       }</div>
      <div class="downloads" style="margin-top:14px">
-       <a class="btn" href="${ghHref()}">${l === 'pt' ? 'Como instalar' : 'Setup guide'}</a>
-       <a class="btn secondary" href="${publicPath('home', l)}">${l === 'pt' ? 'Voltar ao início' : 'Back home'}</a>
+       <a class="btn" href="${publicSite('docs', l, config).canonicalUrl}">${l === 'pt' ? 'Como instalar' : 'Setup guide'}</a>
+       <a class="btn secondary" href="${publicSite('home', l, config).canonicalUrl}">${l === 'pt' ? 'Voltar ao início' : 'Back home'}</a>
      </div>`
     : '';
   const title = `#${esc(meta.voiceChannelName)}`;
@@ -738,7 +745,7 @@ export function recordingPage(
     demo ? `#${meta.voiceChannelName} (demo)` : `#${meta.voiceChannelName} | ${p(l, 'recording')}`,
     `<article class="meeting-page">
       <header class="recording-head">
-        <a class="backlink" href="${demo ? publicPath('home', l) : '/app'}">${demo ? (l === 'pt' ? 'Início' : 'Home') : l === 'pt' ? 'Reuniões' : 'Meetings'}</a>
+        <a class="backlink" href="${demo ? publicSite('home', l, config).canonicalUrl : '/app'}">${demo ? (l === 'pt' ? 'Início' : 'Home') : l === 'pt' ? 'Reuniões' : 'Meetings'}</a>
         <div class="recording-titleline"><h1>${title}</h1>${badge}</div>
         ${subline}
         <div class="recording-alerts">${demoNote}${liveNote}${incompleteNote}</div>
@@ -1412,7 +1419,7 @@ export function recordingsIndexPage(
           pt
             ? 'Entre num canal de voz e use /gravar. Quando a call terminar, o Kassinão organiza áudio, transcrição, ata, decisões e tarefas.'
             : 'Join a voice channel and use /record. When the call ends, Kassinão organizes audio, transcript, meeting notes, decisions, and tasks.'
-        }</span><div class="empty-actions"><code>${pt ? '/gravar' : '/record'}</code><a class="btn secondary" href="${publicPath('docs', l)}">${pt ? 'Ver como funciona' : 'See how it works'}</a></div></div>`
+        }</span><div class="empty-actions"><code>${pt ? '/gravar' : '/record'}</code><a class="btn secondary" href="${publicSite('docs', l, config).canonicalUrl}">${pt ? 'Ver como funciona' : 'See how it works'}</a></div></div>`
       : `<div class="recording-groups">${groupedCards}</div>
         <div class="empty-state compact" id="channel-filter-empty" role="status" hidden><strong>${pt ? 'Nenhuma gravação nos canais selecionados' : 'No recordings in the selected channels'}</strong><span class="muted">${pt ? 'Ative outro canal no filtro acima.' : 'Enable another channel in the filter above.'}</span></div>
         <script${CSP_NONCE_ATTR}>
@@ -1481,11 +1488,6 @@ export function messagePage(title: string, message: string, user?: WebUser, lang
   return shell(title, body, { user, lang });
 }
 
-const REPO_URL = PUBLIC_LINKS.github;
-const NPM_URL = PUBLIC_LINKS.mcp;
-// Enquanto o repo é privado, links "GitHub" apontam pro npm (público) pra não dar 404.
-const ghHref = (): string => (config.repoPublic ? REPO_URL : NPM_URL);
-
 // CSS da landing (vitrine pública). Documento próprio, full-width - NÃO usa o
 // .card do shell(). Voz tipográfica sans real (a mesma família do sistema);
 // monoespaçado (.mono) fica reservado a timestamps, nomes de env var, comandos
@@ -1529,18 +1531,18 @@ export function connectPage(opts: {
           kassinao: {
             command: 'npx',
             args: ['-y', 'kassinao-mcp'],
-            env: { KASSINAO_URL: config.baseUrl, KASSINAO_REFRESH_TOKEN: opts.refreshToken },
+            env: { KASSINAO_URL: config.mcpUrl, KASSINAO_REFRESH_TOKEN: opts.refreshToken },
           },
         },
       },
       null,
       2,
     );
-    const localhostWarn = config.baseUrl.startsWith('http://localhost')
+    const localhostWarn = config.mcpUrl.startsWith('http://localhost')
       ? `<div class="note" role="alert">${esc(
           T(
-            'Este servidor está com BASE_URL de localhost. O token gerado não vai funcionar de outra máquina. Defina a URL pública do bot antes de gerar conexões reais.',
-            'This server has a localhost BASE_URL. The generated token will not work from another machine. Set the public bot URL before generating real connections.',
+            'Este servidor está com MCP_URL de localhost. O token gerado não vai funcionar de outra máquina. Defina a URL pública do MCP antes de gerar conexões reais.',
+            'This server has a localhost MCP_URL. The generated token will not work from another machine. Set the public MCP URL before generating real connections.',
           ),
         )}</div>`
       : '';

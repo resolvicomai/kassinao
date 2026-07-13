@@ -198,6 +198,273 @@ interface MembershipGuild {
 
 export type CurrentGuildMembership = 'member' | 'not-member' | 'unavailable';
 
+type DomainConfig = typeof config & {
+  appUrl?: string;
+  publicUrl?: string;
+  docsUrl?: string;
+  mcpUrl?: string;
+  legacyUrl?: string;
+};
+
+export interface WebOrigins {
+  app: string;
+  public: string;
+  docs: string;
+  mcp: string;
+  legacy?: string;
+}
+
+export type WebHostRole = 'app' | 'public' | 'docs' | 'mcp' | 'legacy';
+
+export type WebHostRoutingDecision =
+  | { action: 'pass'; roles: WebHostRole[] }
+  | { action: 'rewrite'; roles: WebHostRole[]; path: string }
+  | { action: 'redirect'; roles: WebHostRole[]; status: 308; target: string }
+  | { action: 'reject'; roles: WebHostRole[]; status: 404 | 421 };
+
+/**
+ * Topologia pública do deploy. Os fallbacks mantêm instalações self-hosted de
+ * origem única compatíveis: sem as novas variáveis, todas as superfícies seguem
+ * vivendo sob BASE_URL, exatamente como antes.
+ */
+export function configuredWebOrigins(source: DomainConfig = config as DomainConfig): WebOrigins {
+  const app = source.appUrl ?? source.baseUrl;
+  const publicUrl = source.publicUrl ?? source.baseUrl;
+  return {
+    app,
+    public: publicUrl,
+    docs: source.docsUrl ?? publicUrl,
+    mcp: source.mcpUrl ?? app,
+    ...(source.legacyUrl ? { legacy: source.legacyUrl } : {}),
+  };
+}
+
+function requestHost(req: Request): string | undefined {
+  const header = req.get?.('host') ?? req.headers.host;
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (!raw || /[\s/\\]/.test(raw)) return undefined;
+  try {
+    return new URL(`http://${raw}`).host.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function hostOf(origin: string): string {
+  return new URL(origin).host.toLowerCase();
+}
+
+function isNavigation(req: Request): boolean {
+  return req.method === 'GET' || req.method === 'HEAD';
+}
+
+function pathWithOriginalQuery(req: Request, pathname: string): string {
+  const q = req.originalUrl.indexOf('?');
+  return `${pathname}${q >= 0 ? req.originalUrl.slice(q) : ''}`;
+}
+
+function absoluteTarget(origin: string, req: Request, pathname = req.path): string {
+  return `${origin}${pathWithOriginalQuery(req, pathname)}`;
+}
+
+function rolesForHost(host: string, origins: WebOrigins): WebHostRole[] {
+  const entries: Array<[WebHostRole, string | undefined]> = [
+    ['app', origins.app],
+    ['public', origins.public],
+    ['docs', origins.docs],
+    ['mcp', origins.mcp],
+    ['legacy', origins.legacy],
+  ];
+  return entries.filter(([, origin]) => origin && hostOf(origin) === host).map(([role]) => role);
+}
+
+function wwwHost(origins: WebOrigins): string | undefined {
+  const url = new URL(origins.public);
+  if (url.hostname === 'localhost' || url.hostname.startsWith('www.') || /^[\d.:]+$/.test(url.hostname)) {
+    return undefined;
+  }
+  const port = url.port ? `:${url.port}` : '';
+  return `www.${url.hostname.toLowerCase()}${port}`;
+}
+
+function isSharedStaticPath(pathname: string): boolean {
+  return (
+    pathname === '/favicon-32.png' ||
+    pathname === '/og.png' ||
+    pathname === '/og-pt.png' ||
+    pathname === '/og-en.png' ||
+    pathname.startsWith('/assets/')
+  );
+}
+
+function isPathPrefix(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+function isPathPrefixFolded(pathname: string, prefix: string): boolean {
+  return isPathPrefix(pathname.toLowerCase(), prefix.toLowerCase());
+}
+
+function canonicalPrefixPath(pathname: string, prefix: string): string {
+  const canonical = `${prefix}${pathname.slice(prefix.length)}`;
+  return canonical === `${prefix}/` ? prefix : canonical;
+}
+
+function canonicalRouteKey(pathname: string): string {
+  if (pathname === '/') return pathname;
+  return pathname.replace(/\/+$/, '').toLowerCase() || '/';
+}
+
+/**
+ * Decide a superfície ANTES de qualquer handler. Nenhum destino é montado a
+ * partir do Host recebido: redirects usam somente origens já validadas em config.
+ */
+export function webHostRoutingDecision(req: Request, origins = configuredWebOrigins()): WebHostRoutingDecision {
+  const host = requestHost(req);
+  const pathname = req.path || '/';
+  const apiPath = isPathPrefixFolded(pathname, '/api');
+
+  // Probes internos do container não dependem do domínio público e nunca ganham
+  // acesso às superfícies privadas por causa dessa exceção.
+  if (
+    (!host || rolesForHost(host, origins).length === 0) &&
+    isLoopbackAddress(req.socket.remoteAddress) &&
+    isPathPrefix(pathname, '/health')
+  ) {
+    return { action: 'pass', roles: [] };
+  }
+
+  if (!host) return { action: 'reject', roles: [], status: 421 };
+
+  if (host === wwwHost(origins)) {
+    // API nunca muda de origem por redirect, nem em GET/HEAD: isso evita perda
+    // ou encaminhamento acidental do header Authorization.
+    if (apiPath) return { action: 'reject', roles: [], status: 404 };
+    if (!isNavigation(req)) return { action: 'reject', roles: [], status: 421 };
+    return { action: 'redirect', roles: [], status: 308, target: absoluteTarget(origins.public, req) };
+  }
+
+  const roles = rolesForHost(host, origins);
+  if (roles.length === 0) return { action: 'reject', roles, status: 421 };
+
+  const has = (role: WebHostRole): boolean => roles.includes(role);
+  const redirect = (target: string): WebHostRoutingDecision =>
+    isNavigation(req) ? { action: 'redirect', roles, status: 308, target } : { action: 'reject', roles, status: 404 };
+
+  if (isPathPrefix(pathname, '/health') || pathname === '/robots.txt' || pathname === '/sitemap.xml') {
+    return { action: 'pass', roles };
+  }
+  if (isSharedStaticPath(pathname)) return { action: 'pass', roles };
+
+  if (apiPath) {
+    // Não canoniza API por redirect. Variante de caixa é rejeitada antes do
+    // router para nunca mover bearer tokens entre URLs/origens.
+    if (!isPathPrefix(pathname, '/api')) return { action: 'reject', roles, status: 404 };
+    // A origem legada continua aceitando clientes MCP já instalados. Nunca há
+    // redirect de API: POSTs e tokens permanecem na origem que receberam.
+    // Em origem única, o mesmo host acumula os papéis app+mcp. Em topologia
+    // dividida, o host privado do app não aceita bearer da API MCP.
+    return has('mcp') || has('legacy') ? { action: 'pass', roles } : { action: 'reject', roles, status: 404 };
+  }
+
+  const authPath = isPathPrefixFolded(pathname, '/auth');
+  if (authPath) {
+    const canonicalPath = canonicalPrefixPath(pathname, '/auth');
+    if (!isPathPrefix(pathname, '/auth')) return redirect(absoluteTarget(origins.app, req, canonicalPath));
+    if (has('app')) return { action: 'pass', roles };
+    // Callback antigo precisa chegar ao handler para o code OAuth emitido com a
+    // URI anterior poder ser consumido. Novos logins já começam na origem app.
+    if (has('legacy') && pathname === '/auth/callback') return { action: 'pass', roles };
+    return redirect(absoluteTarget(origins.app, req));
+  }
+
+  const appPath = isPathPrefixFolded(pathname, '/app');
+  if (appPath) {
+    const canonicalPath = canonicalPrefixPath(pathname, '/app');
+    if (!isPathPrefix(pathname, '/app') || pathname === '/app/') {
+      return redirect(absoluteTarget(origins.app, req, canonicalPath));
+    }
+    return has('app') ? { action: 'pass', roles } : redirect(absoluteTarget(origins.app, req));
+  }
+
+  const oldAppPath =
+    isPathPrefix(pathname, '/gravacoes') || isPathPrefix(pathname, '/rec') || isPathPrefix(pathname, '/conectar-ia');
+  if (oldAppPath && !has('app')) {
+    const mapped = pathname.startsWith('/gravacoes')
+      ? pathname.replace(/^\/gravacoes/, '/app')
+      : pathname.startsWith('/rec')
+        ? pathname.replace(/^\/rec/, '/app/rec')
+        : pathname.replace(/^\/conectar-ia/, '/app/conectar-ia');
+    return redirect(absoluteTarget(origins.app, req, mapped));
+  }
+
+  const routeKey = canonicalRouteKey(pathname);
+  const docsPt = routeKey === '/docs';
+  const docsEn = routeKey === '/en/docs';
+  if (docsPt || docsEn) {
+    const publicDocsPath = docsEn ? '/en/docs' : '/docs';
+    if (has('docs') && has('public')) {
+      return pathname === publicDocsPath
+        ? { action: 'pass', roles }
+        : redirect(absoluteTarget(origins.public, req, publicDocsPath));
+    }
+    const canonicalPath = docsEn ? '/en' : '/';
+    return redirect(absoluteTarget(origins.docs, req, canonicalPath));
+  }
+
+  // Num host dedicado de docs, / e /en são aliases internos das rotas antigas.
+  // Isso evita duplicar handlers e mantém self-hosters de origem única intactos.
+  if (has('docs') && !has('public') && (routeKey === '/' || routeKey === '/en')) {
+    const canonicalPath = routeKey === '/en' ? '/en' : '/';
+    if (pathname !== canonicalPath) return redirect(absoluteTarget(origins.docs, req, canonicalPath));
+    return {
+      action: 'rewrite',
+      roles,
+      path: pathWithOriginalQuery(req, routeKey === '/en' ? '/en/docs' : '/docs'),
+    };
+  }
+
+  const canonicalPublicPath = new Map<string, string>([
+    ['/', '/'],
+    ['/en', '/en'],
+    ['/demo', '/demo'],
+    ['/en/demo', '/en/demo'],
+    ['/demo/audio', '/demo/audio'],
+  ]).get(routeKey);
+  if (canonicalPublicPath) {
+    if (has('public')) {
+      return pathname === canonicalPublicPath
+        ? { action: 'pass', roles }
+        : redirect(absoluteTarget(origins.public, req, canonicalPublicPath));
+    }
+    if (has('mcp') && canonicalPublicPath === '/') {
+      return {
+        action: 'redirect',
+        roles,
+        status: 308,
+        target: `${origins.docs}/#mcp`,
+      };
+    }
+    if (has('docs') && (canonicalPublicPath === '/' || canonicalPublicPath === '/en')) {
+      // Coberto pelo rewrite acima; mantém o narrowing explícito para configs
+      // incomuns onde a mesma origem acumule papéis adicionais.
+      return { action: 'pass', roles };
+    }
+    if (has('mcp')) return { action: 'reject', roles, status: 404 };
+    return redirect(absoluteTarget(origins.public, req, canonicalPublicPath));
+  }
+
+  // O host do MCP é uma superfície mínima: API + descoberta na raiz. Não deixa
+  // handlers públicos/privados futuros vazarem por acidente.
+  if (has('mcp') && roles.length === 1) return { action: 'reject', roles, status: 404 };
+
+  // Na origem legada, somente compatibilidades deliberadas passam. Links de
+  // páginas conhecidas foram redirecionados acima; caminhos arbitrários não.
+  if (has('legacy') && roles.length === 1) return { action: 'reject', roles, status: 404 };
+
+  return { action: 'pass', roles };
+}
+
 /** Confirma membership pela REST do Discord; cache local nunca autoriza a criação. */
 export async function currentGuildMembership(
   userId: string,
@@ -216,27 +483,99 @@ export async function currentGuildMembership(
   return unavailable ? 'unavailable' : 'not-member';
 }
 
+function configuredOriginForRequest(req: Request, origins = configuredWebOrigins()): string | undefined {
+  const host = requestHost(req);
+  if (!host) return undefined;
+  if (host === wwwHost(origins)) return origins.public;
+  const candidates = [origins.app, origins.public, origins.docs, origins.mcp, origins.legacy].filter(
+    (origin): origin is string => Boolean(origin),
+  );
+  return candidates.find((origin) => hostOf(origin) === host);
+}
+
 /** Destino canônico para HTTP público; undefined mantém HTTPS e probes locais. */
-export function httpsRedirectTarget(req: Request, baseUrl = config.baseUrl): string | undefined {
-  if (!baseUrl.startsWith('https://') || req.secure || isLoopbackAddress(req.socket.remoteAddress)) return undefined;
+export function httpsRedirectTarget(
+  req: Request,
+  baseUrl?: string,
+  origins = configuredWebOrigins(),
+): string | undefined {
+  const canonicalOrigin = baseUrl ?? configuredOriginForRequest(req, origins);
+  if (!canonicalOrigin?.startsWith('https://') || req.secure || isLoopbackAddress(req.socket.remoteAddress))
+    return undefined;
   const requestPath = req.originalUrl.startsWith('/') ? req.originalUrl : '/';
-  return `${baseUrl}${requestPath}`;
+  return `${canonicalOrigin}${requestPath}`;
 }
 
 export function isRateLimitedWebPath(pathname: string): boolean {
   return !/^\/(?:health|api)(?:\/|$)/i.test(pathname);
 }
 
+export function robotsForRoles(roles: WebHostRole[], origins = configuredWebOrigins()): string {
+  if (roles.includes('public')) {
+    return [
+      'User-agent: *',
+      'Allow: /',
+      'Disallow: /app',
+      'Disallow: /auth',
+      'Disallow: /api',
+      `Sitemap: ${origins.public}/sitemap.xml`,
+      '',
+    ].join('\n');
+  }
+  if (roles.includes('docs')) {
+    return ['User-agent: *', 'Allow: /', `Sitemap: ${origins.docs}/sitemap.xml`, ''].join('\n');
+  }
+  return ['User-agent: *', 'Disallow: /', ''].join('\n');
+}
+
+export function sitemapForRoles(roles: WebHostRole[], origins = configuredWebOrigins()): string | undefined {
+  let urls: string[] | undefined;
+  if (roles.includes('public')) {
+    urls = [`${origins.public}/`, `${origins.public}/en`, `${origins.public}/demo`, `${origins.public}/en/demo`];
+    if (roles.includes('docs')) urls.push(`${origins.public}/docs`, `${origins.public}/en/docs`);
+  } else if (roles.includes('docs')) {
+    urls = [`${origins.docs}/`, `${origins.docs}/en`];
+  }
+  if (!urls) return undefined;
+  const entries = urls.map((url) => `  <url><loc>${url}</loc></url>`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries}\n</urlset>\n`;
+}
+
 export function startWebServer(): void {
   const app = express();
   app.disable('x-powered-by');
+  // O guard de host e o router precisam concordar: variantes como /API ou
+  // /App/ não podem cair em handlers case-insensitive depois da classificação.
+  app.set('case sensitive routing', true);
+  app.set('strict routing', true);
   // Atrás do Cloudflare Tunnel (1 proxy): faz req.ip refletir o IP real do cliente,
   // pra o rate-limit por IP não ser burlado forjando X-Forwarded-For.
   app.set('trust proxy', 1);
 
+  // A mesma aplicação atende cinco hostnames, mas cada um expõe só sua
+  // superfície. A decisão acontece antes de rate-limit, cookies e handlers para
+  // que Host desconhecido e chamadas no subdomínio errado falhem fechados.
+  app.use((req, res, next) => {
+    const decision = webHostRoutingDecision(req);
+    if (decision.action === 'reject') {
+      res
+        .status(decision.status)
+        .type('text/plain')
+        .send(decision.status === 421 ? 'Host não reconhecido.' : 'Not found.');
+      return;
+    }
+    if (decision.action === 'redirect') {
+      res.redirect(decision.status, decision.target);
+      return;
+    }
+    if (decision.action === 'rewrite') req.url = decision.path;
+    res.locals.webHostRoles = decision.roles;
+    next();
+  });
+
   // Cloudflare pode aceitar HTTP mesmo quando a origem canônica é HTTPS. O
-  // destino usa BASE_URL, nunca Host controlado pelo cliente; probes locais do
-  // container continuam funcionando em HTTP.
+  // destino é escolhido apenas entre as origens configuradas, nunca é montado a
+  // partir do Host controlado pelo cliente; probes locais seguem em HTTP.
   app.use((req, res, next) => {
     const target = httpsRedirectTarget(req);
     if (target) {
@@ -297,6 +636,21 @@ export function startWebServer(): void {
   // são metadados operacionais privados (e não são necessários ao healthcheck).
   app.get('/health', (_req, res) => {
     res.set('Cache-Control', 'no-store').json({ ok: true, ready: isClientReady() });
+  });
+
+  app.get('/robots.txt', (_req, res) => {
+    const roles = (res.locals.webHostRoles ?? []) as WebHostRole[];
+    res.type('text/plain').set('Cache-Control', 'public, max-age=3600').send(robotsForRoles(roles));
+  });
+
+  app.get('/sitemap.xml', (_req, res) => {
+    const roles = (res.locals.webHostRoles ?? []) as WebHostRole[];
+    const sitemap = sitemapForRoles(roles);
+    if (!sitemap) {
+      res.status(404).end();
+      return;
+    }
+    res.type('application/xml').set('Cache-Control', 'public, max-age=3600').send(sitemap);
   });
 
   // Fonte da interface servida localmente. Mantém a página independente de CDN

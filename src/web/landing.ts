@@ -1093,14 +1093,16 @@ function wave(): string {
 }
 
 export function landingPage(lang: Locale = 'pt'): string {
-  const site = publicSite('home', lang, config.baseUrl);
+  const site = publicSite('home', lang, config);
+  const ptHome = publicSite('home', 'pt', config).canonicalUrl;
+  const enHome = publicSite('home', 'en', config).canonicalUrl;
   const pt = lang === 'pt';
   const T = (portuguese: string, english: string): string => (pt ? portuguese : english);
-  const visualVersion = '20260713';
+  const visualVersion = '20260713-cloud';
   const discordVideo = `/assets/discord-demo-${lang}.webm?v=${visualVersion}`;
   const discordPoster = `/assets/discord-demo-${lang}.png?v=${visualVersion}`;
   const meetingImage = `/assets/meeting-demo-${lang}.png`;
-  const ogImage = `${config.baseUrl}/og-${lang}.png`;
+  const ogImage = `${config.publicUrl}/og-${lang}.png`;
   const title = T(
     'Kassinão: decisões do Discord com nome, contexto e fonte',
     'Kassinão: Discord decisions with names, context, and sources',
@@ -1110,8 +1112,8 @@ export function landingPage(lang: Locale = 'pt'): string {
     'An open-source, self-hosted bot that records one track per speaker and turns Discord calls into transcripts, meeting notes, tasks, and timestamped answers.',
   );
   const language = `<div class="language" aria-label="${esc(T('Idioma', 'Language'))}">
-    <a href="/"${pt ? ' aria-current="page"' : ''} lang="pt-BR">PT</a>
-    <a href="/en"${pt ? '' : ' aria-current="page"'} lang="en">EN</a>
+    <a href="${ptHome}"${pt ? ' aria-current="page"' : ''} lang="pt-BR">PT</a>
+    <a href="${enHome}"${pt ? '' : ' aria-current="page"'} lang="en">EN</a>
   </div>`;
   const commands = [
     {
@@ -1155,7 +1157,9 @@ export function landingPage(lang: Locale = 'pt'): string {
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
 <link rel="canonical" href="${esc(site.canonicalUrl)}">
-<link rel="alternate" hreflang="${site.alternateLocale === 'pt' ? 'pt-BR' : 'en'}" href="${esc(`${config.baseUrl}${site.links.alternate}`)}">
+<link rel="alternate" hreflang="pt-BR" href="${esc(ptHome)}">
+<link rel="alternate" hreflang="en" href="${esc(enHome)}">
+<link rel="alternate" hreflang="x-default" href="${esc(enHome)}">
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(description)}">
 <meta property="og:image" content="${esc(ogImage)}">
@@ -1170,7 +1174,7 @@ export function landingPage(lang: Locale = 'pt'): string {
 <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" sizes="180x180">
 <style>${LANDING_CSS}</style>
-<script${CSP_NONCE_ATTR} type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@type': 'SoftwareApplication', name: 'Kassinão', applicationCategory: 'BusinessApplication', operatingSystem: 'Docker, Linux', description, url: site.canonicalUrl, softwareHelp: `${config.baseUrl}${site.links.docs}`, codeRepository: site.links.github, license: 'https://www.gnu.org/licenses/agpl-3.0.html' }).replace(/</g, '\\u003c')}</script>
+<script${CSP_NONCE_ATTR} type="application/ld+json">${JSON.stringify({ '@context': 'https://schema.org', '@type': 'SoftwareApplication', name: 'Kassinão', applicationCategory: 'BusinessApplication', operatingSystem: 'Docker, Linux', description, url: site.canonicalUrl, softwareHelp: site.links.docs, codeRepository: site.links.github, license: 'https://www.gnu.org/licenses/agpl-3.0.html' }).replace(/</g, '\\u003c')}</script>
 </head>
 <body>
 <a class="skip-link" href="#conteudo">${esc(T('Pular para o conteúdo', 'Skip to content'))}</a>

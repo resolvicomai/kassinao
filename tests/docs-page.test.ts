@@ -32,7 +32,7 @@ describe('documentation page', () => {
     expect(html).toContain('MCP_SECRET');
     expect(html).toContain('Falha para o lado seguro');
     expect(html).not.toContain('/auth/login');
-    expect(html).toContain('href="/demo"');
+    expect(html).toContain('href="http://localhost:8080/demo"');
     expect(html).not.toContain('Abrir central');
   });
 
@@ -47,7 +47,7 @@ describe('documentation page', () => {
     expect(html).toContain('/ask &lt;question&gt; [days]');
     expect(html).toContain('Recording history');
     expect(html).toContain('MANUAL_RECORD_GUILD_STARTS_PER_24H');
-    expect(html).toContain('href="/en/demo"');
+    expect(html).toContain('href="http://localhost:8080/en/demo"');
     expect(html).not.toContain('>Copiar</button>');
     expect(html).toContain('>Copy</button>');
     expect(html).toContain('Default: required');

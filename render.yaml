@@ -20,7 +20,7 @@ services:
       - key: DISCORD_CLIENT_SECRET
         sync: false
       - key: BASE_URL
-        sync: false # ex.: https://kassinao.onrender.com (use a URL pública do serviço)
+        sync: false # ex.: https://kassinao.onrender.com; APP_URL/PUBLIC_URL/DOCS_URL/MCP_URL herdam esta origem
       - key: GUILD_ID
         sync: false
       - key: RECORDINGS_DIR

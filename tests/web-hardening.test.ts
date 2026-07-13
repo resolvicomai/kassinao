@@ -3,7 +3,14 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { config, normalizeBaseUrl, parseConfiguredNumber, validateSecret } from '../src/config';
+import {
+  config,
+  normalizeBaseUrl,
+  normalizeOrigin,
+  parseConfiguredNumber,
+  resolveConfiguredOrigins,
+  validateSecret,
+} from '../src/config';
 import { beginLogin, getWebUser, isAllowedWebMutation, logoutWeb, WebUser } from '../src/web/auth';
 import { discordDemoPage } from '../src/web/discordDemo';
 import { landingPage } from '../src/web/landing';
@@ -130,9 +137,53 @@ describe('configuração fail-fast', () => {
 
   it('normaliza só origens HTTP(S), sem caminho/credencial/query', () => {
     expect(normalizeBaseUrl('https://kassinao.example.com/')).toBe('https://kassinao.example.com');
+    expect(normalizeOrigin('APP_URL', 'https://app.kassinao.cloud/')).toBe('https://app.kassinao.cloud');
     expect(() => normalizeBaseUrl('javascript:alert(1)')).toThrow(/http/);
     expect(() => normalizeBaseUrl('https://u:p@example.com')).toThrow(/credenciais/);
     expect(() => normalizeBaseUrl('https://example.com/sub')).toThrow(/caminho/);
+  });
+
+  it('preserva a instalação de origem única quando as novas URLs não são definidas', () => {
+    expect(config.appUrl).toBe('http://localhost:8080');
+    expect(config.baseUrl).toBe(config.appUrl);
+    expect(config.publicUrl).toBe(config.appUrl);
+    expect(config.docsUrl).toBe(config.appUrl);
+    expect(config.mcpUrl).toBe(config.appUrl);
+    expect(config.legacyUrl).toBeUndefined();
+  });
+
+  it('resolve a topologia separada com a precedência documentada', () => {
+    expect(
+      resolveConfiguredOrigins(
+        {
+          BASE_URL: 'https://fallback.example',
+          APP_URL: 'https://app.kassinao.cloud',
+          PUBLIC_URL: 'https://kassinao.cloud',
+          DOCS_URL: 'https://docs.kassinao.cloud',
+          MCP_URL: 'https://mcp.kassinao.cloud',
+          LEGACY_URL: 'https://old.example',
+        },
+        'http://localhost:8080',
+      ),
+    ).toEqual({
+      appUrl: 'https://app.kassinao.cloud',
+      publicUrl: 'https://kassinao.cloud',
+      docsUrl: 'https://docs.kassinao.cloud',
+      mcpUrl: 'https://mcp.kassinao.cloud',
+      legacyUrl: 'https://old.example',
+    });
+
+    expect(
+      resolveConfiguredOrigins(
+        { BASE_URL: 'https://single.example', PUBLIC_URL: 'https://site.example' },
+        'http://localhost:8080',
+      ),
+    ).toEqual({
+      appUrl: 'https://single.example',
+      publicUrl: 'https://site.example',
+      docsUrl: 'https://site.example',
+      mcpUrl: 'https://single.example',
+    });
   });
 
   it('rejeita segredos HMAC curtos', () => {
@@ -154,16 +205,16 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).not.toContain('href="/app');
     expect(html).not.toContain('/app/rec/');
     expect(html).not.toContain('/auth/login');
-    expect(html).toContain('href="/demo"');
+    expect(html).toContain('href="http://localhost:8080/demo"');
     expect(html).toContain('Demo pública com dados fictícios, sem login.');
     expect(html).not.toContain('Entrar');
-    expect(html).toContain('https://www.npmjs.com/package/kassinao-mcp');
+    expect(html).toContain('href="http://localhost:8080/docs#mcp"');
     expect(html).toContain('https://github.com/resolvicomai/kassinao');
     expect(html).toContain('/assets/discord-demo-pt.webm');
     expect(html).toContain('/assets/meeting-demo-pt.png');
     expect(html).toContain('--accent: #5865f2');
     expect(html).not.toContain('#c53f28');
-    expect(html).toContain('href="/en"');
+    expect(html).toContain('href="http://localhost:8080/en"');
     expect(html).not.toMatch(/[—–]/u);
   });
 
@@ -206,7 +257,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(pt).toContain('Gravação iniciada por Priya');
     expect(pt).not.toContain('Recording started by Priya');
     expect(en).toContain('Recording started by Priya');
-    expect(en).toContain('href="/en">Back home</a>');
+    expect(en).toContain('href="http://localhost:8080/en">Back home</a>');
   });
 
   it('app privado renderiza EN completo e preserva query ao trocar idioma', () => {

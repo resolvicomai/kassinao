@@ -2,8 +2,8 @@
   "name": "kassinao-mcp",
   "version": "1.0.3",
   "description": "MCP connector for Kassinão — ask your Discord meeting recordings (transcripts, minutes, action items) from Claude Desktop, Cursor and other MCP clients.",
-  "author": "Mauro Marques (resolvicomai)",
-  "homepage": "https://kassinao.resolvicomai.app/en/docs#mcp",
+  "author": "Mauro Marques",
+  "homepage": "https://mcp.kassinao.cloud",
   "repository": {
     "type": "git",
     "url": "https://github.com/resolvicomai/kassinao.git",
