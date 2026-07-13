@@ -73,11 +73,10 @@ export interface ConfiguredOrigins {
   publicUrl: string;
   docsUrl: string;
   mcpUrl: string;
-  legacyUrl?: string;
 }
 
 type OriginEnvironment = Partial<
-  Record<'APP_URL' | 'BASE_URL' | 'PUBLIC_URL' | 'DOCS_URL' | 'MCP_URL' | 'LEGACY_URL', string | undefined>
+  Record<'APP_URL' | 'BASE_URL' | 'PUBLIC_URL' | 'DOCS_URL' | 'MCP_URL', string | undefined>
 >;
 
 /** Resolve a topologia sem estado global para que precedência e fallbacks sejam testáveis. */
@@ -88,8 +87,7 @@ export function resolveConfiguredOrigins(source: OriginEnvironment, localUrl: st
   const publicUrl = configured('PUBLIC_URL', appUrl);
   const docsUrl = configured('DOCS_URL', publicUrl);
   const mcpUrl = configured('MCP_URL', appUrl);
-  const legacyUrl = source.LEGACY_URL?.trim() ? configured('LEGACY_URL', appUrl) : undefined;
-  return { appUrl, publicUrl, docsUrl, mcpUrl, ...(legacyUrl ? { legacyUrl } : {}) };
+  return { appUrl, publicUrl, docsUrl, mcpUrl };
 }
 
 /** Segredos HMAC fracos não podem parecer configuração válida. */
@@ -185,7 +183,7 @@ const port = numberEnv('PORT', 8080, { min: 1, max: 65535, integer: true });
 const localUrl = `http://localhost:${port}`;
 // APP_URL é a origem canônica do produto privado (OAuth, gravações e downloads).
 // BASE_URL continua aceito como alias retrocompatível para instalações existentes.
-const { appUrl, publicUrl, docsUrl, mcpUrl, legacyUrl } = resolveConfiguredOrigins(process.env, localUrl);
+const { appUrl, publicUrl, docsUrl, mcpUrl } = resolveConfiguredOrigins(process.env, localUrl);
 // Vários módulos e integrações self-hosted ainda leem config.baseUrl. Seu
 // significado permanece sendo a origem do app, agora também exposta como appUrl.
 const baseUrl = appUrl;
@@ -226,8 +224,6 @@ export const config = {
   docsUrl,
   /** Origem da API MCP. Cai para appUrl em instalações de origem única. */
   mcpUrl,
-  /** Origem pública anterior mantida durante migrações. Ausente quando LEGACY_URL não foi configurada. */
-  legacyUrl,
   /** true quando o repo do GitHub está público — libera os links "GitHub"/access.ts e a afirmação "auditável" na landing. Padrão false pra nunca servir link 404. */
   repoPublic: process.env.REPO_PUBLIC === 'true',
   recordingsDir,

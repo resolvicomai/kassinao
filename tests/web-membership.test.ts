@@ -26,7 +26,6 @@ const splitOrigins: WebOrigins = {
   docs: 'https://docs.kassinao.cloud',
   app: 'https://app.kassinao.cloud',
   mcp: 'https://mcp.kassinao.cloud',
-  legacy: 'https://kassinao.resolvicomai.app',
 };
 
 function webRequest(host: string, originalUrl: string, method = 'GET'): Request {
@@ -148,26 +147,18 @@ describe('políticas HTTP da superfície web', () => {
     });
   });
 
-  it('mantém API e callback OAuth legados, mas migra navegações antigas para o app novo', () => {
-    expect(
-      webHostRoutingDecision(webRequest('kassinao.resolvicomai.app', '/api/mcp/refresh', 'POST'), splitOrigins),
-    ).toMatchObject({ action: 'pass' });
-    expect(
-      webHostRoutingDecision(webRequest('kassinao.resolvicomai.app', '/auth/callback?code=x'), splitOrigins),
-    ).toMatchObject({ action: 'pass' });
-    expect(
-      webHostRoutingDecision(webRequest('kassinao.resolvicomai.app', '/app/rec/abc?lang=pt'), splitOrigins),
-    ).toMatchObject({
-      action: 'redirect',
-      target: 'https://app.kassinao.cloud/app/rec/abc?lang=pt',
-    });
-    expect(
-      webHostRoutingDecision(webRequest('kassinao.resolvicomai.app', '/app/rec/abc/delete', 'POST'), splitOrigins),
-    ).toMatchObject({ action: 'reject', status: 404 });
-  });
-
   it('rejeita Host desconhecido sem refletir seu valor', () => {
     expect(webHostRoutingDecision(webRequest('evil.example', '/app'), splitOrigins)).toEqual({
+      action: 'reject',
+      roles: [],
+      status: 421,
+    });
+    expect(webHostRoutingDecision(webRequest('retired.example', '/api/mcp/refresh', 'POST'), splitOrigins)).toEqual({
+      action: 'reject',
+      roles: [],
+      status: 421,
+    });
+    expect(webHostRoutingDecision(webRequest('retired.example', '/auth/callback?code=x'), splitOrigins)).toEqual({
       action: 'reject',
       roles: [],
       status: 421,

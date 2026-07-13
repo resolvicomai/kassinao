@@ -206,7 +206,6 @@ Todas as opções estão comentadas, uma a uma, em [`.env.example`](.env.example
 | `PUBLIC_URL` | `APP_URL` / `BASE_URL` | Landing pública e demo |
 | `DOCS_URL` | `PUBLIC_URL` | Origem da documentação |
 | `MCP_URL` | `APP_URL` / `BASE_URL` | Origem da API consumida pelo `kassinao-mcp` |
-| `LEGACY_URL` | — | Origem anterior opcional, mantida temporariamente durante uma migração |
 | `REPO_PUBLIC` | `false` | `true` exibe links de código/instalação dentro das páginas privadas; a landing pública sempre aponta para este repositório |
 | `TUNNEL_TOKEN` | — | Token do Cloudflare Tunnel (Opção A; defina também `COMPOSE_PROFILES=tunnel`) |
 | `PORT` | `8080` | Porta do servidor web |
@@ -218,13 +217,6 @@ Todas as opções estão comentadas, uma a uma, em [`.env.example`](.env.example
 | `COOKIE_SECRET` | gerado | Segredo dos cookies de sessão (mín. 32 bytes se definido manualmente) |
 | `TZ` | `America/Sao_Paulo` | Fuso das datas (a página usa o do navegador) |
 | `DEFAULT_LOCALE` | `en` | Idioma padrão quando não há locale do usuário (ex.: DM); dentro dos servidores, cada pessoa vê no idioma do próprio Discord |
-
-### Migrar uma instância existente para outro domínio
-
-1. Mantenha a origem anterior em `LEGACY_URL` enquanto DNS, links antigos e clientes MCP são migrados. Sessões do navegador não atravessam domínios, então cada pessoa entra novamente uma vez na nova `APP_URL`.
-2. Cadastre a nova `APP_URL/auth/callback` no OAuth do Discord antes de virar a produção. Mantenha o callback anterior durante a transição.
-3. Tokens MCP ficam vinculados à origem que os emitiu. Eles podem continuar usando a `LEGACY_URL` durante a janela de compatibilidade; para passar à nova `MCP_URL`, gere uma conexão nova no app e troque `KASSINAO_URL` e o token juntos.
-4. Remova `LEGACY_URL` e o callback antigo só depois da janela de compatibilidade escolhida e da migração dos clientes ativos.
 | `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
 | `TRANSCRIBE_MODEL` | por provider | Ex.: `universal-3-5-pro` (assemblyai), `whisper-large-v3` (groq) |
 | `TRANSCRIBE_LANGUAGE` | `pt` | Idioma falado nas calls |
@@ -242,6 +234,13 @@ Todas as opções estão comentadas, uma a uma, em [`.env.example`](.env.example
 | `MCP_ACCESS_TTL_MIN` / `MCP_REFRESH_TTL_DAYS` | `15` / `30` | Validade do token de acesso (minutos) e do refresh (dias) do conector MCP |
 
 Tem mais: guarda de espaço em disco, alerta de disco cheio, backup automático via rclone — tudo comentado, uma opção por vez, em [`.env.example`](.env.example).
+
+### Trocar os domínios de uma instância existente
+
+1. Cadastre a nova `APP_URL/auth/callback` no OAuth do Discord antes de virar a produção.
+2. Troque DNS, rotas do túnel, `APP_URL`, `PUBLIC_URL`, `DOCS_URL` e `MCP_URL` na mesma janela de manutenção. Sessões do navegador não atravessam domínios, então as pessoas precisam entrar de novo.
+3. Tokens MCP ficam vinculados à origem que os emitiu. Gere uma conexão nova e troque `KASSINAO_URL` e o token juntos em cada cliente ativo.
+4. Valide todas as novas origens e remova em seguida o callback OAuth, os registros DNS e as rotas de túnel substituídos. Hostnames aposentados não são atendidos pela aplicação.
 
 Transcrição 100% local: com `TRANSCRIBE_PROVIDER=command` o áudio nunca sai do servidor. Wrapper pronto para faster-whisper em [`scripts/transcribe-local.py`](scripts/transcribe-local.py):
 
