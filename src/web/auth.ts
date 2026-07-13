@@ -187,15 +187,23 @@ export function scopeWebSessionToApp(req: Request, res: Response): void {
  */
 export function isAllowedWebMutation(req: Request, expectedBaseUrl = appOrigin()): boolean {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method.toUpperCase())) return true;
-  if (req.get('sec-fetch-site') === 'cross-site') return false;
   const origin = req.get('origin');
-  if (!origin) return true;
-  if (origin === 'null') return false;
-  try {
-    return new URL(origin).origin === new URL(expectedBaseUrl).origin;
-  } catch {
-    return false;
+  if (origin) {
+    if (origin === 'null') return false;
+    try {
+      // `Origin` exato é a prova principal. Alguns navegadores/webviews podem
+      // classificar uma navegação de formulário como cross-site mesmo quando o
+      // POST nasce e termina no app; Fetch Metadata não deve sobrepor uma origem
+      // canônica já verificada.
+      return new URL(origin).origin === new URL(expectedBaseUrl).origin;
+    } catch {
+      return false;
+    }
   }
+  // Sem Origin, mantém a defesa de compatibilidade: navegadores cross-site são
+  // negados; clientes não-browser continuam aceitos porque não carregam o cookie
+  // HttpOnly automaticamente.
+  return req.get('sec-fetch-site') !== 'cross-site';
 }
 
 // ---------- fluxo OAuth2 do Discord ----------
