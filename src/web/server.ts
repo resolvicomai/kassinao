@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express, { NextFunction, Request, Response } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { config } from '../config';
 import { freeMB } from '../disk';
 import { client } from '../discord/client';
@@ -26,7 +27,7 @@ import {
   transcriptReady,
 } from '../store';
 import { checkAccess } from './access';
-import { FixedWindowRateLimiter, mountMcpApi } from './api';
+import { mountMcpApi } from './api';
 import {
   beginLogin,
   finishLogin,
@@ -223,7 +224,7 @@ export function httpsRedirectTarget(req: Request, baseUrl = config.baseUrl): str
 }
 
 export function isRateLimitedWebPath(pathname: string): boolean {
-  return /^\/(app|rec|auth|demo|conectar-ia|gravacoes)\b/i.test(pathname);
+  return !/^\/(?:health|api)(?:\/|$)/i.test(pathname);
 }
 
 export function startWebServer(): void {
@@ -268,6 +269,22 @@ export function startWebServer(): void {
     } as Response['send'];
     next();
   });
+
+  // Limite global reconhecido pelo ecossistema Express/CodeQL. A API tem um
+  // limiter próprio e os healthchecks precisam permanecer disponíveis para o
+  // Docker; todas as demais rotas, inclusive landing, assets e OAuth, entram.
+  app.use(
+    rateLimit({
+      windowMs: 60_000,
+      limit: 120,
+      standardHeaders: 'draft-8',
+      legacyHeaders: false,
+      skip: (req) => !isRateLimitedWebPath(req.path),
+      handler: (req, res) => {
+        res.status(429).set('Retry-After', '30').send(MSG.tooManyRequests[pageLang(req)]);
+      },
+    }),
+  );
 
   // Remove o cookie legado Path=/ e mantém apenas sessões registradas com jti.
   // Tokens antigos sem revogação server-side são encerrados no primeiro acesso.
@@ -318,21 +335,6 @@ export function startWebServer(): void {
     res
       .set('Cache-Control', 'no-store')
       .json({ ok: true, ready: isClientReady(), freeMB: freeMB(), activeRecordings: sessionManager.all().length });
-  });
-
-  // Rate-limit leve por IP nas rotas web (a API /api/* tem o dela). Segura
-  // brute-force/reconhecimento sem incomodar uso real.
-  const webRateLimiter = new FixedWindowRateLimiter();
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    // /i: o roteamento do Express é case-insensitive por padrão — sem a flag,
-    // /APP/rec/... chegaria ao handler sem passar pelo contador
-    if (!isRateLimitedWebPath(req.path)) return next();
-    const ip = req.ip ?? 'unknown';
-    if (webRateLimiter.consume(ip, 120, 60_000)) {
-      res.status(429).set('Retry-After', '30').send(MSG.tooManyRequests[pageLang(req)]);
-      return;
-    }
-    next();
   });
 
   // Persiste a escolha de idioma (?lang=en|pt) num cookie de 1 ano.
@@ -410,7 +412,9 @@ export function startWebServer(): void {
           const l = pageLang(req);
           const user = getWebUser(req);
           if (!user) {
-            beginLogin(res, '/app/conectar-ia');
+            // POST sem sessão (expirada/adulterada) volta para a tela canônica;
+            // o GET oferece o login sem iniciar OAuth a partir de uma mutação.
+            res.redirect(303, '/app/conectar-ia');
             return;
           }
           if (notReady(res, l, user)) return;
@@ -608,13 +612,19 @@ export function startWebServer(): void {
     }
     res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(f);
   });
-  app.get('/og-:locale(pt|en).png', (req, res) => {
-    const f = path.join(process.cwd(), 'docs', `og-${req.params.locale}.png`);
+  const sendLocalizedOpenGraph = (res: Response, locale: Locale): void => {
+    const f = path.join(process.cwd(), 'docs', locale === 'pt' ? 'og-pt.png' : 'og-en.png');
     if (!fs.existsSync(f)) {
       res.status(404).send('sem og');
       return;
     }
     res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(f);
+  };
+  app.get('/og-pt.png', (_req, res) => {
+    sendLocalizedOpenGraph(res, 'pt');
+  });
+  app.get('/og-en.png', (_req, res) => {
+    sendLocalizedOpenGraph(res, 'en');
   });
 
   app.get('/auth/login', (req, res) => {

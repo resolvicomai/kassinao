@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readApiJson } from '../mcp/src/apiResponse';
 import { loadCredentialStore } from '../mcp/src/credentialStore';
 import {
@@ -16,6 +16,7 @@ import { createToolErrorResponse, MCP_UNTRUSTED_DESCRIPTION, markToolResultUntru
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -50,6 +51,35 @@ describe.skipIf(process.platform === 'win32')('filesystem do token do conector M
 
     expect(() => loadCredentialStore(directory, file)).toThrow(/symbolic link/);
     expect(fs.statSync(target).mode & 0o777).toBe(0o644);
+  });
+
+  it('retorna credenciais vazias quando o arquivo ainda não existe', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kassinao-mcp-missing-'));
+    temporaryDirectories.push(root);
+    const directory = path.join(root, 'store');
+
+    expect(loadCredentialStore(directory, path.join(directory, 'token.json'))).toEqual({});
+  });
+
+  it('não abre uma segunda identidade de arquivo depois da validação', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kassinao-mcp-race-'));
+    temporaryDirectories.push(root);
+    const directory = path.join(root, 'store');
+    const file = path.join(directory, 'token.json');
+    const replacement = path.join(root, 'replacement.json');
+    fs.mkdirSync(directory, { mode: 0o700 });
+    fs.writeFileSync(file, JSON.stringify({ refreshToken: 'original' }), { mode: 0o600 });
+    fs.writeFileSync(replacement, JSON.stringify({ refreshToken: 'replacement' }), { mode: 0o600 });
+
+    const originalLstat = fs.lstatSync;
+    const lstatSpy = vi.spyOn(fs, 'lstatSync').mockImplementation(((target: fs.PathLike) => {
+      const stats = originalLstat(target);
+      if (String(target) === file) fs.renameSync(replacement, file);
+      return stats;
+    }) as typeof fs.lstatSync);
+
+    expect(loadCredentialStore(directory, file)).toEqual({ refreshToken: 'original' });
+    expect(lstatSpy).not.toHaveBeenCalledWith(file);
   });
 });
 

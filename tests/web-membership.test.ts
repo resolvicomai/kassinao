@@ -48,7 +48,12 @@ describe('políticas HTTP da superfície web', () => {
   it('mantém login e callback OAuth dentro do rate limit web', () => {
     expect(isRateLimitedWebPath('/auth/login')).toBe(true);
     expect(isRateLimitedWebPath('/auth/callback')).toBe(true);
+    expect(isRateLimitedWebPath('/')).toBe(true);
+    expect(isRateLimitedWebPath('/assets/kassinao-mark.png')).toBe(true);
+    expect(isRateLimitedWebPath('/og-pt.png')).toBe(true);
     expect(isRateLimitedWebPath('/health')).toBe(false);
+    expect(isRateLimitedWebPath('/health/details')).toBe(false);
+    expect(isRateLimitedWebPath('/api/meetings')).toBe(false);
   });
 
   it('neutraliza quebra de linha antes de valores controlados entrarem no log', () => {

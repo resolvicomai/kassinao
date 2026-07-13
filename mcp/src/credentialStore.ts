@@ -38,6 +38,18 @@ function protectDirectory(directory: string): void {
   if (process.platform !== 'win32') fs.chmodSync(directory, 0o700);
 }
 
+function openCredentialStore(file: string): number | undefined {
+  const noFollow = process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW;
+  try {
+    return fs.openSync(file, fs.constants.O_RDONLY | noFollow);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return undefined;
+    if (code === 'ELOOP') throw unsafeStore('token files cannot be symbolic links.');
+    throw err;
+  }
+}
+
 /**
  * Tighten the credential store before reading it. On Unix, refusing symlinks
  * prevents an unexpected path from redirecting the chmod/read operation.
@@ -45,19 +57,8 @@ function protectDirectory(directory: string): void {
 export function loadCredentialStore(directory: string, file: string): StoredCredentials {
   protectDirectory(directory);
 
-  let linkStats: fs.Stats;
-  try {
-    linkStats = fs.lstatSync(file);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
-    throw err;
-  }
-  if (linkStats.isSymbolicLink()) throw unsafeStore('token files cannot be symbolic links.');
-  if (!linkStats.isFile()) throw unsafeStore('the token path is not a regular file.');
-  assertOwnedByCurrentUser(linkStats, 'the token file');
-
-  const noFollow = process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW;
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | noFollow);
+  const fd = openCredentialStore(file);
+  if (fd === undefined) return {};
   try {
     const openedStats = fs.fstatSync(fd);
     if (!openedStats.isFile()) throw unsafeStore('the token path is not a regular file.');
