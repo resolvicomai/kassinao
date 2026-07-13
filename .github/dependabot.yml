@@ -24,6 +24,11 @@ updates:
       development-minor-patch:
         dependency-type: development
         update-types: [minor, patch]
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

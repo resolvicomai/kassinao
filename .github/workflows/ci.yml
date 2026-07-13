@@ -54,5 +54,7 @@ jobs:
       - name: Build MCP connector
         run: npm run build
         working-directory: mcp
-      - name: Docker build (dry-run)
-        run: docker build -t kassinao:ci .
+      - name: Docker build with locked local transcriber
+        run: docker build --build-arg LOCAL_TRANSCRIBE=1 -t kassinao:ci .
+      - name: Smoke-test local transcriber dependencies
+        run: docker run --rm --entrypoint python3 kassinao:ci -c "import faster_whisper"

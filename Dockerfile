@@ -18,10 +18,12 @@ ENV NODE_ENV=production \
 
 # Transcrição local (TRANSCRIBE_PROVIDER=command): build com --build-arg LOCAL_TRANSCRIBE=1
 # para instalar Python + faster-whisper na imagem. Padrão 0 (providers de API só precisam do Node).
+COPY requirements-whisper.txt ./
 ARG LOCAL_TRANSCRIBE=0
 RUN if [ "$LOCAL_TRANSCRIBE" = "1" ]; then \
       apt-get update && apt-get install -y --no-install-recommends python3 python3-pip && \
-      pip3 install --break-system-packages --no-cache-dir "faster-whisper==1.2.1" && \
+      pip3 install --break-system-packages --no-cache-dir --require-hashes \
+        --only-binary=:all: -r requirements-whisper.txt && \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
