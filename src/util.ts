@@ -57,12 +57,9 @@ export function shortError(error: string | undefined, locale: 'pt' | 'en'): stri
   if (/timeout|timed out|a tempo|network|fetch failed|econn/i.test(raw)) {
     return pt ? 'o serviço de IA não respondeu a tempo' : 'the AI service did not respond in time';
   }
-  // desconhecido: corta no primeiro '{' (fora o JSON do provedor) e limita o tamanho
-  const cut = raw
-    .split('{')[0]
-    .trim()
-    .replace(/[:—-]\s*$/, '');
-  return safeSlice(cut || raw, 140);
+  // Mensagens desconhecidas podem conter corpo HTTP, caminho interno ou segredo.
+  // O erro cru já foi registrado no servidor; a UI recebe apenas uma categoria.
+  return pt ? 'o serviço de IA encontrou um erro interno' : 'the AI service encountered an internal error';
 }
 
 /** Endereço do socket é loopback real (não confia em X-Forwarded-For). */

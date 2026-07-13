@@ -67,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.0] — 2026-07-06
 
 ### Added
-- **Real VAD (voice activity detection)** — only speech segments are sent to the transcription API (silence-padded tracks are trimmed with ffmpeg `silencedetect`). Cuts cost/quota dramatically and eliminates the classic Whisper silence hallucinations ("Legenda Adriana Zanotto"…), plus a post-filter for known hallucinated phrases and repetition loops.
+- **Real VAD (voice activity detection)** — speech segments are normally sent to the transcription API after silence-padded tracks are trimmed with ffmpeg `silencedetect`; fixed chunks are the safety fallback when detection fails. Cuts cost/quota dramatically and adds a post-filter for known hallucinated phrases and repetition loops.
 - **AssemblyAI transcription provider** (`TRANSCRIBE_PROVIDER=assemblyai`, model `universal`) — top-3 for pt-BR; automatically falls back to Groq Whisper when a `GROQ_API_KEY` is present.
 - **OpenRouter provider for AI minutes** (`OPENROUTER_API_KEY`, `MINUTES_PROVIDER`, default model `google/gemini-2.5-flash`) — huge context window, no more HTTP 413 on long calls; Groq path now uses map-reduce with rate-limit-aware pacing.
 - **Call presence** — everyone in the voice channel is registered (`meta.presence`), even if muted the whole time: they get access to the recording, show up on the page ("also in the call"), and the timeline logs joins/leaves.
@@ -102,6 +102,7 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
+[1.3.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.3.0
 [1.2.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.2.0
 [1.1.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.1.0
 [1.0.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.0.0

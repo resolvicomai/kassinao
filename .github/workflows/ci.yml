@@ -16,21 +16,45 @@ jobs:
     steps:
       # Actions pinadas em SHA (imutável) — tag @v4 poderia ser movida por um atacante.
       # O comentário mantém a versão legível; o Dependabot (github-actions) atualiza o SHA.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - name: Review dependency changes
+        if: github.event_name == 'pull_request' && github.event.repository.private == false
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '22'
           cache: 'npm'
-      - run: npm ci
+          cache-dependency-path: |
+            package-lock.json
+            mcp/package-lock.json
+      - name: Install root dependencies
+        run: npm ci
+      - name: Audit root dependencies
+        run: npm audit --audit-level=high
+      - name: Verify root dependency signatures
+        run: npm audit signatures
       - run: npm run lint
       - run: npm run format:check
       - run: npm test
       - run: npm run build
       # o conector MCP é um pacote separado — sem este step, mcp/ quebrado passaria verde
-      - name: Build MCP connector
-        run: npm ci && npm run build
+      - name: Install MCP dependencies
+        run: npm ci
         working-directory: mcp
-      - name: Docker build (dry-run)
-        run: docker build -t kassinao:ci .
+      - name: Audit MCP dependencies
+        run: npm audit --audit-level=high
+        working-directory: mcp
+      - name: Verify MCP dependency signatures
+        run: npm audit signatures
+        working-directory: mcp
+      - name: Build MCP connector
+        run: npm run build
+        working-directory: mcp
+      - name: Docker build with locked local transcriber
+        run: docker build --build-arg LOCAL_TRANSCRIBE=1 -t kassinao:ci .
+      - name: Smoke-test local transcriber dependencies
+        run: docker run --rm --entrypoint python3 kassinao:ci -c "import faster_whisper"

@@ -1,0 +1,83 @@
+{
+  "resumo": "O time revisou a preparação do dashboard v3, investigou um pico de churn ligado ao novo onboarding e aprovou a expansão do experimento de preço anual após os bons resultados. O incidente de produção de terça foi analisado e a causa foi uma remoção de chaves no Redis. Diante do aumento de custos e da carga de plantão, o grupo decidiu abrir uma segunda vaga de infraestrutura. O lançamento ficou confirmado para a próxima quinta, condicionado à correção do onboarding e a um teste de carga aprovado.",
+  "decisoes": [
+    "Lançar o dashboard v3 na próxima quinta, condicionado à correção do onboarding e à aprovação no teste de carga.",
+    "Reverter o tour obrigatório do novo onboarding, que está correlacionado ao pico de churn.",
+    "Expandir o experimento do plano anual para 100% da base após o aumento de 18% na conversão.",
+    "Abrir uma segunda vaga para infraestrutura ou SRE.",
+    "Adicionar um teste de carga semanal ao CI antes de cada release."
+  ],
+  "acoes": [
+    {
+      "tarefa": "Fazer o merge da reversão do onboarding e colocá-la atrás de uma feature flag",
+      "responsavel": "Rafael",
+      "prazo": "quarta"
+    },
+    {
+      "tarefa": "Rodar o teste de carga em staging e compartilhar os números",
+      "responsavel": "Mei",
+      "prazo": "quarta, fim do dia"
+    },
+    {
+      "tarefa": "Finalizar o e-mail de lançamento e o changelog e agendar para quinta às 9h",
+      "responsavel": "Priya",
+      "prazo": "quinta"
+    },
+    {
+      "tarefa": "Escrever o post-mortem do incidente no Redis e adicionar o alerta de eviction",
+      "responsavel": "James",
+      "prazo": "sexta"
+    },
+    {
+      "tarefa": "Abrir a vaga de infraestrutura ou SRE e compartilhar a descrição para revisão",
+      "responsavel": "Sofia",
+      "prazo": "esta semana"
+    },
+    {
+      "tarefa": "Levantar a retenção de 30 dias da coorte do plano anual",
+      "responsavel": "Tobias",
+      "prazo": "próximo sync"
+    }
+  ],
+  "topicos": [
+    { "titulo": "Abertura e agenda", "inicioMs": 0 },
+    { "titulo": "Preparação do lançamento do dashboard v3", "inicioMs": 270000 },
+    { "titulo": "Investigação do pico de churn no onboarding", "inicioMs": 970000 },
+    { "titulo": "Resultados do experimento de preço", "inicioMs": 1780000 },
+    { "titulo": "Post-mortem do incidente de terça no Redis", "inicioMs": 2345000 },
+    { "titulo": "Contratação e custo de nuvem", "inicioMs": 2900000 },
+    { "titulo": "Fechamento e itens de ação", "inicioMs": 3330000 }
+  ],
+  "porParticipante": [
+    {
+      "nome": "Rafael",
+      "pontos": [
+        "Apontou o tour de onboarding como causa provável do churn",
+        "É responsável pela reversão e pelo critério de lançamento"
+      ]
+    },
+    {
+      "nome": "Mei",
+      "pontos": ["Identificou a ausência do teste de carga no CI", "Vai rodar o teste em staging antes do lançamento"]
+    },
+    {
+      "nome": "Priya",
+      "pontos": ["Confirmou o escopo e a comunicação do lançamento", "É responsável pelo e-mail e pelo changelog"]
+    },
+    {
+      "nome": "James",
+      "pontos": ["Diagnosticou a remoção de chaves no Redis", "É responsável pelo post-mortem e pelo alerta"]
+    },
+    {
+      "nome": "Sofia",
+      "pontos": ["Defendeu a contratação diante da carga de plantão", "É responsável pela abertura da vaga"]
+    },
+    {
+      "nome": "Tobias",
+      "pontos": [
+        "Apresentou os resultados do experimento de preço",
+        "É responsável pela leitura de retenção em 30 dias"
+      ]
+    }
+  ]
+}

@@ -41,6 +41,10 @@ const STRINGS: Strings = {
     pt: '⚠️ O gravador deste servidor já está ocupado. Não criei outra gravação.',
     en: '⚠️ This server recorder is already busy. I did not create another recording.',
   },
+  'err.recording-start-limited': {
+    pt: '⏳ Muitas gravações foram iniciadas recentemente. Tente de novo em {wait}. Um admin pode iniciar sem esse limite.',
+    en: '⏳ Too many recordings were started recently. Try again in {wait}. An admin can start without this limit.',
+  },
   'err.record-no-access': {
     pt: '🔒 Você não pode iniciar uma gravação em **{channel}** porque não enxerga esse canal.',
     en: '🔒 You cannot start a recording in **{channel}** because you cannot see that channel.',
@@ -100,6 +104,10 @@ const STRINGS: Strings = {
     pt: '🛑 Cancelei a inicialização. Nenhum áudio foi gravado.',
     en: '🛑 I cancelled startup. No audio was recorded.',
   },
+  'record.start-failed': {
+    pt: '❌ Não consegui iniciar a gravação. Tenta de novo daqui a pouco.',
+    en: "❌ I couldn't start the recording. Try again in a moment.",
+  },
   'record.stopping': {
     pt: '⏳ Essa gravação já está sendo encerrada. Não vou finalizar duas vezes.',
     en: '⏳ This recording is already stopping. I will not finalize it twice.',
@@ -118,8 +126,8 @@ const STRINGS: Strings = {
   'panel.title-done': { pt: '✅ Gravação encerrada • {channel}', en: '✅ Recording finished • {channel}' },
   // saudação amigável (texto acima do painel) — deixa o time à vontade e explica o que rola
   'panel.greeting-recording': {
-    pt: '👋 Oi, pessoal! Estou **gravando este canal** — no final eu gero a **ata** e a **transcrição** sozinho. 🔒 É preciso continuar no servidor; em canal restrito, só participantes, quem iniciou e admins abrem depois.',
-    en: "👋 Hey everyone! I'm **recording this channel** — I'll generate the **minutes** and **transcript** myself at the end. 🔒 You must remain in the server; for restricted channels, only participants, the starter, and admins can open it later.",
+    pt: '👋 Oi, pessoal! Estou **gravando este canal** — no final eu gero a **ata** e a **transcrição** sozinho. 🔒 Só participantes, quem iniciou e admins atuais abrem depois; é preciso continuar no servidor.',
+    en: "👋 Hey everyone! I'm **recording this channel** — I'll generate the **minutes** and **transcript** myself at the end. 🔒 Only participants, the starter, and current admins can open it later; server membership is still required.",
   },
   'panel.greeting-done': {
     pt: '✅ **Gravação encerrada!** Já tô preparando a transcrição e a ata — fica pronto em ~1 min. 🙌',
@@ -164,12 +172,12 @@ const STRINGS: Strings = {
   // DM para quem iniciou
   'dm.title-start': { pt: '🔴 Gravação iniciada', en: '🔴 Recording started' },
   'dm.desc-start': {
-    pt: 'Comecei a gravar **{channel}** em **{guild}**. 👍\n\n📥 **[Página da gravação]({url})** — dá pra baixar até durante a call.\n⏱️ Gravo por até **{hours}h** • fica disponível por **{expiresDays} dias** depois de terminar.\n🔒 É preciso continuar no servidor; em canal restrito, só participantes, quem iniciou e admins abrem.',
-    en: 'I started recording **{channel}** in **{guild}**. 👍\n\n📥 **[Recording page]({url})** — you can download even during the call.\n⏱️ I record for up to **{hours}h** • it stays available for **{expiresDays} days** after it ends.\n🔒 You must remain in the server; for restricted channels, only participants, the starter, and admins can open it.',
+    pt: 'Comecei a gravar **{channel}** em **{guild}**. 👍\n\n📥 **[Página da gravação]({url})** — dá pra baixar até durante a call.\n⏱️ Gravo por até **{hours}h** • fica disponível por **{expiresDays} dias** depois de terminar.\n🔒 Só participantes, quem iniciou e admins atuais abrem; é preciso continuar no servidor.',
+    en: 'I started recording **{channel}** in **{guild}**. 👍\n\n📥 **[Recording page]({url})** — you can download even during the call.\n⏱️ I record for up to **{hours}h** • it stays available for **{expiresDays} days** after it ends.\n🔒 Only participants, the starter, and current admins can open it; server membership is still required.',
   },
   'dm.desc-start-unlimited': {
-    pt: 'Comecei a gravar **{channel}** em **{guild}**. 👍\n\n📥 **[Página da gravação]({url})** — dá pra baixar até durante a call.\n⏱️ Gravo por até **{hours}h** • a gravação **fica guardada até alguém apagar**.\n🔒 É preciso continuar no servidor; em canal restrito, só participantes, quem iniciou e admins abrem.',
-    en: 'I started recording **{channel}** in **{guild}**. 👍\n\n📥 **[Recording page]({url})** — you can download even during the call.\n⏱️ I record for up to **{hours}h** • the recording is **kept until someone deletes it**.\n🔒 You must remain in the server; for restricted channels, only participants, the starter, and admins can open it.',
+    pt: 'Comecei a gravar **{channel}** em **{guild}**. 👍\n\n📥 **[Página da gravação]({url})** — dá pra baixar até durante a call.\n⏱️ Gravo por até **{hours}h** • a gravação **fica guardada até alguém apagar**.\n🔒 Só participantes, quem iniciou e admins atuais abrem; é preciso continuar no servidor.',
+    en: 'I started recording **{channel}** in **{guild}**. 👍\n\n📥 **[Recording page]({url})** — you can download even during the call.\n⏱️ I record for up to **{hours}h** • the recording is **kept until someone deletes it**.\n🔒 Only participants, the starter, and current admins can open it; server membership is still required.',
   },
   'dm.title-stop': { pt: '✅ Gravação encerrada', en: '✅ Recording finished' },
   'dm.desc-stop': {
@@ -371,8 +379,8 @@ const STRINGS: Strings = {
   'help.flow': { pt: 'Passo a passo', en: 'Quick start' },
   'help.perms': { pt: 'Permissões', en: 'Permissions' },
   'help.perms-body': {
-    pt: '• **Gravar**: qualquer membro. **Parar/anotar**: quem enxerga o canal gravado.\n• **Ver uma gravação**: exige continuar membro do servidor. Em canal restrito, só quem **estava na call** (mesmo mutado), iniciou ou é admin; ganhar acesso ao canal depois não abre o histórico.\n• **Apagar**: quem iniciou ou admin, com permissão revalidada na hora. **/autorecord** e **/config**: exigem *Gerenciar Servidor*.\n• **/perguntar** e a busca só usam reuniões que **você** pode abrir.',
-    en: '• **Record**: any member. **Stop/annotate**: whoever can see the recorded channel.\n• **Open a recording**: you must remain a server member. For restricted channels, only whoever **was in the call** (even muted), the starter, or an admin; gaining channel access later does not unlock history.\n• **Delete**: starter or admin, with permission revalidated at that moment. **/autorecord** and **/config**: require *Manage Server*.\n• **/ask** and search only use meetings **you** can open.',
+    pt: '• **Gravar**: qualquer membro. **Parar/anotar**: quem enxerga o canal gravado.\n• **Ver uma gravação**: exige continuar membro do servidor e ter **estado na call** (mesmo mutado), iniciado a gravação ou ser admin atual; ganhar acesso ao canal depois não abre o histórico.\n• **Apagar**: quem iniciou ou admin, com permissão revalidada na hora. **/autorecord** e **/config**: exigem *Gerenciar Servidor*.\n• **/perguntar** e a busca só usam reuniões que **você** pode abrir.',
+    en: '• **Record**: any member. **Stop/annotate**: whoever can see the recorded channel.\n• **Open a recording**: you must remain a server member and have **joined the call** (even muted), started the recording, or be a current admin; gaining channel access later does not unlock history.\n• **Delete**: starter or admin, with permission revalidated at that moment. **/autorecord** and **/config**: require *Manage Server*.\n• **/ask** and search only use meetings **you** can open.',
   },
   'help.flow-body': {
     pt: '1. Entre num canal de voz e use **/gravar**\n2. Conversem normalmente (📌 marca momentos importantes)\n3. Use **/parar** — a ata resumida chega no canal (quem iniciou recebe o link por DM)\n4. Depois, é só **/perguntar** ("o que decidimos sobre X?") ou buscar no índice web',
@@ -398,8 +406,8 @@ const STRINGS: Strings = {
     en: '📥 **Downloads & minutes** (on the recording page)\n• **MP3** — one track per person (ZIP). Light, plays anywhere.\n• **FLAC** — one track per person (ZIP), **lossless**; big files, best for editing/archiving.\n• **Mix** — everyone together in a **single MP3**; the page player uses it (with 1×/1.5×/2× speed).\n• **Audacity** — a project (`.lof` + labels) that opens in Audacity with tracks **already aligned** and your notes marked.\n• **📝 Transcript** (.md/.txt) — speaker names, search, per-person filter and clickable timestamps.\n• **📋 Minutes** — summary, decisions, action items (owner/due) and per-person points.\nAll login-protected. {retention} — search and /ask keep working.',
   },
   'help.topic-privacy': {
-    pt: '🔒 **Privacidade e acesso**\n• As gravações só abrem com **login no Discord** e membership atual no servidor; saiu, perdeu o acesso.\n• Em canal **restrito**, só acessa quem **estava na call** (mesmo mutado), iniciou ou é admin. Receber permissão depois não abre o passado. Em canal público no início, vale também a audiência atual do canal.\n• A gravação é **visível**: eu entro na call e fico como `[GRAVANDO]` — ninguém é gravado sem ver.\n• Em canais **restritos**, me libere no canal (**Ver Canal + Conectar**) pra eu entrar.\n• {retentionPrivacy}; dá pra apagar tudo pela página (quem iniciou ou admin).',
-    en: '🔒 **Privacy & access**\n• Recordings require **Discord login** and current server membership; leave the server and access ends.\n• For a **restricted** channel, only whoever **was in the call** (even muted), the starter, or an admin can access it. Permission granted later does not unlock the past. If the channel was public when recording began, its current audience also applies.\n• Recording is **visible**: I join the call and show as `[RECORDING]` — nobody is recorded unknowingly.\n• In **restricted** channels, grant me access (**View Channel + Connect**) so I can join.\n• {retentionPrivacy}; everything can be deleted from the page (starter or admin).',
+    pt: '🔒 **Privacidade e acesso**\n• As gravações só abrem com **login no Discord** e membership atual no servidor; saiu, perdeu o acesso.\n• Em qualquer canal, só acessa quem **estava na call** (mesmo mutado), iniciou ou é admin atual. Receber permissão depois não abre o passado.\n• A gravação é **visível**: eu entro na call e fico como `[GRAVANDO]` — ninguém é gravado sem ver.\n• Em canais **restritos**, me libere no canal (**Ver Canal + Conectar**) pra eu entrar.\n• {retentionPrivacy}; dá pra apagar tudo pela página (quem iniciou ou admin).',
+    en: '🔒 **Privacy & access**\n• Recordings require **Discord login** and current server membership; leave the server and access ends.\n• In every channel, only whoever **was in the call** (even muted), the starter, or a current admin can access it. Permission granted later does not unlock the past.\n• Recording is **visible**: I join the call and show as `[RECORDING]` — nobody is recorded unknowingly.\n• In **restricted** channels, grant me access (**View Channel + Connect**) so I can join.\n• {retentionPrivacy}; everything can be deleted from the page (starter or admin).',
   },
   // frases de retenção intercambiáveis pros tópicos do /ajuda (config atual manda)
   'help.retention-limited': {
@@ -543,6 +551,40 @@ export function t(locale: Locale, key: string, vars: Record<string, string | num
   for (const [name, value] of Object.entries(vars)) {
     // função como replacement: nomes de usuário contendo "$&" etc. não corrompem o texto
     text = text.replaceAll(`{${name}}`, () => String(value));
+  }
+  return text;
+}
+
+function templateVariables(template: string, value: string): Record<string, string> | undefined {
+  const names: string[] = [];
+  const pattern = template
+    .split(/(\{[^{}]+\})/u)
+    .map((part) => {
+      const variable = part.match(/^\{([^{}]+)\}$/u);
+      if (variable) {
+        names.push(variable[1]);
+        return '(.+?)';
+      }
+      return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    })
+    .join('');
+  const match = value.match(new RegExp(`^${pattern}$`, 'u'));
+  if (!match) return undefined;
+  return Object.fromEntries(names.map((name, index) => [name, match[index + 1]]));
+}
+
+/**
+ * Eventos automáticos ficam persistidos no idioma usado no Discord no momento
+ * da call. A web reconhece somente os templates conhecidos e os reapresenta no
+ * idioma atual; qualquer texto desconhecido continua intacto.
+ */
+export function localizeEvent(text: string, locale: Locale): string {
+  for (const [key, translations] of Object.entries(STRINGS)) {
+    if (!key.startsWith('event.')) continue;
+    for (const sourceLocale of ['pt', 'en'] as const) {
+      const variables = templateVariables(translations[sourceLocale], text);
+      if (variables) return t(locale, key, variables);
+    }
   }
   return text;
 }

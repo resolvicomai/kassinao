@@ -1,0 +1,122 @@
+[
+  {
+    "startMs": 12000,
+    "endMs": 28000,
+    "speaker": "Priya",
+    "text": "Certo, todo mundo chegou. Vamos fechar em uma hora. Três pontos principais: preparação para o lançamento, o número de churn e os resultados de preço do Tobias."
+  },
+  {
+    "startMs": 31000,
+    "endMs": 43000,
+    "speaker": "Rafael",
+    "text": "Antes disso, podemos limitar o incidente de terça? O James já terminou metade do relatório."
+  },
+  {
+    "startMs": 45000,
+    "endMs": 52000,
+    "speaker": "Priya",
+    "text": "Boa. Fazemos o post-mortem perto do fim. Primeiro, o lançamento."
+  },
+  {
+    "startMs": 273000,
+    "endMs": 285000,
+    "speaker": "Priya",
+    "text": "Dashboard v3: onde estamos? Conseguimos lançar na quinta?"
+  },
+  {
+    "startMs": 302000,
+    "endMs": 318000,
+    "speaker": "Rafael",
+    "text": "O código está praticamente pronto. Minha preocupação não é o dashboard, é o fluxo de onboarding que lançamos na semana passada."
+  },
+  {
+    "startMs": 320000,
+    "endMs": 331000,
+    "speaker": "Mei",
+    "text": "E ainda não temos teste de carga no CI. Estamos estimando a capacidade no escuro."
+  },
+  {
+    "startMs": 974000,
+    "endMs": 989000,
+    "speaker": "Priya",
+    "text": "Certo, o pico de churn. Subiu de 3,1% para 4,4% em duas semanas. O que mudou?"
+  },
+  {
+    "startMs": 999000,
+    "endMs": 1012000,
+    "speaker": "Rafael",
+    "text": "A única coisa lançada nesse período foi o tour obrigatório do onboarding."
+  },
+  {
+    "startMs": 1025000,
+    "endMs": 1038000,
+    "speaker": "Tobias",
+    "text": "O funil confirma isso: 22% dos novos usuários abandonam na etapa 3 do tour."
+  },
+  {
+    "startMs": 1090000,
+    "endMs": 1099000,
+    "speaker": "Sofia",
+    "text": "Então voltamos atrás e deixamos o tour opcional?"
+  },
+  {
+    "startMs": 1102000,
+    "endMs": 1114000,
+    "speaker": "Rafael",
+    "text": "Voltamos atrás para o lançamento, colocamos atrás de uma feature flag e redesenhamos depois."
+  },
+  {
+    "startMs": 1784000,
+    "endMs": 1799000,
+    "speaker": "Tobias",
+    "text": "Sobre preços: o teste do plano anual em 20% da base aumentou a conversão em 18%, sem impacto nos reembolsos."
+  },
+  {
+    "startMs": 1872000,
+    "endMs": 1882000,
+    "speaker": "Priya",
+    "text": "É um resultado forte. Algum motivo para não levar a 100%?"
+  },
+  {
+    "startMs": 1890000,
+    "endMs": 1902000,
+    "speaker": "Tobias",
+    "text": "Nenhum que eu veja. Vou puxar a retenção de 30 dias da coorte anual para confirmar."
+  },
+  {
+    "startMs": 2349000,
+    "endMs": 2364000,
+    "speaker": "James",
+    "text": "Na terça, o Redis atingiu o maxmemory e começou a remover chaves que considerávamos duráveis. As sessões caíram."
+  },
+  {
+    "startMs": 2510000,
+    "endMs": 2524000,
+    "speaker": "James",
+    "text": "A correção é uma instância maior e um alerta de eviction. Escrevo o post-mortem até sexta."
+  },
+  {
+    "startMs": 2905000,
+    "endMs": 2918000,
+    "speaker": "Sofia",
+    "text": "Isso leva ao plantão. Temos uma pessoa só em infraestrutura. Quero abrir uma segunda vaga de SRE."
+  },
+  {
+    "startMs": 2980000,
+    "endMs": 2992000,
+    "speaker": "Mei",
+    "text": "Concordo. Tanto o teste de carga quanto o incidente mostram que o time está no limite."
+  },
+  {
+    "startMs": 3334000,
+    "endMs": 3348000,
+    "speaker": "Priya",
+    "text": "Certo, ações. Rafael: reverter o onboarding até quarta. Mei: teste de carga até quarta no fim do dia."
+  },
+  {
+    "startMs": 3468000,
+    "endMs": 3482000,
+    "speaker": "Priya",
+    "text": "A Sofia abre a vaga de SRE e o Tobias traz os números de retenção. Lançamos na quinta se os critérios passarem. Obrigada."
+  }
+]

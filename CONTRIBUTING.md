@@ -8,7 +8,8 @@ Thanks for your interest! Contributions of all kinds are welcome — bug reports
 git clone https://github.com/resolvicomai/kassinao.git
 cd kassinao
 npm install
-cp .env.example .env   # fill in at least DISCORD_TOKEN, APPLICATION_ID, DISCORD_CLIENT_SECRET
+cp .env.example .env && chmod 600 .env
+# Fill in at least DISCORD_TOKEN, APPLICATION_ID and DISCORD_CLIENT_SECRET.
 npm run dev            # runs with auto-reload (tsx)
 ```
 
@@ -18,7 +19,7 @@ Node.js **22+** is required (see `.nvmrc`). The project is TypeScript with `stri
 
 - Run `npm run build` — it must compile with **zero** errors (CI enforces this).
 - Keep the style of the surrounding code (2-space indent, see `.editorconfig`).
-- Match the existing bilingual pattern: user-facing strings live in [`src/i18n.ts`](src/i18n.ts) with `pt` and `en` variants.
+- Match the existing bilingual pattern: shared bot strings live in [`src/i18n.ts`](src/i18n.ts); page-specific copy stays next to its renderer with complete `pt` and `en` variants.
 - Write a clear PR description: what changed and why. Link the issue it closes.
 
 ## Reporting bugs / requesting features

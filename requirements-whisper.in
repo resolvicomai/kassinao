@@ -1,0 +1,2 @@
+# Direct Python dependency used by the optional local transcription image.
+faster-whisper==1.2.1

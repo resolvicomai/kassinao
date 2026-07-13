@@ -1,12 +1,15 @@
-<!-- Obrigado pela contribuição! Preencha rapidamente: -->
+## What changes
+<!-- Describe the behavior and why it belongs in Kassinão. -->
 
-## O que muda
-<!-- Descreva a mudança e o porquê. -->
+## How it was verified
+<!-- Include commands, screenshots, or a short reproduction. Never paste secrets or real meeting content. -->
 
-## Issue relacionada
+## Related issue
 <!-- Closes #123 -->
 
 ## Checklist
-- [ ] `npm run build` compila sem erros
-- [ ] Strings de usuário adicionadas em `src/i18n.ts` (pt + en), se aplicável
-- [ ] Testei manualmente / descrevi como testar
+
+- [ ] `npm run lint`, `npm run format:check`, `npm test`, and `npm run build` pass
+- [ ] User-facing copy is present in both PT-BR and English when applicable
+- [ ] Public fixtures contain only fictional data
+- [ ] Recording, web, and MCP access rules remain aligned

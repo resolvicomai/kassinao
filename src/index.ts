@@ -45,6 +45,8 @@ import { alertOwners, startMonitor } from './monitor';
 import { Locale, localeOf, t } from './i18n';
 import { autoRecordStore, isArmed, setArmed } from './recorder/autorecord';
 import { sessionManager } from './recorder/manager';
+import { ManualRecordingStartLimiter } from './recorder/manualStartLimiter';
+import { reportManualRecordingStartFailure } from './recorder/manualStartFailure';
 import {
   BoundedIdSet,
   canManuallyStartRecording,
@@ -87,7 +89,7 @@ import {
   saveMeta,
   transcriptReady,
 } from './store';
-import { allowsCurrentChannelGrant, forgetMember, recordingIdentityGrant } from './web/access';
+import { forgetGuildMembers, forgetMember, recordingIdentityGrant } from './web/access';
 import { createExchangeCode, revokeUser } from './web/mcpTokens';
 import { resolveRange } from './web/range';
 import { startWebServer } from './web/server';
@@ -753,6 +755,11 @@ const askLimiter = new AskLimiter({
   maxGlobal: MAX_ASKS_PER_HOUR_GLOBAL,
   windowMs: 60 * 60 * 1000,
 });
+const manualRecordingStartLimiter = new ManualRecordingStartLimiter({
+  userCooldownMs: config.manualRecordUserCooldownSec * 1000,
+  guildCooldownMs: config.manualRecordGuildCooldownSec * 1000,
+  maxStartsPerGuild24h: config.manualRecordGuildStartsPer24h,
+});
 
 async function handlePerguntar(interaction: ChatInputCommandInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
@@ -784,9 +791,7 @@ async function handlePerguntar(interaction: ChatInputCommandInteraction): Promis
     const candidates = listGuildMetasInRange(interaction.guild.id, range.fromMs, range.toMs)
       .filter((m) => m.status === 'done')
       .filter((m) => transcriptReady(m));
-    const authorized = authorizeAskMetas(candidates, (meta) =>
-      memberCanAccessRecording(member, meta, interaction.guild!),
-    );
+    const authorized = authorizeAskMetas(candidates, (meta) => memberCanAccessRecording(member, meta));
     if (authorized.metas.length === 0) {
       await interaction.editReply(
         temporal.label ? t(l, 'ask.no-period', { period: temporal.label }) : t(l, 'ask.no-meetings', { days }),
@@ -913,8 +918,21 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
     return;
   }
 
-  await interaction.deferReply({ ephemeral: true });
+  const reservation = manualRecordingStartLimiter.reserve(
+    interaction.guild.id,
+    interaction.user.id,
+    manualAccess.canManageGuild,
+  );
+  if (!reservation.ok) {
+    await interaction.reply({
+      content: t(l, 'err.recording-start-limited', { wait: formatDuration(reservation.retryAfterMs) }),
+      ephemeral: true,
+    });
+    return;
+  }
+
   try {
+    await interaction.deferReply({ ephemeral: true });
     const session = await startSession({
       guild: interaction.guild,
       voiceChannel,
@@ -922,6 +940,7 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
       locale: l,
       auto: false,
     });
+    reservation.commit();
     const panel = session.panelJumpUrl;
     await interaction.editReply(
       panel
@@ -929,6 +948,7 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
         : t(l, 'record.started-no-panel', { channel: `#${voiceChannel.name}`, url: session.pageUrl }),
     );
   } catch (err) {
+    reservation.rollback();
     if (err instanceof RecordingStartCancelledError) {
       await interaction.editReply(t(l, 'record.start-cancelled'));
     } else if (err instanceof RecordingBusyError) {
@@ -955,7 +975,7 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
         }
       }
     } else {
-      await interaction.editReply(t(l, 'err.join-failed', { reason: (err as Error).message }));
+      await interaction.editReply(reportManualRecordingStartFailure(err, l));
     }
   }
 }
@@ -1291,7 +1311,7 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
       const canAccess =
         !!member &&
         (startingSession
-          ? memberCanAccessRecording(member, startingSession.meta, interaction.guild)
+          ? memberCanAccessRecording(member, startingSession.meta)
           : (channel?.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel) ?? false));
       if (!canAccess) {
         await interaction.editReply(t(l, 'status.none'));
@@ -1303,9 +1323,7 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
     const stopping = sessionManager.stoppingSession(interaction.guild.id);
     if (stopping) {
       await interaction.editReply(
-        member && memberCanAccessRecording(member, stopping.meta, interaction.guild)
-          ? t(l, 'record.stopping')
-          : t(l, 'status.none'),
+        member && memberCanAccessRecording(member, stopping.meta) ? t(l, 'record.stopping') : t(l, 'status.none'),
       );
       return;
     }
@@ -1313,7 +1331,7 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
     return;
   }
   const member = interaction.member as GuildMember | null;
-  if (!member || !memberCanAccessRecording(member, session.meta, interaction.guild)) {
+  if (!member || !memberCanAccessRecording(member, session.meta)) {
     await interaction.editReply(t(l, 'status.none'));
     return;
   }
@@ -1336,16 +1354,13 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
 }
 
 /**
- * No Discord a própria interaction já prova membership atual. Calls privadas
- * ficam limitadas a quem iniciou/esteve presente e admins; só calls públicas
- * no início aceitam ViewChannel atual. Mesma política do acesso web/MCP.
+ * No Discord a própria interaction já prova membership atual. O histórico fica
+ * limitado a quem iniciou/esteve presente e admins, em qualquer tipo de canal.
+ * Mesma política do acesso web/MCP.
  */
-function memberCanAccessRecording(member: GuildMember, meta: RecordingMeta, guild: Guild): boolean {
+function memberCanAccessRecording(member: GuildMember, meta: RecordingMeta): boolean {
   if (recordingIdentityGrant(member.id, meta).view) return true;
   if (member.permissions.has(PermissionFlagsBits.ManageGuild)) return true;
-  if (!allowsCurrentChannelGrant(meta)) return false;
-  const channel = guild.channels.cache.get(meta.voiceChannelId);
-  if (channel && channel.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel)) return true;
   return false;
 }
 
@@ -1357,9 +1372,7 @@ async function handleGravacoes(interaction: ChatInputCommandInteraction): Promis
   }
   const member = interaction.member as GuildMember;
   // Filtra para SÓ as gravações que esta pessoa pode acessar (não vaza as outras).
-  const all = listGuildMetas(interaction.guild.id, 100).filter((m) =>
-    memberCanAccessRecording(member, m, interaction.guild!),
-  );
+  const all = listGuildMetas(interaction.guild.id, 100).filter((m) => memberCanAccessRecording(member, m));
   if (all.length === 0) {
     await interaction.reply({ content: t(l, 'recordings.none'), ephemeral: true });
     return;
@@ -1781,6 +1794,10 @@ client.on(Events.GuildCreate, async (guild) => {
   } catch {
     // sem canal onde eu possa postar — /ajuda continua disponível
   }
+});
+
+client.on(Events.GuildDelete, (guild) => {
+  forgetGuildMembers(guild.id);
 });
 
 // DM ao bot → responde o guia (onboarding). Não lê o conteúdo além de detectar

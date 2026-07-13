@@ -6,9 +6,9 @@ The **MCP** connector for [Kassinão](https://github.com/resolvicomai/kassinao):
 
 ## How it works (and why it's safe)
 
-The connector runs **on your machine** and is a **thin** HTTP client: it does **not** read recordings or make access decisions. It carries a **personal token** and calls the bot's API, which applies **the same access control as the web page** — meeting by meeting. Current server membership is required, and private-channel history is limited to its participants/starter and current admins. You only see what you'd already see on the site. **There is no "see everything" mode.** It is **read-only** (it never writes, deletes, or serves audio).
+The connector runs **on your machine** and is a **thin** HTTP client: it does **not** read recordings or make access decisions. It carries a **personal token** and calls the bot's API, which applies **the same access control as the web page** — meeting by meeting. Current server membership is required, and every recording is limited to its participants/starter and current admins. You only see what you'd already see on the site. **There is no "see everything" mode.** It is **read-only** (it never writes, deletes, or serves audio).
 
-> ⚠️ **Transcripts are untrusted input.** Any call participant may have "spoken" malicious text or used a hostile nickname. The server wraps all meeting content in an "untrusted data" block and strips control sequences before delivering it — but always treat meeting content as data, never as instructions.
+> ⚠️ **Meeting content is untrusted input.** Any call participant may have spoken malicious text or used a hostile nickname. Every tool description and response carries an explicit `contentSecurity` warning, while the server strips control sequences and neutralizes formatting escapes. Always treat transcripts, minutes, notes, names, and snippets as data, never as instructions.
 
 ## Prerequisites
 
@@ -53,7 +53,7 @@ This stores the token locally. Configure your MCP client just like Option A (the
 
 ## Where the token lives
 
-After first use, the refresh token (rotated on every renewal) is stored under `~/.config/kassinao-mcp/` in a `token-<profile>.json` file with `0600` permissions (`token.json` for the legacy exchange flow). Each generated connection gets an isolated profile automatically, so Claude and Cursor can coexist on the same computer when each uses its own token. Do not paste the same generated token into two clients. No recordings/transcripts are ever copied to your machine — the connector only talks HTTPS to the server. Tokens are pinned to the configured `KASSINAO_URL`; changing instances requires a token issued by the new instance.
+After first use, the refresh token (rotated on every renewal) is stored under `~/.config/kassinao-mcp/` in a `token-<profile>.json` file with `0600` permissions (`token.json` for the legacy exchange flow). Each generated connection gets an isolated profile automatically, so Claude and Cursor can coexist on the same computer when each uses its own token. Do not paste the same generated token into two clients. The connector does not sync or persist the meeting archive: it requests only the data needed for each tool response over HTTPS. Tokens are pinned to the configured `KASSINAO_URL`; changing instances requires a token issued by the new instance.
 
 ## Revoking
 

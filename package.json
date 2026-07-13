@@ -1,10 +1,11 @@
 {
   "name": "kassinao",
   "version": "1.3.0",
-  "description": "Self-hosted Discord voice recorder with per-speaker AI transcription and meeting minutes.",
+  "private": true,
+  "description": "Open-source Discord bot that turns per-speaker recordings into searchable transcripts, meeting notes, tasks, and sourced answers.",
   "license": "AGPL-3.0-or-later",
   "author": "Mauro Marques (resolvicomai)",
-  "homepage": "https://github.com/resolvicomai/kassinao#readme",
+  "homepage": "https://kassinao.resolvicomai.app/en",
   "repository": {
     "type": "git",
     "url": "https://github.com/resolvicomai/kassinao.git"
@@ -18,10 +19,12 @@
     "voice-recording",
     "transcription",
     "meeting-notes",
+    "meeting-transcription",
     "ai",
+    "mcp",
+    "open-source",
     "whisper",
     "self-hosted",
-    "craig",
     "typescript"
   ],
   "main": "dist/index.js",
@@ -40,11 +43,13 @@
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.0",
+    "@fontsource-variable/space-grotesk": "^5.2.10",
     "@snazzah/davey": "^0.1.6",
     "archiver": "^7.0.1",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.5.2",
     "ffmpeg-static": "^5.2.0",
     "libsodium-wrappers": "^0.7.15",
     "prism-media": "^1.3.5"
