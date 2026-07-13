@@ -42,7 +42,9 @@ describe('watchdog de saúde no host', () => {
     const { result, calls } = runWatch('unhealthy');
     expect(result.status, result.stderr).toBe(0);
     expect(calls).toContain('inspect --format');
-    expect(calls).toContain('restart --time 20 kassinao');
+    expect(calls).toContain('restart kassinao');
+    expect(calls).not.toContain('--time');
+    expect(calls).not.toContain('--timeout');
   });
 
   it('não reinicia um contêiner saudável', () => {

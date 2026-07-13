@@ -32,7 +32,9 @@ case "$status" in
     ;;
   unhealthy)
     echo "$(date -Is) reiniciando $CONTAINER: healthcheck unhealthy" >&2
-    "$DOCKER" restart --time 20 "$CONTAINER" >/dev/null
+    # Sem --timeout: herda o StopTimeout do contêiner (45s no Compose), em vez
+    # de encurtar o shutdown e arriscar SIGKILL durante a finalização do áudio.
+    "$DOCKER" restart "$CONTAINER" >/dev/null
     ;;
   *)
     echo "estado inesperado de $CONTAINER: $status" >&2
