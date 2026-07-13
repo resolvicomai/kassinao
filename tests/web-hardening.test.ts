@@ -108,10 +108,21 @@ describe('cookies e CSRF da superfície web privada', () => {
     expect(isActiveWebSession(ids[10], 'cap-user')).toBe(true);
   });
 
-  it('aceita a origem exata e rejeita subdomínio irmão/cross-site', () => {
-    const base = 'https://kassinao.example.com';
+  it('prioriza a origem exata mesmo quando Fetch Metadata classifica a navegação como cross-site', () => {
+    const base = 'https://app.kassinao.cloud';
     expect(isAllowedWebMutation(fakeRequest('POST', { origin: base }), base)).toBe(true);
+    expect(isAllowedWebMutation(fakeRequest('POST', { origin: base, 'sec-fetch-site': 'cross-site' }), base)).toBe(
+      true,
+    );
+  });
+
+  it('rejeita subdomínio irmão e cross-site sem origem verificável', () => {
+    const base = 'https://app.kassinao.cloud';
+    expect(isAllowedWebMutation(fakeRequest('POST', { origin: 'https://kassinao.cloud' }), base)).toBe(false);
+    expect(isAllowedWebMutation(fakeRequest('POST', { origin: 'https://docs.kassinao.cloud' }), base)).toBe(false);
     expect(isAllowedWebMutation(fakeRequest('POST', { origin: 'https://evil.example.com' }), base)).toBe(false);
+    expect(isAllowedWebMutation(fakeRequest('POST', { origin: 'null' }), base)).toBe(false);
+    expect(isAllowedWebMutation(fakeRequest('POST', { origin: 'not a url' }), base)).toBe(false);
     expect(isAllowedWebMutation(fakeRequest('POST', { 'sec-fetch-site': 'cross-site' }), base)).toBe(false);
     expect(isAllowedWebMutation(fakeRequest('POST'), base)).toBe(true); // cliente não-browser, sem cookie automático
     expect(isAllowedWebMutation(fakeRequest('GET', { origin: 'https://evil.example.com' }), base)).toBe(true);
