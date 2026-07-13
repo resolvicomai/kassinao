@@ -1,4 +1,6 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import type { StoredCredentials } from './tokenAuth.js';
 
 function parseCredentials(raw: string): StoredCredentials {
@@ -9,6 +11,10 @@ function parseCredentials(raw: string): StoredCredentials {
     return {
       url: typeof value.url === 'string' ? value.url : undefined,
       refreshToken: typeof value.refreshToken === 'string' ? value.refreshToken : undefined,
+      refreshAttempt:
+        typeof value.refreshAttempt === 'string' && /^[a-f0-9]{32}$/.test(value.refreshAttempt)
+          ? value.refreshAttempt
+          : undefined,
     };
   } catch {
     return {};
@@ -67,5 +73,37 @@ export function loadCredentialStore(directory: string, file: string): StoredCred
     return parseCredentials(fs.readFileSync(fd, 'utf8'));
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+/** Grava o cofre por rename atômico e só retorna depois de fsync no arquivo/diretório. */
+export function saveCredentialStore(directory: string, file: string, credentials: StoredCredentials): void {
+  protectDirectory(directory);
+  const temporary = `${file}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  const noFollow = process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW;
+  try {
+    const fd = fs.openSync(
+      temporary,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow,
+      0o600,
+    );
+    try {
+      if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
+      fs.writeFileSync(fd, JSON.stringify(credentials));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(temporary, file);
+    if (process.platform !== 'win32') {
+      const directoryFd = fs.openSync(path.dirname(file), fs.constants.O_RDONLY);
+      try {
+        fs.fsyncSync(directoryFd);
+      } finally {
+        fs.closeSync(directoryFd);
+      }
+    }
+  } finally {
+    fs.rmSync(temporary, { force: true });
   }
 }

@@ -239,7 +239,7 @@ Tem mais: guarda de espaço em disco, alerta de disco cheio, backup automático 
 
 1. Cadastre a nova `APP_URL/auth/callback` no OAuth do Discord antes de virar a produção.
 2. Troque DNS, rotas do túnel, `APP_URL`, `PUBLIC_URL`, `DOCS_URL` e `MCP_URL` na mesma janela de manutenção. Sessões do navegador não atravessam domínios, então as pessoas precisam entrar de novo.
-3. Tokens MCP ficam vinculados à origem que os emitiu. Gere uma conexão nova e troque `KASSINAO_URL` e o token juntos em cada cliente ativo.
+3. Tokens MCP ficam vinculados à origem que os emitiu. Gere uma conexão nova e substitua, em cada cliente ativo, o bloco completo impresso pelo comando de troca.
 4. Valide todas as novas origens e remova em seguida o callback OAuth, os registros DNS e as rotas de túnel substituídos. Hostnames aposentados não são atendidos pela aplicação.
 
 Transcrição 100% local: com `TRANSCRIBE_PROVIDER=command` o áudio nunca sai do servidor. Wrapper pronto para faster-whisper em [`scripts/transcribe-local.py`](scripts/transcribe-local.py):

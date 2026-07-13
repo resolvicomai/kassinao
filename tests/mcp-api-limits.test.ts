@@ -8,7 +8,7 @@ import { markClientReady } from '../src/discord/ready';
 import { deleteRecording, saveMeta, saveMinutes, saveTranscript, type RecordingMeta } from '../src/store';
 import { forgetMember } from '../src/web/access';
 import { FixedWindowRateLimiter, mountMcpApi } from '../src/web/api';
-import { signMcpAccess } from '../src/web/auth';
+import { signMcpAccess, signMcpRefresh } from '../src/web/auth';
 import { createSession, revokeUser } from '../src/web/mcpTokens';
 
 describe('limites de disponibilidade da API MCP', () => {
@@ -35,6 +35,7 @@ describe('paginação das consultas agregadas MCP', () => {
   let server: http.Server;
   let baseUrl: string;
   let authorization: string;
+  let initialRefreshToken: string;
 
   beforeAll(async () => {
     markClientReady();
@@ -103,6 +104,13 @@ describe('paginação das consultas agregadas MCP', () => {
 
     const session = createSession(userId, 'Lia');
     authorization = `Bearer ${signMcpAccess({ id: userId, name: 'Lia', exp: now + 60_000, jti: session.sid })}`;
+    initialRefreshToken = signMcpRefresh({
+      id: userId,
+      name: 'Lia',
+      exp: session.exp,
+      jti: session.sid,
+      gen: session.gen,
+    });
     const app = express();
     mountMcpApi(app);
     server = http.createServer(app);
@@ -172,5 +180,38 @@ describe('paginação das consultas agregadas MCP', () => {
     const secondBody = (await second.json()) as typeof firstBody;
     expect(secondBody.results.map((result) => result.id)).toEqual([secondRecordingId]);
     expect(secondBody.nextCursor).toBeNull();
+  });
+
+  it('reemite a rotação após resposta perdida e avança normalmente depois', async () => {
+    const firstAttempt = '0123456789abcdef0123456789abcdef';
+    const rotate = (refreshToken: string, attemptId: string) =>
+      fetch(`${baseUrl}/api/mcp/refresh`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken, attempt_id: attemptId }),
+      });
+
+    const malformed = await rotate(initialRefreshToken, 'not-valid');
+    expect(malformed.status).toBe(400);
+
+    const first = await rotate(initialRefreshToken, firstAttempt);
+    const firstBody = (await first.json()) as { refresh_token: string };
+    const retry = await rotate(initialRefreshToken, firstAttempt);
+    const retryBody = (await retry.json()) as { refresh_token: string };
+
+    expect(first.status).toBe(200);
+    expect(retry.status).toBe(200);
+    expect(retryBody.refresh_token).toBe(firstBody.refresh_token);
+
+    const next = await rotate(firstBody.refresh_token, 'fedcba9876543210fedcba9876543210');
+    expect(next.status).toBe(200);
+    const nextBody = (await next.json()) as { refresh_token: string };
+
+    const legacyClient = await fetch(`${baseUrl}/api/mcp/refresh`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ refresh_token: nextBody.refresh_token }),
+    });
+    expect(legacyClient.status).toBe(200);
   });
 });

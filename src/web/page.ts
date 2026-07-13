@@ -313,7 +313,7 @@ function shell(
     /** Mostra "Conectar IA" na nav só na central e no próprio conectar
      *  (na página de uma gravação é ruído; feedback do Mauro). */
     navAi?: boolean;
-    /** O token MCP aparece uma única vez; trocar idioma nessa resposta o perderia. */
+    /** O código MCP aparece uma única vez; trocar idioma nessa resposta o perderia. */
     lockLocale?: boolean;
   } = {},
 ): string {
@@ -1499,8 +1499,8 @@ export function messagePage(title: string, message: string, user?: WebUser, lang
 export function connectPage(opts: {
   lang: Locale;
   user?: WebUser;
-  refreshToken?: string;
-  /** apelido dado à conexão recém-gerada (eco na página do token). */
+  exchangeCode?: string;
+  /** apelido dado à conexão preparada (eco na página do código). */
   label?: string;
   /** conexões ativas DESTE usuário - a lista de gestão. */
   sessions?: SessionSummary[];
@@ -1524,29 +1524,17 @@ export function connectPage(opts: {
     return shell(title, body, { lang: opts.lang, active: 'ai' });
   }
 
-  if (opts.refreshToken) {
-    const cfg = JSON.stringify(
-      {
-        mcpServers: {
-          kassinao: {
-            command: 'npx',
-            args: ['-y', 'kassinao-mcp'],
-            env: { KASSINAO_URL: config.mcpUrl, KASSINAO_REFRESH_TOKEN: opts.refreshToken },
-          },
-        },
-      },
-      null,
-      2,
-    );
+  if (opts.exchangeCode) {
+    const command = `npx -y kassinao-mcp@1.0.4 exchange --stdin --url ${config.mcpUrl}`;
     const localhostWarn = config.mcpUrl.startsWith('http://localhost')
       ? `<div class="note" role="alert">${esc(
           T(
-            'Este servidor está com MCP_URL de localhost. O token gerado não vai funcionar de outra máquina. Defina a URL pública do MCP antes de gerar conexões reais.',
-            'This server has a localhost MCP_URL. The generated token will not work from another machine. Set the public MCP URL before generating real connections.',
+            'Este servidor está com MCP_URL de localhost. O comando gerado não vai funcionar de outra máquina. Defina a URL pública do MCP antes de gerar conexões reais.',
+            'This server has a localhost MCP_URL. The generated command will not work from another machine. Set the public MCP URL before generating real connections.',
           ),
         )}</div>`
       : '';
-    const body = `<section class="connect-page"><h1>${esc(T('Conexão gerada', 'Connection generated'))}</h1>
+    const body = `<section class="connect-page"><h1>${esc(T('Conexão preparada', 'Connection ready'))}</h1>
       ${
         opts.label
           ? `<p class="subline">${esc(T('Apelido', 'Nickname'))}: <strong>${esc(opts.label)}</strong>. ${esc(
@@ -1558,16 +1546,17 @@ export function connectPage(opts: {
           : ''
       }
       ${localhostWarn}
-      <div class="security-note" role="status"><strong>${esc(T('Copie esta configuração agora.', 'Copy this configuration now.'))}</strong><span>${esc(
+      <div class="security-note" role="status"><strong>${esc(T('Use este código agora.', 'Use this code now.'))}</strong><span>${esc(
         T(
-          'O token não será mostrado de novo. Ele dá ao seu assistente acesso somente às gravações que sua conta pode ver.',
-          'The token will not be shown again. It gives your assistant access only to recordings your account can see.',
+          'Ele funciona uma vez e expira em cerca de cinco minutos. O comando pede o código sem exibi-lo nem gravá-lo no histórico do terminal.',
+          'It works once and expires in about five minutes. The command asks for it without displaying it or saving it in terminal history.',
         ),
       )}</span></div>
       <ol class="connect-steps">
-        <li>${esc(T('Copie o bloco abaixo.', 'Copy the block below.'))}</li>
-        <li>${esc(T('Cole no arquivo de configuração de um aplicativo.', 'Paste it into one application configuration file.'))}</li>
-        <li>${esc(T('Reinicie o aplicativo e faça uma pergunta.', 'Restart the application and ask a question.'))}</li>
+        <li>${esc(T('Copie o código descartável.', 'Copy the one-time code.'))}</li>
+        <li>${esc(T('Execute o comando no Terminal, cole o código quando ele pedir e pressione Enter.', 'Run the command in Terminal, paste the code when prompted, and press Enter.'))}</li>
+        <li>${esc(T('O token vai para um arquivo local protegido (0600 no macOS/Linux; ACL herdada do perfil no Windows) e a configuração impressa não contém segredo.', 'The token goes to a protected local file (0600 on macOS/Linux; inherited profile ACL on Windows), and the printed config contains no secret.'))}</li>
+        <li>${esc(T('Cole a configuração impressa no aplicativo, reinicie e faça uma pergunta.', 'Paste the printed config into the application, restart it, and ask a question.'))}</li>
       </ol>
       <h2>${esc(T('Onde fica o arquivo', 'Where the file lives'))}</h2>
       <ul class="connect-steps">
@@ -1576,12 +1565,14 @@ export function connectPage(opts: {
         <li>Cursor: <span style="font-family:ui-monospace,monospace">~/.cursor/mcp.json</span></li>
         <li>${esc(T('Outro assistente com MCP: onde a documentação dele indicar', 'Any other MCP-capable assistant: wherever its docs point'))}</li>
       </ul>
-      <div class="downloads" style="margin-top:16px"><button id="kcopy" class="btn" type="button">${esc(T('Copiar configuração', 'Copy configuration'))}</button></div>
-      <pre id="kcfg" class="tokenbox" tabindex="0" aria-label="${esc(T('Configuração MCP', 'MCP configuration'))}">${esc(cfg)}</pre>
+      <div class="downloads" style="margin-top:16px"><button id="kcopycode" class="btn" type="button">${esc(T('Copiar código', 'Copy code'))}</button></div>
+      <pre id="kcode" class="tokenbox" tabindex="0" aria-label="${esc(T('Código descartável MCP', 'One-time MCP code'))}">${esc(opts.exchangeCode)}</pre>
+      <div class="downloads" style="margin-top:16px"><button id="kcopy" class="btn secondary" type="button">${esc(T('Copiar comando', 'Copy command'))}</button></div>
+      <pre id="kcfg" class="tokenbox" tabindex="0" aria-label="${esc(T('Comando de conexão MCP', 'MCP connection command'))}">${esc(command)}</pre>
       <p class="connect-intro">${esc(
         T(
-          'Já usa outros servidores MCP? Cole só o bloco "kassinao" dentro de "mcpServers". Não substitua o arquivo inteiro. O conector requer Node 20 ou superior e usa "npx -y kassinao-mcp".',
-          'Already use other MCP servers? Paste only the "kassinao" block inside "mcpServers". Do not replace the entire file. The connector requires Node 20 or newer and uses "npx -y kassinao-mcp".',
+          'Já usa outros servidores MCP? Depois do comando, cole só o bloco "kassinao" impresso dentro de "mcpServers". Não substitua o arquivo inteiro. Requer Node 20 ou superior.',
+          'Already use other MCP servers? After running the command, paste only the printed "kassinao" block inside "mcpServers". Do not replace the entire file. Node 20 or newer is required.',
         ),
       )}</p>
       <p class="connect-intro">${esc(
@@ -1591,7 +1582,7 @@ export function connectPage(opts: {
         ),
       )}</p>
       <div class="downloads" style="margin-top:18px"><a class="btn secondary" href="/app/conectar-ia">${esc(T('Voltar às conexões', 'Back to connections'))}</a></div>
-      <script${CSP_NONCE_ATTR}>(function(){var b=document.getElementById('kcopy');if(!b)return;b.addEventListener('click',function(){var t=(document.getElementById('kcfg').textContent)||'';navigator.clipboard.writeText(t).then(function(){var o=b.textContent;b.textContent='${esc(T('Copiado', 'Copied'))}';setTimeout(function(){b.textContent=o;},2000);}).catch(function(){});});})();</script></section>`;
+      <script${CSP_NONCE_ATTR}>(function(){function wire(bid,tid){var b=document.getElementById(bid);if(!b)return;b.addEventListener('click',function(){var e=document.getElementById(tid);var t=e?e.textContent:'';navigator.clipboard.writeText(t||'').then(function(){var o=b.textContent;b.textContent='${esc(T('Copiado', 'Copied'))}';setTimeout(function(){b.textContent=o;},2000);}).catch(function(){});});}wire('kcopycode','kcode');wire('kcopy','kcfg');})();</script></section>`;
     return shell(title, body, { lang: opts.lang, user: opts.user, active: 'ai', wide: true, lockLocale: true });
   }
 
@@ -1657,8 +1648,8 @@ export function connectPage(opts: {
     </form>
     <p class="muted" style="margin-top:8px">${esc(
       T(
-        'Você recebe uma configuração pronta para colar. Gere uma conexão por assistente para poder revogar cada acesso separadamente.',
-        'You receive a ready-to-paste configuration. Generate one connection per assistant so you can revoke each access separately.',
+        'Você recebe um comando descartável que instala a conexão sem deixar o token na configuração. Gere uma por assistente para revogar cada acesso separadamente.',
+        'You receive a one-time command that installs the connection without leaving the token in the config. Generate one per assistant so you can revoke each access separately.',
       ),
     )}</p>
     ${list}</section>`;

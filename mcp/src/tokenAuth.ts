@@ -3,6 +3,8 @@ import crypto from 'node:crypto';
 export interface StoredCredentials {
   url?: string;
   refreshToken?: string;
+  /** Nonce durável da tentativa ainda sem confirmação; permite retry idempotente. */
+  refreshAttempt?: string;
 }
 
 /** Refresh tokens require HTTPS; HTTP is allowed only for local development. */
@@ -42,10 +44,25 @@ export function selectBootstrapRefreshToken(stored: StoredCredentials, currentUr
  * prevents clients on the same machine from rotating the SAME refresh token in
  * parallel. The hash is only a local key and does not reveal the token in the filename.
  */
-export function tokenStoreFileName(currentUrl: string, bootstrapToken: string): string {
+export function tokenStoreFileName(currentUrl: string, bootstrapToken: string, profile = ''): string {
+  if (profile) {
+    if (!/^[a-f0-9]{24}$/.test(profile)) {
+      throw new Error('KASSINAO_PROFILE must be a 24-character lowercase hexadecimal profile id.');
+    }
+    return `token-${profile}.json`;
+  }
   if (!bootstrapToken) return 'token.json'; // legacy `exchange` flow, without env
-  const profile = crypto.createHash('sha256').update(`${currentUrl}\0${bootstrapToken}`).digest('hex').slice(0, 24);
-  return `token-${profile}.json`;
+  const tokenProfile = crypto
+    .createHash('sha256')
+    .update(`${currentUrl}\0${bootstrapToken}`)
+    .digest('hex')
+    .slice(0, 24);
+  return `token-${tokenProfile}.json`;
+}
+
+/** O profile localiza um cofre; não é credencial e pode ir na configuração MCP. */
+export function createTokenProfileId(): string {
+  return crypto.randomBytes(12).toString('hex');
 }
 
 /** Só 401 prova que o token salvo morreu; 429/5xx não autorizam reapresentar um env antigo. */

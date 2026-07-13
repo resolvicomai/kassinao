@@ -35,11 +35,16 @@ import {
   isAllowedWebMutation,
   logoutWeb,
   scopeWebSessionToApp,
-  signMcpRefresh,
   WebUser,
 } from './auth';
 import { applyCspNonce, contentSecurityPolicy, createCspNonce } from './csp';
-import { createSession, listUserSessions, McpSessionCapacityError, revokeUser, revokeUserSession } from './mcpTokens';
+import {
+  createExchangeCode,
+  listUserSessions,
+  McpExchangeCodeCapacityError,
+  revokeUser,
+  revokeUserSession,
+} from './mcpTokens';
 import {
   connectPage,
   messagePage,
@@ -778,12 +783,13 @@ export function startWebServer(): void {
           const label = String((req.body as Record<string, unknown>)?.label ?? '')
             .trim()
             .slice(0, 40);
-          // O usuário recebe um REFRESH token (o conector troca por access via /api/mcp/refresh).
-          let s;
+          // O navegador recebe só um código descartável. O refresh token nasce na
+          // troca feita pelo conector e vai direto ao cofre local, nunca ao HTML/config.
+          let exchangeCode: string;
           try {
-            s = createSession(user.id, user.name, label);
+            exchangeCode = createExchangeCode(user.id, user.name, label);
           } catch (err) {
-            if (!(err instanceof McpSessionCapacityError)) throw err;
+            if (!(err instanceof McpExchangeCodeCapacityError)) throw err;
             res
               .status(503)
               .set('Retry-After', '60')
@@ -791,14 +797,13 @@ export function startWebServer(): void {
               .send(messagePage(MSG.mcpCapacityTitle[l], MSG.mcpCapacity[l], user, l));
             return;
           }
-          const refreshToken = signMcpRefresh({ id: user.id, name: user.name, exp: s.exp, jti: s.sid, gen: s.gen });
           console.log(
-            `MCP: sessão ${s.sid} criada para ${cleanInline(user.name)} (${cleanInline(user.id)}) via web${label ? ` — "${cleanInline(label)}"` : ''}.`,
+            `MCP: código de conexão criado para ${cleanInline(user.name)} (${cleanInline(user.id)}) via web${label ? ` — "${cleanInline(label)}"` : ''}.`,
           );
           res
             .set('Cache-Control', 'no-store')
             .type('html')
-            .send(connectPage({ lang: l, user, refreshToken, label }));
+            .send(connectPage({ lang: l, user, exchangeCode, label }));
         } catch (err) {
           next(err);
         }
