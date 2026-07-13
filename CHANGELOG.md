@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.4.1] — 2026-07-13
+## [1.4.2] — 2026-07-13
 
 ### Changed
 
@@ -14,12 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Authenticated actions in the private app no longer reject a canonical `app.kassinao.cloud` request when browser Fetch Metadata classifies its form navigation as cross-site. Exact origins remain required whenever the browser sends `Origin`; sibling and external origins remain blocked.
 - Every recording request revalidates current Discord membership. Historical access is limited to the starter, people who were present, and current admins; destructive actions always force a separate check.
 - Public Discord panels and completion notices contain only generic status. Private details stay in freshly authorized DMs/pages, and a durable, no-delete migration neutralizes historical bot messages without overwriting concurrent edits.
 - Membership REST calls, archive scans, transcript reads, notes, presence identities, candidates, guilds, payload bytes, and segments now have per-user and global availability budgets. Guild timelines stay pre-indexed, web libraries use bounded cursors, and large transcript routes paginate or fail before unbounded allocation.
 - The application container no longer receives the Cloudflare Tunnel token from the shared Compose environment.
 - Private notification fanout is bounded and resumable; successful DMs are not duplicated, starter DMs revalidate membership, and webhook failures never log credential-bearing URLs.
+
+## [1.4.1] — 2026-07-13
+
+### Fixed
+
+- Authenticated actions in the private app no longer reject a canonical `app.kassinao.cloud` request when browser Fetch Metadata classifies its form navigation as cross-site. Exact origins remain required whenever the browser sends `Origin`; sibling and external origins remain blocked.
 
 ## [1.4.0] — 2026-07-13
 
@@ -121,6 +126,7 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
+[1.4.2]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.2
 [1.4.1]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.1
 [1.4.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.0
 [1.3.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.3.0
