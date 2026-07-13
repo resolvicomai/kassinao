@@ -35,24 +35,23 @@ const safeContent = 'Gravação encerrada. Detalhes somente na área privada.';
 
 describe('migração das superfícies históricas do Discord', () => {
   it('inventaria canal antigo e neutraliza link de gravação mesmo sem meta local', async () => {
+    const message = {
+      id: 'ata-expirada',
+      channelId: 'canal-configurado-antigo',
+      guildId: 'guild-1',
+      authorId: 'bot-1',
+      createdTimestamp: 1_500_000,
+      content: 'Ata antiga: https://old.example/rec/2025-01-02-a1b2c3d4e5',
+      embeds: [{ description: 'Resumo privado que não pode continuar no canal.' }],
+    };
     const client: DiscordSurfaceInventoryClient = {
       botUserId: 'bot-1',
       listGuildMessageChannelIds: vi.fn(async () => ['canal-configurado-antigo']),
-      fetchMessage: vi.fn(async () => ({ kind: 'missing' })),
+      fetchMessage: vi.fn(async () => ({ kind: 'found', message })),
       fetchHistory: vi.fn(async () => ({
         kind: 'found',
         guildId: 'guild-1',
-        messages: [
-          {
-            id: 'ata-expirada',
-            channelId: 'canal-configurado-antigo',
-            guildId: 'guild-1',
-            authorId: 'bot-1',
-            createdTimestamp: 1_500_000,
-            content: 'Ata antiga: https://old.example/rec/2025-01-02-a1b2c3d4e5',
-            embeds: [{ description: 'Resumo privado que não pode continuar no canal.' }],
-          },
-        ],
+        messages: [message],
       })),
       editMessage: vi.fn(async () => {}),
     };
@@ -377,7 +376,7 @@ describe('migração das superfícies históricas do Discord', () => {
       guildId: 'guild-1',
       authorId: 'bot-1',
       createdTimestamp: 1_000_100,
-      content: 'link antigo',
+      content: 'https://old.example/rec/2026-01-02-a1b2c3d4e5',
     };
     const editMessage = vi
       .fn<DiscordSurfaceClient['editMessage']>()
@@ -413,25 +412,66 @@ describe('migração das superfícies históricas do Discord', () => {
     expect(resumed.complete).toBe(true);
   });
 
+  it('não sobrescreve mensagem alterada depois de persistir o plano', async () => {
+    let persisted = legacyMeta();
+    const message = {
+      id: 'panel-1',
+      channelId: 'voice-1',
+      guildId: 'guild-1',
+      authorId: 'bot-1',
+      createdTimestamp: 1_000_100,
+      content: 'https://old.example/rec/2026-01-02-a1b2c3d4e5',
+    };
+    const editMessage = vi.fn<DiscordSurfaceClient['editMessage']>().mockRejectedValueOnce(new Error('Discord 503'));
+    const client: DiscordSurfaceClient = {
+      botUserId: 'bot-1',
+      fetchMessage: async () => ({ kind: 'found', message }),
+      fetchHistory: async () => ({ kind: 'found', guildId: 'guild-1', messages: [] }),
+      editMessage,
+    };
+    const persist = async (meta: RecordingMeta) => {
+      persisted = structuredClone(meta);
+    };
+
+    await expect(
+      migrateDiscordSurfacesStep({ meta: persisted, knownChannelIds: [], safeContent, client, persist }),
+    ).rejects.toThrow('Discord 503');
+    message.content = 'Mensagem nova do bot, sem link de gravação.';
+
+    const resumed = await migrateDiscordSurfacesStep({
+      meta: persisted,
+      knownChannelIds: [],
+      safeContent,
+      client,
+      persist,
+    });
+
+    expect(editMessage).toHaveBeenCalledTimes(1);
+    expect(resumed.meta.discordSurfaceMigration?.audits[0].outcome).toBe('sanitized');
+  });
+
   it('descobre URL histórica exata, mas ignora mensagem alheia e conteúdo não relacionado', async () => {
     const meta = legacyMeta();
     delete meta.panelChannelId;
     delete meta.panelMessageId;
+    const relevant = {
+      id: 'relevant',
+      channelId: 'voice-1',
+      guildId: 'guild-1',
+      authorId: 'bot-1',
+      createdTimestamp: 1_500_000,
+      content: 'https://old.example/rec/2026-01-02-a1b2c3d4e5',
+    };
     const client: DiscordSurfaceClient = {
       botUserId: 'bot-1',
-      fetchMessage: vi.fn(async () => ({ kind: 'missing' })),
+      fetchMessage: vi.fn(async (_channelId, messageId) =>
+        messageId === relevant.id ? { kind: 'found', message: relevant } : { kind: 'missing' },
+      ),
       fetchHistory: vi.fn(async () => ({
         kind: 'found',
         guildId: 'guild-1',
         messages: [
-          {
-            id: 'relevant',
-            channelId: 'voice-1',
-            guildId: 'guild-1',
-            authorId: 'bot-1',
-            createdTimestamp: 1_500_000,
-            content: 'https://old.example/rec/2026-01-02-a1b2c3d4e5',
-          },
+          relevant,
           {
             id: 'prefix-only',
             channelId: 'voice-1',

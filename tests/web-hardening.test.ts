@@ -286,6 +286,34 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).not.toContain('<h1>Minhas gravações</h1>');
   });
 
+  it('expõe continuação explícita quando a biblioteca foi limitada por cursor', () => {
+    const user: WebUser = {
+      typ: 'session',
+      id: 'u-page',
+      name: 'Pessoa',
+      avatar: null,
+      exp: Date.now() + 60_000,
+      jti: 'sid-page',
+    };
+    const html = recordingsIndexPage([], { user, lang: 'pt', q: 'decisão', nextCursor: 1_000 });
+    expect(html).toContain('Ver mais reuniões');
+    expect(html).toContain('cursor=1000');
+    expect(html).toContain('q=decis%C3%A3o');
+  });
+
+  it('avisa quando a transcrição não pode ser materializada com segurança', () => {
+    const dir = path.join(process.cwd(), 'docs', 'example');
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;
+    const html = recordingPage(meta, {
+      live: false,
+      canDelete: false,
+      lang: 'pt',
+      transcriptNotice: 'A transcrição excede o limite seguro.',
+    });
+    expect(html).toContain('A transcrição excede o limite seguro.');
+    expect(html).not.toContain(`/app/rec/${meta.id}/transcricao.md`);
+  });
+
   it('abas associam controles/painéis e implementam teclado', () => {
     const dir = path.join(process.cwd(), 'docs', 'example');
     const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;

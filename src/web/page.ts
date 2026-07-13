@@ -2,6 +2,7 @@ import { config } from '../config';
 import { localizeEvent, Locale } from '../i18n';
 import { msToClock } from '../processing/transcribe';
 import { formatDuration, formatOffset } from '../recorder/RecordingSession';
+import { MAX_NOTES_PER_RECORDING, MAX_PRESENCE_IDENTITIES_PER_RESPONSE } from '../securityLimits';
 import {
   audioExpiryOf,
   MeetingMinutes,
@@ -457,11 +458,22 @@ export function recordingPage(
     user?: WebUser;
     lang: Locale;
     transcript?: TranscriptSegment[];
+    transcriptNotice?: string;
     minutes?: MeetingMinutes;
     demo?: boolean;
   },
 ): string {
   const { live, lang: l } = opts;
+  const legacyContentTruncated =
+    meta.notes.length > MAX_NOTES_PER_RECORDING ||
+    (meta.presence?.length ?? 0) > MAX_PRESENCE_IDENTITIES_PER_RESPONSE ||
+    meta.events.length > 500;
+  meta = {
+    ...meta,
+    notes: meta.notes.slice(0, MAX_NOTES_PER_RECORDING),
+    presence: meta.presence?.slice(0, MAX_PRESENCE_IDENTITIES_PER_RESPONSE),
+    events: meta.events.slice(0, 500),
+  };
   const demo = opts.demo ?? false;
   const seekable = !demo; // no modo demo o áudio é só um trecho, então horários não pulam
   const endedAt = meta.endedAt ?? Date.now();
@@ -528,6 +540,17 @@ export function recordingPage(
   const incompleteNote =
     !demo && meta.audioIncomplete
       ? `<div class="note" style="border-left-color:#f0b232">${p(l, 'audioIncomplete')}</div>`
+      : '';
+  const transcriptNotice = opts.transcriptNotice
+    ? `<div class="note" style="border-left-color:#f0b232">${esc(opts.transcriptNotice)}</div>`
+    : '';
+  const legacyContentNotice =
+    !demo && legacyContentTruncated
+      ? `<div class="note" style="border-left-color:#f0b232">${
+          l === 'pt'
+            ? 'Parte do conteúdo histórico foi limitada nesta visualização para manter a página estável.'
+            : 'Some historical content was limited in this view to keep the page stable.'
+        }</div>`
       : '';
 
   const minutes = renderMinutes(meta, opts.minutes, l, seekable);
@@ -748,7 +771,7 @@ export function recordingPage(
         <a class="backlink" href="${demo ? publicSite('home', l, config).canonicalUrl : '/app'}">${demo ? (l === 'pt' ? 'Início' : 'Home') : l === 'pt' ? 'Reuniões' : 'Meetings'}</a>
         <div class="recording-titleline"><h1>${title}</h1>${badge}</div>
         ${subline}
-        <div class="recording-alerts">${demoNote}${liveNote}${incompleteNote}</div>
+        <div class="recording-alerts">${demoNote}${liveNote}${incompleteNote}${transcriptNotice}${legacyContentNotice}</div>
       </header>
       ${workspace}
       ${demoCta}
@@ -1215,6 +1238,9 @@ export function recordingsIndexPage(
     sort?: RecordingsSort;
     /** Flash pós-ação (?freed=1 / ?deleted=1). */
     flash?: string;
+    /** Continuação segura da varredura de candidatas/ACL. */
+    nextCursor?: number;
+    hasPreviousPage?: boolean;
   },
 ): string {
   const l = opts.lang;
@@ -1288,6 +1314,20 @@ export function recordingsIndexPage(
       : '';
 
   const flash = opts.flash ? `<div class="note" role="status">${esc(opts.flash)}</div>` : '';
+  const archivePagination =
+    opts.nextCursor !== undefined || opts.hasPreviousPage
+      ? (() => {
+          const next = new URLSearchParams();
+          if (q) next.set('q', q);
+          if (sort !== 'recent') next.set('sort', sort);
+          if (opts.nextCursor !== undefined) next.set('cursor', String(opts.nextCursor));
+          return `<nav class="downloads" aria-label="${pt ? 'Paginação do arquivo' : 'Archive pagination'}">
+            ${opts.hasPreviousPage ? `<a class="btn secondary" href="/app">${pt ? 'Voltar ao início' : 'Back to start'}</a>` : ''}
+            ${opts.nextCursor !== undefined ? `<a class="btn secondary" href="/app?${esc(next.toString())}">${pt ? 'Ver mais reuniões' : 'View more meetings'}</a>` : ''}
+            <span class="muted">${pt ? 'O arquivo é verificado em partes para manter a busca e o Discord estáveis.' : 'The archive is checked in bounded pages to keep search and Discord stable.'}</span>
+          </nav>`;
+        })()
+      : '';
 
   const channelMap = new Map<string, { name: string; guild: string }>();
   for (const m of metas)
@@ -1452,7 +1492,7 @@ export function recordingsIndexPage(
           });
         });
         </script>`;
-  const libraryContent = q ? hitsHtml : `${stats}${sorts}${chips}${cards}`;
+  const libraryContent = q ? `${hitsHtml}${archivePagination}` : `${stats}${sorts}${chips}${cards}${archivePagination}`;
 
   return shell(
     pt ? 'Minhas gravações' : 'My recordings',

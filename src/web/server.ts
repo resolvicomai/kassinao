@@ -18,16 +18,17 @@ import {
   deleteAudioOnly,
   deleteRecording,
   forgetAudioBytes,
-  listMetas,
+  listMetaIdsPage,
   readMeta,
   readMinutes,
-  readTranscript,
+  readTranscriptBounded,
   RecordingMeta,
+  TranscriptSegment,
   transcriptionNeedsAudio,
   transcriptReady,
 } from '../store';
-import { checkAccess, createAccessRequestContext } from './access';
-import { mountMcpApi } from './api';
+import { checkAccess, createAccessRequestContext, TransientAccessError, withFreshMembershipBudget } from './access';
+import { ApiRateLimiters, FixedWindowRateLimiter, mountMcpApi } from './api';
 import {
   beginLogin,
   finishLogin,
@@ -70,6 +71,26 @@ const PUBLIC_VISUALS = [
   ['meeting-demo-pt.png', 'image/png'],
   ['meeting-demo-en.png', 'image/png'],
 ] as const;
+
+const mcpConnectionCreationLimiter = new FixedWindowRateLimiter();
+const webHeavyReadLimiters = new ApiRateLimiters();
+
+export const WEB_DIRECT_TRANSCRIPT_MAX_BYTES = 5 * 1024 * 1024;
+export const WEB_DIRECT_TRANSCRIPT_MAX_SEGMENTS = 5_000;
+export const MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE = 100;
+const MAX_WEB_LIBRARY_GUILDS_PER_PAGE = 25;
+const MAX_WEB_LIBRARY_ITEMS_PER_PAGE = 100;
+
+export function webHeavyReadRateLimited(userId: string): boolean {
+  return (
+    webHeavyReadLimiters.consumeKey(`web-heavy-user:${userId}`, 12, 60_000) ||
+    webHeavyReadLimiters.consumeGlobal('web-heavy-global', 30, 60_000)
+  );
+}
+
+export function mcpConnectionCreationRateLimited(userId: string): boolean {
+  return mcpConnectionCreationLimiter.consume(`mcp-connect:${userId}`, 5, 60_000);
+}
 
 function pageLang(req: Request): Locale {
   return resolveWebLocale({
@@ -136,6 +157,14 @@ const MSG = {
     pt: 'Muitas requisições. Tente de novo em instantes.',
     en: 'Too many requests. Try again shortly.',
   },
+  transcriptTooLarge: {
+    pt: 'A transcrição excede o limite seguro para abrir inteira nesta página. A ata e o áudio continuam disponíveis.',
+    en: 'The transcript exceeds the safe limit for opening it all on this page. Meeting notes and audio remain available.',
+  },
+  transcriptUnavailable: {
+    pt: 'A transcrição está temporariamente indisponível. Recarregue em instantes.',
+    en: 'The transcript is temporarily unavailable. Reload shortly.',
+  },
   noAudio: { pt: 'Sem áudio disponível.', en: 'No audio available.' },
   recordingInProgress: { pt: 'Gravação em andamento.', en: 'Recording in progress.' },
   audioExpired: { pt: 'O áudio desta gravação expirou.', en: 'This recording audio has expired.' },
@@ -197,6 +226,74 @@ interface MembershipGuild {
 }
 
 export type CurrentGuildMembership = 'member' | 'not-member' | 'unavailable';
+type FreshMembershipRunner = typeof withFreshMembershipBudget;
+const membershipScanCursors = new Map<string, number>();
+
+function rememberMembershipScanCursor(userId: string, cursor: number): void {
+  membershipScanCursors.delete(userId);
+  membershipScanCursors.set(userId, cursor);
+  while (membershipScanCursors.size > 5_000) {
+    const oldest = membershipScanCursors.keys().next().value as string | undefined;
+    if (!oldest) break;
+    membershipScanCursors.delete(oldest);
+  }
+}
+
+export interface WebLibraryPage {
+  items: Array<{ meta: RecordingMeta; canDelete: boolean }>;
+  nextCursor?: number;
+  candidatesScanned: number;
+  guildsChecked: number;
+}
+
+/**
+ * Página por cursor ANTES da ACL, com continuação explícita. Isso impede que
+ * gravações novas e inacessíveis escondam para sempre uma antiga autorizada e
+ * mantém cada request abaixo dos orçamentos de membership do Discord.
+ */
+export async function collectWebLibraryPage(
+  user: WebUser,
+  metas: RecordingMeta[],
+  cursor = 0,
+  runCheck: typeof checkAccess = checkAccess,
+): Promise<WebLibraryPage> {
+  const items: WebLibraryPage['items'] = [];
+  const requestContext = createAccessRequestContext();
+  const checkedGuilds = new Set<string>();
+  let candidatesScanned = 0;
+  let index = Number.isSafeInteger(cursor) && cursor >= 0 ? Math.min(cursor, metas.length) : 0;
+
+  while (
+    index < metas.length &&
+    candidatesScanned < MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE &&
+    items.length < MAX_WEB_LIBRARY_ITEMS_PER_PAGE
+  ) {
+    const meta = metas[index];
+    if (meta.demo) {
+      index++;
+      continue;
+    }
+    if (!checkedGuilds.has(meta.guildId)) {
+      if (checkedGuilds.size >= MAX_WEB_LIBRARY_GUILDS_PER_PAGE) break;
+      checkedGuilds.add(meta.guildId);
+    }
+    index++;
+    candidatesScanned++;
+    try {
+      const access = await runCheck(user, meta, { requestContext });
+      if (access.view) items.push({ meta, canDelete: access.delete });
+    } catch {
+      // A página privada continua fail-closed em falha transitória do Discord.
+    }
+  }
+
+  return {
+    items,
+    nextCursor: index < metas.length ? index : undefined,
+    candidatesScanned,
+    guildsChecked: checkedGuilds.size,
+  };
+}
 
 type DomainConfig = typeof config & {
   appUrl?: string;
@@ -456,17 +553,32 @@ export function webHostRoutingDecision(req: Request, origins = configuredWebOrig
 export async function currentGuildMembership(
   userId: string,
   guilds: Iterable<MembershipGuild> = client.guilds.cache.values(),
+  runCheck: FreshMembershipRunner = withFreshMembershipBudget,
 ): Promise<CurrentGuildMembership> {
+  const candidates = [...guilds];
+  if (candidates.length === 0) return 'not-member';
+  const start = (membershipScanCursors.get(userId) ?? 0) % candidates.length;
   let unavailable = false;
-  for (const guild of guilds) {
+  for (let offset = 0; offset < candidates.length; offset++) {
+    const index = (start + offset) % candidates.length;
+    const guild = candidates[index];
     try {
-      await guild.members.fetch({ user: userId, force: true, cache: false });
+      await runCheck(userId, () => guild.members.fetch({ user: userId, force: true, cache: false }));
+      membershipScanCursors.delete(userId);
       return 'member';
     } catch (err) {
+      // O orçamento acabou antes deste fetch. Retoma exatamente daqui na
+      // próxima janela em vez de condenar guilds depois da 60ª à fome eterna.
+      if (err instanceof TransientAccessError) {
+        rememberMembershipScanCursor(userId, index);
+        return 'unavailable';
+      }
+      rememberMembershipScanCursor(userId, (index + 1) % candidates.length);
       const code = err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
       if (code !== 10007 && code !== 10013) unavailable = true;
     }
   }
+  membershipScanCursors.delete(userId);
   return unavailable ? 'unavailable' : 'not-member';
 }
 
@@ -758,6 +870,14 @@ export function startWebServer(): void {
             return;
           }
           if (notReady(res, l, user)) return;
+          if (mcpConnectionCreationRateLimited(user.id)) {
+            res
+              .status(429)
+              .set('Retry-After', '30')
+              .type('html')
+              .send(messagePage(MSG.errorTitle[l], MSG.tooManyRequests[l], user, l));
+            return;
+          }
           const membership = await currentGuildMembership(user.id);
           if (membership === 'unavailable') {
             res
@@ -887,7 +1007,7 @@ export function startWebServer(): void {
     locale: Locale,
   ): {
     meta: RecordingMeta;
-    transcript: ReturnType<typeof readTranscript>;
+    transcript: TranscriptSegment[];
     minutes: ReturnType<typeof readMinutes>;
   } | null => {
     try {
@@ -1018,33 +1138,49 @@ export function startWebServer(): void {
     const q = String(req.query.q ?? '')
       .trim()
       .slice(0, 100);
+    const cursorValue = Number(req.query.cursor ?? 0);
+    const cursor = Number.isSafeInteger(cursorValue) && cursorValue >= 0 ? cursorValue : 0;
     const user = getWebUser(req);
     if (!user) {
-      // next reconstruído de partes VALIDADAS (nunca originalUrl cru) — preserva a busca
-      beginLogin(res, q ? `/app?q=${encodeURIComponent(q)}` : '/app');
+      // next reconstruído de partes VALIDADAS (nunca originalUrl cru).
+      const next = new URLSearchParams();
+      if (q) next.set('q', q);
+      if (cursor) next.set('cursor', String(cursor));
+      beginLogin(res, next.size ? `/app?${next.toString()}` : '/app');
       return;
     }
     if (notReady(res, l, user)) return;
+    if (q && webHeavyReadRateLimited(user.id)) {
+      res
+        .status(429)
+        .set('Retry-After', '30')
+        .type('html')
+        .send(messagePage(MSG.errorTitle[l], MSG.tooManyRequests[l], user, l));
+      return;
+    }
     // mesma regra da página individual (checkAccess) aplicada meta a meta. A
-    // confirmação REST é deduplicada só durante este request, nunca entre requests.
-    const all = listMetas()
-      .filter((m) => !m.demo)
-      .sort((a, b) => b.startedAt - a.startedAt)
-      .slice(0, 300);
+    // confirmação REST é deduplicada só durante este request. O cursor avança
+    // pelas candidatas, não só pelas autorizadas, para nenhuma faixa do arquivo
+    // ficar permanentemente escondida atrás de ruído recente.
+    const candidatePage = listMetaIdsPage(cursor, MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE);
+    const candidatePositions: number[] = [];
+    const candidates = candidatePage.ids.flatMap((id, index) => {
+      const meta = readMeta(id);
+      if (!meta) return [];
+      candidatePositions.push(cursor + index);
+      return [meta];
+    });
+    const library = await collectWebLibraryPage(user, candidates);
+    const nextCursor =
+      library.nextCursor !== undefined ? candidatePositions[library.nextCursor] : candidatePage.nextCursor;
     // tamanho em disco é infra, não conteúdo: só o dono da VPS (OWNER_IDS) vê —
     // "quanto custa cada gravação" não é da conta de quem só participou da call
     const owner = config.ownerIds.includes(user.id);
-    const items: RecordingIndexItem[] = [];
-    const accessRequest = createAccessRequestContext();
-    for (const m of all) {
-      try {
-        const access = await checkAccess(user, m, { requestContext: accessRequest });
-        if (access.view)
-          items.push({ meta: m, canDelete: access.delete, audioBytes: owner ? audioBytesOf(m.id) : undefined });
-      } catch {
-        // transitório: melhor omitir do índice do que travar a página
-      }
-    }
+    const items: RecordingIndexItem[] = library.items.map(({ meta, canDelete }) => ({
+      meta,
+      canDelete,
+      audioBytes: owner ? audioBytesOf(meta.id) : undefined,
+    }));
     // A busca usa sempre as 100 mais recentes, independentemente da ordenação
     // escolhida para a biblioteca. Ordenar por antigas/tamanho não pode mudar
     // silenciosamente o universo pesquisado.
@@ -1068,6 +1204,8 @@ export function startWebServer(): void {
         freeDiskMB: owner ? freeMB() : undefined,
         sort,
         flash,
+        nextCursor,
+        hasPreviousPage: cursor > 0,
       }),
     );
   });
@@ -1092,11 +1230,30 @@ export function startWebServer(): void {
       return;
     }
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
-    // transcript é lido sempre que existir (mesmo em rodada de retry/parcial):
-    // conteúdo já entregue nunca some da página
-    const transcript = readTranscript(meta.id);
+    let transcript: TranscriptSegment[] | undefined;
+    let transcriptNotice: string | undefined;
+    if (transcriptReady(meta)) {
+      if (webHeavyReadRateLimited(user.id)) {
+        res
+          .status(429)
+          .set('Retry-After', '30')
+          .type('html')
+          .send(messagePage(MSG.errorTitle[l], MSG.tooManyRequests[l], user, l));
+        return;
+      }
+      const bounded = readTranscriptBounded(meta.id, WEB_DIRECT_TRANSCRIPT_MAX_BYTES);
+      if (bounded.status === 'ok' && bounded.segments.length <= WEB_DIRECT_TRANSCRIPT_MAX_SEGMENTS) {
+        transcript = bounded.segments;
+      } else {
+        transcriptNotice = bounded.status === 'unavailable' ? MSG.transcriptUnavailable[l] : MSG.transcriptTooLarge[l];
+      }
+    }
     const minutes = meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
-    res.type('html').send(recordingPage(meta, { live, canDelete: access.delete, user, lang: l, transcript, minutes }));
+    res
+      .type('html')
+      .send(
+        recordingPage(meta, { live, canDelete: access.delete, user, lang: l, transcript, transcriptNotice, minutes }),
+      );
   });
 
   app.get('/app/rec/:id/audio', async (req, res) => {
@@ -1213,7 +1370,23 @@ export function startWebServer(): void {
         .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
-    const markdown = transcriptToMarkdown(meta, readTranscript(meta.id) ?? []);
+    if (webHeavyReadRateLimited(user.id)) {
+      res.status(429).set('Retry-After', '30').send(MSG.tooManyRequests[l]);
+      return;
+    }
+    const transcript = readTranscriptBounded(meta.id, WEB_DIRECT_TRANSCRIPT_MAX_BYTES);
+    if (
+      transcript.status === 'too_large' ||
+      (transcript.status === 'ok' && transcript.segments.length > WEB_DIRECT_TRANSCRIPT_MAX_SEGMENTS)
+    ) {
+      res.status(413).send(MSG.transcriptTooLarge[l]);
+      return;
+    }
+    if (transcript.status === 'unavailable') {
+      res.status(503).set('Retry-After', '30').send(MSG.transcriptUnavailable[l]);
+      return;
+    }
+    const markdown = transcriptToMarkdown(meta, transcript.segments);
     const ext = req.params.ext;
     res
       .type(ext === 'md' ? 'text/markdown; charset=utf-8' : 'text/plain; charset=utf-8')

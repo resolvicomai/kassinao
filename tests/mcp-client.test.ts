@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readApiJson } from '../mcp/src/apiResponse';
 import { loadCredentialStore } from '../mcp/src/credentialStore';
+import { strictFetch } from '../mcp/src/http';
 import {
   mayFallbackToEnvToken,
   normalizeKassinaoUrl,
@@ -21,6 +22,7 @@ const execFileAsync = promisify(execFile);
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -94,6 +96,23 @@ describe('URL do conector MCP', () => {
     expect(() => normalizeKassinaoUrl('http://kassinao.example.com')).toThrow(/HTTPS/);
     expect(() => normalizeKassinaoUrl('https://user:pass@example.com')).toThrow(/credentials/);
     expect(() => normalizeKassinaoUrl('https://example.com/sub')).toThrow(/path/);
+  });
+
+  it('recusa redirects em toda chamada HTTP autenticada', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await strictFetch('https://safe.example/api', {
+      method: 'POST',
+      redirect: 'follow',
+      headers: { authorization: 'Bearer secret' },
+      body: '{"refresh_token":"secret"}',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://safe.example/api',
+      expect.objectContaining({ method: 'POST', redirect: 'error' }),
+    );
   });
 });
 

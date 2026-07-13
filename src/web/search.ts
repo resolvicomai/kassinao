@@ -1,4 +1,5 @@
-import { RecordingMeta, readMinutes, readTranscript, transcriptReady } from '../store';
+import { RecordingMeta, readMinutes, readTranscriptForSearch, transcriptReady } from '../store';
+import { MAX_NOTES_PER_RECORDING } from '../securityLimits';
 
 /**
  * Busca simples (sem índice) nas gravações ACESSÍVEIS ao usuário — a lista de
@@ -16,6 +17,20 @@ export interface WebSearchHit {
   snippet: string;
   kind: 'transcript' | 'minutes' | 'note';
 }
+
+export interface WebSearchLimits {
+  maxTranscriptBytesPerMeeting: number;
+  maxTranscriptBytesPerRequest: number;
+  maxSegmentsPerMeeting: number;
+  maxSegmentsPerRequest: number;
+}
+
+export const DEFAULT_WEB_SEARCH_LIMITS: WebSearchLimits = {
+  maxTranscriptBytesPerMeeting: 1024 * 1024,
+  maxTranscriptBytesPerRequest: 5 * 1024 * 1024,
+  maxSegmentsPerMeeting: 5_000,
+  maxSegmentsPerRequest: 10_000,
+};
 
 function norm(s: string): string {
   return s
@@ -42,10 +57,18 @@ function snippetAround(text: string, term: string, width = 140): string {
   return `${start > 0 ? '…' : ''}${cut}${start + width < text.length ? '…' : ''}`;
 }
 
-export function searchRecordings(metas: RecordingMeta[], query: string, limit = 40): WebSearchHit[] {
+export function searchRecordings(
+  metas: RecordingMeta[],
+  query: string,
+  limit = 40,
+  overrides: Partial<WebSearchLimits> = {},
+): WebSearchHit[] {
   const terms = termsOf(query);
   if (terms.length === 0) return [];
   const hits: WebSearchHit[] = [];
+  const limits = { ...DEFAULT_WEB_SEARCH_LIMITS, ...overrides };
+  let transcriptBytesScanned = 0;
+  let transcriptSegmentsScanned = 0;
 
   for (const meta of metas) {
     if (hits.length >= limit) break;
@@ -70,7 +93,8 @@ export function searchRecordings(metas: RecordingMeta[], query: string, limit = 
       }
     }
 
-    for (const note of meta.notes) {
+    if (hits.length >= limit) break;
+    for (const note of meta.notes.slice(0, MAX_NOTES_PER_RECORDING)) {
       const nf = norm(note.text);
       const hit = terms.find((t) => nf.includes(t));
       if (hit) {
@@ -87,8 +111,20 @@ export function searchRecordings(metas: RecordingMeta[], query: string, limit = 
       }
     }
 
-    if (!transcriptReady(meta)) continue;
-    const segments = readTranscript(meta.id) ?? [];
+    if (
+      hits.length >= limit ||
+      !transcriptReady(meta) ||
+      transcriptBytesScanned >= limits.maxTranscriptBytesPerRequest ||
+      transcriptSegmentsScanned >= limits.maxSegmentsPerRequest
+    )
+      continue;
+    const remainingBytes = limits.maxTranscriptBytesPerRequest - transcriptBytesScanned;
+    const transcript = readTranscriptForSearch(meta.id, Math.min(limits.maxTranscriptBytesPerMeeting, remainingBytes));
+    if (!transcript) continue;
+    const remainingSegments = limits.maxSegmentsPerRequest - transcriptSegmentsScanned;
+    const segments = transcript.segments.slice(0, Math.min(limits.maxSegmentsPerMeeting, remainingSegments));
+    transcriptBytesScanned += transcript.bytes;
+    transcriptSegmentsScanned += segments.length;
     let perMeta = 0;
     for (const s of segments) {
       if (perMeta >= 4 || hits.length >= limit) break; // no máx. 4 trechos por gravação

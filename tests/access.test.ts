@@ -1,7 +1,13 @@
 import { Collection, PermissionFlagsBits, type Guild, type GuildMember } from 'discord.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { client } from '../src/discord/client';
-import { checkAccess, createAccessRequestContext, recordingIdentityGrant } from '../src/web/access';
+import {
+  checkAccess,
+  createAccessRequestContext,
+  FreshMembershipBudget,
+  recordingIdentityGrant,
+  TransientAccessError,
+} from '../src/web/access';
 import type { RecordingMeta } from '../src/store';
 
 const GUILD_ID = 'guild-access-test';
@@ -125,5 +131,51 @@ describe('ACL histórica das gravações', () => {
     await checkAccess(user, meta({ id: 'recording-b' }), { requestContext });
 
     expect(fetchMember).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('orçamento de membership autoritativo', () => {
+  const limits = {
+    perUserPerMinute: 2,
+    globalPerMinute: 3,
+    maxConcurrent: 1,
+    maxTrackedUsers: 10,
+  };
+
+  it('agrega todas as consultas do mesmo userId sem cachear o resultado', async () => {
+    const budget = new FreshMembershipBudget(limits, () => 1_000);
+    const task = vi.fn(async () => 'fresh');
+
+    await expect(budget.run('user-a', task)).resolves.toBe('fresh');
+    await expect(budget.run('user-a', task)).resolves.toBe('fresh');
+    await expect(budget.run('user-a', task)).rejects.toBeInstanceOf(TransientAccessError);
+    expect(task).toHaveBeenCalledTimes(2);
+  });
+
+  it('aplica teto global mesmo quando os userIds são diferentes', async () => {
+    const budget = new FreshMembershipBudget({ ...limits, perUserPerMinute: 10 }, () => 1_000);
+
+    await budget.run('user-a', async () => undefined);
+    await budget.run('user-b', async () => undefined);
+    await budget.run('user-c', async () => undefined);
+    await expect(budget.run('user-d', async () => undefined)).rejects.toBeInstanceOf(TransientAccessError);
+  });
+
+  it('recusa saturação concorrente e libera a vaga no finally', async () => {
+    const budget = new FreshMembershipBudget({ ...limits, perUserPerMinute: 10, globalPerMinute: 10 }, () => 1_000);
+    let release!: () => void;
+    const first = budget.run(
+      'user-a',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    await vi.waitFor(() => expect(budget.activeChecks).toBe(1));
+
+    await expect(budget.run('user-b', async () => undefined)).rejects.toBeInstanceOf(TransientAccessError);
+    release();
+    await first;
+    await expect(budget.run('user-b', async () => 'ok')).resolves.toBe('ok');
   });
 });

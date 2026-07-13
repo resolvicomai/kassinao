@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type {
   DiscordSurfaceAuditEntry,
   DiscordSurfaceAuditOutcome,
@@ -121,6 +122,25 @@ function messageReferencesAnyRecording(message: DiscordSurfaceMessage): boolean 
   return /https?:\/\/[^\s<>"']+\/(?:app\/)?rec\/\d{4}-\d{2}-\d{2}-[a-f0-9]{10}(?=$|[/?#\s<>"'\])}])/i.test(serialized);
 }
 
+function messageSurfaceFingerprint(message: DiscordSurfaceMessage): string {
+  const surface = JSON.stringify({
+    id: message.id,
+    channelId: message.channelId,
+    guildId: message.guildId,
+    authorId: message.authorId,
+    content: message.content,
+    embeds: message.embeds ?? [],
+    components: message.components ?? [],
+  });
+  return crypto.createHash('sha256').update(surface).digest('hex');
+}
+
+function isAlreadySafe(message: DiscordSurfaceMessage, safeContent: string): boolean {
+  return (
+    message.content === safeContent && (message.embeds?.length ?? 0) === 0 && (message.components?.length ?? 0) === 0
+  );
+}
+
 function appendAudit(
   meta: RecordingMeta,
   channelId: string,
@@ -128,12 +148,14 @@ function appendAudit(
   source: DiscordSurfaceAuditSource,
   outcome: DiscordSurfaceAuditOutcome,
   now: number,
+  plannedFingerprint?: string,
 ): DiscordSurfaceAuditEntry {
   const entry: DiscordSurfaceAuditEntry = {
     channelId,
     messageId,
     source,
     outcome,
+    plannedFingerprint,
     createdAt: now,
     updatedAt: now,
   };
@@ -186,6 +208,18 @@ async function settleMessage(
     await persistAuditOutcome(meta, entry, invalid, now(), persist);
     return;
   }
+  const stillReferencesRecording = messageReferencesRecording(fetched.message, meta.id);
+  const unchangedSincePlan =
+    Boolean(entry.plannedFingerprint) && entry.plannedFingerprint === messageSurfaceFingerprint(fetched.message);
+  const mayEdit =
+    entry.source === 'discovered-url' ? stillReferencesRecording : unchangedSincePlan || stillReferencesRecording;
+  // Descoberta por URL perde autoridade quando o link some. Para um painel com
+  // ID persistido, o fingerprint ainda permite limpar conteúdo sensível sem URL,
+  // mas uma edição concorrente desconhecida nunca é sobrescrita.
+  if (isAlreadySafe(fetched.message, safeContent) || !mayEdit) {
+    await persistAuditOutcome(meta, entry, 'sanitized', now(), persist);
+    return;
+  }
   await client.editMessage(entry.channelId, entry.messageId, {
     content: safeContent,
     embeds: [],
@@ -209,16 +243,55 @@ async function auditAndSettleMessage(
     await persistAuditOutcome(meta, entry, invalid, now(), persist);
     return;
   }
-  const entry = appendAudit(meta, message.channelId, message.id, source, 'planned', now());
+  const entry = appendAudit(
+    meta,
+    message.channelId,
+    message.id,
+    source,
+    'planned',
+    now(),
+    messageSurfaceFingerprint(message),
+  );
   // O plano durável vem antes da edição externa. Se o processo morrer no meio,
   // a próxima rodada reencontra `planned` e conclui a mesma edição idempotente.
   await persist(meta);
-  await client.editMessage(message.channelId, message.id, {
-    content: safeContent,
-    embeds: [],
-    components: [],
-  });
-  await persistAuditOutcome(meta, entry, 'sanitized', now(), persist);
+  await settleMessage(meta, entry, safeContent, client, persist, now);
+}
+
+async function settleGuildMessage(
+  state: DiscordGuildSurfaceMigrationState,
+  entry: DiscordSurfaceAuditEntry,
+  safeContent: string,
+  client: DiscordSurfaceInventoryClient,
+  persist: (state: DiscordGuildSurfaceMigrationState) => void | Promise<void>,
+  now: () => number,
+): Promise<void> {
+  const fetched = await client.fetchMessage(entry.channelId, entry.messageId);
+  if (fetched.kind === 'missing') {
+    entry.outcome = 'missing';
+  } else if (
+    fetched.message.id !== entry.messageId ||
+    fetched.message.channelId !== entry.channelId ||
+    fetched.message.guildId !== state.guildId
+  ) {
+    entry.outcome = 'wrong-guild';
+  } else if (fetched.message.authorId !== client.botUserId) {
+    entry.outcome = 'not-owned';
+  } else {
+    // A edição pode ter concluído ou a mensagem pode ter mudado depois do
+    // checkpoint. Só sobrescreve enquanto uma URL estrita de gravação existir.
+    if (!isAlreadySafe(fetched.message, safeContent) && messageReferencesAnyRecording(fetched.message)) {
+      await client.editMessage(entry.channelId, entry.messageId, {
+        content: safeContent,
+        embeds: [],
+        components: [],
+      });
+    }
+    entry.outcome = 'sanitized';
+  }
+  entry.updatedAt = now();
+  state.updatedAt = now();
+  await persist(state);
 }
 
 function directPanelComplete(meta: RecordingMeta): boolean {
@@ -372,32 +445,7 @@ export async function migrateGuildDiscordSurfacesStep(
   if (state.policyVersion === DISCORD_SURFACE_POLICY_VERSION) return { state, complete: true };
 
   for (const planned of state.audits.filter((entry) => entry.outcome === 'planned')) {
-    const fetched = await options.client.fetchMessage(planned.channelId, planned.messageId);
-    if (fetched.kind === 'missing') {
-      planned.outcome = 'missing';
-    } else if (
-      fetched.message.id !== planned.messageId ||
-      fetched.message.channelId !== planned.channelId ||
-      fetched.message.guildId !== options.guildId
-    ) {
-      planned.outcome = 'wrong-guild';
-    } else if (fetched.message.authorId !== options.client.botUserId) {
-      planned.outcome = 'not-owned';
-    } else {
-      // A edição pode ter concluído antes do crash. Se o link já sumiu,
-      // considera resolvido sem sobrescrever uma mensagem posteriormente alterada.
-      if (messageReferencesAnyRecording(fetched.message)) {
-        await options.client.editMessage(planned.channelId, planned.messageId, {
-          content: options.safeContent,
-          embeds: [],
-          components: [],
-        });
-      }
-      planned.outcome = 'sanitized';
-    }
-    planned.updatedAt = now();
-    state.updatedAt = now();
-    await options.persist(state);
+    await settleGuildMessage(state, planned, options.safeContent, options.client, options.persist, now);
   }
 
   if (!state.channelsInventoriedAt) {
@@ -470,14 +518,7 @@ export async function migrateGuildDiscordSurfacesStep(
         state.audits.push(entry);
         state.updatedAt = now();
         await options.persist(state);
-        await options.client.editMessage(message.channelId, message.id, {
-          content: options.safeContent,
-          embeds: [],
-          components: [],
-        });
-        entry.outcome = 'sanitized';
-        entry.updatedAt = now();
-        await options.persist(state);
+        await settleGuildMessage(state, entry, options.safeContent, options.client, options.persist, now);
       }
       discovery.messagesScanned += messages.length;
       const oldest = messages.at(-1);

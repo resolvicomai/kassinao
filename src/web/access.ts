@@ -33,6 +33,86 @@ interface AccessResult extends Access {
 /** Erro transitório: o chamador (API MCP) deve responder 503 Retry-After, nunca 403. */
 export class TransientAccessError extends Error {}
 
+interface MembershipBudgetLimits {
+  perUserPerMinute: number;
+  globalPerMinute: number;
+  maxConcurrent: number;
+  maxTrackedUsers: number;
+}
+
+interface MembershipWindow {
+  count: number;
+  resetAt: number;
+}
+
+/**
+ * Limita chamadas REST autoritativas sem reutilizar o resultado de autorização.
+ * O orçamento por userId agrega todas as sessões/web requests; o teto global e
+ * a concorrência impedem que várias contas saturem o Discord ao mesmo tempo.
+ */
+export class FreshMembershipBudget {
+  private readonly userWindows = new Map<string, MembershipWindow>();
+  private globalWindow: MembershipWindow = { count: 0, resetAt: 0 };
+  private active = 0;
+
+  constructor(
+    private readonly limits: MembershipBudgetLimits = {
+      perUserPerMinute: 60,
+      globalPerMinute: 600,
+      maxConcurrent: 8,
+      maxTrackedUsers: 5_000,
+    },
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  get activeChecks(): number {
+    return this.active;
+  }
+
+  async run<T>(userId: string, task: () => Promise<T>): Promise<T> {
+    const now = this.now();
+    if (!userId || this.active >= this.limits.maxConcurrent) {
+      throw new TransientAccessError('orçamento de membership saturado');
+    }
+
+    const current = this.userWindows.get(userId);
+    const userWindow = !current || current.resetAt <= now ? { count: 0, resetAt: now + 60_000 } : current;
+    if (userWindow.count >= this.limits.perUserPerMinute) {
+      throw new TransientAccessError('orçamento de membership do usuário esgotado');
+    }
+    userWindow.count++;
+    if (current !== userWindow) {
+      this.userWindows.delete(userId);
+      this.userWindows.set(userId, userWindow);
+    }
+
+    if (this.globalWindow.resetAt <= now) this.globalWindow = { count: 0, resetAt: now + 60_000 };
+    if (this.globalWindow.count >= this.limits.globalPerMinute) {
+      throw new TransientAccessError('orçamento global de membership esgotado');
+    }
+    this.globalWindow.count++;
+
+    while (this.userWindows.size > this.limits.maxTrackedUsers) {
+      const oldest = this.userWindows.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.userWindows.delete(oldest);
+    }
+
+    this.active++;
+    try {
+      return await task();
+    } finally {
+      this.active--;
+    }
+  }
+}
+
+const freshMembershipBudget = new FreshMembershipBudget();
+
+export function withFreshMembershipBudget<T>(userId: string, task: () => Promise<T>): Promise<T> {
+  return freshMembershipBudget.run(userId, task);
+}
+
 // "Definitivamente não é membro daqui" (nega camadas de servidor, sem 503):
 //  10007 Unknown Member (saiu do servidor) • 10013 Unknown User (id inexistente).
 // Só erro TRANSITÓRIO (429/5xx/timeout/rede) vira 503 retriável.
@@ -60,7 +140,9 @@ async function fetchMemberFresh(guildId: string, userId: string): Promise<GuildM
   try {
     // `cache:false` também impede que esta consulta autoritativa repovoe um
     // GuildMember obsoleto no cache interno do discord.js.
-    return await guild.members.fetch({ user: userId, force: true, cache: false });
+    return await withFreshMembershipBudget(userId, () =>
+      guild.members.fetch({ user: userId, force: true, cache: false }),
+    );
   } catch (err) {
     if (isUnknownMember(err)) return null;
     throw new TransientAccessError('members.fetch falhou (transitório)');

@@ -99,6 +99,8 @@ export interface DiscordSurfaceAuditEntry {
   messageId: string;
   source: DiscordSurfaceAuditSource;
   outcome: DiscordSurfaceAuditOutcome;
+  /** Hash do conteúdo/componentes no checkpoint; evita sobrescrever edição concorrente. */
+  plannedFingerprint?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -220,7 +222,8 @@ function metaPath(id: string): string {
 
 const VALID_ID = /^[a-zA-Z0-9-]+$/;
 let metaCache: Map<string, RecordingMeta> | undefined;
-let guildMetaIds: Map<string, Set<string>> | undefined;
+/** IDs por guild, já ordenados por startedAt desc. */
+let guildMetaTimelineIds: Map<string, string[]> | undefined;
 /** IDs ordenados por startedAt desc; permite janelas limitadas sem varrer o arquivo inteiro. */
 let metaTimelineIds: string[] | undefined;
 
@@ -228,38 +231,61 @@ function cloneMeta(meta: RecordingMeta): RecordingMeta {
   return structuredClone(meta);
 }
 
-function cacheMeta(meta: RecordingMeta): void {
-  if (!metaCache || !guildMetaIds || !metaTimelineIds) return;
-  const previous = metaCache.get(meta.id);
-  if (previous && previous.guildId !== meta.guildId) guildMetaIds.get(previous.guildId)?.delete(meta.id);
-  metaCache.set(meta.id, cloneMeta(meta));
-  const ids = guildMetaIds.get(meta.guildId) ?? new Set<string>();
-  ids.add(meta.id);
-  guildMetaIds.set(meta.guildId, ids);
-  if (!previous) {
-    metaTimelineIds.push(meta.id);
-    sortMetaTimeline();
-  } else if (previous.startedAt !== meta.startedAt) {
-    const index = metaTimelineIds.indexOf(meta.id);
-    if (index >= 0) metaTimelineIds.splice(index, 1);
-    metaTimelineIds.push(meta.id);
-    sortMetaTimeline();
+function compareMetaIds(leftId: string, rightId: string): number {
+  const left = metaCache?.get(leftId);
+  const right = metaCache?.get(rightId);
+  const byTime = (right?.startedAt ?? 0) - (left?.startedAt ?? 0);
+  return byTime || leftId.localeCompare(rightId);
+}
+
+function removeTimelineId(timeline: string[] | undefined, id: string): void {
+  const index = timeline?.indexOf(id) ?? -1;
+  if (index >= 0) timeline?.splice(index, 1);
+}
+
+/** Insere sem reordenar o índice inteiro a cada saveMeta. */
+function insertTimelineId(timeline: string[], id: string): void {
+  let low = 0;
+  let high = timeline.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (compareMetaIds(id, timeline[middle]) < 0) high = middle;
+    else low = middle + 1;
   }
+  timeline.splice(low, 0, id);
+}
+
+function cacheMeta(meta: RecordingMeta): void {
+  if (!metaCache || !guildMetaTimelineIds || !metaTimelineIds) return;
+  const previous = metaCache.get(meta.id);
+  const guildPositionChanged = !previous || previous.guildId !== meta.guildId || previous.startedAt !== meta.startedAt;
+  const globalPositionChanged = !previous || previous.startedAt !== meta.startedAt;
+
+  if (guildPositionChanged && previous) {
+    const previousTimeline = guildMetaTimelineIds.get(previous.guildId);
+    removeTimelineId(previousTimeline, meta.id);
+    if (previousTimeline?.length === 0) guildMetaTimelineIds.delete(previous.guildId);
+  }
+  if (globalPositionChanged && previous) removeTimelineId(metaTimelineIds, meta.id);
+
+  metaCache.set(meta.id, cloneMeta(meta));
+
+  if (guildPositionChanged) {
+    const guildTimeline = guildMetaTimelineIds.get(meta.guildId) ?? [];
+    insertTimelineId(guildTimeline, meta.id);
+    guildMetaTimelineIds.set(meta.guildId, guildTimeline);
+  }
+  if (globalPositionChanged) insertTimelineId(metaTimelineIds, meta.id);
 }
 
 function sortMetaTimeline(): void {
-  metaTimelineIds?.sort((leftId, rightId) => {
-    const left = metaCache?.get(leftId);
-    const right = metaCache?.get(rightId);
-    const byTime = (right?.startedAt ?? 0) - (left?.startedAt ?? 0);
-    return byTime || leftId.localeCompare(rightId);
-  });
+  metaTimelineIds?.sort(compareMetaIds);
 }
 
 function ensureMetaCache(): void {
-  if (metaCache && guildMetaIds && metaTimelineIds) return;
+  if (metaCache && guildMetaTimelineIds && metaTimelineIds) return;
   const cache = new Map<string, RecordingMeta>();
-  const byGuild = new Map<string, Set<string>>();
+  const byGuild = new Map<string, string[]>();
   let entries: fs.Dirent[] = [];
   try {
     entries = fs.readdirSync(config.recordingsDir, { withFileTypes: true });
@@ -273,17 +299,18 @@ function ensureMetaCache(): void {
       if (meta.id !== entry.name || !VALID_ID.test(meta.id)) continue;
       meta.notes ??= [];
       cache.set(meta.id, meta);
-      const ids = byGuild.get(meta.guildId) ?? new Set<string>();
-      ids.add(meta.id);
+      const ids = byGuild.get(meta.guildId) ?? [];
+      ids.push(meta.id);
       byGuild.set(meta.guildId, ids);
     } catch {
       // Diretório incompleto/corrompido não entra no índice.
     }
   }
   metaCache = cache;
-  guildMetaIds = byGuild;
+  guildMetaTimelineIds = byGuild;
   metaTimelineIds = [...cache.keys()];
   sortMetaTimeline();
+  for (const timeline of guildMetaTimelineIds.values()) timeline.sort(compareMetaIds);
 }
 
 // Fail-closed: os writes recebem ids gerados pelo servidor, então um id fora do
@@ -370,22 +397,39 @@ export interface SearchTranscriptRead {
   bytes: number;
 }
 
-/** Leitura usada por busca/RAG: arquivo fora do teto fica para a ata estruturada. */
-export function readTranscriptForSearch(id: string, maxBytes: number): SearchTranscriptRead | undefined {
-  if (!VALID_ID.test(id) || !Number.isFinite(maxBytes) || maxBytes <= 0) return undefined;
+export type BoundedTranscriptRead =
+  | { status: 'ok'; segments: TranscriptSegment[]; bytes: number }
+  | { status: 'too_large'; bytes: number }
+  | { status: 'unavailable' };
+
+/**
+ * Confere o tamanho no descritor antes de alocar/parsear o JSON. Como os writes
+ * são atômicos, o descritor continua apontando para a mesma versão do arquivo.
+ */
+export function readTranscriptBounded(id: string, maxBytes: number): BoundedTranscriptRead {
+  if (!VALID_ID.test(id) || !Number.isFinite(maxBytes) || maxBytes <= 0) return { status: 'unavailable' };
   let descriptor: number | undefined;
   try {
     descriptor = fs.openSync(transcriptPath(id), 'r');
-    if (fs.fstatSync(descriptor).size > maxBytes) return undefined;
+    const size = fs.fstatSync(descriptor).size;
+    if (size > maxBytes) return { status: 'too_large', bytes: size };
     const raw = fs.readFileSync(descriptor, 'utf8');
     const bytes = Buffer.byteLength(raw, 'utf8');
-    if (bytes > maxBytes) return undefined;
-    return { segments: JSON.parse(raw) as TranscriptSegment[], bytes };
+    if (bytes > maxBytes) return { status: 'too_large', bytes };
+    const segments = JSON.parse(raw) as unknown;
+    if (!Array.isArray(segments)) return { status: 'unavailable' };
+    return { status: 'ok', segments: segments as TranscriptSegment[], bytes };
   } catch {
-    return undefined;
+    return { status: 'unavailable' };
   } finally {
     if (descriptor !== undefined) fs.closeSync(descriptor);
   }
+}
+
+/** Leitura usada por busca/RAG: arquivo fora do teto fica para a ata estruturada. */
+export function readTranscriptForSearch(id: string, maxBytes: number): SearchTranscriptRead | undefined {
+  const result = readTranscriptBounded(id, maxBytes);
+  return result.status === 'ok' ? { segments: result.segments, bytes: result.bytes } : undefined;
 }
 
 export function saveTranscript(id: string, segments: TranscriptSegment[]): void {
@@ -415,10 +459,13 @@ export function deleteRecording(id: string): void {
   if (!VALID_ID.test(id)) return;
   fs.rmSync(recordingDir(id), { recursive: true, force: true });
   const previous = metaCache?.get(id);
-  if (previous) guildMetaIds?.get(previous.guildId)?.delete(id);
+  if (previous) {
+    const guildTimeline = guildMetaTimelineIds?.get(previous.guildId);
+    removeTimelineId(guildTimeline, id);
+    if (guildTimeline?.length === 0) guildMetaTimelineIds?.delete(previous.guildId);
+  }
   metaCache?.delete(id);
-  const timelineIndex = metaTimelineIds?.indexOf(id) ?? -1;
-  if (timelineIndex >= 0) metaTimelineIds?.splice(timelineIndex, 1);
+  removeTimelineId(metaTimelineIds, id);
 }
 
 export function listMetas(): RecordingMeta[] {
@@ -429,24 +476,48 @@ export function listMetas(): RecordingMeta[] {
   });
 }
 
+export interface ListMetaIdsPageResult {
+  ids: string[];
+  nextCursor?: number;
+}
+
+/**
+ * Cursor barato sobre a timeline: não clona metas privadas antes de o chamador
+ * aplicar seu teto/ACL. O cursor é um offset opaco para a versão atual da lista.
+ */
+export function listMetaIdsPage(cursor = 0, limit = 100): ListMetaIdsPageResult {
+  ensureMetaCache();
+  const timeline = metaTimelineIds ?? [];
+  const start = Number.isSafeInteger(cursor) && cursor >= 0 ? Math.min(cursor, timeline.length) : 0;
+  const safeLimit = Number.isSafeInteger(limit) ? Math.min(Math.max(1, limit), 1_000) : 100;
+  const end = Math.min(start + safeLimit, timeline.length);
+  return {
+    ids: timeline.slice(start, end),
+    nextCursor: end < timeline.length ? end : undefined,
+  };
+}
+
 export interface ListMetasRangeResult {
   metas: RecordingMeta[];
   /** Existem metas adicionais na janela depois do teto solicitado. */
   truncated: boolean;
 }
 
-/**
- * Lê uma janela global já ordenada com busca binária e teto rígido. O chamador
- * pode então aplicar filtros/ACL sem transformar uma consulta desde epoch em
- * uma ordenação e clonagem O(arquivo inteiro).
- */
-export function listMetasInRange(fromMs: number, toMs: number, limit: number): ListMetasRangeResult {
-  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs) return { metas: [], truncated: false };
-  const safeLimit = Math.max(1, Math.floor(limit));
-  ensureMetaCache();
-  const timeline = metaTimelineIds ?? [];
+export interface ListMetaIdsRangeResult {
+  ids: string[];
+  /** Existem ids adicionais na janela depois do teto solicitado. */
+  truncated: boolean;
+}
 
-  // Primeira meta estritamente anterior ao limite superior da janela.
+function timelineIdsInRange(
+  timeline: readonly string[],
+  fromMs: number,
+  toMs: number,
+  limit: number,
+): ListMetaIdsRangeResult {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs) return { ids: [], truncated: false };
+  const safeLimit = Math.max(1, Math.floor(limit));
+
   let low = 0;
   let high = timeline.length;
   while (low < high) {
@@ -456,31 +527,66 @@ export function listMetasInRange(fromMs: number, toMs: number, limit: number): L
     else high = middle;
   }
 
-  const metas: RecordingMeta[] = [];
+  const ids: string[] = [];
   let truncated = false;
   for (let index = low; index < timeline.length; index++) {
     const meta = metaCache?.get(timeline[index]);
     if (!meta) continue;
     if (meta.startedAt < fromMs) break;
-    if (metas.length >= safeLimit) {
+    if (ids.length >= safeLimit) {
       truncated = true;
       break;
     }
-    metas.push(cloneMeta(meta));
+    ids.push(meta.id);
   }
-  return { metas, truncated };
+  return { ids, truncated };
+}
+
+/** Janela global limitada sem clonar os documentos de metadata. */
+export function listMetaIdsInRange(fromMs: number, toMs: number, limit: number): ListMetaIdsRangeResult {
+  ensureMetaCache();
+  return timelineIdsInRange(metaTimelineIds ?? [], fromMs, toMs, limit);
+}
+
+/**
+ * Lê uma janela global já ordenada com busca binária e teto rígido. O chamador
+ * pode então aplicar filtros/ACL sem transformar uma consulta desde epoch em
+ * uma ordenação e clonagem O(arquivo inteiro).
+ */
+export function listMetasInRange(fromMs: number, toMs: number, limit: number): ListMetasRangeResult {
+  const result = listMetaIdsInRange(fromMs, toMs, limit);
+  return {
+    metas: result.ids.flatMap((id) => {
+      const meta = metaCache?.get(id);
+      return meta ? [cloneMeta(meta)] : [];
+    }),
+    truncated: result.truncated,
+  };
 }
 
 export function listGuildMetas(guildId: string, limit = 5): RecordingMeta[] {
-  return listMetas()
-    .filter((m) => m.guildId === guildId)
-    .sort((a, b) => b.startedAt - a.startedAt)
-    .slice(0, limit);
+  ensureMetaCache();
+  const safeLimit = Math.max(1, Math.floor(limit));
+  return (guildMetaTimelineIds?.get(guildId) ?? []).slice(0, safeLimit).flatMap((id) => {
+    const meta = metaCache?.get(id);
+    return meta ? [cloneMeta(meta)] : [];
+  });
 }
 
 export interface ListGuildMetasRangeOptions {
   /** Quantas metas podem sair da consulta, já ordenadas da mais recente. */
   limit?: number;
+}
+
+/** Janela de uma guild limitada sem clonar os documentos de metadata. */
+export function listGuildMetaIdsInRange(
+  guildId: string,
+  fromMs: number,
+  toMs: number,
+  limit: number,
+): ListMetaIdsRangeResult {
+  ensureMetaCache();
+  return timelineIdsInRange(guildMetaTimelineIds?.get(guildId) ?? [], fromMs, toMs, limit);
 }
 
 /**
@@ -494,16 +600,12 @@ export function listGuildMetasInRange(
   toMs: number,
   options: ListGuildMetasRangeOptions = {},
 ): RecordingMeta[] {
-  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs) return [];
   const limit = options.limit === undefined ? Number.MAX_SAFE_INTEGER : Math.max(1, Math.floor(options.limit));
-  ensureMetaCache();
-  const ids = guildMetaIds?.get(guildId) ?? new Set<string>();
-  return [...ids]
-    .map((id) => metaCache?.get(id))
-    .filter((meta): meta is RecordingMeta => Boolean(meta && meta.startedAt >= fromMs && meta.startedAt < toMs))
-    .sort((a, b) => b.startedAt - a.startedAt)
-    .slice(0, limit)
-    .map(cloneMeta);
+  const result = listGuildMetaIdsInRange(guildId, fromMs, toMs, limit);
+  return result.ids.flatMap((id) => {
+    const meta = metaCache?.get(id);
+    return meta ? [cloneMeta(meta)] : [];
+  });
 }
 
 export function pageUrl(id: string): string {

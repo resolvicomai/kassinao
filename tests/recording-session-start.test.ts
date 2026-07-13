@@ -18,7 +18,12 @@ vi.mock('@discordjs/voice', async (importOriginal) => {
   };
 });
 
-import { RecordingSession, RecordingStartCancelledError } from '../src/recorder/RecordingSession';
+import {
+  MAX_NOTES_PER_RECORDING,
+  MAX_PRESENCE_IDENTITIES,
+  RecordingSession,
+  RecordingStartCancelledError,
+} from '../src/recorder/RecordingSession';
 import { DISCORD_SURFACE_POLICY_VERSION } from '../src/discordSurfaceMigration';
 import { listMetas, readMeta, tracksDir } from '../src/store';
 import { NOTIFICATION_POLICY_VERSION } from '../src/transcriptionNotification';
@@ -128,6 +133,34 @@ describe('RecordingSession.start — transação real de início', () => {
     expect(fs.existsSync(recordingDir(session))).toBe(false);
   });
 
+  it('recusa uma sala que já começa no teto de presença antes de captar áudio', async () => {
+    const f = fixture();
+    for (let index = 0; index < MAX_PRESENCE_IDENTITIES; index += 1) {
+      const id = `member-${index}`;
+      f.channel.members.set(id, {
+        id,
+        displayName: `Pessoa ${index}`,
+        user: { bot: false },
+      });
+    }
+    voice.joinVoiceChannel.mockReturnValue(f.connection);
+    voice.entersState.mockResolvedValue(f.connection);
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: null,
+      locale: 'pt',
+      auto: false,
+    });
+
+    await expect(session.start()).rejects.toThrow(`limite seguro de ${MAX_PRESENCE_IDENTITIES} pessoas`);
+    expect(f.connection.receiver.speaking.on).not.toHaveBeenCalled();
+    expect(f.connection.destroy).toHaveBeenCalledTimes(1);
+    expect(f.message.delete).toHaveBeenCalledTimes(1);
+    expect(readMeta(session.id)).toBeUndefined();
+    expect(fs.existsSync(recordingDir(session))).toBe(false);
+  });
+
   it('cancela durante painel pendente sem captar áudio e apaga resposta REST tardia', async () => {
     // Inicializa o índice em memória antes de saveMeta para reproduzir o caminho
     // real do bot após o boot. O abort precisa apagar disco e cache juntos.
@@ -189,6 +222,83 @@ describe('RecordingSession.start — transação real de início', () => {
     fs.rmSync(recordingDir(session), { recursive: true, force: true });
   });
 
+  it('persiste a identidade que completa o teto e encerra de forma idempotente', async () => {
+    const f = fixture();
+    voice.joinVoiceChannel.mockReturnValue(f.connection);
+    voice.entersState.mockResolvedValue(f.connection);
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: null,
+      locale: 'pt',
+      auto: false,
+    });
+    await session.start();
+    session.meta.presence = Array.from({ length: MAX_PRESENCE_IDENTITIES - 1 }, (_, index) => ({
+      id: `presence-${index}`,
+      name: `Pessoa ${index}`,
+      joinedAtMs: index,
+    }));
+    const autoStop = vi.fn();
+    session.onAutoStop = autoStop;
+
+    session.noteVoiceJoin('presence-limit', 'Pessoa Limite');
+
+    expect(session.isStopping).toBe(true);
+    expect(session.meta.presence).toHaveLength(MAX_PRESENCE_IDENTITIES);
+    expect(session.meta.presence?.at(-1)).toMatchObject({ id: 'presence-limit', name: 'Pessoa Limite' });
+    expect(readMeta(session.id)?.presence?.at(-1)).toMatchObject({ id: 'presence-limit' });
+    expect(autoStop).toHaveBeenCalledTimes(1);
+    expect(autoStop).toHaveBeenCalledWith(session, 'limite-presenca');
+
+    // Mesmo que outro evento chegue enquanto o fechamento está em andamento,
+    // nenhuma identidade é descartada com a captura ainda ativa nem o meta cresce.
+    session.noteVoiceJoin('presence-overflow', 'Pessoa Excedente');
+    expect(session.meta.presence).toHaveLength(MAX_PRESENCE_IDENTITIES);
+    expect(session.meta.presence?.some((entry) => entry.id === 'presence-overflow')).toBe(false);
+
+    const firstStop = session.stop('manual', { id: 'admin', name: 'Admin' });
+    const secondStop = session.stop('desconectado');
+    expect(firstStop).toBe(secondStop);
+    const meta = await firstStop;
+    expect(meta.events.some((event) => event.text.includes('Limite seguro'))).toBe(true);
+    expect(meta.events.some((event) => event.text.includes('Admin') && event.text.includes('parou'))).toBe(false);
+    expect(f.connection.destroy).toHaveBeenCalledTimes(1);
+    fs.rmSync(recordingDir(session), { recursive: true, force: true });
+  });
+
+  it('aplica o mesmo teto quando falar é a única prova de presença recebida', async () => {
+    const f = fixture();
+    voice.joinVoiceChannel.mockReturnValue(f.connection);
+    voice.entersState.mockResolvedValue(f.connection);
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: null,
+      locale: 'en',
+      auto: false,
+    });
+    await session.start();
+    session.meta.presence = Array.from({ length: MAX_PRESENCE_IDENTITIES - 1 }, (_, index) => ({
+      id: `speaker-presence-${index}`,
+      name: `Person ${index}`,
+      joinedAtMs: index,
+    }));
+    const speakingStart = f.connection.receiver.speaking.on.mock.calls[0]?.[1] as
+      ((userId: string) => void) | undefined;
+
+    expect(speakingStart).toBeTypeOf('function');
+    speakingStart?.('speaker-limit');
+
+    expect(session.isStopping).toBe(true);
+    expect(session.meta.presence).toHaveLength(MAX_PRESENCE_IDENTITIES);
+    expect(session.meta.presence?.at(-1)).toMatchObject({ id: 'speaker-limit' });
+    expect(f.connection.receiver.subscribe).not.toHaveBeenCalled();
+    const meta = await session.stop('manual');
+    expect(meta.events.some((event) => event.text.includes('Safe') && event.text.includes('limit reached'))).toBe(true);
+    fs.rmSync(recordingDir(session), { recursive: true, force: true });
+  });
+
   it('mantém o painel público genérico e envia detalhes somente por DM', async () => {
     const f = fixture();
     voice.joinVoiceChannel.mockReturnValue(f.connection);
@@ -223,6 +333,25 @@ describe('RecordingSession.start — transação real de início', () => {
     expect(f.guild.client.users.send).toHaveBeenCalled();
 
     fs.rmSync(recordingDir(session), { recursive: true, force: true });
+  });
+
+  it('limita a quantidade de notas persistidas por gravação', () => {
+    const f = fixture();
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: { id: 'starter', name: 'Starter' },
+      locale: 'pt',
+      auto: false,
+    });
+    session.meta.notes = Array.from({ length: MAX_NOTES_PER_RECORDING }, (_, index) => ({
+      atMs: index,
+      author: 'Pessoa',
+      text: `Nota ${index}`,
+    }));
+
+    expect(session.addNote('Pessoa', 'nota excedente')).toBe(false);
+    expect(session.meta.notes).toHaveLength(MAX_NOTES_PER_RECORDING);
   });
 
   it('não envia link por DM quando membership atual não pode ser confirmada', async () => {

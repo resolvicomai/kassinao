@@ -26,6 +26,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { readApiJson } from './apiResponse.js';
 import { loadCredentialStore } from './credentialStore.js';
+import { strictFetch } from './http.js';
 import {
   createTokenProfileId,
   mayFallbackToEnvToken,
@@ -149,7 +150,7 @@ interface TokenResponse {
 }
 
 async function tryRefresh(token: string): Promise<TokenResponse | undefined> {
-  const r = await fetch(`${URL_BASE}/api/mcp/refresh`, {
+  const r = await strictFetch(`${URL_BASE}/api/mcp/refresh`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ refresh_token: token }),
@@ -201,13 +202,13 @@ async function apiGet(pathname: string, params: Record<string, unknown>): Promis
     if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
   }
   let token = await getAccess();
-  let r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  let r = await strictFetch(url, { headers: { authorization: `Bearer ${token}` } });
   if (r.status === 401) {
     // Another tool may have refreshed while this request still used the previous
     // access token. Reuse the new token and refresh only if the current one failed.
     if (token === accessToken) await refreshOnce();
     token = accessToken;
-    r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    r = await strictFetch(url, { headers: { authorization: `Bearer ${token}` } });
   }
   if (r.status === 503) {
     throw new Error('Kassinão is starting or Discord is unavailable. Try again in a moment.');
@@ -334,7 +335,7 @@ async function runExchange(code: string): Promise<void> {
     console.error('Set KASSINAO_URL first (for example, KASSINAO_URL=https://kassinao.example.com).');
     process.exit(1);
   }
-  const r = await fetch(`${URL_BASE}/api/mcp/exchange`, {
+  const r = await strictFetch(`${URL_BASE}/api/mcp/exchange`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ code }),

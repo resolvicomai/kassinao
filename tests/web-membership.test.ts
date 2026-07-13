@@ -1,15 +1,36 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
 import { cleanInline } from '../src/sanitize';
+import type { RecordingMeta } from '../src/store';
+import { FreshMembershipBudget } from '../src/web/access';
 import {
+  collectWebLibraryPage,
   currentGuildMembership,
   httpsRedirectTarget,
   isRateLimitedWebPath,
+  mcpConnectionCreationRateLimited,
+  MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE,
   robotsForRoles,
   sitemapForRoles,
   WebOrigins,
   webHostRoutingDecision,
 } from '../src/web/server';
+
+function libraryMeta(id: string, guildId: string): RecordingMeta {
+  return {
+    id,
+    guildId,
+    guildName: guildId,
+    voiceChannelId: 'voice',
+    voiceChannelName: 'Call',
+    startedBy: null,
+    startedAt: Date.now(),
+    status: 'done',
+    participants: [],
+    events: [],
+    notes: [],
+  };
+}
 
 function guildFetch(result: 'member' | 'missing' | 'transient') {
   const fetch =
@@ -53,6 +74,84 @@ describe('criação de conexão MCP', () => {
 
     await expect(currentGuildMembership('user', [guildFetch('missing').guild])).resolves.toBe('not-member');
     await expect(currentGuildMembership('user', [guildFetch('transient').guild])).resolves.toBe('unavailable');
+  });
+
+  it('limita tentativas de criação por usuário antes de varrer guilds', () => {
+    const userId = 'web-membership-rate-limit-user';
+    expect(Array.from({ length: 5 }, () => mcpConnectionCreationRateLimited(userId))).toEqual(
+      Array.from({ length: 5 }, () => false),
+    );
+    expect(mcpConnectionCreationRateLimited(userId)).toBe(true);
+  });
+
+  it('retoma a varredura depois do budget sem deixar guilds tardias inacessíveis', async () => {
+    let now = 1_000;
+    const budget = new FreshMembershipBudget(
+      { perUserPerMinute: 2, globalPerMinute: 10, maxConcurrent: 2, maxTrackedUsers: 10 },
+      () => now,
+    );
+    const first = guildFetch('missing');
+    const second = guildFetch('missing');
+    const third = guildFetch('missing');
+    const member = guildFetch('member');
+    const runCheck = <T>(userId: string, task: () => Promise<T>) => budget.run(userId, task);
+
+    await expect(
+      currentGuildMembership('late-guild-user', [first.guild, second.guild, third.guild, member.guild], runCheck),
+    ).resolves.toBe('unavailable');
+    expect(first.fetch).toHaveBeenCalledTimes(1);
+    expect(second.fetch).toHaveBeenCalledTimes(1);
+    expect(third.fetch).not.toHaveBeenCalled();
+
+    now += 60_001;
+    await expect(
+      currentGuildMembership('late-guild-user', [first.guild, second.guild, third.guild, member.guild], runCheck),
+    ).resolves.toBe('member');
+    expect(third.fetch).toHaveBeenCalledTimes(1);
+    expect(member.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('paginação ACL da biblioteca web', () => {
+  const user = { id: 'library-user', name: 'Pessoa', avatar: null };
+
+  it('alcança guilds depois do teto sem repetir sempre as primeiras', async () => {
+    const metas = Array.from({ length: 70 }, (_, index) => libraryMeta(`library-${index}`, `guild-${index}`));
+    const runCheck = vi.fn(async (_user, meta: RecordingMeta) => ({
+      view: meta.guildId === 'guild-69',
+      delete: false,
+    }));
+
+    const first = await collectWebLibraryPage(user, metas, 0, runCheck);
+    const second = await collectWebLibraryPage(user, metas, first.nextCursor, runCheck);
+    const third = await collectWebLibraryPage(user, metas, second.nextCursor, runCheck);
+
+    expect(first).toMatchObject({ nextCursor: 25, guildsChecked: 25 });
+    expect(second).toMatchObject({ nextCursor: 50, guildsChecked: 25 });
+    expect(third.items.map((item) => item.meta.id)).toEqual(['library-69']);
+    expect(third.nextCursor).toBeUndefined();
+  });
+
+  it('não deixa uma página cheia de candidatas inacessíveis esconder uma antiga autorizada', async () => {
+    const metas = [
+      ...Array.from({ length: MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE }, (_, index) =>
+        libraryMeta(`noise-${index}`, 'noise-guild'),
+      ),
+      libraryMeta('authorized-old', 'noise-guild'),
+    ];
+    const runCheck = vi.fn(async (_user, meta: RecordingMeta) => ({
+      view: meta.id === 'authorized-old',
+      delete: false,
+    }));
+
+    const first = await collectWebLibraryPage(user, metas, 0, runCheck);
+    const second = await collectWebLibraryPage(user, metas, first.nextCursor, runCheck);
+
+    expect(first).toMatchObject({
+      nextCursor: MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE,
+      candidatesScanned: MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE,
+    });
+    expect(second.items.map((item) => item.meta.id)).toEqual(['authorized-old']);
   });
 });
 

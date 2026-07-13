@@ -1,12 +1,21 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import express from 'express';
 import { Collection, type Guild, type GuildMember } from 'discord.js';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { client } from '../src/discord/client';
 import { markClientReady } from '../src/discord/ready';
-import { deleteRecording, readMeta, saveMeta, saveMinutes, saveTranscript, type RecordingMeta } from '../src/store';
-import { FixedWindowRateLimiter, mountMcpApi } from '../src/web/api';
+import {
+  deleteRecording,
+  readMeta,
+  saveMeta,
+  saveMinutes,
+  saveTranscript,
+  transcriptPath,
+  type RecordingMeta,
+} from '../src/store';
+import { ApiRateLimiters, FixedWindowRateLimiter, MCP_DIRECT_TRANSCRIPT_MAX_BYTES, mountMcpApi } from '../src/web/api';
 import { signMcpAccess } from '../src/web/auth';
 import { createSession, revokeUser } from '../src/web/mcpTokens';
 
@@ -23,6 +32,17 @@ describe('limites de disponibilidade da API MCP', () => {
     now += 60_001;
     expect(limiter.consume('ip:d', 10, 60_000)).toBe(false);
     expect(limiter.trackedKeys).toBe(1);
+  });
+
+  it('não deixa churn de chaves controláveis reiniciar uma cota global', () => {
+    const limiters = new ApiRateLimiters(2, 2, () => 1_000);
+
+    expect(limiters.consumeGlobal('scan-global', 1, 60_000)).toBe(false);
+    expect(limiters.consumeGlobal('scan-global', 1, 60_000)).toBe(true);
+    for (let index = 0; index < 100; index++) {
+      expect(limiters.consumeKey(`ip:${index}`, 10, 60_000)).toBe(false);
+    }
+    expect(limiters.consumeGlobal('scan-global', 1, 60_000)).toBe(true);
   });
 });
 
@@ -188,24 +208,152 @@ describe('paginação das consultas agregadas MCP', () => {
     expect(secondBody.nextCursor).toBe('5');
   });
 
-  it('mantém leituras por meetingId fora do orçamento reduzido de scans', async () => {
-    const directSession = createSession(userId, 'Lia direct');
+  it('aplica o orçamento de transcript também a /said com meetingId', async () => {
+    const directUserId = `api-said-budget-${crypto.randomUUID()}`;
+    const candidate = readMeta(recordingId);
+    if (!candidate) throw new Error('meta-base ausente');
+    candidate.presence = [{ id: directUserId, name: 'Pessoa said', joinedAtMs: 0 }];
+    saveMeta(candidate);
+    const directSession = createSession(directUserId, 'Pessoa said');
     const directAuthorization = `Bearer ${signMcpAccess({
-      id: userId,
-      name: 'Lia',
+      id: directUserId,
+      name: 'Pessoa said',
       exp: Date.now() + 60_000,
       jti: directSession.sid,
     })}`;
-    const statuses: number[] = [];
-    for (let request = 0; request < 13; request++) {
-      const response = await fetch(
-        `${baseUrl}/api/said?meetingId=${encodeURIComponent(recordingId)}&query=needle&limit=1`,
+    try {
+      const statuses: number[] = [];
+      for (let request = 0; request < 13; request++) {
+        const response = await fetch(
+          `${baseUrl}/api/said?meetingId=${encodeURIComponent(recordingId)}&query=needle&limit=1`,
+          { headers: { authorization: directAuthorization } },
+        );
+        statuses.push(response.status);
+      }
+
+      expect(statuses).toEqual([...Array.from({ length: 12 }, () => 200), 429]);
+      const directTranscript = await fetch(
+        `${baseUrl}/api/meetings/${encodeURIComponent(recordingId)}/transcript?limit=1`,
         { headers: { authorization: directAuthorization } },
       );
-      statuses.push(response.status);
+      expect(directTranscript.status).toBe(429);
+    } finally {
+      candidate.presence = [];
+      saveMeta(candidate);
+      revokeUser(directUserId);
     }
+  });
 
-    expect(statuses).toEqual(Array.from({ length: 13 }, () => 200));
+  it('pagina a rota direta de transcrição e informa continuação', async () => {
+    const first = await fetch(`${baseUrl}/api/meetings/${encodeURIComponent(recordingId)}/transcript?limit=2`, {
+      headers: { authorization },
+    });
+    const firstBody = (await first.json()) as {
+      segments: { text: string }[];
+      totalSegments: number;
+      truncated: boolean;
+      nextCursor: string | null;
+    };
+    expect(first.status).toBe(200);
+    expect(firstBody).toMatchObject({ totalSegments: 5, truncated: true, nextCursor: '3' });
+    expect(firstBody.segments.map((segment) => segment.text)).toEqual(['needle 0', 'needle 1']);
+
+    const second = await fetch(
+      `${baseUrl}/api/meetings/${encodeURIComponent(recordingId)}/transcript?limit=2&cursor=3`,
+      { headers: { authorization } },
+    );
+    const secondBody = (await second.json()) as typeof firstBody;
+    expect(second.status).toBe(200);
+    expect(secondBody).toMatchObject({ totalSegments: 5, truncated: true, nextCursor: '5' });
+    expect(secondBody.segments.map((segment) => segment.text)).toEqual(['needle 2', 'needle 3']);
+  });
+
+  it('limita notas e presença legadas também nas respostas diretas', async () => {
+    const candidate = readMeta(recordingId);
+    if (!candidate) throw new Error('meta-base ausente');
+    candidate.notes = Array.from({ length: 501 }, (_, index) => ({
+      atMs: index,
+      author: 'Lia',
+      text: `nota ${index}`,
+    }));
+    candidate.presence = Array.from({ length: 101 }, (_, index) => ({
+      id: `legacy-presence-${index}`,
+      name: `Pessoa ${index}`,
+      joinedAtMs: index,
+    }));
+    saveMeta(candidate);
+    try {
+      const response = await fetch(
+        `${baseUrl}/api/meetings/${encodeURIComponent(recordingId)}?include=notes,timeline`,
+        { headers: { authorization } },
+      );
+      const body = (await response.json()) as {
+        notes: unknown[];
+        notesTruncated: boolean;
+        timelineTruncated: boolean;
+        presentSilent: unknown[];
+        presentSilentTruncated: boolean;
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.notes).toHaveLength(500);
+      expect(body.notesTruncated).toBe(true);
+      expect(body.timelineTruncated).toBe(true);
+      expect(body.presentSilent).toHaveLength(100);
+      expect(body.presentSilentTruncated).toBe(true);
+    } finally {
+      candidate.notes = [];
+      candidate.presence = [];
+      saveMeta(candidate);
+    }
+  });
+
+  it('recusa transcript acima do teto antes de montar dossier, rota direta ou export', async () => {
+    const original = Array.from({ length: 5 }, (_, index) => ({
+      startMs: index * 1_000,
+      endMs: index * 1_000 + 500,
+      speaker: 'Lia',
+      text: `needle ${index}`,
+    }));
+    try {
+      fs.writeFileSync(
+        transcriptPath(recordingId),
+        JSON.stringify([{ startMs: 0, endMs: 1, speaker: 'Lia', text: 'x'.repeat(MCP_DIRECT_TRANSCRIPT_MAX_BYTES) }]),
+      );
+
+      const dossier = await fetch(
+        `${baseUrl}/api/meetings/${encodeURIComponent(recordingId)}?include=transcript&transcriptLimit=2`,
+        { headers: { authorization } },
+      );
+      expect(dossier.status).toBe(200);
+      await expect(dossier.json()).resolves.toMatchObject({
+        transcript: [],
+        transcriptTruncated: true,
+        transcriptUnavailableReason: 'too_large',
+        transcriptByteLimit: MCP_DIRECT_TRANSCRIPT_MAX_BYTES,
+      });
+
+      const direct = await fetch(`${baseUrl}/api/meetings/${encodeURIComponent(recordingId)}/transcript`, {
+        headers: { authorization },
+      });
+      expect(direct.status).toBe(413);
+      await expect(direct.json()).resolves.toMatchObject({
+        error: 'transcript_too_large',
+        maxBytes: MCP_DIRECT_TRANSCRIPT_MAX_BYTES,
+      });
+
+      const exported = await fetch(
+        `${baseUrl}/api/meetings/${encodeURIComponent(recordingId)}/export?format=transcricao.md`,
+        { headers: { authorization } },
+      );
+      expect(exported.status).toBe(413);
+      await expect(exported.json()).resolves.toMatchObject({
+        error: 'transcript_too_large',
+        maxBytes: MCP_DIRECT_TRANSCRIPT_MAX_BYTES,
+      });
+    } finally {
+      saveTranscript(recordingId, original);
+    }
   });
 
   it('não perde falas autorizadas antigas quando candidatas recentes são inacessíveis', async () => {
@@ -242,7 +390,7 @@ describe('paginação das consultas agregadas MCP', () => {
     const noisyIds: string[] = [];
     try {
       const now = Date.now();
-      for (let index = 0; index < 1_001; index++) {
+      for (let index = 0; index < 501; index++) {
         const id = `api-noisy-${crypto.randomUUID()}`;
         noisyIds.push(id);
         saveMeta({
