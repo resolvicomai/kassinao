@@ -26,7 +26,11 @@ import { DISCORD_SURFACE_POLICY_VERSION } from '../discordSurfaceMigration';
 import { Locale, t } from '../i18n';
 import { alertOwners } from '../monitor';
 import { safeName } from '../sanitize';
-import { MAX_NOTES_PER_RECORDING, MAX_PRESENCE_IDENTITIES } from '../securityLimits';
+import {
+  MAX_NOTES_PER_RECORDING,
+  MAX_PRESENCE_IDENTITIES,
+  MAX_PRESENCE_IDENTITIES_PER_RESPONSE,
+} from '../securityLimits';
 import { deleteRecording, pageUrl, RecordingMeta, saveMeta, tracksDir } from '../store';
 import { NOTIFICATION_POLICY_VERSION } from '../transcriptionNotification';
 import { safeSlice } from '../util';
@@ -269,7 +273,10 @@ export class RecordingSession {
 
       // Presença: quem JÁ está na sala entra no registro agora (mesmo que nunca
       // desmute) — presença na call dá acesso à gravação, falar não é requisito.
-      this.snapshotPresence();
+      if (!this.snapshotPresence()) {
+        await this.stopPromise?.catch(() => {});
+        throw new RecordingStartCancelledError();
+      }
       this.sendStartDM();
     } catch (err) {
       await this.abortStart();
@@ -347,13 +354,28 @@ export class RecordingSession {
     else void stopping.catch((err) => console.error(`Erro encerrando ${this.id}:`, err));
   }
 
+  /** Falha de persistência torna inseguro continuar captando: para em `finally`. */
+  private persistPresenceOrStop(limitReached: boolean): boolean {
+    let persisted = false;
+    try {
+      saveMeta(this.meta);
+      persisted = true;
+      return true;
+    } catch {
+      console.error(`Falha ao persistir presença da gravação ${this.id}; encerrando a captura.`);
+      return false;
+    } finally {
+      if (!persisted || limitReached) this.stopAtPresenceLimit();
+    }
+  }
+
   /**
    * Registra quem está no canal AGORA (idempotente — só adiciona quem falta).
    * Chamado no start() e de novo quando a sessão entra no manager: quem entrou
    * na janela entre os dois (o start leva ~1-2s de REST) não pode ficar de fora.
    */
-  snapshotPresence(): void {
-    if (this.stopping) return;
+  snapshotPresence(): boolean {
+    if (this.stopping) return false;
     const names: string[] = [];
     let limitReached = (this.meta.presence?.length ?? 0) >= MAX_PRESENCE_IDENTITIES;
     for (const [, member] of this.voiceChannel.members) {
@@ -366,15 +388,25 @@ export class RecordingSession {
       if (result.limitReached) break;
     }
     if (names.length > 0) {
+      const visibleNames = names.slice(0, MAX_PRESENCE_IDENTITIES_PER_RESPONSE);
+      const hiddenCount = names.length - visibleNames.length;
       // no início vira UMA linha ("Na call: A, B, C"); retardatários da janela ganham linha própria
       if (this.meta.events.length <= 1) {
-        this.addEvent(t(this.locale, 'event.present-initial', { names: names.map((n) => safeName(n)).join(', ') }));
+        const boundedNames = visibleNames.map((n) => safeName(n)).join(', ');
+        const suffix = hiddenCount > 0 ? `, +${hiddenCount}` : '';
+        this.addEvent(t(this.locale, 'event.present-initial', { names: `${boundedNames}${suffix}` }));
       } else {
-        for (const n of names) this.addEvent(t(this.locale, 'event.voice-joined', { name: safeName(n) }));
+        for (const n of visibleNames) this.addEvent(t(this.locale, 'event.voice-joined', { name: safeName(n) }));
+        if (hiddenCount > 0)
+          this.addEvent(
+            this.locale === 'pt'
+              ? `👥 +${hiddenCount} outras pessoas na call`
+              : `👥 +${hiddenCount} other people in call`,
+          );
       }
-      saveMeta(this.meta);
-    }
-    if (limitReached) this.stopAtPresenceLimit();
+      this.persistPresenceOrStop(limitReached);
+    } else if (limitReached) this.stopAtPresenceLimit();
+    return !this.stopping;
   }
 
   /** Último evento de entra/sai por pessoa (anti-spam: loop de entra/sai não enche a timeline). */
@@ -393,12 +425,17 @@ export class RecordingSession {
     const list = (this.meta.presence ??= []);
     const existing = list.find((p) => p.id === userId);
     let limitReached = list.length >= MAX_PRESENCE_IDENTITIES;
+    let eventAllowed: boolean;
     if (existing) {
       // voltou depois de sair: reabre a presença (mantém o 1º joinedAtMs)
       if (existing.leftAtMs === undefined) {
         if (limitReached) this.stopAtPresenceLimit();
         return; // já estava dentro (evento duplicado)
       }
+      // Alternância da mesma identidade dentro da janela não muda nem persiste
+      // presença; isso limita fsync/structuredClone a uma transição por minuto.
+      if (!this.presenceEventAllowed(userId)) return;
+      eventAllowed = true;
       delete existing.leftAtMs;
     } else {
       const result = this.addPresenceIdentity(userId, name);
@@ -409,13 +446,13 @@ export class RecordingSession {
         this.stopAtPresenceLimit();
         return;
       }
+      eventAllowed = this.presenceEventAllowed(userId);
     }
-    if (this.presenceEventAllowed(userId)) {
+    if (eventAllowed) {
       this.addEvent(t(this.locale, 'event.voice-joined', { name: safeName(name) }));
       this.schedulePanelUpdate();
     }
-    saveMeta(this.meta);
-    if (limitReached) this.stopAtPresenceLimit();
+    this.persistPresenceOrStop(limitReached);
   }
 
   /** Alguém saiu do canal gravado. */
@@ -423,12 +460,11 @@ export class RecordingSession {
     if (this.stopping) return;
     const entry = this.meta.presence?.find((p) => p.id === userId && p.leftAtMs === undefined);
     if (!entry) return; // não estava registrado (ex.: bot) — nada a fazer
+    if (!this.presenceEventAllowed(`out:${userId}`)) return;
     entry.leftAtMs = Date.now() - this.startedAt;
-    if (this.presenceEventAllowed(`out:${userId}`)) {
-      this.addEvent(t(this.locale, 'event.voice-left', { name: safeName(name) }));
-      this.schedulePanelUpdate();
-    }
-    saveMeta(this.meta);
+    this.addEvent(t(this.locale, 'event.voice-left', { name: safeName(name) }));
+    this.schedulePanelUpdate();
+    this.persistPresenceOrStop(false);
   }
 
   /** Consentimento visível: o bot vira "[GRAVANDO] ..." enquanto grava. */
@@ -555,7 +591,7 @@ export class RecordingSession {
     // presença, portanto o ACL precisa ser atualizado ANTES de criar faixa. Se
     // esta identidade completar o teto, ela ganha acesso e a captura para aqui.
     const presence = this.addPresenceIdentity(userId, `usuario-${userId}`);
-    if (presence.added) saveMeta(this.meta);
+    if (presence.added && !this.persistPresenceOrStop(presence.limitReached)) return;
     if (presence.limitReached) {
       this.stopAtPresenceLimit();
       return;

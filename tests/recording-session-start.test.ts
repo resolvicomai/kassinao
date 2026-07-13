@@ -24,6 +24,7 @@ import {
   RecordingSession,
   RecordingStartCancelledError,
 } from '../src/recorder/RecordingSession';
+import { MAX_PRESENCE_IDENTITIES_PER_RESPONSE } from '../src/securityLimits';
 import { DISCORD_SURFACE_POLICY_VERSION } from '../src/discordSurfaceMigration';
 import { listMetas, readMeta, tracksDir } from '../src/store';
 import { NOTIFICATION_POLICY_VERSION } from '../src/transcriptionNotification';
@@ -296,6 +297,83 @@ describe('RecordingSession.start — transação real de início', () => {
     expect(f.connection.receiver.subscribe).not.toHaveBeenCalled();
     const meta = await session.stop('manual');
     expect(meta.events.some((event) => event.text.includes('Safe') && event.text.includes('limit reached'))).toBe(true);
+    fs.rmSync(recordingDir(session), { recursive: true, force: true });
+  });
+
+  it('não regrava o meta em churn da mesma identidade dentro do cooldown', async () => {
+    const f = fixture();
+    voice.joinVoiceChannel.mockReturnValue(f.connection);
+    voice.entersState.mockResolvedValue(f.connection);
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: null,
+      locale: 'pt',
+      auto: false,
+    });
+    await session.start();
+
+    session.noteVoiceJoin('churn-user', 'Pessoa Churn');
+    session.noteVoiceLeave('churn-user', 'Pessoa Churn');
+    const before = readMeta(session.id)?.presence?.find((entry) => entry.id === 'churn-user');
+    session.noteVoiceJoin('churn-user', 'Pessoa Churn');
+    const after = readMeta(session.id)?.presence?.find((entry) => entry.id === 'churn-user');
+
+    expect(before?.leftAtMs).toBeTypeOf('number');
+    expect(session.meta.presence?.find((entry) => entry.id === 'churn-user')?.leftAtMs).toBe(before?.leftAtMs);
+    expect(after).toEqual(before);
+    await session.stop('manual');
+    fs.rmSync(recordingDir(session), { recursive: true, force: true });
+  });
+
+  it('encerra a captura mesmo quando o grant que completa o teto não pode ser persistido', async () => {
+    const f = fixture();
+    voice.joinVoiceChannel.mockReturnValue(f.connection);
+    voice.entersState.mockResolvedValue(f.connection);
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: null,
+      locale: 'pt',
+      auto: false,
+    });
+    await session.start();
+    session.meta.presence = Array.from({ length: MAX_PRESENCE_IDENTITIES - 1 }, (_, index) => ({
+      id: `persisted-${index}`,
+      name: `Pessoa ${index}`,
+      joinedAtMs: index,
+    }));
+    const fsync = vi.spyOn(fs, 'fsyncSync').mockImplementationOnce(() => {
+      throw new Error('ENOSPC');
+    });
+
+    expect(() => session.noteVoiceJoin('unsafe-last', 'Pessoa Final')).not.toThrow();
+    expect(session.isStopping).toBe(true);
+    expect(f.connection.destroy).toHaveBeenCalledTimes(1);
+    fsync.mockRestore();
+    await session.stop('manual').catch(() => {});
+    fs.rmSync(recordingDir(session), { recursive: true, force: true });
+  });
+
+  it('resume snapshot inicial sem concatenar centenas de nomes numa timeline', () => {
+    const f = fixture();
+    for (let index = 0; index < MAX_PRESENCE_IDENTITIES - 1; index++) {
+      const id = `snapshot-${index}`;
+      f.channel.members.set(id, { id, displayName: `Pessoa ${index}`, user: { bot: false } });
+    }
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: null,
+      locale: 'pt',
+      auto: false,
+    });
+
+    expect(session.snapshotPresence()).toBe(true);
+    const initialPresence = session.meta.events.at(-1)?.text ?? '';
+    expect(initialPresence).toContain(`+${MAX_PRESENCE_IDENTITIES - 1 - MAX_PRESENCE_IDENTITIES_PER_RESPONSE}`);
+    expect(initialPresence).not.toContain('Pessoa 998');
+    expect(initialPresence.length).toBeLessThan(10_000);
     fs.rmSync(recordingDir(session), { recursive: true, force: true });
   });
 
