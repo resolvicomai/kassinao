@@ -176,7 +176,6 @@ All options live in [`.env.example`](.env.example). Key ones:
 | `PUBLIC_URL` | `APP_URL` / `BASE_URL` | Public landing and demo |
 | `DOCS_URL` | `PUBLIC_URL` | Documentation origin |
 | `MCP_URL` | `APP_URL` / `BASE_URL` | API origin consumed by `kassinao-mcp` |
-| `LEGACY_URL` | — | Optional previous origin kept temporarily for migration compatibility |
 | `GUILD_ID` | — | Registers commands instantly in that server |
 | `TUNNEL_TOKEN` / `COMPOSE_PROFILES` | — | Cloudflare Tunnel token + the `tunnel` profile (recommended HTTPS path) |
 | `REPO_PUBLIC` | `false` | `true` shows source/install links inside private app pages; the public landing always links to this repository |
@@ -188,19 +187,19 @@ All options live in [`.env.example`](.env.example). Key ones:
 | `MINUTES_ENABLED` | `auto` | AI minutes: `auto` (on when an OpenRouter or Groq key exists) / `true` / `false` |
 | `MINUTES_PROVIDER` / `OPENROUTER_API_KEY` | `openrouter` when key set | Minutes LLM: `openrouter` (default `google/gemini-2.5-flash`) or `groq` (default `llama-3.3-70b-versatile`) |
 | `MINUTES_WEBHOOK_URL` | — | POSTs a JSON `minutes.ready` event per meeting to your own integration; env-only by design (no SSRF via Discord) |
-
-### Moving an existing instance to another domain
-
-1. Keep the previous origin in `LEGACY_URL` while DNS, old links, and existing MCP clients migrate. Browser sessions cannot cross domains, so users sign in once again on the new `APP_URL`.
-2. Add the new `APP_URL/auth/callback` to Discord OAuth before switching production. Keep the previous callback during the transition.
-3. Existing MCP tokens are pinned to the origin that issued them. They can continue on `LEGACY_URL` during the compatibility window; to move to the new `MCP_URL`, generate a new connection in the app and replace both `KASSINAO_URL` and its token.
-4. Remove `LEGACY_URL` and the old OAuth callback only after the chosen compatibility window and after active clients have migrated.
 | `MCP_SECRET` | — | Turns the MCP connector on; rotating it revokes every connector at once |
 | `OWNER_IDS` | — | Discord IDs allowed to use `/mcp` (CSV); regular members self-serve at `/app/conectar-ia` |
 | `DEFAULT_LOCALE` | `en` | Language for DMs/replies when no per-user locale is available (guild members still see their own Discord client's language) |
 | `TZ` | `America/Sao_Paulo` | Timezone for dates (the web page defaults to the visitor's own) |
 
 More knobs — disk guard, disk-full alerts, off-site backup via rclone — are all documented one option at a time in [`.env.example`](.env.example).
+
+### Changing the domains of an existing instance
+
+1. Add the new `APP_URL/auth/callback` to Discord OAuth before switching production.
+2. Change DNS, tunnel routes, `APP_URL`, `PUBLIC_URL`, `DOCS_URL`, and `MCP_URL` in one maintenance window. Browser sessions do not cross domains, so users must sign in again.
+3. MCP tokens are pinned to the origin that issued them. Generate a new connection and replace `KASSINAO_URL` and its token together for every active client.
+4. Verify every new origin, then remove the superseded OAuth callback, DNS records, and tunnel routes. Retired hostnames are not served by the application.
 
 ### Commands
 

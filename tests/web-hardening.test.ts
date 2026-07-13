@@ -149,7 +149,6 @@ describe('configuração fail-fast', () => {
     expect(config.publicUrl).toBe(config.appUrl);
     expect(config.docsUrl).toBe(config.appUrl);
     expect(config.mcpUrl).toBe(config.appUrl);
-    expect(config.legacyUrl).toBeUndefined();
   });
 
   it('resolve a topologia separada com a precedência documentada', () => {
@@ -161,7 +160,6 @@ describe('configuração fail-fast', () => {
           PUBLIC_URL: 'https://kassinao.cloud',
           DOCS_URL: 'https://docs.kassinao.cloud',
           MCP_URL: 'https://mcp.kassinao.cloud',
-          LEGACY_URL: 'https://old.example',
         },
         'http://localhost:8080',
       ),
@@ -170,7 +168,6 @@ describe('configuração fail-fast', () => {
       publicUrl: 'https://kassinao.cloud',
       docsUrl: 'https://docs.kassinao.cloud',
       mcpUrl: 'https://mcp.kassinao.cloud',
-      legacyUrl: 'https://old.example',
     });
 
     expect(

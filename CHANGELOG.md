@@ -10,11 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Public marketing site and private `/app/*` workspace, with a fictional live demo, recordings table, tabbed meeting view, light/dark themes, and per-device MCP connection management.
 - Local-only `/health/details` for safe pre-deploy checks without exposing active-call or disk metadata publicly.
-- Split-origin deployment through `APP_URL`, `PUBLIC_URL`, `DOCS_URL`, `MCP_URL`, and optional `LEGACY_URL`, with host isolation, canonical metadata, per-surface robots/sitemaps, and migration-safe redirects.
+- Split-origin deployment through `APP_URL`, `PUBLIC_URL`, `DOCS_URL`, and `MCP_URL`, with host isolation, canonical metadata, per-surface robots/sitemaps, and fail-closed handling for unconfigured hostnames.
 
 ### Changed
 
-- The official hosted service now uses `kassinao.cloud` for the landing/demo, `docs.kassinao.cloud` for documentation, `app.kassinao.cloud` for OAuth and private recordings/transcripts, and `mcp.kassinao.cloud` for the connector API. The previous origin remains API/callback compatible only during migration.
+- The official hosted service now uses `kassinao.cloud` for the landing/demo, `docs.kassinao.cloud` for documentation, `app.kassinao.cloud` for OAuth and private recordings/transcripts, and `mcp.kassinao.cloud` for the connector API. Unconfigured or retired origins cannot access API, OAuth, or private routes.
 - `/ask` now resolves meeting dates separately from action deadlines (including relative deadlines such as `today`, `tomorrow`, and weekdays), ranks eligible meetings before applying context limits, and searches structured minutes fields including decisions, actions, owners, due dates, topics, attendance, and per-participant notes.
 - `kassinao-mcp` 1.0.3 pins saved refresh tokens to their issuing instance, isolates multiple local connections, serializes concurrent refreshes, preserves sessions across transient 429/5xx responses, and reports its package version to MCP clients.
 - Private web/API responses are `no-store`; session cookies are scoped to `/app`; state cookies are scoped to `/auth`; app mutations validate the exact request origin.

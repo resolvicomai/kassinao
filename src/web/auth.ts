@@ -53,7 +53,7 @@ const SESSION_PATH = '/app';
 const STATE_PATH = '/auth';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-type DomainConfig = typeof config & { appUrl?: string; legacyUrl?: string };
+type DomainConfig = typeof config & { appUrl?: string };
 
 function appOrigin(): string {
   const domainConfig = config as DomainConfig;
@@ -200,22 +200,8 @@ export function isAllowedWebMutation(req: Request, expectedBaseUrl = appOrigin()
 
 // ---------- fluxo OAuth2 do Discord ----------
 
-function configuredCallbackOrigin(req?: Request): string {
-  const domainConfig = config as DomainConfig;
-  const canonicalApp = appOrigin();
-  if (!req || !domainConfig.legacyUrl) return canonicalApp;
-  const rawHost = req.get('host');
-  if (!rawHost || /[\s/\\]/.test(rawHost)) return canonicalApp;
-  try {
-    const requestHost = new URL(`http://${rawHost}`).host.toLowerCase();
-    return new URL(domainConfig.legacyUrl).host.toLowerCase() === requestHost ? domainConfig.legacyUrl : canonicalApp;
-  } catch {
-    return canonicalApp;
-  }
-}
-
-export function redirectUri(req?: Request): string {
-  return `${configuredCallbackOrigin(req)}/auth/callback`;
+export function redirectUri(): string {
+  return `${appOrigin()}/auth/callback`;
 }
 
 export function beginLogin(res: Response, next: string): void {
@@ -260,7 +246,7 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
       client_secret: config.clientSecret,
       grant_type: 'authorization_code',
       code,
-      redirect_uri: redirectUri(req),
+      redirect_uri: redirectUri(),
     }),
     signal: AbortSignal.timeout(10_000),
   });

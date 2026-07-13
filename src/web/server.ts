@@ -203,7 +203,6 @@ type DomainConfig = typeof config & {
   publicUrl?: string;
   docsUrl?: string;
   mcpUrl?: string;
-  legacyUrl?: string;
 };
 
 export interface WebOrigins {
@@ -211,10 +210,9 @@ export interface WebOrigins {
   public: string;
   docs: string;
   mcp: string;
-  legacy?: string;
 }
 
-export type WebHostRole = 'app' | 'public' | 'docs' | 'mcp' | 'legacy';
+export type WebHostRole = 'app' | 'public' | 'docs' | 'mcp';
 
 export type WebHostRoutingDecision =
   | { action: 'pass'; roles: WebHostRole[] }
@@ -235,7 +233,6 @@ export function configuredWebOrigins(source: DomainConfig = config as DomainConf
     public: publicUrl,
     docs: source.docsUrl ?? publicUrl,
     mcp: source.mcpUrl ?? app,
-    ...(source.legacyUrl ? { legacy: source.legacyUrl } : {}),
   };
 }
 
@@ -273,7 +270,6 @@ function rolesForHost(host: string, origins: WebOrigins): WebHostRole[] {
     ['public', origins.public],
     ['docs', origins.docs],
     ['mcp', origins.mcp],
-    ['legacy', origins.legacy],
   ];
   return entries.filter(([, origin]) => origin && hostOf(origin) === host).map(([role]) => role);
 }
@@ -360,11 +356,9 @@ export function webHostRoutingDecision(req: Request, origins = configuredWebOrig
     // Não canoniza API por redirect. Variante de caixa é rejeitada antes do
     // router para nunca mover bearer tokens entre URLs/origens.
     if (!isPathPrefix(pathname, '/api')) return { action: 'reject', roles, status: 404 };
-    // A origem legada continua aceitando clientes MCP já instalados. Nunca há
-    // redirect de API: POSTs e tokens permanecem na origem que receberam.
     // Em origem única, o mesmo host acumula os papéis app+mcp. Em topologia
     // dividida, o host privado do app não aceita bearer da API MCP.
-    return has('mcp') || has('legacy') ? { action: 'pass', roles } : { action: 'reject', roles, status: 404 };
+    return has('mcp') ? { action: 'pass', roles } : { action: 'reject', roles, status: 404 };
   }
 
   const authPath = isPathPrefixFolded(pathname, '/auth');
@@ -372,9 +366,6 @@ export function webHostRoutingDecision(req: Request, origins = configuredWebOrig
     const canonicalPath = canonicalPrefixPath(pathname, '/auth');
     if (!isPathPrefix(pathname, '/auth')) return redirect(absoluteTarget(origins.app, req, canonicalPath));
     if (has('app')) return { action: 'pass', roles };
-    // Callback antigo precisa chegar ao handler para o code OAuth emitido com a
-    // URI anterior poder ser consumido. Novos logins já começam na origem app.
-    if (has('legacy') && pathname === '/auth/callback') return { action: 'pass', roles };
     return redirect(absoluteTarget(origins.app, req));
   }
 
@@ -458,10 +449,6 @@ export function webHostRoutingDecision(req: Request, origins = configuredWebOrig
   // handlers públicos/privados futuros vazarem por acidente.
   if (has('mcp') && roles.length === 1) return { action: 'reject', roles, status: 404 };
 
-  // Na origem legada, somente compatibilidades deliberadas passam. Links de
-  // páginas conhecidas foram redirecionados acima; caminhos arbitrários não.
-  if (has('legacy') && roles.length === 1) return { action: 'reject', roles, status: 404 };
-
   return { action: 'pass', roles };
 }
 
@@ -487,9 +474,7 @@ function configuredOriginForRequest(req: Request, origins = configuredWebOrigins
   const host = requestHost(req);
   if (!host) return undefined;
   if (host === wwwHost(origins)) return origins.public;
-  const candidates = [origins.app, origins.public, origins.docs, origins.mcp, origins.legacy].filter(
-    (origin): origin is string => Boolean(origin),
-  );
+  const candidates = [origins.app, origins.public, origins.docs, origins.mcp];
   return candidates.find((origin) => hostOf(origin) === host);
 }
 
@@ -552,9 +537,10 @@ export function startWebServer(): void {
   // pra o rate-limit por IP não ser burlado forjando X-Forwarded-For.
   app.set('trust proxy', 1);
 
-  // A mesma aplicação atende cinco hostnames, mas cada um expõe só sua
-  // superfície. A decisão acontece antes de rate-limit, cookies e handlers para
-  // que Host desconhecido e chamadas no subdomínio errado falhem fechados.
+  // A mesma aplicação atende quatro origens canônicas (e o alias www da landing),
+  // mas cada uma expõe só sua superfície. A decisão acontece antes de rate-limit,
+  // cookies e handlers para que Host desconhecido e chamadas no subdomínio errado
+  // falhem fechados.
   app.use((req, res, next) => {
     const decision = webHostRoutingDecision(req);
     if (decision.action === 'reject') {

@@ -10,7 +10,6 @@ delete process.env.APP_URL;
 delete process.env.PUBLIC_URL;
 delete process.env.DOCS_URL;
 delete process.env.MCP_URL;
-delete process.env.LEGACY_URL;
 process.env.RETENTION_DAYS = '7';
 process.env.TEXT_RETENTION_DAYS = '90';
 // MCP habilitado nos testes, com segredo DISTINTO do cookie (isolamento exigido no boot).

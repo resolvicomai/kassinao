@@ -226,14 +226,6 @@ const ENV_GROUPS: EnvGroup[] = [
         },
       },
       {
-        name: 'LEGACY_URL',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: {
-          pt: 'Origem anterior durante migração. Mantém links e clientes antigos funcionando até a retirada planejada.',
-          en: 'Previous origin during a migration. Keeps old links and clients working until planned retirement.',
-        },
-      },
-      {
         name: 'GUILD_ID',
         fallback: { pt: 'vazio', en: 'empty' },
         description: {
