@@ -45,9 +45,13 @@ import {
   recordingsIndexPage,
   RecordingsSort,
 } from './page';
-import { landingPage } from './landing';
+import { revenueLandingPage } from './revenueLanding';
 import { searchRecordings } from './search';
 import { beginDownload, endDownload, hasActiveDownloads } from './tracker';
+
+const ARCHIVO_FONT = require.resolve('@fontsource-variable/archivo/files/archivo-latin-wght-normal.woff2');
+const REVENUE_ASSET_DIR = path.join(process.cwd(), 'docs', 'brand');
+const REVENUE_VISUALS = ['kassinao-revenue-hero.webp', 'kassinao-revenue-after-call.webp'] as const;
 
 /** Idioma da página pelo Accept-Language do navegador (pt-BR ou inglês). */
 // Idioma da página: escolha explícita (?lang) > cookie salvo > PADRÃO INGLÊS.
@@ -176,6 +180,18 @@ export function startWebServer(): void {
   app.get('/health', (_req, res) => {
     res.set('Cache-Control', 'no-store').json({ ok: true, ready: isClientReady() });
   });
+
+  app.get('/assets/archivo.woff2', (_req, res) => {
+    res.type('font/woff2').set('Cache-Control', 'public, max-age=31536000, immutable').sendFile(ARCHIVO_FONT);
+  });
+  for (const fileName of REVENUE_VISUALS) {
+    app.get(`/assets/${fileName}`, (_req, res) => {
+      res
+        .type('image/webp')
+        .set('Cache-Control', 'public, max-age=31536000, immutable')
+        .sendFile(path.join(REVENUE_ASSET_DIR, fileName));
+    });
+  }
 
   // Diagnóstico usado antes de deploy/restart, acessível só DENTRO do container
   // (`docker exec ... fetch(localhost/health/details)`). Mantém o stop seguro sem
@@ -340,9 +356,15 @@ export function startWebServer(): void {
   }
 
   app.get('/', (req, res) => {
-    // landing = vitrine pública, cega pra sessão de propósito: a única ponte
-    // público→app é o "entrar" do rodapé. O app (/app/*) é mundo à parte.
-    res.type('html').send(landingPage(pageLang(req)));
+    if (String(req.query.lang ?? '').toLowerCase() === 'en') {
+      res.redirect(302, '/en');
+      return;
+    }
+    res.set('Content-Language', 'pt-BR').type('html').send(revenueLandingPage('pt'));
+  });
+
+  app.get('/en', (_req, res) => {
+    res.set('Content-Language', 'en').type('html').send(revenueLandingPage('en'));
   });
 
   // Demo PÚBLICA (sem login) — serve SOMENTE os dados fictícios de docs/example.
@@ -396,6 +418,15 @@ export function startWebServer(): void {
     const f = path.join(process.cwd(), 'docs', 'og.png');
     if (!fs.existsSync(f)) {
       res.status(404).send('sem og');
+      return;
+    }
+    res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(f);
+  });
+
+  app.get('/og-:locale(pt|en).png', (req, res) => {
+    const f = path.join(process.cwd(), 'docs', `og-${req.params.locale}.png`);
+    if (!fs.existsSync(f)) {
+      res.status(404).send('sem og localizado');
       return;
     }
     res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(f);
