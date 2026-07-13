@@ -16,7 +16,7 @@ The connector runs **on your machine** and is a **thin** HTTP client: it does **
 
 - **The bot admin must have enabled MCP** (`MCP_SECRET` set on the server). Without it, `/app/conectar-ia` and `/mcp` don't exist (404 / missing command).
 - **Node.js 20+** on your machine.
-- **The connector.** `npx -y kassinao-mcp@1.0.3` downloads and runs the pinned published release — nothing to install manually (you just need Node). Prefer running from source? `git clone` the repo, `cd mcp && npm ci --userconfig ../.npmrc.security && npm run build`; in the config, replace `"command": "npx"` / `"args": ["-y","kassinao-mcp@1.0.3"]` with `"command": "node"`, `"args": ["/absolute/path/to/repo/mcp/dist/index.js"]`.
+- **The connector.** `npx -y kassinao-mcp@1.0.4` downloads and runs the pinned published release — nothing to install manually (you just need Node). Prefer running from source? `git clone` the repo, `cd mcp && npm ci --userconfig ../.npmrc.security && npm run build`; in the config, replace `"command": "npx"` / `"args": ["-y","kassinao-mcp@1.0.4"]` with `"command": "node"`, `"args": ["/absolute/path/to/repo/mcp/dist/index.js"]`.
 
 ## Setup
 
@@ -31,7 +31,7 @@ The connector runs **on your machine** and is a **thin** HTTP client: it does **
   "mcpServers": {
     "kassinao": {
       "command": "npx",
-      "args": ["-y", "kassinao-mcp@1.0.3"],
+      "args": ["-y", "kassinao-mcp@1.0.4"],
       "env": {
         "KASSINAO_URL": "https://mcp.kassinao.cloud",
         "KASSINAO_REFRESH_TOKEN": "PASTE_THE_TOKEN_HERE"
@@ -50,7 +50,7 @@ For a self-hosted instance, open `APP_URL/app/conectar-ia` and set `KASSINAO_URL
 On Discord, the owner runs **`/mcp new`** (shown as **`/mcp novo`** on pt-BR clients) — ephemeral reply with a single-use code valid for ~5 min. Then:
 
 ```bash
-KASSINAO_URL=https://mcp.kassinao.cloud npx -y kassinao-mcp@1.0.3 exchange <code>
+KASSINAO_URL=https://mcp.kassinao.cloud npx -y kassinao-mcp@1.0.4 exchange <code>
 ```
 
 This stores the token locally and prints a copy-ready config containing a non-secret `KASSINAO_PROFILE` id. Use that block as printed; it selects this connection's own token file without placing the refresh token in your client config. Replace the URL with your instance's `MCP_URL` when self-hosting.

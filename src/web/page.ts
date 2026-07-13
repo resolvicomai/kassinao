@@ -1530,7 +1530,7 @@ export function connectPage(opts: {
         mcpServers: {
           kassinao: {
             command: 'npx',
-            args: ['-y', 'kassinao-mcp@1.0.3'],
+            args: ['-y', 'kassinao-mcp@1.0.4'],
             env: { KASSINAO_URL: config.mcpUrl, KASSINAO_REFRESH_TOKEN: opts.refreshToken },
           },
         },
@@ -1580,8 +1580,8 @@ export function connectPage(opts: {
       <pre id="kcfg" class="tokenbox" tabindex="0" aria-label="${esc(T('Configuração MCP', 'MCP configuration'))}">${esc(cfg)}</pre>
       <p class="connect-intro">${esc(
         T(
-          'Já usa outros servidores MCP? Cole só o bloco "kassinao" dentro de "mcpServers". Não substitua o arquivo inteiro. O conector requer Node 20 ou superior e fixa a versão publicada "kassinao-mcp@1.0.3".',
-          'Already use other MCP servers? Paste only the "kassinao" block inside "mcpServers". Do not replace the entire file. The connector requires Node 20 or newer and pins the published "kassinao-mcp@1.0.3" release.',
+          'Já usa outros servidores MCP? Cole só o bloco "kassinao" dentro de "mcpServers". Não substitua o arquivo inteiro. O conector requer Node 20 ou superior e fixa a versão publicada "kassinao-mcp@1.0.4".',
+          'Already use other MCP servers? Paste only the "kassinao" block inside "mcpServers". Do not replace the entire file. The connector requires Node 20 or newer and pins the published "kassinao-mcp@1.0.4" release.',
         ),
       )}</p>
       <p class="connect-intro">${esc(

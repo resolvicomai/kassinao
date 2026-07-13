@@ -1802,7 +1802,7 @@ WHISPER_MODEL=small`,
   "mcpServers": {
     "kassinao": {
       "command": "npx",
-      "args": ["-y", "kassinao-mcp@1.0.3"],
+      "args": ["-y", "kassinao-mcp@1.0.4"],
       "env": {
         "KASSINAO_URL": "${T('https://SEU-KASSINAO', 'https://YOUR-KASSINAO')}",
         "KASSINAO_REFRESH_TOKEN": "${T('COLE_O_TOKEN', 'PASTE_THE_TOKEN')}"
@@ -2130,8 +2130,8 @@ WHISPER_MODEL=small`,
         ${codeBlock(
           l === 'pt' ? 'Terminal' : 'Terminal',
           T(
-            'KASSINAO_URL=https://SEU-KASSINAO npx -y kassinao-mcp@1.0.3 exchange CODIGO',
-            'KASSINAO_URL=https://YOUR-KASSINAO npx -y kassinao-mcp@1.0.3 exchange CODE',
+            'KASSINAO_URL=https://SEU-KASSINAO npx -y kassinao-mcp@1.0.4 exchange CODIGO',
+            'KASSINAO_URL=https://YOUR-KASSINAO npx -y kassinao-mcp@1.0.4 exchange CODE',
           ),
           copyLabel,
         )}
