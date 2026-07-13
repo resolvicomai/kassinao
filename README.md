@@ -90,6 +90,15 @@ docker compose up -d --build
 
 Keep `.env` owned by the deployment user and at mode `0600`. `./scripts/inject-secrets.sh` accepts the three setup secrets without echoing them on screen; never paste populated values into issues, chat, shell commands or logs. The container runs without root as UID/GID `1000` by default. If an existing `recordings/` belongs to root, run `sudo chown -R 1000:1000 recordings`; custom non-root IDs can be set with `KASSINAO_UID` and `KASSINAO_GID`.
 
+For a self-hosted Linux server, install the host-side health watchdog after the first deploy. It can restart only the `kassinao` container and replaces socket-mounted autoheal containers:
+
+```bash
+sudo install -o root -g root -m 0755 scripts/health-watch.sh /usr/local/sbin/kassinao-health-watch
+sudo install -o root -g root -m 0644 deploy/systemd/kassinao-health-watch.* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now kassinao-health-watch.timer
+```
+
 Then **invite the bot** (step 1 below) and run **`/record`** in a Discord voice channel. That's the whole loop.
 
 > ☁️ **One-click deploy:** [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/resolvicomai/kassinao) — blueprint in [`render.yaml`](render.yaml). Set `GROQ_API_KEY` + `TRANSCRIBE_PROVIDER=groq` in the dashboard to turn on transcription and minutes.

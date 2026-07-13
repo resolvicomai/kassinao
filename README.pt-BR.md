@@ -92,6 +92,15 @@ docker compose up -d --build
 
 Mantenha o `.env` pertencendo ao usuário do deploy e com modo `0600`. O `./scripts/inject-secrets.sh` recebe os três segredos iniciais sem mostrá-los na tela; nunca cole valores preenchidos em issue, chat, comando de shell ou log. O container roda sem root como UID/GID `1000` por padrão. Se um `recordings/` antigo pertence a root, rode `sudo chown -R 1000:1000 recordings`; IDs não-root diferentes podem ser definidos com `KASSINAO_UID` e `KASSINAO_GID`.
 
+Em VPS Linux, instale o watchdog no host depois do primeiro deploy. Ele só pode reiniciar o container `kassinao` e substitui containers de autoheal com o socket do Docker montado:
+
+```bash
+sudo install -o root -g root -m 0755 scripts/health-watch.sh /usr/local/sbin/kassinao-health-watch
+sudo install -o root -g root -m 0644 deploy/systemd/kassinao-health-watch.* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now kassinao-health-watch.timer
+```
+
 Depois **convide o bot** (passo 1) e rode **`/gravar`** num canal de voz. Pronto — o passo a passo completo está logo abaixo.
 
 > ☁️ **Deploy em 1 clique:** [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/resolvicomai/kassinao) — blueprint em [`render.yaml`](render.yaml). Defina `GROQ_API_KEY` + `TRANSCRIBE_PROVIDER=groq` no painel do Render pra já subir com transcrição e ata ligadas.

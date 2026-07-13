@@ -9,11 +9,29 @@ RCLONE_CONFIG_FILE="${RCLONE_RETENTION_CONFIG:?Defina RCLONE_RETENTION_CONFIG}"
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-30}"
 MAX_DELETE="${BACKUP_MAX_DELETE:-100}"
 LOCK_FILE="${BACKUP_RETENTION_LOCK_FILE:-/run/lock/kassinao-backup-retention.lock}"
+DRY_RUN="${BACKUP_RETENTION_DRY_RUN:-0}"
 
 die() {
   echo "ERRO: $*" >&2
   exit 1
 }
+
+case "$DRY_RUN" in
+  0 | 1) ;;
+  *) die "BACKUP_RETENTION_DRY_RUN precisa ser 0 ou 1" ;;
+esac
+
+case "$REMOTE" in
+  *:*) ;;
+  *) die "RCLONE_RETENTION_REMOTE precisa usar a forma remoto:caminho" ;;
+esac
+remote_path="${REMOTE#*:}"
+if [[ "$remote_path" =~ ^/*$ ]]; then
+  die "RCLONE_RETENTION_REMOTE precisa incluir um caminho não vazio"
+fi
+if [[ "$remote_path" =~ (^|/)\.{1,2}(/|$) ]]; then
+  die "RCLONE_RETENTION_REMOTE precisa incluir um caminho seguro, sem . ou .."
+fi
 
 command -v rclone >/dev/null 2>&1 || die "rclone não instalado"
 command -v flock >/dev/null 2>&1 || die "flock não instalado"
@@ -29,11 +47,6 @@ if (( (8#$config_mode & 077) != 0 )); then
   die "RCLONE_RETENTION_CONFIG permite acesso de grupo/outros; execute chmod 600"
 fi
 
-case "$REMOTE" in
-  *:*) ;;
-  *) die "RCLONE_RETENTION_REMOTE precisa usar a forma remoto:caminho" ;;
-esac
-
 remote_name="${REMOTE%%:*}:"
 remote_type="$(
   rclone --config "$RCLONE_CONFIG_FILE" listremotes --long |
@@ -48,15 +61,19 @@ exec 9>"$LOCK_FILE"
 flock -n 9 || die "já existe uma retenção em execução"
 
 extra_args=()
-if [ "${BACKUP_RETENTION_DRY_RUN:-0}" = "1" ]; then
+if [ "$DRY_RUN" = "1" ]; then
   extra_args+=(--dry-run)
 fi
 
 rclone --config "$RCLONE_CONFIG_FILE" delete "${REMOTE%/}" \
   --min-age "${KEEP_DAYS}d" \
-  --include 'kassinao-*.tar.gz' \
-  --exclude '*' \
+  --filter '+ /kassinao-*.tar.gz' \
+  --filter '- **' \
   --max-delete "$MAX_DELETE" \
   "${extra_args[@]}"
 
-echo "retenção concluída: backups > ${KEEP_DAYS}d em ${REMOTE%/} (limite: $MAX_DELETE)"
+if [ "$DRY_RUN" = "1" ]; then
+  echo "dry-run concluído: nenhuma exclusão aplicada em ${REMOTE%/}"
+else
+  echo "retenção concluída: backups > ${KEEP_DAYS}d em ${REMOTE%/} (limite: $MAX_DELETE)"
+fi
