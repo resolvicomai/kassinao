@@ -105,11 +105,11 @@ describe('ACL histórica das gravações', () => {
     await expect(checkAccess(user, recording, { freshMember: true })).resolves.toEqual({ view: true, delete: true });
     await expect(checkAccess(user, recording, { freshMember: true })).resolves.toEqual({ view: true, delete: true });
     expect(fetchMember).toHaveBeenCalledTimes(2);
-    expect(fetchMember).toHaveBeenNthCalledWith(1, { user: USER_ID, force: true, cache: true });
-    expect(fetchMember).toHaveBeenNthCalledWith(2, { user: USER_ID, force: true, cache: true });
+    expect(fetchMember).toHaveBeenNthCalledWith(1, { user: USER_ID, force: true, cache: false });
+    expect(fetchMember).toHaveBeenNthCalledWith(2, { user: USER_ID, force: true, cache: false });
   });
 
-  it('limita o cache compartilhado e remove a identidade menos recente', async () => {
+  it('atualiza a recência no hit e remove a identidade realmente menos recente', async () => {
     const fetchMember = vi.fn(async ({ user }: { user: string }) => ({
       id: user,
       permissions: { has: () => false },
@@ -121,10 +121,17 @@ describe('ACL histórica das gravações', () => {
     } as unknown as Guild;
     client.guilds.cache.set(GUILD_ID, guild);
 
-    for (let i = 0; i <= MEMBER_CACHE_MAX_ENTRIES; i++) {
+    for (let i = 0; i < MEMBER_CACHE_MAX_ENTRIES; i++) {
       await checkAccess({ id: `member-${i}`, name: `Member ${i}` }, meta());
     }
+
+    // member-0 vira o mais recente sem nova ida ao Discord.
     await checkAccess({ id: 'member-0', name: 'Member 0' }, meta());
+    await checkAccess({ id: `member-${MEMBER_CACHE_MAX_ENTRIES}`, name: 'Member novo' }, meta());
+
+    // O hit anterior preserva member-0; a entrada realmente mais antiga (member-1) sai.
+    await checkAccess({ id: 'member-0', name: 'Member 0' }, meta());
+    await checkAccess({ id: 'member-1', name: 'Member 1' }, meta());
 
     expect(fetchMember).toHaveBeenCalledTimes(MEMBER_CACHE_MAX_ENTRIES + 2);
   });

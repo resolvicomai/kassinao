@@ -2,6 +2,32 @@ import { describe, expect, it } from 'vitest';
 import { ManualRecordingStartLimiter } from '../src/recorder/manualStartLimiter';
 
 describe('limites de início manual de gravação', () => {
+  it('desfaz a reserva quando a gravação falha e só cobra quando o início confirma', () => {
+    const limiter = new ManualRecordingStartLimiter({
+      userCooldownMs: 60_000,
+      guildCooldownMs: 60_000,
+      maxStartsPerGuild24h: 1,
+    });
+
+    const failedStart = limiter.reserve('guild-a', 'alice', false, 1_000);
+    expect(failedStart).toMatchObject({ ok: true });
+    expect(limiter.reserve('guild-a', 'alice', false, 2_000)).toMatchObject({
+      ok: false,
+      reason: 'user-cooldown',
+    });
+    if (failedStart.ok) failedStart.rollback();
+
+    const successfulStart = limiter.reserve('guild-a', 'alice', false, 2_000);
+    expect(successfulStart).toMatchObject({ ok: true });
+    if (successfulStart.ok) successfulStart.commit();
+
+    expect(limiter.reserve('guild-a', 'alice', false, 3_000)).toEqual({
+      ok: false,
+      reason: 'user-cooldown',
+      retryAfterMs: 59_000,
+    });
+  });
+
   it('aplica cooldown global por usuário e por servidor', () => {
     const limiter = new ManualRecordingStartLimiter({
       userCooldownMs: 60_000,

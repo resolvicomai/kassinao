@@ -46,6 +46,7 @@ import { Locale, localeOf, t } from './i18n';
 import { autoRecordStore, isArmed, setArmed } from './recorder/autorecord';
 import { sessionManager } from './recorder/manager';
 import { ManualRecordingStartLimiter } from './recorder/manualStartLimiter';
+import { reportManualRecordingStartFailure } from './recorder/manualStartFailure';
 import {
   BoundedIdSet,
   canManuallyStartRecording,
@@ -917,21 +918,21 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
     return;
   }
 
-  const admission = manualRecordingStartLimiter.admit(
+  const reservation = manualRecordingStartLimiter.reserve(
     interaction.guild.id,
     interaction.user.id,
     manualAccess.canManageGuild,
   );
-  if (!admission.ok) {
+  if (!reservation.ok) {
     await interaction.reply({
-      content: t(l, 'err.recording-start-limited', { wait: formatDuration(admission.retryAfterMs) }),
+      content: t(l, 'err.recording-start-limited', { wait: formatDuration(reservation.retryAfterMs) }),
       ephemeral: true,
     });
     return;
   }
 
-  await interaction.deferReply({ ephemeral: true });
   try {
+    await interaction.deferReply({ ephemeral: true });
     const session = await startSession({
       guild: interaction.guild,
       voiceChannel,
@@ -939,6 +940,7 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
       locale: l,
       auto: false,
     });
+    reservation.commit();
     const panel = session.panelJumpUrl;
     await interaction.editReply(
       panel
@@ -946,6 +948,7 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
         : t(l, 'record.started-no-panel', { channel: `#${voiceChannel.name}`, url: session.pageUrl }),
     );
   } catch (err) {
+    reservation.rollback();
     if (err instanceof RecordingStartCancelledError) {
       await interaction.editReply(t(l, 'record.start-cancelled'));
     } else if (err instanceof RecordingBusyError) {
@@ -972,7 +975,7 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
         }
       }
     } else {
-      await interaction.editReply(t(l, 'err.join-failed', { reason: (err as Error).message }));
+      await interaction.editReply(reportManualRecordingStartFailure(err, l));
     }
   }
 }

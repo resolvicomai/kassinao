@@ -64,14 +64,18 @@ async function fetchMemberCached(guildId: string, userId: string, forceRefresh =
   if (!guild) throw new TransientAccessError('guild fora do cache (gateway não pronto?)');
   const key = `${guildId}:${userId}`;
   const hit = memberCache.get(key);
-  if (!forceRefresh && hit && Date.now() - hit.at < MEMBER_TTL_MS) return hit.member;
+  if (!forceRefresh && hit && Date.now() - hit.at < MEMBER_TTL_MS) {
+    memberCache.delete(key);
+    memberCache.set(key, hit);
+    return hit.member;
+  }
   try {
     // `members.fetch(userId)` SEM force devolve o GuildMember já presente no
     // cache interno do discord.js. Sem a intent privilegiada GuildMembers, uma
     // remoção de cargo/saída do servidor não atualiza esse objeto e a permissão
     // revogada poderia sobreviver indefinidamente. Toda renovação deste cache é
     // portanto autoritativa via REST.
-    const member = await guild.members.fetch({ user: userId, force: true, cache: true });
+    const member = await guild.members.fetch({ user: userId, force: true, cache: false });
     cacheMember(key, member);
     return member;
   } catch (err) {

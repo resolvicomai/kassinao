@@ -104,6 +104,10 @@ const STRINGS: Strings = {
     pt: '🛑 Cancelei a inicialização. Nenhum áudio foi gravado.',
     en: '🛑 I cancelled startup. No audio was recorded.',
   },
+  'record.start-failed': {
+    pt: '❌ Não consegui iniciar a gravação. Tenta de novo daqui a pouco.',
+    en: "❌ I couldn't start the recording. Try again in a moment.",
+  },
   'record.stopping': {
     pt: '⏳ Essa gravação já está sendo encerrada. Não vou finalizar duas vezes.',
     en: '⏳ This recording is already stopping. I will not finalize it twice.',
