@@ -34,20 +34,26 @@ import {
 import {
   checkAccessForMcp,
   createAccessRequestContext,
+  currentGuildMembership,
   prevalidateGuildMembershipForMcp,
   TransientAccessError,
 } from './access';
 import { getMcpUser, McpToken, signMcpAccess, signMcpRefresh, verifyMcpRefresh } from './auth';
 import {
-  consumeExchangeCode,
+  claimExchangeCode,
+  commitExchangeCode,
   createSession,
   isRefreshAttemptId,
   isActiveSession,
   McpSessionCapacityError,
+  revokeUser,
+  revokeUserSession,
+  releaseExchangeCode,
   rotateSession,
 } from './mcpTokens';
 import { OpaqueCursorError, openOpaqueCursor, sealOpaqueCursor } from './opaqueCursor';
 import { formatInTz, RangeError as WindowError, RangeInput, resolveRange, ResolvedRange } from './range';
+import { revokeWebSessionsForUser } from './webSessions';
 
 /**
  * API /api/* que o conector MCP consome. É a ÚNICA porta dos dados de reunião para
@@ -181,6 +187,23 @@ function clientIp(req: Request): string {
   // NUNCA ler X-Forwarded-For[0] (o cliente forja e rotaciona, furando o rate-limit).
   // Com `trust proxy=1` (definido no server), req.ip é o hop confiável atrás do Cloudflare.
   return req.ip ?? 'unknown';
+}
+
+/**
+ * Gate barato que roda ANTES do parser JSON. Sem ele, um atacante anônimo pode
+ * obrigar o processo a ler/alocar corpos em /api sem consumir limite algum.
+ * Os limites específicos de exchange/refresh e das rotas autenticadas seguem
+ * existindo depois deste teto de borda.
+ */
+export function preBodyApiRateGate(req: Request, res: Response, next: NextFunction): void {
+  if (
+    rateLimited(`api-prebody-ip:${clientIp(req)}`, 180, 60_000) ||
+    globalRateLimited('api-prebody-global', 900, 60_000)
+  ) {
+    res.status(429).set('Retry-After', '30').json({ error: 'rate_limited' });
+    return;
+  }
+  next();
 }
 
 // ---------- helpers de query ----------
@@ -567,6 +590,7 @@ async function visibleInWindow(
           candidate.id === resume?.anchor.id &&
           candidate.startedAt === resume?.anchor.startedAt)) &&
       !m.demo &&
+      config.guildPolicy.allows(m.guildId) &&
       (!f.guildId || m.guildId === f.guildId) &&
       (!f.channelId || m.voiceChannelId === f.channelId) &&
       (!f.status || m.status === f.status) &&
@@ -596,7 +620,7 @@ async function visibleInWindow(
 /** Resolve uma gravação SÓ se o usuário pode vê-la; senão 404 (igual a inexistente). */
 async function getViewable(user: McpToken, id: string): Promise<RecordingMeta | undefined> {
   const meta = readMeta(id);
-  if (!meta || meta.demo) return undefined;
+  if (!meta || meta.demo || !config.guildPolicy.allows(meta.guildId)) return undefined;
   const access = await checkAccessForMcp(user, meta); // pode lançar → 503
   return access.view ? meta : undefined;
 }
@@ -851,54 +875,109 @@ export function mountMcpApi(app: Express): void {
     res.set('Cache-Control', 'private, no-store, max-age=0').set('Pragma', 'no-cache');
     next();
   });
+  // Precisa vir antes de express.json: o corpo hostil ainda não foi lido.
+  api.use(preBodyApiRateGate);
   api.use(express.json({ limit: '32kb' }));
 
   // ----- lifecycle de token (sem auth Bearer; protegido por rate-limit de IP) -----
 
-  api.post('/mcp/exchange', (req, res) => {
-    if (rateLimited(`ip:${clientIp(req)}`, 20, 60_000)) {
-      res.status(429).set('Retry-After', '30').json({ error: 'rate_limited' });
-      return;
-    }
-    const code = typeof req.body?.code === 'string' ? req.body.code : '';
-    const claimed = consumeExchangeCode(code);
-    if (!claimed) {
-      res.status(400).json({ error: 'invalid_code' });
-      return;
-    }
-    try {
-      res.set('Cache-Control', 'no-store').json(issueTokens(claimed.userId, claimed.name, claimed.label));
-    } catch (err) {
-      if (!(err instanceof McpSessionCapacityError)) throw err;
-      res.status(503).set('Retry-After', '60').json({ error: 'session_capacity' });
-    }
-  });
+  api.post(
+    '/mcp/exchange',
+    handle(async (req, res) => {
+      if (rateLimited(`ip:${clientIp(req)}`, 20, 60_000)) {
+        res.status(429).set('Retry-After', '30').json({ error: 'rate_limited' });
+        return;
+      }
+      if (!isClientReady()) {
+        res.status(503).set('Retry-After', '5').json({ error: 'starting' });
+        return;
+      }
+      const code = typeof req.body?.code === 'string' ? req.body.code : '';
+      const claimed = claimExchangeCode(code);
+      if (!claimed) {
+        res.status(400).json({ error: 'invalid_code' });
+        return;
+      }
+      const membership = await currentGuildMembership(claimed.userId);
+      if (membership === 'unavailable') {
+        releaseExchangeCode(claimed);
+        res.status(503).set('Retry-After', '5').json({ error: 'discord_unavailable' });
+        return;
+      }
+      if (membership === 'not-member') {
+        commitExchangeCode(claimed);
+        // A negação é global (nenhuma guild permitida), não a saída de uma guild
+        // isolada. Um código antigo não cria sessão e também encerra credenciais
+        // remanescentes sem depender do intent privilegiado GuildMembers.
+        revokeUser(claimed.userId);
+        revokeWebSessionsForUser(claimed.userId);
+        res.status(403).json({ error: 'not_authorized' });
+        return;
+      }
+      try {
+        const issued = issueTokens(claimed.userId, claimed.name, claimed.label);
+        if (!commitExchangeCode(claimed)) {
+          revokeUserSession(claimed.userId, issued.sid);
+          throw new Error('reserva do código MCP foi perdida antes do commit');
+        }
+        res.set('Cache-Control', 'no-store').json(issued.body);
+      } catch (err) {
+        if (err instanceof McpSessionCapacityError) {
+          releaseExchangeCode(claimed);
+          res.status(503).set('Retry-After', '60').json({ error: 'session_capacity' });
+          return;
+        }
+        throw err;
+      }
+    }),
+  );
 
-  api.post('/mcp/refresh', (req, res) => {
-    if (rateLimited(`ip:${clientIp(req)}`, 30, 60_000)) {
-      res.status(429).set('Retry-After', '30').json({ error: 'rate_limited' });
-      return;
-    }
-    const rt = typeof req.body?.refresh_token === 'string' ? req.body.refresh_token : undefined;
-    const rawAttempt = req.body?.attempt_id as unknown;
-    const attemptId = rawAttempt === undefined ? undefined : isRefreshAttemptId(rawAttempt) ? rawAttempt : null;
-    if (attemptId === null) {
-      res.status(400).json({ error: 'invalid_attempt' });
-      return;
-    }
-    const parsed = verifyMcpRefresh(rt);
-    if (!parsed) {
-      res.status(401).json({ error: 'unauthorized' });
-      return;
-    }
-    const rot = rotateSession(parsed.jti, parsed.gen, attemptId);
-    if (!rot.ok) {
-      // 'reuse' já matou a sessão; 'unknown' = revogada/expirada. Ambos → 401 uniforme.
-      res.status(401).json({ error: 'unauthorized' });
-      return;
-    }
-    res.set('Cache-Control', 'no-store').json(signPair(rot.userId, rot.name, parsed.jti, rot.gen, rot.exp));
-  });
+  api.post(
+    '/mcp/refresh',
+    handle(async (req, res) => {
+      if (rateLimited(`ip:${clientIp(req)}`, 30, 60_000)) {
+        res.status(429).set('Retry-After', '30').json({ error: 'rate_limited' });
+        return;
+      }
+      if (!isClientReady()) {
+        res.status(503).set('Retry-After', '5').json({ error: 'starting' });
+        return;
+      }
+      const rt = typeof req.body?.refresh_token === 'string' ? req.body.refresh_token : undefined;
+      const rawAttempt = req.body?.attempt_id as unknown;
+      const attemptId = rawAttempt === undefined ? undefined : isRefreshAttemptId(rawAttempt) ? rawAttempt : null;
+      if (attemptId === null) {
+        res.status(400).json({ error: 'invalid_attempt' });
+        return;
+      }
+      const parsed = verifyMcpRefresh(rt);
+      if (!parsed) {
+        res.status(401).json({ error: 'unauthorized' });
+        return;
+      }
+      const membership = await currentGuildMembership(parsed.id);
+      if (membership === 'unavailable') {
+        res.status(503).set('Retry-After', '5').json({ error: 'discord_unavailable' });
+        return;
+      }
+      if (membership === 'not-member') {
+        // Suspensão por saída vira revogação definitiva no primeiro refresh.
+        // `currentGuildMembership` só chega aqui após verificar todas as guilds
+        // permitidas, então o bug multi-guild de revogar cedo não reaparece.
+        revokeUser(parsed.id);
+        revokeWebSessionsForUser(parsed.id);
+        res.status(403).json({ error: 'not_authorized' });
+        return;
+      }
+      const rot = rotateSession(parsed.jti, parsed.gen, attemptId);
+      if (!rot.ok) {
+        // 'reuse' já matou a sessão; 'unknown' = revogada/expirada. Ambos → 401 uniforme.
+        res.status(401).json({ error: 'unauthorized' });
+        return;
+      }
+      res.set('Cache-Control', 'no-store').json(signPair(rot.userId, rot.name, parsed.jti, rot.gen, rot.exp));
+    }),
+  );
 
   // ----- rotas autenticadas de dados -----
 
@@ -1794,9 +1873,9 @@ export function mountMcpApi(app: Express): void {
 
 // ---------- auxiliares fora do closure ----------
 
-function issueTokens(userId: string, name: string, label?: string): Record<string, unknown> {
+function issueTokens(userId: string, name: string, label?: string): { sid: string; body: Record<string, unknown> } {
   const s = createSession(userId, name, label);
-  return signPair(userId, name, s.sid, s.gen, s.exp);
+  return { sid: s.sid, body: signPair(userId, name, s.sid, s.gen, s.exp) };
 }
 
 function signPair(userId: string, name: string, sid: string, gen: number, refreshExp: number): Record<string, unknown> {

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { config } from '../src/config';
+import { isCanonicalRecordingDirectory } from '../src/cleanup';
 import { buildAaiKeyterms } from '../src/processing/transcribe';
 import {
   audioBytesOf,
@@ -18,6 +19,16 @@ import {
 
 const DIR = process.env.RECORDINGS_DIR!;
 const DAY = 24 * 60 * 60 * 1000;
+
+describe('limpeza de diretórios órfãos', () => {
+  it('aceita somente o formato criado pelo RecordingSession', () => {
+    expect(isCanonicalRecordingDirectory('2026-07-14-0123456789')).toBe(true);
+    expect(isCanonicalRecordingDirectory('.cache')).toBe(false);
+    expect(isCanonicalRecordingDirectory('model-cache')).toBe(false);
+    expect(isCanonicalRecordingDirectory('../2026-07-14-0123456789')).toBe(false);
+    expect(isCanonicalRecordingDirectory('2026-07-14-012345678Z')).toBe(false);
+  });
+});
 
 function makeMeta(id: string, extra: Partial<RecordingMeta> = {}): RecordingMeta {
   return {
@@ -116,6 +127,8 @@ describe('liberar espaço (deleteAudioOnly) e tamanho em disco', () => {
 
 describe('keyterms do Universal-3.5-Pro (AssemblyAI)', () => {
   it('inclui participantes, presença, servidor e canal — sem duplicar', () => {
+    const previous = config.transcribeSendMeetingContext;
+    (config as { transcribeSendMeetingContext: boolean }).transcribeSendMeetingContext = true;
     const m = makeMeta('kt-1', {
       participants: [
         { id: 'u1', name: 'Kaio Vsf', avatar: null, trackFile: '1.flac', index: 1 },
@@ -126,24 +139,44 @@ describe('keyterms do Universal-3.5-Pro (AssemblyAI)', () => {
         { id: 'u3', name: 'Mudo da Silva', joinedAtMs: 0 },
       ],
     });
-    const terms = buildAaiKeyterms(m);
-    expect(terms).toContain('Kaio Vsf');
-    expect(terms).toContain('Mudo da Silva');
-    expect(terms).toContain('time');
-    expect(terms).toContain('daily');
-    expect(terms.filter((t) => t === 'Ana')).toHaveLength(1);
+    try {
+      const terms = buildAaiKeyterms(m);
+      expect(terms).toContain('Kaio Vsf');
+      expect(terms).toContain('Mudo da Silva');
+      expect(terms).toContain('time');
+      expect(terms).toContain('daily');
+      expect(terms.filter((t) => t === 'Ana')).toHaveLength(1);
+    } finally {
+      (config as { transcribeSendMeetingContext: boolean }).transcribeSendMeetingContext = previous;
+    }
   });
 
   it('respeita o limite da API: descarta termos com mais de 6 palavras e nomes de 1 caractere', () => {
+    const previous = config.transcribeSendMeetingContext;
+    (config as { transcribeSendMeetingContext: boolean }).transcribeSendMeetingContext = true;
     const m = makeMeta('kt-2', {
       participants: [
         { id: 'u1', name: 'um dois tres quatro cinco seis sete', avatar: null, trackFile: '1.flac', index: 1 },
         { id: 'u2', name: 'x', avatar: null, trackFile: '2.flac', index: 2 },
       ],
     });
-    const terms = buildAaiKeyterms(m);
-    expect(terms).not.toContain('um dois tres quatro cinco seis sete');
-    expect(terms).not.toContain('x');
+    try {
+      const terms = buildAaiKeyterms(m);
+      expect(terms).not.toContain('um dois tres quatro cinco seis sete');
+      expect(terms).not.toContain('x');
+    } finally {
+      (config as { transcribeSendMeetingContext: boolean }).transcribeSendMeetingContext = previous;
+    }
+  });
+
+  it('não envia identidade da reunião sem opt-in', () => {
+    const previous = config.transcribeSendMeetingContext;
+    (config as { transcribeSendMeetingContext: boolean }).transcribeSendMeetingContext = false;
+    try {
+      expect(buildAaiKeyterms(makeMeta('kt-private'))).not.toEqual(expect.arrayContaining(['time', 'daily']));
+    } finally {
+      (config as { transcribeSendMeetingContext: boolean }).transcribeSendMeetingContext = previous;
+    }
   });
 
   it('soma o vocabulário fixo do TRANSCRIBE_KEYTERMS', () => {

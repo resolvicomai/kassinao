@@ -4,12 +4,17 @@ process.env.APPLICATION_ID ||= 'test-app';
 process.env.DISCORD_CLIENT_SECRET ||= 'test-secret';
 process.env.COOKIE_SECRET = 'test-cookie-secret-0123456789abcdef';
 process.env.RECORDINGS_DIR ||= '/tmp/kassinao-test-recordings';
-// Não herdar BASE_URL do shell/runner: testes precisam de uma origem absoluta estável.
-process.env.BASE_URL = 'http://localhost:8080';
-delete process.env.APP_URL;
+// Não herdar URLs do shell/runner: testes usam a origem canônica moderna.
+process.env.APP_URL = 'http://localhost:8080';
+delete process.env.BASE_URL;
 delete process.env.PUBLIC_URL;
 delete process.env.DOCS_URL;
 delete process.env.MCP_URL;
+// A suíte usa IDs fictícios por teste; o opt-in explícito evita transformar a
+// configuração global de teste numa allowlist impossível de compartilhar.
+process.env.ALLOW_ALL_GUILDS = 'true';
+delete process.env.ALLOWED_GUILD_IDS;
+delete process.env.GUILD_ID;
 process.env.RETENTION_DAYS = '7';
 process.env.TEXT_RETENTION_DAYS = '90';
 // MCP habilitado nos testes, com segredo DISTINTO do cookie (isolamento exigido no boot).

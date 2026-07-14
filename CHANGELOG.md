@@ -4,6 +4,26 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.4] — 2026-07-14
+
+### Added
+
+- Private instances now require an explicit Discord guild allowlist. `ALLOW_ALL_GUILDS=true` is available only as a deliberate public multi-guild opt-in; `GUILD_ID` remains a command-registration filter and does not grant access.
+- Self-host configuration now supports exact proxy hops, a fork-specific source URL, explicit ASR fallback/context controls, optional OpenRouter attribution, and signed minutes webhooks.
+
+### Changed
+
+- `APP_URL` is the canonical origin for new deployments. `BASE_URL` remains a legacy alias and conflicting values fail startup.
+- External fallback, meeting context, AI minutes, OpenRouter attribution, and webhook delivery are off until the operator enables each path explicitly.
+- Public product links now lead only to the fictional demo, documentation, GitHub, and the npm connector package. Kassinão provides no hosted workspace, public signup, or shared meeting API.
+- The app and docs now pin `kassinao-mcp@1.0.6`; its npm metadata points to the public self-hosting documentation instead of a private operator API.
+
+### Fixed
+
+- Self-host documentation now matches the hard recording quotas enforced by the runtime, including admin-inclusive guild and global limits.
+- Fork-specific `SOURCE_URL` and `REPO_PUBLIC` settings now control the repository link inside private app navigation.
+- Minutes webhook documentation now defines the exact signed headers, raw-body HMAC input, replay window, constant-time comparison, and delivery-id idempotency contract.
+
 ## [1.4.3] — 2026-07-13
 
 ### Changed
@@ -40,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Authenticated actions in the private app no longer reject a canonical `app.kassinao.cloud` request when browser Fetch Metadata classifies its form navigation as cross-site. Exact origins remain required whenever the browser sends `Origin`; sibling and external origins remain blocked.
+- Authenticated actions in the private app no longer reject the canonical configured `APP_URL` when browser Fetch Metadata classifies its form navigation as cross-site. Exact origins remain required whenever the browser sends `Origin`; sibling and external origins remain blocked.
 
 ## [1.4.0] — 2026-07-13
 
@@ -52,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The official hosted service now uses `kassinao.cloud` for the landing/demo, `docs.kassinao.cloud` for documentation, `app.kassinao.cloud` for OAuth and private recordings/transcripts, and `mcp.kassinao.cloud` for the connector API. Unconfigured or retired origins cannot access API, OAuth, or private routes.
+- The maintainer-operated deployment adopted separate origins for the public landing, public docs, private OAuth/archive, and private connector API. It was not a hosted workspace or public signup; unconfigured or retired origins cannot access API, OAuth, or private routes.
 - `/ask` now resolves meeting dates separately from action deadlines (including relative deadlines such as `today`, `tomorrow`, and weekdays), ranks eligible meetings before applying context limits, and searches structured minutes fields including decisions, actions, owners, due dates, topics, attendance, and per-participant notes.
 - `kassinao-mcp` 1.0.3 pins saved refresh tokens to their issuing instance, isolates multiple local connections, serializes concurrent refreshes, preserves sessions across transient 429/5xx responses, and reports its package version to MCP clients.
 - Private web/API responses are `no-store`; session cookies are scoped to `/app`; state cookies are scoped to `/auth`; app mutations validate the exact request origin.
@@ -142,6 +162,7 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
+[1.4.4]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.4
 [1.4.3]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.3
 [1.4.2]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.2
 [1.4.1]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.1

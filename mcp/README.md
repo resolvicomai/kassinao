@@ -1,10 +1,12 @@
 # kassinao-mcp
 
-The **MCP** connector for [Kassinão](https://github.com/resolvicomai/kassinao): it lets your AI assistant (Claude Desktop, Cursor, etc.) answer questions about the meetings the bot recorded — **"what's pending this week?"**, **"who mentioned the budget on Tuesday?"**, **"list the calls between June 1 and 30"** — in natural language.
+The **MCP** connector for [Kassinão](https://github.com/resolvicomai/kassinao): it lets your AI assistant (Claude Desktop, Cursor, etc.) answer questions about meetings recorded by your own Kassinão instance.
 
-Official connector entry point and documentation: [mcp.kassinao.cloud](https://mcp.kassinao.cloud).
+Documentation: [docs.kassinao.cloud/en#mcp](https://docs.kassinao.cloud/en#mcp). Package: [npm](https://www.npmjs.com/package/kassinao-mcp).
 
-> Documentação em português: veja o README principal em [pt-BR](../README.pt-BR.md).
+> Kassinão does not provide a hosted workspace, public signup, or shared MCP API. Your operator deploys the bot, private app, and API. `KASSINAO_URL` must be the `MCP_URL` generated for that deployment.
+
+> Documentação em português: veja o [README principal em pt-BR](https://github.com/resolvicomai/kassinao/blob/main/README.pt-BR.md).
 
 ## How it works (and why it's safe)
 
@@ -16,13 +18,13 @@ The connector runs **on your machine** and is a **thin** HTTP client: it does **
 
 - **The bot admin must have enabled MCP** (`MCP_SECRET` set on the server). Without it, `/app/conectar-ia` and `/mcp` don't exist (404 / missing command).
 - **Node.js 20+** on your machine.
-- **The connector.** `npx -y kassinao-mcp@1.0.5` downloads and runs the pinned published release — nothing to install manually (you just need Node). Prefer running from source? `git clone` the repo, `cd mcp && npm ci --userconfig ../.npmrc.security && npm run build`; in the config, replace `"command": "npx"` / `"args": ["-y","kassinao-mcp@1.0.5"]` with `"command": "node"`, `"args": ["/absolute/path/to/repo/mcp/dist/index.js"]`.
+- **The connector.** `npx -y kassinao-mcp@1.0.6` downloads and runs the pinned published release — nothing to install manually (you just need Node). Prefer running from source? `git clone` the repo, `cd mcp && npm ci --userconfig ../.npmrc.security && npm run build`; in the config, replace `"command": "npx"` / `"args": ["-y","kassinao-mcp@1.0.6"]` with `"command": "node"`, `"args": ["/absolute/path/to/repo/mcp/dist/index.js"]`.
 
 ## Setup
 
 ### Option A — via the web page (easiest)
 
-1. Open [app.kassinao.cloud/app/conectar-ia](https://app.kassinao.cloud/app/conectar-ia) and sign in with Discord.
+1. Open `APP_URL/app/conectar-ia` on your Kassinão instance and sign in with Discord.
 2. Click **Generate connection** and copy the one-time code. It expires in about five minutes.
 3. Run the command shown on the page, paste the code into its hidden prompt, and press Enter. The connector stores the refresh token in a protected local file (`0600` on macOS/Linux; your profile's inherited ACL on Windows) and prints a config block containing only a non-secret profile id:
 
@@ -31,9 +33,9 @@ The connector runs **on your machine** and is a **thin** HTTP client: it does **
   "mcpServers": {
     "kassinao": {
       "command": "npx",
-      "args": ["-y", "kassinao-mcp@1.0.5"],
+      "args": ["-y", "kassinao-mcp@1.0.6"],
       "env": {
-        "KASSINAO_URL": "https://mcp.kassinao.cloud",
+        "KASSINAO_URL": "https://kassinao.your-domain.com",
         "KASSINAO_PROFILE": "PROFILE_PRINTED_BY_THE_COMMAND"
       }
     }
@@ -43,17 +45,17 @@ The connector runs **on your machine** and is a **thin** HTTP client: it does **
 
 4. Paste the printed block into your MCP client's config — `claude_desktop_config.json` (Claude Desktop), `~/.cursor/mcp.json` (Cursor), or wherever your assistant's docs point. Restart the client.
 
-For a self-hosted instance, open `APP_URL/app/conectar-ia`; the generated command already includes that instance's `MCP_URL`. When the instance only defines `BASE_URL`, both values use that same origin.
+The generated command already includes that instance's `MCP_URL`. `BASE_URL` is accepted only as a legacy alias for `APP_URL`; new deployments should configure `APP_URL` directly.
 
 ### Option B — no browser (VM/SSH)
 
 On Discord, the owner runs **`/mcp new`** (shown as **`/mcp novo`** on pt-BR clients) — ephemeral reply with a single-use code valid for ~5 min. Then:
 
 ```bash
-npx -y kassinao-mcp@1.0.5 exchange --stdin --url https://mcp.kassinao.cloud
+npx -y kassinao-mcp@1.0.6 exchange --stdin --url https://kassinao.your-domain.com
 ```
 
-Paste the one-time code when prompted. Input is hidden so the code does not enter shell history or process arguments. The command stores the token locally and prints a copy-ready config containing a non-secret `KASSINAO_PROFILE` id. Use that block as printed; it selects this connection's own token file without placing the refresh token in your client config. Replace the URL with your instance's `MCP_URL` when self-hosting.
+Replace the example URL with your instance's `MCP_URL`. Paste the one-time code when prompted. Input is hidden so the code does not enter shell history or process arguments. The command stores the token locally and prints a copy-ready config containing a non-secret `KASSINAO_PROFILE` id. Use that block as printed; it selects this connection's own token file without placing the refresh token in your client config.
 
 ## Where the token lives
 

@@ -8,11 +8,22 @@ import {
   config,
   normalizeBaseUrl,
   normalizeOrigin,
+  normalizeWebBindAddress,
   parseConfiguredNumber,
   resolveConfiguredOrigins,
+  validateDedicatedSecret,
   validateSecret,
 } from '../src/config';
-import { beginLogin, getWebUser, isAllowedWebMutation, logoutWeb, WebUser } from '../src/web/auth';
+import {
+  beginLogin,
+  finishLogin,
+  getWebUser,
+  isAllowedWebMutation,
+  logoutWeb,
+  serializeWebCookie,
+  webCookieSettings,
+  WebUser,
+} from '../src/web/auth';
 import { discordDemoPage } from '../src/web/discordDemo';
 import { landingPage } from '../src/web/landing';
 import { connectPage, messagePage, recordingPage, recordingsIndexPage } from '../src/web/page';
@@ -20,7 +31,12 @@ import { normalizedSearchTerms, recordingIncludesUser } from '../src/web/api';
 import type { RecordingMeta } from '../src/store';
 import { isLoopbackAddress } from '../src/util';
 import { webDeliveryErrorClass } from '../src/web/server';
-import { createWebSession, isActiveWebSession } from '../src/web/webSessions';
+import {
+  createWebSession,
+  isActiveWebSession,
+  revokeWebSessionsForUser,
+  webSessionScope,
+} from '../src/web/webSessions';
 
 function fakeRequest(method: string, headers: Record<string, string> = {}): Request {
   return {
@@ -62,16 +78,47 @@ function cookieResponse(): { res: Response; cookies: string[] } {
   return { res, cookies };
 }
 
-function loginState(cookies: string[]): { cookie: string; next: string } {
+function loginState(cookies: string[]): { cookie: string; next: string; state: string } {
   const cookie = cookies.find((value) => value.startsWith('kassinao_state='));
   if (!cookie) throw new Error('cookie OAuth state ausente');
   const token = decodeURIComponent(cookie.slice('kassinao_state='.length).split(';', 1)[0]);
   const body = token.split('.', 1)[0];
-  const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { next: string };
-  return { cookie, next: payload.next };
+  const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { next: string; state: string };
+  return { cookie, next: payload.next, state: payload.state };
+}
+
+function callbackRequest(saved: ReturnType<typeof loginState>): Request {
+  return {
+    method: 'GET',
+    query: { code: 'oauth-code', state: saved.state },
+    headers: { cookie: saved.cookie.split(';', 1)[0] },
+    get() {
+      return undefined;
+    },
+  } as unknown as Request;
 }
 
 describe('cookies e CSRF da superfície web privada', () => {
+  it('usa cookies __Host- em HTTPS sem Domain e com Path=/ + Secure', () => {
+    const settings = webCookieSettings('https://app.kassinao.cloud');
+    expect(settings).toEqual({
+      sessionName: '__Host-kassinao_session',
+      stateName: '__Host-kassinao_state',
+      sessionPath: '/',
+      statePath: '/',
+    });
+    const serialized = serializeWebCookie(
+      'https://app.kassinao.cloud',
+      settings.sessionName,
+      'token',
+      60_000,
+      settings.sessionPath,
+    );
+    expect(serialized).toContain('Path=/;');
+    expect(serialized).toContain('; Secure');
+    expect(serialized).not.toContain('Domain=');
+  });
+
   it('state fica em /auth e logout apaga sessão nova + legado', () => {
     const login = cookieResponse();
     beginLogin(login.res, '/app');
@@ -84,31 +131,102 @@ describe('cookies e CSRF da superfície web privada', () => {
   });
 
   it('mantém next local no limite e descarta o primeiro byte excedente sem criar cookie grande', () => {
-    const acceptedNext = `/${'a'.repeat(2_047)}`;
+    const acceptedNext = `/app?${'a'.repeat(2_043)}`;
     const accepted = cookieResponse();
     beginLogin(accepted.res, acceptedNext);
     expect(loginState(accepted.cookies)).toMatchObject({ next: acceptedNext });
     expect(loginState(accepted.cookies).cookie.length).toBeLessThanOrEqual(4_096);
 
     const oversized = cookieResponse();
-    beginLogin(oversized.res, `/${'a'.repeat(2_048)}`);
-    expect(loginState(oversized.cookies)).toMatchObject({ next: '/' });
+    beginLogin(oversized.res, `/app?${'a'.repeat(2_044)}`);
+    expect(loginState(oversized.cookies)).toMatchObject({ next: '/app' });
     expect(loginState(oversized.cookies).cookie.length).toBeLessThanOrEqual(4_096);
   });
 
   it('descarta next cujo escape JSON faria o cookie ultrapassar o limite do navegador', () => {
     const login = cookieResponse();
-    beginLogin(login.res, `/${'"'.repeat(2_047)}`);
+    beginLogin(login.res, `/app?${'"'.repeat(2_043)}`);
 
-    expect(loginState(login.cookies)).toMatchObject({ next: '/' });
+    expect(loginState(login.cookies)).toMatchObject({ next: '/app' });
     expect(loginState(login.cookies).cookie.length).toBeLessThanOrEqual(4_096);
   });
 
   it('descarta next que o navegador poderia interpretar como redirect externo', () => {
-    for (const unsafeNext of ['//evil.example', '/\\evil.example', 'https://evil.example']) {
+    for (const unsafeNext of ['//evil.example', '/\\evil.example', 'https://evil.example', '/docs']) {
       const login = cookieResponse();
       beginLogin(login.res, unsafeNext);
-      expect(loginState(login.cookies)).toMatchObject({ next: '/' });
+      expect(loginState(login.cookies)).toMatchObject({ next: '/app' });
+    }
+  });
+
+  it('só emite sessão depois da autorização de guild e preserva escopo limitado', async () => {
+    const login = cookieResponse();
+    beginLogin(login.res, '/app/conectar-ia');
+    const saved = loginState(login.cookies);
+    const response = cookieResponse();
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'discord-access' }), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 'oauth-user', username: 'alice', global_name: 'Alice', avatar: null }), {
+          status: 200,
+        }),
+      );
+    try {
+      const result = await finishLogin(callbackRequest(saved), response.res, async () => 'revoke-only');
+      expect(result.status).toBe('ok');
+      if (result.status !== 'ok') throw new Error('login não emitido');
+      expect(result.user.scope).toBe('revoke-only');
+      expect(webSessionScope(result.user.jti, result.user.id)).toBe('revoke-only');
+      expect(
+        response.cookies.some((cookie) => cookie.startsWith('kassinao_session=') && !cookie.includes('Max-Age=0')),
+      ).toBe(true);
+      revokeWebSessionsForUser(result.user.id);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it('nega outsider sem criar cookie de sessão', async () => {
+    const login = cookieResponse();
+    beginLogin(login.res, '/app');
+    const saved = loginState(login.cookies);
+    const response = cookieResponse();
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ access_token: 'discord-access' }), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 'outsider', username: 'outsider', global_name: null, avatar: null }), {
+          status: 200,
+        }),
+      );
+    try {
+      await expect(finishLogin(callbackRequest(saved), response.res, async () => 'denied')).resolves.toEqual({
+        status: 'denied',
+      });
+      expect(
+        response.cookies.some((cookie) => cookie.startsWith('kassinao_session=') && !cookie.includes('Max-Age=0')),
+      ).toBe(false);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it('trata rate limit ou falha do Discord como indisponibilidade, nunca como negação', async () => {
+    const login = cookieResponse();
+    beginLogin(login.res, '/app');
+    const saved = loginState(login.cookies);
+    const response = cookieResponse();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('', { status: 429 }));
+    try {
+      await expect(finishLogin(callbackRequest(saved), response.res, async () => 'denied')).resolves.toEqual({
+        status: 'unavailable',
+      });
+      expect(
+        response.cookies.some((cookie) => cookie.startsWith('kassinao_session=') && !cookie.includes('Max-Age=0')),
+      ).toBe(false);
+    } finally {
+      fetchMock.mockRestore();
     }
   });
 
@@ -119,6 +237,7 @@ describe('cookies e CSRF da superfície web privada', () => {
       id: 'web-user',
       name: 'Alice',
       avatar: null,
+      scope: 'full',
       exp,
       jti: createWebSession('web-user', exp),
     };
@@ -146,6 +265,18 @@ describe('cookies e CSRF da superfície web privada', () => {
     const ids = Array.from({ length: 11 }, () => createWebSession('cap-user', exp));
     expect(isActiveWebSession(ids[0], 'cap-user')).toBe(false);
     expect(isActiveWebSession(ids[10], 'cap-user')).toBe(true);
+  });
+
+  it('persiste o escopo da sessão e permite revogar todos os logins de uma conta', () => {
+    const exp = Date.now() + 60_000;
+    const userId = `scoped-user-${crypto.randomUUID()}`;
+    const limited = createWebSession(userId, exp, 'revoke-only');
+    const full = createWebSession(userId, exp, 'full');
+    expect(webSessionScope(limited, userId)).toBe('revoke-only');
+    expect(webSessionScope(full, userId)).toBe('full');
+    expect(revokeWebSessionsForUser(userId)).toBe(2);
+    expect(isActiveWebSession(limited, userId)).toBe(false);
+    expect(isActiveWebSession(full, userId)).toBe(false);
   });
 
   it('prioriza a origem exata mesmo quando Fetch Metadata classifica a navegação como cross-site', () => {
@@ -195,6 +326,13 @@ describe('configuração fail-fast', () => {
     expect(() => parseConfiguredNumber('PORT', '70000', 8080, { max: 65535 })).toThrow(/<= 65535/);
   });
 
+  it('mantém bare-node em loopback e exige wildcard explícito', () => {
+    expect(normalizeWebBindAddress(undefined)).toBe('127.0.0.1');
+    expect(normalizeWebBindAddress('localhost')).toBe('localhost');
+    expect(normalizeWebBindAddress('0.0.0.0')).toBe('0.0.0.0');
+    expect(() => normalizeWebBindAddress('web.internal')).toThrow(/WEB_BIND_ADDRESS/);
+  });
+
   it('normaliza só origens HTTP(S), sem caminho/credencial/query', () => {
     expect(normalizeBaseUrl('https://kassinao.example.com/')).toBe('https://kassinao.example.com');
     expect(normalizeOrigin('APP_URL', 'https://app.kassinao.cloud/')).toBe('https://app.kassinao.cloud');
@@ -209,13 +347,24 @@ describe('configuração fail-fast', () => {
     expect(config.publicUrl).toBe(config.appUrl);
     expect(config.docsUrl).toBe(config.appUrl);
     expect(config.mcpUrl).toBe(config.appUrl);
+    expect(config.trustProxyHops).toBe(0);
+    expect(config.transcribeFallbackProvider).toBe('none');
+    expect(config.transcribeSendMeetingContext).toBe(false);
+    expect(config.minutesEnabled).toBe('false');
+    expect(config.openrouterSiteUrl).toBe('');
   });
 
   it('resolve a topologia separada com a precedência documentada', () => {
+    expect(() =>
+      resolveConfiguredOrigins(
+        { BASE_URL: 'https://fallback.example', APP_URL: 'https://app.kassinao.cloud' },
+        'http://localhost:8080',
+      ),
+    ).toThrow(/origens diferentes/);
+
     expect(
       resolveConfiguredOrigins(
         {
-          BASE_URL: 'https://fallback.example',
           APP_URL: 'https://app.kassinao.cloud',
           PUBLIC_URL: 'https://kassinao.cloud',
           DOCS_URL: 'https://docs.kassinao.cloud',
@@ -246,6 +395,16 @@ describe('configuração fail-fast', () => {
   it('rejeita segredos HMAC curtos', () => {
     expect(() => validateSecret('COOKIE_SECRET', 'curto')).toThrow(/ao menos 32 bytes/);
     expect(validateSecret('COOKIE_SECRET', '0123456789abcdef0123456789abcdef')).toHaveLength(32);
+  });
+
+  it('rejeita segredo de webhook reutilizado de outra credencial', () => {
+    const shared = '0123456789abcdef0123456789abcdef';
+    expect(() => validateDedicatedSecret('MINUTES_WEBHOOK_SECRET', shared, [['COOKIE_SECRET', shared]])).toThrow(
+      /não pode ser igual a COOKIE_SECRET/,
+    );
+    expect(validateDedicatedSecret('MINUTES_WEBHOOK_SECRET', `${shared}-dedicado`, [['COOKIE_SECRET', shared]])).toBe(
+      `${shared}-dedicado`,
+    );
   });
 });
 
@@ -326,6 +485,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
       id: 'u-en',
       name: 'English user',
       avatar: null,
+      scope: 'full',
       exp: Date.now() + 60_000,
       jti: 'sid-en',
     };
@@ -344,6 +504,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
       id: 'u-page',
       name: 'Pessoa',
       avatar: null,
+      scope: 'full',
       exp: Date.now() + 60_000,
       jti: 'sid-page',
     };
@@ -516,7 +677,15 @@ describe('regressões de privacidade e acessibilidade da web', () => {
   it('atualiza e expira o feedback de cada tentativa de copiar o código MCP', () => {
     const html = connectPage({
       lang: 'pt',
-      user: { id: 'copy-user', name: 'Pessoa', avatar: null },
+      user: {
+        typ: 'session',
+        id: 'copy-user',
+        name: 'Pessoa',
+        avatar: null,
+        scope: 'full',
+        exp: Date.now() + 60_000,
+        jti: 'copy-user-session',
+      },
       exchangeCode: 'codigo-descartavel',
       label: 'Notebook',
     });
@@ -529,10 +698,48 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).toContain("status.textContent=''");
   });
 
+  it('só mostra o repositório configurado na sidebar privada quando REPO_PUBLIC está ligado', () => {
+    const originalRepoPublic = config.repoPublic;
+    const originalSourceUrl = config.sourceUrl;
+    const user: WebUser = {
+      typ: 'session',
+      id: 'source-link-user',
+      name: 'Pessoa',
+      avatar: null,
+      scope: 'full',
+      exp: Date.now() + 60_000,
+      jti: 'source-link-session',
+    };
+
+    try {
+      config.repoPublic = false;
+      config.sourceUrl = 'https://github.com/example/private-fork';
+      expect(connectPage({ lang: 'pt', user, sessions: [] })).not.toContain(
+        'href="https://github.com/example/private-fork"',
+      );
+
+      config.repoPublic = true;
+      const visible = connectPage({ lang: 'pt', user, sessions: [] });
+      expect(visible).toContain('href="https://github.com/example/private-fork"');
+      expect(visible).not.toContain('href="https://github.com/resolvicomai/kassinao"');
+    } finally {
+      config.repoPublic = originalRepoPublic;
+      config.sourceUrl = originalSourceUrl;
+    }
+  });
+
   it('isola retry, feedback e reset dos dois botões de cópia MCP em runtime', async () => {
     const html = connectPage({
       lang: 'pt',
-      user: { id: 'copy-runtime-user', name: 'Pessoa', avatar: null },
+      user: {
+        typ: 'session',
+        id: 'copy-runtime-user',
+        name: 'Pessoa',
+        avatar: null,
+        scope: 'full',
+        exp: Date.now() + 60_000,
+        jti: 'copy-runtime-session',
+      },
       exchangeCode: 'codigo-descartavel',
       label: 'Notebook',
     });
@@ -708,6 +915,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
       id: 'copy-user',
       name: 'Alice',
       avatar: null,
+      scope: 'full',
       exp: Date.now() + 60_000,
       jti: 'copy-session',
     };
@@ -727,6 +935,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
       id: 'context-user',
       name: 'Alice',
       avatar: null,
+      scope: 'full',
       exp: Date.now() + 60_000,
       jti: 'context-session',
     };
@@ -779,6 +988,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
       id: 'u-filter',
       name: 'Alice',
       avatar: null,
+      scope: 'full',
       exp: Date.now() + 60_000,
       jti: 'sid-filter',
     };
@@ -801,6 +1011,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
       id: 'u-token',
       name: 'Alice',
       avatar: null,
+      scope: 'full',
       exp: Date.now() + 60_000,
       jti: 'sid-token',
     };
@@ -833,6 +1044,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
         id: 'u1',
         name: 'Alice',
         avatar: null,
+        scope: 'full',
         exp: Date.now() + 60_000,
         jti: 'sid',
       },

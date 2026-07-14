@@ -42,10 +42,11 @@ describe('arquitetura compartilhada de idioma e rotas web', () => {
 
   it('separa landing, docs e MCP sem quebrar a topologia de origem única', () => {
     const topology = {
-      appUrl: 'https://app.kassinao.cloud',
+      appUrl: 'https://app.example.com',
       publicUrl: 'https://kassinao.cloud',
       docsUrl: 'https://docs.kassinao.cloud',
-      mcpUrl: 'https://mcp.kassinao.cloud',
+      mcpUrl: 'https://mcp.example.com',
+      sourceUrl: 'https://github.com/example/kassinao-fork',
     };
 
     expect(publicRoutePath('docs', 'pt', topology)).toBe('/');
@@ -54,9 +55,10 @@ describe('arquitetura compartilhada de idioma e rotas web', () => {
     expect(publicSurfaceUrl('demo', 'en', topology)).toBe('https://kassinao.cloud/en/demo');
     expect(publicSurfaceUrl('docs', 'pt', topology)).toBe('https://docs.kassinao.cloud/');
     expect(publicSurfaceUrl('docs', 'en', topology)).toBe('https://docs.kassinao.cloud/en');
-    expect(mcpDiscoveryUrl(topology, 'pt')).toBe('https://mcp.kassinao.cloud/');
-    expect(mcpDiscoveryUrl(topology, 'en')).toBe('https://mcp.kassinao.cloud/en');
-    expect(publicSite('home', 'en', topology).links.mcp).toBe('https://mcp.kassinao.cloud/en');
+    expect(mcpDiscoveryUrl(topology, 'pt')).toBe('https://docs.kassinao.cloud/#mcp');
+    expect(mcpDiscoveryUrl(topology, 'en')).toBe('https://docs.kassinao.cloud/en#mcp');
+    expect(publicSite('home', 'en', topology).links.mcp).toBe('https://docs.kassinao.cloud/en#mcp');
+    expect(publicSite('home', 'en', topology).links.github).toBe('https://github.com/example/kassinao-fork');
   });
 
   it('resolve idioma por escolha explícita, cookie, navegador e fallback nessa ordem', () => {

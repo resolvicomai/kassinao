@@ -1307,7 +1307,7 @@ export function landingPage(lang: Locale = 'pt'): string {
             <div class="mcp-query">${esc(T('Quais ações ficaram pendentes esta semana?', 'What action items are still pending this week?'))}</div>
             <div class="mcp-response">${esc(T('4 ações em 2 reuniões. Bea e Rafa têm prazos até sexta.', '4 action items across 2 meetings. Bea and Rafa have deadlines by Friday.'))}</div>
             <p class="mcp-note">${esc(T('Somente leitura, individual e revogável.', 'Read-only, individual, and revocable.'))}</p>
-            <a class="button button-secondary" href="${site.links.mcp}" target="_blank" rel="noopener noreferrer">${esc(T('Ver o MCP', 'View the MCP'))}</a>
+            <a class="button button-secondary" href="${site.links.mcp}">${esc(T('Entender o MCP', 'Understand MCP'))}</a>
           </div>
         </div>
       </div>
@@ -1322,7 +1322,7 @@ export function landingPage(lang: Locale = 'pt'): string {
         <p>${esc(T('A infraestrutura é sua e a política de acesso continua ancorada no Discord.', 'You own the infrastructure, and access policy stays anchored to Discord.'))}</p>
       </div>
       <div class="trust-list" data-reveal>
-        <article class="trust-row"><strong>${esc(T('Self-hosted', 'Self-hosted'))}</strong><p>${esc(T('Rode com Docker na sua VPS e mantenha os arquivos sob o controle do operador.', 'Run it with Docker on your VPS and keep files under the operator\u2019s control.'))}</p></article>
+        <article class="trust-row"><strong>${esc(T('Self-hosted', 'Self-hosted'))}</strong><p>${esc(T('Não existe workspace hospedado ou cadastro público. Você roda seu próprio bot e app na sua VPS.', 'There is no hosted workspace or public signup. You run your own bot and app on your VPS.'))}</p></article>
         <article class="trust-row"><strong>${esc(T('Acesso revalidado', 'Revalidated access'))}</strong><p>${esc(T('Login, busca, perguntas e MCP respeitam a participação e as permissões da reunião.', 'Login, search, questions, and MCP respect meeting participation and permissions.'))}</p></article>
         <article class="trust-row"><strong>${esc(T('Retenção configurável', 'Configurable retention'))}</strong><p>${esc(T('Áudio e texto podem ter ciclos diferentes. Apague o peso sem perder a memória pesquisável.', 'Audio and text can have different lifecycles. Remove the heavy files without losing searchable memory.'))}</p></article>
         <article class="trust-row"><strong>${esc(T('IA escolhida por você', 'Your choice of AI'))}</strong><p>${esc(T('Use processamento local ou configure um provider. Quando há provider externo, o áudio ou texto necessário é enviado conforme essa configuração.', 'Use local processing or configure a provider. When an external provider is enabled, the required audio or text is sent according to that configuration.'))}</p></article>
@@ -1333,7 +1333,7 @@ export function landingPage(lang: Locale = 'pt'): string {
   <section class="wrap final-section">
     <div class="final-cta" data-reveal>
       <h2>${esc(T('Instale no seu servidor. Mantenha o controle.', 'Install it on your server. Keep control.'))}</h2>
-      <p>${esc(T('O Kassinão é open source. Rode na sua VPS, conecte o provedor que preferir e transforme a próxima call em memória do time.', 'Kassinão is open source. Run it on your VPS, connect the provider you prefer, and turn the next call into team memory.'))}</p>
+      <p>${esc(T('O Kassinão é open source. Crie seu app do Discord, use seu próprio domínio e transforme a próxima call em memória do time.', 'Kassinão is open source. Create your Discord app, use your own domain, and turn the next call into team memory.'))}</p>
       <div class="section-actions">
         <a class="button button-primary" href="${site.links.docs}">${esc(T('Abrir guia de instalação', 'Open installation guide'))}</a>
         <a class="button button-secondary" href="${site.links.github}" target="_blank" rel="noopener noreferrer">${esc(T('Auditar o código', 'Audit the code'))}</a>
@@ -1348,7 +1348,7 @@ export function landingPage(lang: Locale = 'pt'): string {
     <div class="footer-brand"><span class="brand-mark" aria-hidden="true">k/</span><span>Kassinão · ${esc(T('feito para o Discord', 'built for Discord'))}</span></div>
     <div class="footer-links">
       <a href="${site.links.docs}">Docs</a>
-      <a href="${site.links.mcp}" target="_blank" rel="noopener noreferrer">MCP</a>
+      <a href="${site.links.mcp}">MCP</a>
       <a href="${site.links.github}" target="_blank" rel="noopener noreferrer">GitHub</a>
     </div>
     ${language}

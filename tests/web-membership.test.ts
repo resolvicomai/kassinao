@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
+import http from 'node:http';
 import { cleanInline } from '../src/sanitize';
 import type { RecordingMeta } from '../src/store';
 import { FreshMembershipBudget, TransientAccessError } from '../src/web/access';
@@ -9,11 +10,14 @@ import {
   currentGuildMembership,
   encodeWebLibraryCursor,
   httpsRedirectTarget,
+  hardenHttpServer,
   isRateLimitedWebPath,
   mcpConnectionCreationRateLimited,
   MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE,
   parseWebLibraryCursor,
+  referrerPolicyForWebRequest,
   robotsForRoles,
+  shouldNoIndexWebResponse,
   sitemapForRoles,
   WebOrigins,
   webHostRoutingDecision,
@@ -260,6 +264,21 @@ describe('paginação ACL da biblioteca web', () => {
 });
 
 describe('políticas HTTP da superfície web', () => {
+  it('preserva Origin nos formulários servidos pela raiz dedicada do app', () => {
+    expect(referrerPolicyForWebRequest(webRequest('app.kassinao.cloud', '/'), splitOrigins)).toBe('same-origin');
+    expect(referrerPolicyForWebRequest(webRequest('kassinao.cloud', '/'), splitOrigins)).toBe('no-referrer');
+    expect(referrerPolicyForWebRequest(webRequest('docs.kassinao.cloud', '/'), splitOrigins)).toBe('no-referrer');
+  });
+
+  it('aplica limites do listener contra slowloris e churn de keep-alive', () => {
+    const server = http.createServer();
+    hardenHttpServer(server);
+    expect(server.requestTimeout).toBe(120_000);
+    expect(server.headersTimeout).toBe(10_000);
+    expect(server.keepAliveTimeout).toBe(5_000);
+    expect(server.maxRequestsPerSocket).toBe(1_000);
+  });
+
   it('isola landing, docs, app e MCP pelo host configurado', () => {
     expect(webHostRoutingDecision(webRequest('kassinao.cloud', '/'), splitOrigins)).toMatchObject({ action: 'pass' });
     expect(webHostRoutingDecision(webRequest('docs.kassinao.cloud', '/?lang=pt'), splitOrigins)).toMatchObject({
@@ -272,6 +291,11 @@ describe('políticas HTTP da superfície web', () => {
     });
     expect(webHostRoutingDecision(webRequest('app.kassinao.cloud', '/app/rec/abc'), splitOrigins)).toMatchObject({
       action: 'pass',
+    });
+    expect(webHostRoutingDecision(webRequest('app.kassinao.cloud', '/?lang=pt'), splitOrigins)).toEqual({
+      action: 'rewrite',
+      roles: ['app'],
+      path: '/app?lang=pt',
     });
     expect(
       webHostRoutingDecision(webRequest('mcp.kassinao.cloud', '/api/meetings', 'POST'), splitOrigins),
@@ -330,9 +354,10 @@ describe('políticas HTTP da superfície web', () => {
       roles: ['app'],
       status: 404,
     });
-    expect(webHostRoutingDecision(webRequest('kassinao.cloud', '/App/rec/abc'), splitOrigins)).toMatchObject({
-      action: 'redirect',
-      target: 'https://app.kassinao.cloud/app/rec/abc',
+    expect(webHostRoutingDecision(webRequest('kassinao.cloud', '/App/rec/abc'), splitOrigins)).toEqual({
+      action: 'reject',
+      roles: ['public'],
+      status: 404,
     });
     expect(webHostRoutingDecision(webRequest('kassinao.cloud', '/demo/'), splitOrigins)).toMatchObject({
       action: 'redirect',
@@ -371,6 +396,11 @@ describe('políticas HTTP da superfície web', () => {
       roles: [],
       status: 421,
     });
+    expect(webHostRoutingDecision(webRequest('kassinao.cloud', '/auth/callback?code=x'), splitOrigins)).toEqual({
+      action: 'reject',
+      roles: ['public'],
+      status: 404,
+    });
   });
 
   it('publica robots e sitemaps próprios para site e docs e bloqueia app/MCP', () => {
@@ -381,6 +411,15 @@ describe('políticas HTTP da superfície web', () => {
     expect(sitemapForRoles(['public'], splitOrigins)).toContain('<loc>https://kassinao.cloud/en/demo</loc>');
     expect(sitemapForRoles(['docs'], splitOrigins)).toContain('<loc>https://docs.kassinao.cloud/en</loc>');
     expect(sitemapForRoles(['mcp'], splitOrigins)).toBeUndefined();
+  });
+
+  it('marca toda superfície privada e health como não indexável', () => {
+    expect(shouldNoIndexWebResponse(webRequest('app.kassinao.cloud', '/assets/kassinao-mark.png'), splitOrigins)).toBe(
+      true,
+    );
+    expect(shouldNoIndexWebResponse(webRequest('mcp.kassinao.cloud', '/'), splitOrigins)).toBe(true);
+    expect(shouldNoIndexWebResponse(webRequest('kassinao.cloud', '/health'), splitOrigins)).toBe(true);
+    expect(shouldNoIndexWebResponse(webRequest('kassinao.cloud', '/demo'), splitOrigins)).toBe(false);
   });
 
   it('redireciona HTTP público para a origem HTTPS configurada sem confiar no Host', () => {

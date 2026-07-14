@@ -1,8 +1,8 @@
 {
   "name": "kassinao",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "private": true,
-  "description": "Open-source Discord bot that turns per-speaker recordings into searchable transcripts, meeting notes, tasks, and sourced answers.",
+  "description": "Open-source, self-hosted Discord bot that turns per-speaker recordings into searchable transcripts, meeting notes, tasks, and sourced answers.",
   "license": "AGPL-3.0-or-later",
   "author": "Mauro Marques",
   "homepage": "https://kassinao.cloud/en",

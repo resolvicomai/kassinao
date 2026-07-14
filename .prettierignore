@@ -1,5 +1,6 @@
 dist
 node_modules
+.pnpm-store
 recordings
 .claude
 .scratch
@@ -8,3 +9,6 @@ recordings
 scratchpad
 mcp/dist
 mcp/node_modules
+launch-assets
+output
+tmp

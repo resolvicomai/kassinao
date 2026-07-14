@@ -9,22 +9,25 @@
 #      pacote oficial verificado. Evite executar instaladores remotos via pipe.
 #   2. Crie um storage com credencial de criar/listar/ler, mas sem excluir, e um
 #      remoto `crypt` por cima dele. Proteja o config:
-#      chmod 600 /root/.config/rclone/upload.conf
+#      chmod 600 /home/SEU_USUARIO/.config/rclone/upload.conf
 #   3. Teste:
-#      RCLONE_CONFIG=/root/.config/rclone/upload.conf \
+#      RECORDINGS_DIR=/caminho/absoluto/kassinao/recordings \
+#      RCLONE_CONFIG=/home/SEU_USUARIO/.config/rclone/upload.conf \
 #      RCLONE_REMOTE=kassinao-backup:SEU_BUCKET ./scripts/backup.sh
 #   4. Agende no cron. Configure retenção no provedor (lifecycle/object lock) ou
 #      rode backup-retention.sh em outro cron com uma credencial de exclusão.
 #
 # Restaurar:
-#   rclone --config /root/.config/rclone/upload.conf copy \
+#   rclone --config /home/SEU_USUARIO/.config/rclone/upload.conf copy \
 #     kassinao-backup:SEU_BUCKET/kassinao-AAAAMMDD-HHMMSS.tar.gz /tmp/
-#   tar -xzf /tmp/kassinao-*.tar.gz -C /root/kassinao/
+#   tar -xzf /tmp/kassinao-*.tar.gz -C /caminho/absoluto/kassinao/
 #
 set -euo pipefail
 umask 077
 
-REC_DIR="${RECORDINGS_DIR:-/root/kassinao/recordings}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+REC_DIR="${RECORDINGS_DIR:-$PROJECT_DIR/recordings}"
 REMOTE="${RCLONE_REMOTE:?Defina RCLONE_REMOTE com um remoto rclone crypt}"
 RCLONE_CONFIG_FILE="${RCLONE_CONFIG:?Defina RCLONE_CONFIG com o config de upload}"
 LOCK_FILE="${BACKUP_LOCK_FILE:-/run/lock/kassinao-backup.lock}"
@@ -47,7 +50,12 @@ die() {
 
 command -v rclone >/dev/null 2>&1 || die "rclone não instalado"
 command -v flock >/dev/null 2>&1 || die "flock não instalado"
+case "$REC_DIR" in
+  /*) ;;
+  *) die "RECORDINGS_DIR precisa ser um caminho absoluto" ;;
+esac
 [ -d "$REC_DIR" ] || die "pasta de gravações não encontrada: $REC_DIR"
+[ ! -L "$REC_DIR" ] || die "RECORDINGS_DIR não pode ser um link simbólico"
 if [ ! -f "$RCLONE_CONFIG_FILE" ] || [ -L "$RCLONE_CONFIG_FILE" ]; then
   die "RCLONE_CONFIG precisa ser um arquivo regular, não um link simbólico"
 fi

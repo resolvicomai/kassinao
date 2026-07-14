@@ -19,21 +19,38 @@ services:
         sync: false
       - key: DISCORD_CLIENT_SECRET
         sync: false
-      - key: BASE_URL
-        sync: false # ex.: https://kassinao.onrender.com; APP_URL/PUBLIC_URL/DOCS_URL/MCP_URL herdam esta origem
+      - key: APP_URL
+        sync: false # URL HTTPS da SUA instância, ex.: https://seu-kassinao.onrender.com
+      - key: ALLOWED_GUILD_IDS
+        sync: false # IDs dos seus servidores Discord, separados por vírgula
+      - key: ALLOW_ALL_GUILDS
+        value: 'false' # altere somente se você operar deliberadamente um bot público multi-guild
       - key: GUILD_ID
-        sync: false
+        sync: false # filtro opcional de registro; precisa estar na allowlist
+      - key: TRUST_PROXY_HOPS
+        value: '1' # proxy HTTPS do Render
+      - key: WEB_BIND_ADDRESS
+        value: 0.0.0.0 # wildcard apenas dentro do container isolado do Render
+      - key: SOURCE_URL
+        value: https://github.com/resolvicomai/kassinao
       - key: RECORDINGS_DIR
         value: /app/recordings
-      # Transcrição + Ata por IA: ponha um provider e a chave correspondente (ou deixe vazio p/ só gravar).
+      # Seguro por padrão: grava sem enviar áudio/texto a providers externos.
       - key: TRANSCRIBE_PROVIDER
-        sync: false # assemblyai | groq | openai | gemini | none
+        value: none # assemblyai | groq | openai | gemini | command | none
+      - key: TRANSCRIBE_FALLBACK_PROVIDER
+        value: none # uma GROQ_API_KEY isolada não liga fallback
+      - key: TRANSCRIBE_SEND_MEETING_CONTEXT
+        value: 'false'
+      - key: MINUTES_ENABLED
+        value: 'false'
+      # Para habilitar IA, altere os defaults acima e configure só as chaves usadas.
       - key: ASSEMBLYAI_API_KEY
-        sync: false # https://www.assemblyai.com — US$50 de crédito grátis (top-3 em pt-BR)
+        sync: false # opcional; https://www.assemblyai.com
       - key: GROQ_API_KEY
-        sync: false # https://console.groq.com — transcrição free tier + fallback (ative Zero Data Retention)
+        sync: false # opcional; https://console.groq.com (ative Zero Data Retention)
       - key: OPENROUTER_API_KEY
-        sync: false # https://openrouter.ai — LLM da ata (padrão google/gemini-2.5-flash)
+        sync: false # opcional; https://openrouter.ai
       # Conector de IA (MCP) — opcional, mas é feature de destaque: sem MCP_SECRET
       # o /app/conectar-ia e a API /api/* ficam DESLIGADOS (opt-in deliberado).
       - key: MCP_SECRET
