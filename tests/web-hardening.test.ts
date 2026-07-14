@@ -2,7 +2,8 @@ import type { Request, Response } from 'express';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import vm from 'node:vm';
+import { describe, expect, it, vi } from 'vitest';
 import {
   config,
   normalizeBaseUrl,
@@ -14,10 +15,11 @@ import {
 import { beginLogin, getWebUser, isAllowedWebMutation, logoutWeb, WebUser } from '../src/web/auth';
 import { discordDemoPage } from '../src/web/discordDemo';
 import { landingPage } from '../src/web/landing';
-import { connectPage, recordingPage, recordingsIndexPage } from '../src/web/page';
+import { connectPage, messagePage, recordingPage, recordingsIndexPage } from '../src/web/page';
 import { normalizedSearchTerms, recordingIncludesUser } from '../src/web/api';
 import type { RecordingMeta } from '../src/store';
 import { isLoopbackAddress } from '../src/util';
+import { webDeliveryErrorClass } from '../src/web/server';
 import { createWebSession, isActiveWebSession } from '../src/web/webSessions';
 
 function fakeRequest(method: string, headers: Record<string, string> = {}): Request {
@@ -164,6 +166,15 @@ describe('cookies e CSRF da superfície web privada', () => {
     expect(isAllowedWebMutation(fakeRequest('POST', { 'sec-fetch-site': 'cross-site' }), base)).toBe(false);
     expect(isAllowedWebMutation(fakeRequest('POST'), base)).toBe(true); // cliente não-browser, sem cookie automático
     expect(isAllowedWebMutation(fakeRequest('GET', { origin: 'https://evil.example.com' }), base)).toBe(true);
+  });
+
+  it('classifica falhas de entrega sem registrar mensagem, caminho ou identificador', () => {
+    expect(webDeliveryErrorClass({ code: 'ECONNABORTED', message: '/private/recording.mp3' })).toBe('client-abort');
+    expect(webDeliveryErrorClass({ code: 'ECONNRESET' })).toBe('client-abort');
+    expect(webDeliveryErrorClass({ code: 'ENOENT' })).toBe('missing');
+    expect(webDeliveryErrorClass({ code: 'EACCES' })).toBe('permission');
+    expect(webDeliveryErrorClass({ code: 'ENOSPC' })).toBe('io');
+    expect(webDeliveryErrorClass(new Error('/private/recording.mp3'))).toBe('other');
   });
 
   it('detalhes de health reconhecem somente socket loopback', () => {
@@ -445,6 +456,294 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).toContain('!p.paused&&!p.ended');
   });
 
+  it('ações POST mostram estado de envio e bloqueiam clique duplo depois da confirmação', () => {
+    const dir = path.join(process.cwd(), 'docs', 'example');
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;
+    const html = recordingPage(meta, { live: false, canDelete: true, lang: 'pt' });
+
+    expect(html).toContain(`action="/app/rec/${meta.id}/liberar-audio"`);
+    expect(html).toContain('e.submitter');
+    expect(html).toContain("button.setAttribute('aria-busy','true')");
+    expect(html).toContain('button.disabled=true');
+    expect(html).toContain("window.addEventListener('pageshow'");
+    expect(html).toContain('if(event.persisted)');
+    expect(html).toContain('location.replace(restore)');
+    expect(html).toContain('else location.reload()');
+    expect(html).toContain('data-submit-busy');
+  });
+
+  it('depois de liberar o áudio confirma o sucesso, mantém a memória e remove a ação repetida', () => {
+    const dir = path.join(process.cwd(), 'docs', 'example');
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;
+    meta.audioDeleted = true;
+    const html = recordingPage(meta, {
+      live: false,
+      canDelete: true,
+      lang: 'pt',
+      flash: 'Espaço liberado — o áudio foi apagado; transcrição, ata e notas continuam.',
+    });
+
+    expect(html).toContain('role="status"');
+    expect(html).toContain('Espaço liberado');
+    expect(html).toContain('O áudio já foi liberado');
+    expect(html).not.toContain(`action="/app/rec/${meta.id}/liberar-audio"`);
+    expect(html).toContain(`action="/app/rec/${meta.id}/delete"`);
+  });
+
+  it('player e downloads expõem progresso e erro sem deixar a pessoa numa ação muda', () => {
+    const dir = path.join(process.cwd(), 'docs', 'example');
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;
+    const html = recordingPage(meta, { live: false, canDelete: true, lang: 'pt' });
+
+    expect(html).toContain('id="kplayer-status"');
+    expect(html).toContain('data-loading="Carregando áudio…"');
+    expect(html).toContain('data-error="Não foi possível carregar o áudio.');
+    expect(html).not.toContain("player.addEventListener('loadstart'");
+    expect(html).toContain("player.addEventListener('play'");
+    expect(html).toContain("player.addEventListener('waiting'");
+    expect(html).toContain("player.addEventListener('error'");
+    expect(html).toContain("error.name === 'NotAllowedError'");
+    expect(html).toContain("error.name === 'AbortError'");
+    expect(html).toContain('data-download');
+    expect(html).toContain('data-download-heavy');
+    expect(html).toContain('id="kdownload-status"');
+    expect(html).toContain('Preparando o download…');
+    expect(html).toContain("if(link.getAttribute('aria-busy')==='true'){event.preventDefault();return;}");
+    expect(html).toContain('token!==downloadFeedback');
+    expect(html).toContain('O download foi solicitado e pode continuar sendo preparado.');
+  });
+
+  it('atualiza e expira o feedback de cada tentativa de copiar o código MCP', () => {
+    const html = connectPage({
+      lang: 'pt',
+      user: { id: 'copy-user', name: 'Pessoa', avatar: null },
+      exchangeCode: 'codigo-descartavel',
+      label: 'Notebook',
+    });
+
+    expect(html).toContain('var copyFeedback=0');
+    expect(html).toContain("status.textContent='Copiando…'");
+    expect(html).toContain('token===copyFeedback');
+    expect(html).toContain('var stateTimer=null');
+    expect(html).toContain('delete b.dataset.copyState');
+    expect(html).toContain("status.textContent=''");
+  });
+
+  it('isola retry, feedback e reset dos dois botões de cópia MCP em runtime', async () => {
+    const html = connectPage({
+      lang: 'pt',
+      user: { id: 'copy-runtime-user', name: 'Pessoa', avatar: null },
+      exchangeCode: 'codigo-descartavel',
+      label: 'Notebook',
+    });
+    const script = Array.from(html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi), (match) => match[1]).find(
+      (candidate) => candidate.includes("wire('kcopycode','kcode')"),
+    );
+    if (!script) throw new Error('Script de cópia MCP não encontrado.');
+
+    type RuntimeListener = () => void;
+    function runtimeElement(textContent = '') {
+      const attributes = new Map<string, string>();
+      const listeners = new Map<string, RuntimeListener>();
+      return {
+        attributes,
+        listeners,
+        dataset: {} as Record<string, string>,
+        disabled: false,
+        textContent,
+        focus: vi.fn(),
+        addEventListener(type: string, listener: RuntimeListener) {
+          listeners.set(type, listener);
+        },
+        setAttribute(name: string, value: string) {
+          attributes.set(name, value);
+        },
+        removeAttribute(name: string) {
+          attributes.delete(name);
+        },
+      };
+    }
+
+    const copyCode = runtimeElement('Copiar código');
+    const copyCommand = runtimeElement('Copiar comando');
+    const code = runtimeElement('codigo-descartavel');
+    const command = runtimeElement('npx kassinao-mcp connect');
+    const status = runtimeElement();
+    const elements: Record<string, ReturnType<typeof runtimeElement>> = {
+      kcopycode: copyCode,
+      kcopy: copyCommand,
+      kcode: code,
+      kcfg: command,
+      'kcopy-status': status,
+    };
+    const fallbackArea = {
+      value: '',
+      style: {} as Record<string, string>,
+      setAttribute: vi.fn(),
+      select: vi.fn(),
+      remove: vi.fn(),
+    };
+    const execCommand = vi.fn(() => false);
+    const timers = new Map<number, { callback: () => void; delay: number }>();
+    const scheduledTimerIds: number[] = [];
+    let nextTimerId = 1;
+    const setTimeout = (callback: () => void, delay: number) => {
+      const id = nextTimerId++;
+      timers.set(id, { callback, delay });
+      scheduledTimerIds.push(id);
+      return id;
+    };
+    const clearTimeout = (id: number | null) => {
+      if (id !== null) timers.delete(id);
+    };
+    const writeText = vi
+      .fn<(value: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error('clipboard indisponível'))
+      .mockResolvedValue(undefined);
+    const selection = { removeAllRanges: vi.fn(), addRange: vi.fn() };
+    const document = {
+      body: { appendChild: vi.fn() },
+      createElement: () => fallbackArea,
+      createRange: () => ({ selectNodeContents: vi.fn() }),
+      execCommand,
+      getElementById: (id: string) => elements[id] ?? null,
+    };
+    const window = {
+      addEventListener: vi.fn(),
+      getSelection: () => selection,
+    };
+
+    vm.runInNewContext(script, {
+      clearTimeout,
+      document,
+      navigator: { clipboard: { writeText } },
+      setTimeout,
+      window,
+    });
+
+    const settle = async () => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    };
+    const clickCode = copyCode.listeners.get('click');
+    const clickCommand = copyCommand.listeners.get('click');
+    if (!clickCode || !clickCommand) throw new Error('Listeners de cópia MCP não instalados.');
+
+    clickCode();
+    await settle();
+    expect(copyCode.dataset.copyState).toBe('error');
+    expect(copyCode.disabled).toBe(false);
+
+    clickCode();
+    expect(copyCode.dataset.copyState).toBeUndefined();
+    expect(copyCode.attributes.get('aria-busy')).toBe('true');
+    expect(status.textContent).toBe('Copiando…');
+    await settle();
+    expect(copyCode.dataset.copyState).toBe('done');
+    expect(copyCode.textContent).toBe('Copiado');
+    expect(copyCode.disabled).toBe(true);
+
+    const [firstStateTimer, firstStatusTimer] = scheduledTimerIds.slice(-2);
+    expect(timers.get(firstStateTimer)?.delay).toBe(2_000);
+    expect(timers.get(firstStatusTimer)?.delay).toBe(2_000);
+
+    clickCommand();
+    expect(timers.has(firstStateTimer)).toBe(true);
+    expect(timers.has(firstStatusTimer)).toBe(false);
+    await settle();
+    expect(copyCommand.dataset.copyState).toBe('done');
+    expect(copyCommand.textContent).toBe('Copiado');
+
+    timers.get(firstStateTimer)?.callback();
+    expect(copyCode.textContent).toBe('Copiar código');
+    expect(copyCode.dataset.copyState).toBeUndefined();
+    expect(copyCode.disabled).toBe(false);
+
+    const [secondStateTimer, secondStatusTimer] = scheduledTimerIds.slice(-2);
+    timers.get(secondStateTimer)?.callback();
+    timers.get(secondStatusTimer)?.callback();
+    expect(copyCommand.textContent).toBe('Copiar comando');
+    expect(copyCommand.dataset.copyState).toBeUndefined();
+    expect(copyCommand.disabled).toBe(false);
+    expect(status.textContent).toBe('');
+    expect(writeText).toHaveBeenCalledTimes(3);
+  });
+
+  it('preserva busca e falantes desligados quando o processamento recarrega a gravação', () => {
+    const dir = path.join(process.cwd(), 'docs', 'example');
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;
+    const transcript = [
+      { speaker: 'Alice', startMs: 0, endMs: 1_000, text: 'Primeiro trecho' },
+      { speaker: 'Bob', startMs: 1_100, endMs: 2_000, text: 'Segundo trecho' },
+    ];
+    const html = recordingPage(meta, { live: false, canDelete: false, lang: 'pt', transcript });
+
+    expect(html).toContain('sessionStorage.setItem(filterKey');
+    expect(html).toContain('sessionStorage.getItem(filterKey)');
+    expect(html).toContain('state.off.indexOf(c.dataset.sp)');
+    expect(html).toContain('input.value=state.q');
+  });
+
+  it('falha de cópia oferece fallback e feedback visível no app e no conector', () => {
+    const dir = path.join(process.cwd(), 'docs', 'example');
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;
+    const minutes = {
+      resumo: 'Resumo',
+      decisoes: [],
+      acoes: [{ tarefa: 'Enviar proposta' }],
+      topicos: [],
+      porParticipante: [],
+    };
+    meta.minutes = { status: 'done' };
+    const recording = recordingPage(meta, { live: false, canDelete: false, lang: 'pt', minutes });
+    expect(recording).toContain("document.execCommand('copy')");
+    expect(recording).toContain('var timer=setTimeout(function()');
+    expect(recording).toContain('clearTimeout(timer)');
+    expect(recording).toContain('legacyCopy(value).then(resolve,reject)');
+    expect(recording).toContain('Não foi possível copiar');
+    expect(recording).toContain('delete cp.dataset.copyState;cp.disabled=false;');
+
+    const user: WebUser = {
+      typ: 'session',
+      id: 'copy-user',
+      name: 'Alice',
+      avatar: null,
+      exp: Date.now() + 60_000,
+      jti: 'copy-session',
+    };
+    const connector = connectPage({ lang: 'pt', user, exchangeCode: 'one-time-code' });
+    expect(connector).toContain("document.execCommand('copy')");
+    expect(connector).toContain('var timer=setTimeout(function()');
+    expect(connector).toContain('clearTimeout(timer)');
+    expect(connector).toContain('legacyCopy(value).then(resolve,reject)');
+    expect(connector).toContain('Não consegui copiar. Selecione o texto manualmente.');
+    expect(connector).toContain('aria-live="polite"');
+    expect(connector).toContain('delete b.dataset.copyState;b.disabled=false;');
+  });
+
+  it('página de erro pode voltar ao contexto da ação sem aceitar URL externa', () => {
+    const user: WebUser = {
+      typ: 'session',
+      id: 'context-user',
+      name: 'Alice',
+      avatar: null,
+      exp: Date.now() + 60_000,
+      jti: 'context-session',
+    };
+    const contextual = messagePage('Erro', 'Falhou', user, 'pt', {
+      backHref: '/app/rec/meeting-1#exportar',
+      backLabel: 'Voltar à gravação',
+      active: 'rec',
+    });
+    expect(contextual).toContain('href="/app/rec/meeting-1#exportar"');
+    expect(contextual).toContain('data-restore-href="/app/rec/meeting-1#exportar"');
+    expect(contextual).toContain('Voltar à gravação');
+
+    const unsafe = messagePage('Erro', 'Falhou', user, 'pt', { backHref: 'https://evil.example' });
+    expect(unsafe).toContain('href="/app"');
+    expect(unsafe).not.toContain('evil.example');
+  });
+
   it('não revela corpo, credenciais ou detalhes crus do provedor na página da gravação', () => {
     const dir = path.join(process.cwd(), 'docs', 'example');
     const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8')) as RecordingMeta;
@@ -517,6 +816,9 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).not.toContain('exchange preview-one-time-code');
     expect(html).not.toContain('KASSINAO_REFRESH_TOKEN');
     expect(html).not.toContain('data-app-locale');
+    expect(html).toContain('data-restore-href="/app/conectar-ia"');
+    expect(html).toContain("window.addEventListener('pagehide'");
+    expect(html).toContain("['kcode','kcfg']");
   });
 
   it('logout do app é POST protegido, nunca link GET mutável', () => {

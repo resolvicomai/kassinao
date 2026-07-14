@@ -1,5 +1,142 @@
-import { describe, expect, it } from 'vitest';
+import vm from 'node:vm';
+import { describe, expect, it, vi } from 'vitest';
 import { docsPage } from '../src/web/docs';
+
+type Listener = (event?: { key?: string }) => void;
+
+function fakeElement() {
+  const attributes = new Map<string, string>();
+  const listeners = new Map<string, Listener>();
+  return {
+    attributes,
+    listeners,
+    textContent: '',
+    value: '',
+    hidden: false,
+    disabled: false,
+    focus: vi.fn(),
+    addEventListener(type: string, listener: Listener) {
+      listeners.set(type, listener);
+    },
+    setAttribute(name: string, value: string) {
+      attributes.set(name, value);
+    },
+    removeAttribute(name: string) {
+      attributes.delete(name);
+    },
+    getAttribute(name: string) {
+      return attributes.get(name) ?? null;
+    },
+  };
+}
+
+function docsRuntime(writeText: (value: string) => Promise<void>, legacyCopySucceeds = true) {
+  const html = docsPage('pt');
+  const scripts = Array.from(html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi), (match) => match[1]);
+  const script = scripts.at(-1);
+  if (!script) throw new Error('Script de interação da documentação não encontrado.');
+
+  const classes = new Set<string>();
+  const body = {
+    appendChild: vi.fn(),
+    classList: {
+      contains: (name: string) => classes.has(name),
+      remove: (name: string) => classes.delete(name),
+      toggle: (name: string, force: boolean) => (force ? classes.add(name) : classes.delete(name)),
+    },
+  };
+  const menuButton = fakeElement();
+  const backdrop = fakeElement();
+  const sidebar = fakeElement();
+  const search = fakeElement();
+  const searchStatus = fakeElement();
+  const noResults = fakeElement();
+  const themeButton = fakeElement();
+  const copyButton = fakeElement();
+  const copyStatus = fakeElement();
+  const code = fakeElement();
+  code.textContent = 'docker compose up -d';
+  const codeBlock = {
+    querySelector(selector: string) {
+      if (selector === 'code') return code;
+      if (selector === '[data-copy-status]') return copyStatus;
+      return null;
+    },
+  };
+  Object.assign(copyButton, { closest: () => codeBlock });
+
+  const elements: Record<string, ReturnType<typeof fakeElement>> = {
+    'mobile-menu': menuButton,
+    'nav-backdrop': backdrop,
+    'docs-sidebar': sidebar,
+    'docs-search': search,
+    'search-status': searchStatus,
+    'no-results': noResults,
+    'theme-toggle': themeButton,
+  };
+  const documentListeners = new Map<string, Listener>();
+  const documentElement = fakeElement();
+  const fallbackArea = {
+    value: '',
+    style: {} as Record<string, string>,
+    setAttribute: vi.fn(),
+    select: vi.fn(),
+    remove: vi.fn(),
+  };
+  const execCommand = vi.fn(() => legacyCopySucceeds);
+  const document = {
+    body,
+    documentElement,
+    createElement: () => fallbackArea,
+    execCommand,
+    getElementById: (id: string) => elements[id] ?? null,
+    querySelector: () => null,
+    querySelectorAll: (selector: string) => (selector === '[data-copy]' ? [copyButton] : []),
+    addEventListener: (type: string, listener: Listener) => documentListeners.set(type, listener),
+  };
+  const timers: Array<(() => void) | undefined> = [];
+  const windowListeners = new Map<string, Listener>();
+  const window = {
+    innerWidth: 390,
+    addEventListener: (type: string, listener: Listener) => windowListeners.set(type, listener),
+    matchMedia: () => ({ matches: true }),
+    setTimeout(callback: () => void) {
+      timers.push(callback);
+      return timers.length - 1;
+    },
+    clearTimeout(id: number) {
+      timers[id] = undefined;
+    },
+  };
+
+  vm.runInNewContext(script, {
+    document,
+    window,
+    navigator: { clipboard: { writeText } },
+    IntersectionObserver: undefined,
+  });
+
+  return {
+    html,
+    body,
+    window,
+    menuButton,
+    backdrop,
+    sidebar,
+    search,
+    copyButton,
+    copyStatus,
+    execCommand,
+    fallbackArea,
+    documentListeners,
+    windowListeners,
+    timers,
+  };
+}
+
+async function settlePromises(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
 
 describe('documentation page', () => {
   it('renders complete Portuguese documentation by default', () => {
@@ -76,5 +213,115 @@ describe('documentation page', () => {
       expect(html).toContain("url('/assets/space-grotesk.woff2')");
       expect(html).toContain('aria-live="polite"');
     }
+  });
+
+  it('shows accessible progress and failure feedback when copying code fails', async () => {
+    let rejectCopy: ((reason?: unknown) => void) | undefined;
+    const runtime = docsRuntime(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectCopy = reject;
+        }),
+      false,
+    );
+
+    expect(runtime.html).toContain('data-copy-status role="status" aria-live="polite"');
+    runtime.copyButton.listeners.get('click')?.();
+
+    expect(runtime.copyButton.disabled).toBe(true);
+    expect(runtime.copyButton.attributes.get('aria-busy')).toBe('true');
+    expect(runtime.copyStatus.textContent).toBe('Copiando...');
+
+    await settlePromises();
+    rejectCopy?.(new Error('clipboard unavailable'));
+    await settlePromises();
+
+    expect(runtime.copyButton.disabled).toBe(false);
+    expect(runtime.copyButton.attributes.has('aria-busy')).toBe(false);
+    expect(runtime.copyStatus.textContent).toBe('Falha ao copiar');
+  });
+
+  it('restores the copy action after a successful attempt', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    const runtime = docsRuntime(writeText);
+
+    runtime.copyButton.listeners.get('click')?.();
+    expect(runtime.copyButton.disabled).toBe(true);
+    expect(runtime.copyStatus.textContent).toBe('Copiando...');
+    await settlePromises();
+
+    expect(writeText).toHaveBeenCalledWith('docker compose up -d');
+    expect(runtime.copyButton.disabled).toBe(true);
+    expect(runtime.copyButton.attributes.has('aria-busy')).toBe(false);
+    expect(runtime.copyStatus.textContent).toBe('Copiado');
+
+    runtime.timers.at(-1)?.();
+    expect(runtime.copyButton.disabled).toBe(false);
+    expect(runtime.copyStatus.textContent).toBe('');
+  });
+
+  it('abandons a hung Clipboard API attempt and completes through the legacy fallback', async () => {
+    const writeText = vi.fn(() => new Promise<void>(() => undefined));
+    const runtime = docsRuntime(writeText);
+
+    runtime.copyButton.listeners.get('click')?.();
+    await settlePromises();
+
+    expect(writeText).toHaveBeenCalledWith('docker compose up -d');
+    expect(runtime.copyButton.disabled).toBe(true);
+    expect(runtime.timers[0]).toBeTypeOf('function');
+
+    runtime.timers[0]?.();
+    await settlePromises();
+
+    expect(runtime.execCommand).toHaveBeenCalledWith('copy');
+    expect(runtime.fallbackArea.remove).toHaveBeenCalledOnce();
+    expect(runtime.copyButton.disabled).toBe(true);
+    expect(runtime.copyButton.attributes.has('aria-busy')).toBe(false);
+    expect(runtime.copyStatus.textContent).toBe('Copiado');
+
+    runtime.timers.at(-1)?.();
+    expect(runtime.copyButton.disabled).toBe(false);
+    expect(runtime.copyStatus.textContent).toBe('');
+  });
+
+  it('returns focus to the mobile menu button whenever an open menu closes', () => {
+    const runtime = docsRuntime(() => Promise.resolve());
+
+    runtime.menuButton.listeners.get('click')?.();
+    expect(runtime.body.classList.contains('nav-open')).toBe(true);
+    expect(runtime.search.focus).toHaveBeenCalledOnce();
+
+    runtime.backdrop.listeners.get('click')?.();
+    expect(runtime.body.classList.contains('nav-open')).toBe(false);
+    expect(runtime.menuButton.attributes.get('aria-expanded')).toBe('false');
+    expect(runtime.menuButton.focus).not.toHaveBeenCalled();
+    runtime.timers[0]?.();
+    expect(runtime.menuButton.focus).toHaveBeenCalledOnce();
+
+    runtime.menuButton.listeners.get('click')?.();
+    runtime.documentListeners.get('keydown')?.({ key: 'Escape' });
+    runtime.timers[1]?.();
+    expect(runtime.menuButton.focus).toHaveBeenCalledTimes(2);
+
+    runtime.documentListeners.get('keydown')?.({ key: 'Escape' });
+    expect(runtime.timers).toHaveLength(2);
+    expect(runtime.menuButton.focus).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the mobile menu state coherent when the viewport becomes desktop-sized', () => {
+    const runtime = docsRuntime(() => Promise.resolve());
+
+    runtime.menuButton.listeners.get('click')?.();
+    expect(runtime.menuButton.attributes.get('aria-expanded')).toBe('true');
+
+    runtime.window.innerWidth = 1200;
+    runtime.windowListeners.get('resize')?.();
+
+    expect(runtime.body.classList.contains('nav-open')).toBe(false);
+    expect(runtime.menuButton.attributes.get('aria-expanded')).toBe('false');
+    expect(runtime.sidebar.attributes.has('aria-hidden')).toBe(false);
+    expect(runtime.sidebar.attributes.has('inert')).toBe(false);
+    expect(runtime.menuButton.focus).not.toHaveBeenCalled();
   });
 });

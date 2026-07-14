@@ -3,7 +3,14 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { RecordingMeta } from '../src/store';
 import type { WebUser } from '../src/web/auth';
-import { applyCspNonce, contentSecurityPolicy, CSP_NONCE_PLACEHOLDER } from '../src/web/csp';
+import {
+  applyCspNonce,
+  contentSecurityPolicy,
+  CSP_NONCE_PLACEHOLDER,
+  DEFAULT_REFERRER_POLICY,
+  referrerPolicyForPath,
+  WEB_REFERRER_POLICY,
+} from '../src/web/csp';
 import { docsPage } from '../src/web/docs';
 import { landingPage } from '../src/web/landing';
 import { connectPage, messagePage, recordingPage, recordingsIndexPage } from '../src/web/page';
@@ -22,6 +29,15 @@ function exampleRecording(): RecordingMeta {
 }
 
 describe('Content Security Policy sem script inline irrestrito', () => {
+  it('preserva o Origin dos formulários POST same-origin sem vazar referrer para outros sites', () => {
+    // Pelo Fetch Standard, `no-referrer` serializa o Origin de POST no-cors
+    // como `null`; o middleware CSRF rejeita esse valor antes da rota.
+    expect(WEB_REFERRER_POLICY).toBe('same-origin');
+    expect(referrerPolicyForPath('/app/rec/exemplo')).toBe(WEB_REFERRER_POLICY);
+    expect(referrerPolicyForPath('/auth/callback')).toBe(DEFAULT_REFERRER_POLICY);
+    expect(DEFAULT_REFERRER_POLICY).toBe('no-referrer');
+  });
+
   it('autoriza somente scripts marcados com o nonce da resposta', () => {
     const nonce = 'dGVzdC1ub25jZS0xMjM0NQ==';
     const policy = contentSecurityPolicy(nonce);

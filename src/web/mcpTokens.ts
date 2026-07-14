@@ -344,6 +344,17 @@ const codeByUser = new Map<string, string>();
 const CODE_TTL_MS = 5 * 60 * 1000;
 export const MAX_PENDING_EXCHANGE_CODES = 5_000;
 
+interface StagedExchangeCode {
+  exchangeCode: string;
+  label?: string;
+  exp: number;
+}
+
+// Estado efêmero do Post/Redirect/Get da interface. A URL contém apenas a rota
+// fixa; o código continua no processo e só o mesmo usuário autenticado consegue
+// retirá-lo uma vez para renderização.
+const stagedExchangeCodes = new Map<string, StagedExchangeCode>();
+
 export class McpExchangeCodeCapacityError extends Error {
   constructor() {
     super('limite global de códigos MCP pendentes atingido');
@@ -360,9 +371,42 @@ function gcCodes(): void {
   }
 }
 
+function gcStagedExchangeCodes(nowMs = Date.now()): void {
+  for (const [userId, staged] of stagedExchangeCodes) {
+    if (staged.exp < nowMs) stagedExchangeCodes.delete(userId);
+  }
+}
+
+export function stageExchangeCodeForDisplay(
+  userId: string,
+  exchangeCode: string,
+  label?: string,
+  nowMs = Date.now(),
+): void {
+  gcStagedExchangeCodes(nowMs);
+  stagedExchangeCodes.set(userId, {
+    exchangeCode,
+    label: label || undefined,
+    exp: nowMs + CODE_TTL_MS,
+  });
+}
+
+/** Retira somente o envelope de exibição; o código continua disponível à troca MCP. */
+export function consumeStagedExchangeCode(
+  userId: string,
+  nowMs = Date.now(),
+): { exchangeCode: string; label?: string } | undefined {
+  gcStagedExchangeCodes(nowMs);
+  const staged = stagedExchangeCodes.get(userId);
+  if (!staged) return undefined;
+  stagedExchangeCodes.delete(userId);
+  return { exchangeCode: staged.exchangeCode, label: staged.label };
+}
+
 /** Cria um código curto de uso único (~5 min) que o binário MCP troca por tokens. */
 export function createExchangeCode(userId: string, name: string, label?: string): string {
   gcCodes();
+  stagedExchangeCodes.delete(userId);
   const previous = codeByUser.get(userId);
   if (previous) codes.delete(previous);
   if (codes.size >= MAX_PENDING_EXCHANGE_CODES) {
@@ -380,6 +424,7 @@ export function consumeExchangeCode(code: string): { userId: string; name: strin
   const c = codes.get(code);
   if (c) codes.delete(code);
   if (c && codeByUser.get(c.userId) === code) codeByUser.delete(c.userId);
+  if (c && stagedExchangeCodes.get(c.userId)?.exchangeCode === code) stagedExchangeCodes.delete(c.userId);
   if (!c || c.exp < Date.now()) return undefined;
   return { userId: c.userId, name: c.name, label: c.label };
 }

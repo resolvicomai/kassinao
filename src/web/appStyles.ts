@@ -447,6 +447,11 @@ export const APP_CSS = `
   }
   .btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
   .btn:active { transform: translateY(1px); }
+  :where(button, .btn)[aria-busy='true'], :where(button, .btn):disabled {
+    cursor: wait;
+    opacity: .68;
+    pointer-events: none;
+  }
   .btn small { font-size: 10px; font-weight: 500; opacity: .78; }
   .btn.secondary { border-color: var(--border-strong); background: var(--surface-2); color: var(--text-strong); }
   .btn.secondary:hover { border-color: var(--text-dim); background: var(--surface-3); }
@@ -923,6 +928,9 @@ export const APP_CSS = `
     cursor: pointer;
   }
   .copybtn:hover { border-color: var(--border-strong); color: var(--text-strong); }
+  :where(.copybtn, .btn)[data-copy-state='error'] { border-color: var(--danger); color: var(--danger); }
+  .media-status { min-height: 20px; margin-top: 8px; }
+  .media-status[role='alert'] { color: var(--danger); }
   .tsearch { display: grid; gap: 8px; margin: 2px 0 12px; }
   .transcript { display: grid; gap: 4px; }
   .tblock { padding: 12px 0; border-bottom: 1px solid var(--border); }
