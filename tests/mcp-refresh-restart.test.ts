@@ -30,10 +30,17 @@ describe('persistência do retry idempotente MCP', () => {
     const first = beforeRestart.rotateSession(session.sid, 0, attemptId);
     expect(first).toMatchObject({ ok: true, gen: 1, replayed: false });
 
-    const persisted = JSON.parse(fs.readFileSync(path.join(root, '.mcp-sessions.json'), 'utf8')) as Array<{
-      lastRefreshAttempt?: { id: string; fromGen: number; replayUntil: number };
+    const sessionFile = path.join(root, '.mcp-sessions.json');
+    const persisted = JSON.parse(fs.readFileSync(sessionFile, 'utf8')) as Array<{
+      lastRefreshAttempt?: { id: string; fromGen: number; replayUntil?: number };
     }>;
     expect(persisted[0]?.lastRefreshAttempt).toMatchObject({ id: attemptId, fromGen: 0 });
+
+    // Simula o schema anterior já persistido e um notebook que ficou suspenso
+    // além da antiga janela de cinco minutos.
+    if (!persisted[0]?.lastRefreshAttempt) throw new Error('tentativa não persistida');
+    persisted[0].lastRefreshAttempt.replayUntil = Date.now() - 1;
+    fs.writeFileSync(sessionFile, JSON.stringify(persisted), { mode: 0o600 });
 
     vi.resetModules();
     const afterRestart = await import('../src/web/mcpTokens');
@@ -41,6 +48,10 @@ describe('persistência do retry idempotente MCP', () => {
 
     expect(retry).toMatchObject({ ok: true, gen: 1, replayed: true });
     expect(afterRestart.isActiveSession(session.sid)).toBe(true);
+    const migrated = JSON.parse(fs.readFileSync(sessionFile, 'utf8')) as Array<{
+      lastRefreshAttempt?: Record<string, unknown>;
+    }>;
+    expect(migrated[0]?.lastRefreshAttempt).toEqual({ id: attemptId, fromGen: 0 });
     afterRestart.revokeUser(userId);
   });
 });

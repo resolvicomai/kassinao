@@ -4,6 +4,25 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] — 2026-07-13
+
+### Changed
+
+- Gemini transcription now defaults to `gemini-3.5-flash` because Google shut down `gemini-2.0-flash` on 2026-06-01. Operators using `TRANSCRIBE_PROVIDER=gemini` without an explicit `TRANSCRIBE_MODEL` should review the current Gemini pricing before upgrading.
+- The app, docs, and Discord setup instructions now pin `kassinao-mcp@1.0.5` instead of resolving an unspecified future release.
+- `kassinao-mcp` 1.0.5 adds the opaque result/scan cursor contract, rejects credential-bearing redirects, bounds token responses and stdin before allocation, and keeps the reproducible profile-scoped credential store introduced in 1.0.4.
+- Native Opus is compiled from the signed npm source tarball; ffmpeg and tini come from signed Debian repositories instead of postinstall executable downloads.
+
+### Fixed
+
+- Every recording request revalidates current Discord membership. Historical access is limited to the starter, people who were present, and current admins; destructive actions always force a separate check.
+- Public Discord panels and completion notices contain only generic status. Private details stay in freshly authorized DMs/pages, and a durable, no-delete migration neutralizes historical bot messages without overwriting concurrent edits.
+- Membership REST calls, archive scans, transcript reads, notes, presence identities, candidates, guilds, payload bytes, segments, recording starts, pending processing, and private DM fanout now have durable per-user and global availability budgets. Guild timelines stay pre-indexed, web libraries use authenticated bounded cursors, and large transcript routes paginate or fail before unbounded allocation.
+- Signed web tokens now reject non-canonical, Unicode-confusable, and oversized encodings; OAuth continuation input and cookies are bounded; cursor continuation is tied to its user, query, sort, purpose, expiry, and underlying content version.
+- MCP aggregate endpoints now enforce current guild membership and recording ACLs before exposing results, deny orphaned recordings, resume bounded scans without skipping authorized meetings or transcript hits, and reject stale continuations after source mutation.
+- The application container no longer receives the Cloudflare Tunnel token from the shared Compose environment.
+- Private notification fanout is bounded and resumable; successful DMs are not duplicated, starter DMs revalidate membership, and webhook failures never log credential-bearing URLs.
+
 ## [1.4.2] — 2026-07-13
 
 ### Changed
@@ -123,6 +142,7 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
+[1.4.3]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.3
 [1.4.2]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.2
 [1.4.1]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.1
 [1.4.0]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.0

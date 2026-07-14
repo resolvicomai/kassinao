@@ -148,21 +148,33 @@ describe('registro de sessões (revogação + rotação-com-reuso)', () => {
     expect(isActiveSession(s.sid)).toBe(false);
   });
 
-  it('limita o replay idempotente a cinco minutos', () => {
+  it('mantém o retry idempotente depois de suspensão maior que cinco minutos', () => {
     vi.useFakeTimers();
-    const userId = `u-expired-retry-${crypto.randomUUID()}`;
+    const userId = `u-suspended-retry-${crypto.randomUUID()}`;
     try {
       const s = createSession(userId, 'Bob');
       const attempt = '0123456789abcdef0123456789abcdef';
       rotateSession(s.sid, 0, attempt);
-      vi.advanceTimersByTime(5 * 60_000 + 1);
+      vi.advanceTimersByTime(6 * 60_000);
 
-      expect(rotateSession(s.sid, 0, attempt)).toMatchObject({ ok: false, reason: 'reuse' });
-      expect(isActiveSession(s.sid)).toBe(false);
+      expect(rotateSession(s.sid, 0, attempt)).toMatchObject({ ok: true, gen: 1, replayed: true });
+      expect(isActiveSession(s.sid)).toBe(true);
     } finally {
       revokeUser(userId);
       vi.useRealTimers();
     }
+  });
+
+  it('encerra o retry anterior após a próxima rotação bem-sucedida', () => {
+    const userId = `u-old-retry-${crypto.randomUUID()}`;
+    const s = createSession(userId, 'Bob');
+    const firstAttempt = '0123456789abcdef0123456789abcdef';
+    const nextAttempt = 'fedcba9876543210fedcba9876543210';
+
+    expect(rotateSession(s.sid, 0, firstAttempt)).toMatchObject({ ok: true, gen: 1, replayed: false });
+    expect(rotateSession(s.sid, 1, nextAttempt)).toMatchObject({ ok: true, gen: 2, replayed: false });
+    expect(rotateSession(s.sid, 0, firstAttempt)).toMatchObject({ ok: false, reason: 'reuse' });
+    expect(isActiveSession(s.sid)).toBe(false);
   });
 
   it('revokeUser derruba todas as sessões do usuário na hora', () => {

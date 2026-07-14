@@ -241,15 +241,22 @@ export const config = {
   /** true quando texto (transcrição/ata/meta) nunca expira sozinho. */
   textRetentionUnlimited,
   maxRecordingHours: numberEnv('MAX_RECORDING_HOURS', 6, { min: Number.EPSILON }),
+  /** Sessões globais consumindo recursos, inclusive durante início/encerramento. */
+  recordingMaxConcurrent: numberEnv('RECORDING_MAX_CONCURRENT', 2, { min: 1, integer: true }),
+  /** Cota dura móvel por servidor, somando inícios manuais e automáticos; admin não ignora. */
+  recordingGuildStartsPer24h: numberEnv('RECORDING_GUILD_STARTS_PER_24H', 12, { min: 1, integer: true }),
+  /** Cotas duras globais contra churn e custo externo. */
+  recordingStartsGlobalPerHour: numberEnv('RECORDING_STARTS_GLOBAL_PER_HOUR', 8, { min: 1, integer: true }),
+  recordingStartsGlobal24h: numberEnv('RECORDING_STARTS_GLOBAL_PER_24H', 32, { min: 1, integer: true }),
+  /** Vagas reservadas antes da captura até cook + ASR + ata terminarem. */
+  recordingMaxPendingProcessing: numberEnv('RECORDING_MAX_PENDING_PROCESSING', 12, {
+    min: 1,
+    integer: true,
+  }),
   /** Cooldown global por membro comum entre inícios manuais; admin ignora. */
   manualRecordUserCooldownSec: numberEnv('MANUAL_RECORD_USER_COOLDOWN_SEC', 60, { min: 0, integer: true }),
   /** Cooldown do servidor entre inícios manuais de membros comuns; admin ignora. */
   manualRecordGuildCooldownSec: numberEnv('MANUAL_RECORD_GUILD_COOLDOWN_SEC', 15, { min: 0, integer: true }),
-  /** Teto móvel de 24h para inícios manuais por servidor; admin ignora e não consome quota. */
-  manualRecordGuildStartsPer24h: numberEnv('MANUAL_RECORD_GUILD_STARTS_PER_24H', 48, {
-    min: 1,
-    integer: true,
-  }),
   mp3Bitrate: process.env.MP3_BITRATE || '192k',
   cookieSecret: loadCookieSecret(),
   /** Fuso para datas no transcript .md e fallback da página (o navegador tem prioridade na web). */

@@ -1,9 +1,7 @@
 import { ChildProcess, spawn } from 'node:child_process';
-import ffmpegStatic from 'ffmpeg-static';
 
 export function ffmpegPath(): string {
-  if (!ffmpegStatic) throw new Error('Binário do ffmpeg não encontrado (ffmpeg-static)');
-  return ffmpegStatic as unknown as string;
+  return process.env.FFMPEG_PATH?.trim() || 'ffmpeg';
 }
 
 // Watchdog contra ffmpeg TRAVADO, não contra encode lento: uma faixa de 6h

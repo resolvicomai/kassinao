@@ -33,8 +33,13 @@ export class SessionRegistry<T> {
   private readonly starting = new Map<string, StartingEntry<T>>();
   private readonly stopping = new Map<string, T>();
 
-  reserveStart(guildId: string, channelId: string, channelName: string): StartReservation | undefined {
-    if (this.isBusy(guildId)) return undefined;
+  reserveStart(
+    guildId: string,
+    channelId: string,
+    channelName: string,
+    maxBusy = Number.POSITIVE_INFINITY,
+  ): StartReservation | undefined {
+    if (this.isBusy(guildId) || this.busyCount() >= maxBusy) return undefined;
     const controller = new AbortController();
     const reservation: StartReservation = {
       guildId,
@@ -131,6 +136,11 @@ export class SessionRegistry<T> {
 
   count(): number {
     return this.active.size;
+  }
+
+  /** Sessões que já consomem capacidade, inclusive durante início e encerramento. */
+  busyCount(): number {
+    return this.starting.size + this.active.size + this.stopping.size;
   }
 
   all(): T[] {

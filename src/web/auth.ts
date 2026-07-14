@@ -52,6 +52,8 @@ const STATE_COOKIE = 'kassinao_state';
 const SESSION_PATH = '/app';
 const STATE_PATH = '/auth';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_LOGIN_NEXT_BYTES = 2_048;
+const MAX_LOGIN_NEXT_JSON_BYTES = MAX_LOGIN_NEXT_BYTES + 2;
 
 type DomainConfig = typeof config & { appUrl?: string };
 
@@ -73,19 +75,39 @@ function sign(payload: object, secret: string): string {
   return `${body}.${mac}`;
 }
 
+const MAX_SIGNED_TOKEN_CHARS = 8_192;
+const MAX_SIGNED_BODY_BYTES = 6 * 1_024;
+const HMAC_SHA256_BYTES = 32;
+const BASE64URL = /^[A-Za-z0-9_-]+$/;
+
+/** Buffer.from(base64url) é permissivo; exige a única codificação canônica. */
+function decodeCanonicalBase64Url(value: string, maxBytes: number): Buffer | undefined {
+  if (!value || !BASE64URL.test(value)) return undefined;
+  const decoded = Buffer.from(value, 'base64url');
+  if (decoded.length > maxBytes || decoded.toString('base64url') !== value) return undefined;
+  return decoded;
+}
+
 function verify<T>(token: string | undefined, secret: string): T | undefined {
-  if (!token) return undefined;
-  const dot = token.lastIndexOf('.');
-  if (dot < 0) return undefined;
-  const body = token.slice(0, dot);
-  const mac = token.slice(dot + 1);
-  const expected = crypto.createHmac('sha256', secret).update(body).digest('base64url');
-  if (mac.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(expected))) {
-    return undefined;
-  }
   try {
-    return JSON.parse(Buffer.from(body, 'base64url').toString()) as T;
+    if (!token || token.length > MAX_SIGNED_TOKEN_CHARS) return undefined;
+    const dot = token.indexOf('.');
+    if (dot <= 0 || dot !== token.lastIndexOf('.') || dot === token.length - 1) return undefined;
+    const body = token.slice(0, dot);
+    const mac = token.slice(dot + 1);
+    const bodyBytes = decodeCanonicalBase64Url(body, MAX_SIGNED_BODY_BYTES);
+    const macBytes = decodeCanonicalBase64Url(mac, HMAC_SHA256_BYTES);
+    if (!bodyBytes || !macBytes || macBytes.length !== HMAC_SHA256_BYTES) return undefined;
+
+    const expected = crypto.createHmac('sha256', secret).update(body).digest();
+    // timingSafeEqual lança se os buffers tiverem tamanhos diferentes. A
+    // checagem em bytes (não em code units Unicode) precisa vir antes.
+    if (macBytes.length !== expected.length || !crypto.timingSafeEqual(macBytes, expected)) return undefined;
+
+    return JSON.parse(bodyBytes.toString('utf8')) as T;
   } catch {
+    // Token é entrada hostil. Nenhuma codificação, HMAC ou JSON inválido pode
+    // escapar para o Express e transformar uma falha de autenticação em 500.
     return undefined;
   }
 }
@@ -215,7 +237,15 @@ export function redirectUri(): string {
 export function beginLogin(res: Response, next: string): void {
   const state = crypto.randomBytes(16).toString('hex');
   // apenas caminhos locais: "//evil.com" e "/\evil.com" são redirects externos no navegador
-  const safeNext = /^\/(?![/\\])/.test(next) && !next.includes('\\') ? next : '/';
+  const safeNext =
+    /^\/(?![/\\])/.test(next) &&
+    !next.includes('\\') &&
+    Buffer.byteLength(next, 'utf8') <= MAX_LOGIN_NEXT_BYTES &&
+    // Aspas, controles e surrogates podem crescer ao serem escapados no JSON.
+    // Limitar também a representação serializada mantém o cookie abaixo de 4 KiB.
+    Buffer.byteLength(JSON.stringify(next), 'utf8') <= MAX_LOGIN_NEXT_JSON_BYTES
+      ? next
+      : '/';
   const stateToken: StateToken = { typ: 'state', state, next: safeNext, exp: Date.now() + 10 * 60 * 1000 };
   setCookie(res, STATE_COOKIE, sign(stateToken, config.cookieSecret), 10 * 60 * 1000, STATE_PATH);
   const params = new URLSearchParams({

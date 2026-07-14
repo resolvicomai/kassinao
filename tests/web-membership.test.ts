@@ -1,15 +1,67 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
 import { cleanInline } from '../src/sanitize';
+import type { RecordingMeta } from '../src/store';
+import { FreshMembershipBudget, TransientAccessError } from '../src/web/access';
+import { OpaqueCursorError } from '../src/web/opaqueCursor';
 import {
+  collectWebLibraryPage,
   currentGuildMembership,
+  encodeWebLibraryCursor,
   httpsRedirectTarget,
   isRateLimitedWebPath,
+  mcpConnectionCreationRateLimited,
+  MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE,
+  parseWebLibraryCursor,
   robotsForRoles,
   sitemapForRoles,
   WebOrigins,
   webHostRoutingDecision,
 } from '../src/web/server';
+
+describe('cursor estável da biblioteca web', () => {
+  it('faz round-trip da âncora sem expor o id nem no Base64 decodificado', () => {
+    const cursor = { startedAt: 1_720_000_000_123, id: '2026-07-09-call-abc' };
+    const encoded = encodeWebLibraryCursor(cursor, 'user-cursor', 'q=&sort=recent', 1_720_000_000_000);
+
+    expect(encoded).not.toContain(cursor.id);
+    expect(Buffer.from(encoded, 'base64url').toString('utf8')).not.toContain(cursor.id);
+    expect(parseWebLibraryCursor(encoded, 'user-cursor', 'q=&sort=recent', 1_720_000_000_000)).toEqual(cursor);
+  });
+
+  it('recusa cursor malformado, de outro usuário ou de outros filtros', () => {
+    const encoded = encodeWebLibraryCursor(
+      { startedAt: 1_720_000_000_123, id: 'valid-id' },
+      'user-cursor',
+      'q=&sort=recent',
+      1_720_000_000_000,
+    );
+
+    expect(() => parseWebLibraryCursor('%%%', 'user-cursor', 'q=&sort=recent')).toThrow(OpaqueCursorError);
+    expect(() => parseWebLibraryCursor(encoded, 'other-user', 'q=&sort=recent', 1_720_000_000_000)).toThrow(
+      OpaqueCursorError,
+    );
+    expect(() => parseWebLibraryCursor(encoded, 'user-cursor', 'q=secret&sort=recent', 1_720_000_000_000)).toThrow(
+      OpaqueCursorError,
+    );
+  });
+});
+
+function libraryMeta(id: string, guildId: string): RecordingMeta {
+  return {
+    id,
+    guildId,
+    guildName: guildId,
+    voiceChannelId: 'voice',
+    voiceChannelName: 'Call',
+    startedBy: null,
+    startedAt: Date.now(),
+    status: 'done',
+    participants: [],
+    events: [],
+    notes: [],
+  };
+}
 
 function guildFetch(result: 'member' | 'missing' | 'transient') {
   const fetch =
@@ -48,11 +100,162 @@ describe('criação de conexão MCP', () => {
     const missing = guildFetch('missing');
     const member = guildFetch('member');
     await expect(currentGuildMembership('user', [missing.guild, member.guild])).resolves.toBe('member');
-    expect(missing.fetch).toHaveBeenCalledWith({ user: 'user', force: true, cache: true });
-    expect(member.fetch).toHaveBeenCalledWith({ user: 'user', force: true, cache: true });
+    expect(missing.fetch).toHaveBeenCalledWith({ user: 'user', force: true, cache: false });
+    expect(member.fetch).toHaveBeenCalledWith({ user: 'user', force: true, cache: false });
 
     await expect(currentGuildMembership('user', [guildFetch('missing').guild])).resolves.toBe('not-member');
     await expect(currentGuildMembership('user', [guildFetch('transient').guild])).resolves.toBe('unavailable');
+  });
+
+  it('limita tentativas de criação por usuário antes de varrer guilds', () => {
+    const userId = 'web-membership-rate-limit-user';
+    expect(Array.from({ length: 5 }, () => mcpConnectionCreationRateLimited(userId))).toEqual(
+      Array.from({ length: 5 }, () => false),
+    );
+    expect(mcpConnectionCreationRateLimited(userId)).toBe(true);
+  });
+
+  it('retoma a varredura depois do budget sem deixar guilds tardias inacessíveis', async () => {
+    let now = 1_000;
+    const budget = new FreshMembershipBudget(
+      { perUserPerMinute: 2, globalPerMinute: 10, maxConcurrent: 2, maxTrackedUsers: 10 },
+      () => now,
+    );
+    const first = guildFetch('missing');
+    const second = guildFetch('missing');
+    const third = guildFetch('missing');
+    const member = guildFetch('member');
+    const runCheck = <T>(userId: string, task: () => Promise<T>) => budget.run(userId, task);
+
+    await expect(
+      currentGuildMembership('late-guild-user', [first.guild, second.guild, third.guild, member.guild], runCheck),
+    ).resolves.toBe('unavailable');
+    expect(first.fetch).toHaveBeenCalledTimes(1);
+    expect(second.fetch).toHaveBeenCalledTimes(1);
+    expect(third.fetch).not.toHaveBeenCalled();
+
+    now += 60_001;
+    await expect(
+      currentGuildMembership('late-guild-user', [first.guild, second.guild, third.guild, member.guild], runCheck),
+    ).resolves.toBe('member');
+    expect(third.fetch).toHaveBeenCalledTimes(1);
+    expect(member.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('não materializa todas as guilds antes de aplicar o teto de varredura', async () => {
+    let yielded = 0;
+    const guilds = {
+      *[Symbol.iterator]() {
+        for (let index = 0; index < 10_000; index++) {
+          yielded++;
+          yield guildFetch(index === 69 ? 'member' : 'missing').guild;
+        }
+      },
+    };
+    const runCheck = async <T>(_userId: string, task: () => Promise<T>) => task();
+
+    await expect(currentGuildMembership('bounded-guild-scan', guilds, runCheck)).resolves.toBe('unavailable');
+    expect(yielded).toBeLessThanOrEqual(60);
+
+    yielded = 0;
+    await expect(currentGuildMembership('bounded-guild-scan', guilds, runCheck)).resolves.toBe('member');
+    expect(yielded).toBe(70);
+  });
+
+  it('conclui como não membro depois de percorrer mais de uma página de guilds ausentes', async () => {
+    const missingGuilds = Array.from({ length: 61 }, () => guildFetch('missing'));
+    const runCheck = async <T>(_userId: string, task: () => Promise<T>) => task();
+
+    await expect(
+      currentGuildMembership(
+        'all-missing-across-membership-pages',
+        missingGuilds.map(({ guild }) => guild),
+        runCheck,
+      ),
+    ).resolves.toBe('unavailable');
+    await expect(
+      currentGuildMembership(
+        'all-missing-across-membership-pages',
+        missingGuilds.map(({ guild }) => guild),
+        runCheck,
+      ),
+    ).resolves.toBe('not-member');
+    expect(missingGuilds.map(({ fetch }) => fetch.mock.calls.length)).toEqual(Array.from({ length: 61 }, () => 1));
+  });
+
+  it('preserva indisponibilidade transitória até concluir todas as páginas', async () => {
+    const transient = guildFetch('transient');
+    const missingGuilds = Array.from({ length: 60 }, () => guildFetch('missing'));
+    const guilds = [transient.guild, ...missingGuilds.map(({ guild }) => guild)];
+    const runCheck = async <T>(_userId: string, task: () => Promise<T>) => task();
+
+    await expect(currentGuildMembership('transient-across-membership-pages', guilds, runCheck)).resolves.toBe(
+      'unavailable',
+    );
+    await expect(currentGuildMembership('transient-across-membership-pages', guilds, runCheck)).resolves.toBe(
+      'unavailable',
+    );
+    expect(transient.fetch).toHaveBeenCalledTimes(1);
+    expect(missingGuilds.map(({ fetch }) => fetch.mock.calls.length)).toEqual(Array.from({ length: 60 }, () => 1));
+  });
+});
+
+describe('paginação ACL da biblioteca web', () => {
+  const user = { id: 'library-user', name: 'Pessoa', avatar: null };
+
+  it('alcança guilds depois do teto sem repetir sempre as primeiras', async () => {
+    const metas = Array.from({ length: 70 }, (_, index) => libraryMeta(`library-${index}`, `guild-${index}`));
+    const runCheck = vi.fn(async (_user, meta: RecordingMeta) => ({
+      view: meta.guildId === 'guild-69',
+      delete: false,
+    }));
+
+    const first = await collectWebLibraryPage(user, metas, 0, runCheck);
+    const second = await collectWebLibraryPage(user, metas, first.nextCursor, runCheck);
+    const third = await collectWebLibraryPage(user, metas, second.nextCursor, runCheck);
+
+    expect(first).toMatchObject({ nextCursor: 25, guildsChecked: 25 });
+    expect(second).toMatchObject({ nextCursor: 50, guildsChecked: 25 });
+    expect(third.items.map((item) => item.meta.id)).toEqual(['library-69']);
+    expect(third.nextCursor).toBeUndefined();
+  });
+
+  it('não deixa uma página cheia de candidatas inacessíveis esconder uma antiga autorizada', async () => {
+    const metas = [
+      ...Array.from({ length: MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE }, (_, index) =>
+        libraryMeta(`noise-${index}`, 'noise-guild'),
+      ),
+      libraryMeta('authorized-old', 'noise-guild'),
+    ];
+    const runCheck = vi.fn(async (_user, meta: RecordingMeta) => ({
+      view: meta.id === 'authorized-old',
+      delete: false,
+    }));
+
+    const first = await collectWebLibraryPage(user, metas, 0, runCheck);
+    const second = await collectWebLibraryPage(user, metas, first.nextCursor, runCheck);
+
+    expect(first).toMatchObject({
+      nextCursor: MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE,
+      candidatesScanned: MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE,
+    });
+    expect(second.items.map((item) => item.meta.id)).toEqual(['authorized-old']);
+  });
+
+  it('não transforma falha transitória em negação nem avalia candidatas posteriores', async () => {
+    const metas = [
+      libraryMeta('conclusive-denial', 'guild-a'),
+      libraryMeta('discord-unavailable', 'guild-b'),
+      libraryMeta('must-not-be-skipped', 'guild-c'),
+    ];
+    const runCheck = vi.fn(async (_user, meta: RecordingMeta) => {
+      if (meta.id === 'discord-unavailable') throw new TransientAccessError('Discord timeout');
+      return { view: false, delete: false };
+    });
+
+    await expect(collectWebLibraryPage(user, metas, 0, runCheck)).rejects.toBeInstanceOf(TransientAccessError);
+    expect(runCheck.mock.calls.map(([, meta]) => meta.id)).toEqual(['conclusive-denial', 'discord-unavailable']);
+    expect(runCheck.mock.calls[0]?.[2]).toMatchObject({ throwOnTransient: true });
   });
 });
 

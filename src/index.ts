@@ -8,6 +8,7 @@
  * Veja <https://www.gnu.org/licenses/> para o texto completo.
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -20,6 +21,7 @@ import {
   Guild,
   GuildBasedChannel,
   GuildMember,
+  Message,
   ModalBuilder,
   ModalSubmitInteraction,
   PermissionFlagsBits,
@@ -35,18 +37,31 @@ import { config } from './config';
 import { answerQuestion, authorizeAskMetas, resolveAskTemporalIntent } from './ask';
 import { AskLimiter, AskRateLimitError } from './askLimiter';
 import { guildConfigStore } from './guildConfig';
+import { DmMessageLimiter } from './dmMessageLimiter';
 import { minutesEnabled } from './processing/minutes';
-import { allowMinutesBroadcast, safeSlice, shortError } from './util';
+import { safeSlice, shortError } from './util';
 import { startCleanupJob } from './cleanup';
 import { freeMB } from './disk';
 import { client } from './discord/client';
-import { markClientReady } from './discord/ready';
+import { observeClientReadiness } from './discord/ready';
+import {
+  DISCORD_SURFACE_POLICY_VERSION,
+  mergeDiscordSurfaceMigrationCheckpoint,
+  migrateGuildDiscordSurfacesStep,
+  migrateDiscordSurfacesStep,
+} from './discordSurfaceMigration';
+import { createDiscordSurfaceClient } from './discordSurfaceMigrationDiscord';
 import { alertOwners, startMonitor } from './monitor';
 import { Locale, localeOf, t } from './i18n';
 import { autoRecordStore, isArmed, setArmed } from './recorder/autorecord';
 import { sessionManager } from './recorder/manager';
 import { ManualRecordingStartLimiter } from './recorder/manualStartLimiter';
 import { reportManualRecordingStartFailure } from './recorder/manualStartFailure';
+import {
+  RecordingAdmissionDenial,
+  RecordingAdmissionGuard,
+  RecordingAdmissionReservation,
+} from './recorder/recordingAdmission';
 import {
   BoundedIdSet,
   canManuallyStartRecording,
@@ -76,20 +91,32 @@ import {
 } from './processing/transcribe';
 import { safeName } from './sanitize';
 import {
+  buildPublicTranscriptionNotice,
+  deliverPrivateTranscriptionNotification,
+  hasPersistedNotificationWork,
+  isPermanentDiscordDmError,
+  NOTIFICATION_POLICY_VERSION,
+  notificationRetryDelayMs,
+  shouldRecoverTranscriptionNotification,
+  shouldExhaustNotificationRetries,
+} from './transcriptionNotification';
+import {
   audioExpiryOf,
   listGuildMetas,
-  listGuildMetasInRange,
+  listGuildMetaIdsInRange,
   listMetas,
   pageUrl,
+  readDiscordSurfaceInventory,
   readMeta,
   readMinutes,
   readTranscript,
   RecordingMeta,
   recoverInterruptedRecordings,
+  saveDiscordSurfaceInventory,
   saveMeta,
   transcriptReady,
 } from './store';
-import { forgetGuildMembers, forgetMember, recordingIdentityGrant } from './web/access';
+import { checkAccessForMcp, recordingIdentityGrant } from './web/access';
 import { createExchangeCode, revokeUser } from './web/mcpTokens';
 import { resolveRange } from './web/range';
 import { startWebServer } from './web/server';
@@ -102,6 +129,10 @@ let recoveredRecordings: RecordingMeta[] = [];
 // Código-fonte oficial. Exibido no /sobre para creditar a autoria e cumprir a
 // obrigação da AGPL §13 (oferecer o fonte a quem interage com o bot pela rede).
 const SOURCE_URL = 'https://github.com/resolvicomai/kassinao';
+
+// Instalado antes do login: reconnects fecham as superfícies privadas em 503
+// até todos os shards voltarem, sem transformar cache transitório em 404.
+observeClientReadiness(client);
 
 // ---------- definição dos comandos (pt-BR nativo + localização em inglês) ----------
 
@@ -267,7 +298,7 @@ function buildCommands() {
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addSubcommand((sc) => {
       sc.setName('ata-canal')
-        .setDescription('Define (ou limpa) o canal onde a ata resumida é postada')
+        .setDescription('Define (ou limpa) o canal do aviso genérico de processamento')
         .addChannelOption((o) => {
           o.setName('canal')
             .setDescription('Canal de texto (vazio = limpar)')
@@ -282,8 +313,8 @@ function buildCommands() {
         });
       sc.setNameLocalizations({ 'en-US': 'minutes-channel', 'en-GB': 'minutes-channel' });
       sc.setDescriptionLocalizations({
-        'en-US': 'Set (or clear) the channel where the minutes summary is posted',
-        'en-GB': 'Set (or clear) the channel where the minutes summary is posted',
+        'en-US': 'Set (or clear) the channel for generic processing notices',
+        'en-GB': 'Set (or clear) the channel for generic processing notices',
       });
       return sc;
     })
@@ -366,6 +397,59 @@ class RecordingBusyError extends Error {
   }
 }
 
+class RecordingGlobalCapacityError extends Error {
+  constructor() {
+    super('recording capacity unavailable');
+    this.name = 'RecordingGlobalCapacityError';
+  }
+}
+
+class RecordingAdmissionError extends Error {
+  constructor(
+    readonly reason: RecordingAdmissionDenial,
+    readonly retryAfterMs?: number,
+  ) {
+    super(`recording admission denied: ${reason}`);
+    this.name = 'RecordingAdmissionError';
+  }
+}
+
+function protectedRecordingStartMessage(error: unknown, locale: Locale): string | undefined {
+  if (error instanceof RecordingGlobalCapacityError) {
+    return locale === 'pt'
+      ? '⏳ A capacidade segura de gravação está ocupada. Tente novamente mais tarde.'
+      : '⏳ Safe recording capacity is currently in use. Try again later.';
+  }
+  if (!(error instanceof RecordingAdmissionError)) return undefined;
+  if (error.reason === 'processing-capacity') {
+    return locale === 'pt'
+      ? '⏳ O processamento seguro está cheio. Novas gravações estão pausadas até a fila avançar.'
+      : '⏳ Safe processing capacity is full. New recordings are paused until the queue advances.';
+  }
+  if (error.reason === 'storage-unavailable') {
+    return locale === 'pt'
+      ? '🛑 A proteção de segurança da gravação está indisponível. Não iniciei a captura.'
+      : '🛑 Recording safety protection is unavailable. Capture was not started.';
+  }
+  return locale === 'pt'
+    ? '⏳ O limite seguro de inícios foi atingido. Tente novamente mais tarde.'
+    : '⏳ The safe start limit has been reached. Try again later.';
+}
+
+function protectedAutoRecordAlert(error: unknown): string | undefined {
+  if (error instanceof RecordingGlobalCapacityError) {
+    return 'O auto-record foi pausado porque a capacidade segura de gravação está ocupada.';
+  }
+  if (!(error instanceof RecordingAdmissionError)) return undefined;
+  if (error.reason === 'processing-capacity') {
+    return 'O auto-record foi pausado porque a capacidade segura de processamento está cheia.';
+  }
+  if (error.reason === 'storage-unavailable') {
+    return 'O auto-record foi bloqueado porque a proteção durável de segurança está indisponível.';
+  }
+  return 'O auto-record foi pausado por uma cota de segurança de gravações.';
+}
+
 function currentBusyError(guildId: string): RecordingBusyError {
   if (sessionManager.startingInfo(guildId)) return new RecordingBusyError('starting');
   if (sessionManager.stoppingSession(guildId)) return new RecordingBusyError('stopping');
@@ -384,9 +468,19 @@ async function startSession(opts: {
   }
   // Reserva ANTES do primeiro await. Dois /gravar, manual + automático ou duas
   // regras no mesmo guild nunca atravessam juntos esta fronteira.
-  const reservation = sessionManager.reserveStart(opts.guild.id, opts.voiceChannel.id, opts.voiceChannel.name);
-  if (!reservation) throw currentBusyError(opts.guild.id);
+  const reservation = sessionManager.reserveStart(
+    opts.guild.id,
+    opts.voiceChannel.id,
+    opts.voiceChannel.name,
+    config.recordingMaxConcurrent,
+  );
+  if (!reservation) {
+    if (sessionManager.isBusy(opts.guild.id)) throw currentBusyError(opts.guild.id);
+    throw new RecordingGlobalCapacityError();
+  }
   let session: RecordingSession | undefined;
+  let pipelineReservation: RecordingAdmissionReservation | undefined;
+  let admissionCommitted = false;
   try {
     // Guarda de disco: não começa uma gravação que vai corromper por falta de espaço.
     const free = freeMB();
@@ -398,7 +492,14 @@ async function startSession(opts: {
       );
     }
 
+    const admission = recordingAdmission.reserve(opts.guild.id, opts.auto ? 'auto' : 'manual');
+    if (!admission.ok) throw new RecordingAdmissionError(admission.reason, admission.retryAfterMs);
+    pipelineReservation = admission.reservation;
+
     session = new RecordingSession(opts);
+    if (!pipelineReservation.bindRecording(session.id)) {
+      throw new RecordingAdmissionError('storage-unavailable');
+    }
     if (!sessionManager.attachStarting(reservation, session)) throw new RecordingStartCancelledError();
     session.onAutoStop = (s, reason) => {
       void stopSession(s, reason).catch((err) => console.error(`Erro encerrando ${s.id}:`, err));
@@ -415,6 +516,10 @@ async function startSession(opts: {
     if (session.meta.status !== 'recording' || !sessionManager.commitStart(reservation, session)) {
       throw new RecordingStartCancelledError();
     }
+    if (!pipelineReservation.commit(session.meta.startedAt)) {
+      throw new RecordingAdmissionError('storage-unavailable');
+    }
+    admissionCommitted = true;
 
     // Uma regra automática no mesmo canal fica desarmada mesmo quando o início
     // foi manual. Assim /parar não religa a gravação enquanto a sala segue cheia.
@@ -431,6 +536,8 @@ async function startSession(opts: {
       sessionManager.delete(opts.guild.id, session);
     }
     if (session?.meta.status === 'recording') await session.abortStart().catch(() => {});
+    if (admissionCommitted && session) recordingAdmission.complete(session.id);
+    else pipelineReservation?.rollback();
     throw err;
   } finally {
     sessionManager.releaseStart(reservation);
@@ -440,6 +547,17 @@ async function startSession(opts: {
 /** Sessões já processadas por afterSessionEnd — o hook não é idempotente sozinho
  *  (stopSession e onAutoStop podem correr para a mesma sessão). */
 const endedSessions = new BoundedIdSet(500);
+const processingStages = new Map<string, { cookDone: boolean; aiDone: boolean }>();
+
+function settleProcessingStage(recordingId: string, stage: 'cook' | 'ai'): void {
+  const state = processingStages.get(recordingId);
+  if (!state) return;
+  if (stage === 'cook') state.cookDone = true;
+  else state.aiDone = true;
+  if (!state.cookDone || !state.aiDone) return;
+  processingStages.delete(recordingId);
+  recordingAdmission.complete(recordingId);
+}
 
 /** Pós-fim de gravação: rearma o auto-record quando faz sentido, reavalia os canais e transcreve. */
 function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
@@ -479,10 +597,20 @@ function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
   // Pré-cozinha o mix MP3 em segundo plano: o primeiro clique no player deixa de
   // esperar minutos de ffmpeg (o cook tem semáforo próprio e cacheia o resultado).
   if (session.meta.participants.length > 0) {
-    cook(session.meta, 'mix').catch((err) =>
-      console.warn(`Pré-cook do mix de ${session.id} falhou (fica pro primeiro clique):`, (err as Error).message),
-    );
-    enqueueTranscription(session.id, (meta) => notifyTranscription(meta, session.locale));
+    const aiEnabled = transcriptionEnabled();
+    processingStages.set(session.id, { cookDone: false, aiDone: !aiEnabled });
+    cook(session.meta, 'mix')
+      .catch((err) =>
+        console.warn(`Pré-cook do mix de ${session.id} falhou (fica pro primeiro clique):`, (err as Error).message),
+      )
+      .finally(() => settleProcessingStage(session.id, 'cook'));
+    if (aiEnabled) {
+      enqueueTranscription(
+        session.id,
+        (meta) => notifyTranscription(meta, session.locale),
+        () => settleProcessingStage(session.id, 'ai'),
+      );
+    }
   } else {
     // gravação vazia: marca 'disabled' JÁ (a página não pode prometer "na fila"
     // por minutos enquanto a fila serial chega numa transcrição que nunca haverá)
@@ -491,13 +619,47 @@ function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
       meta.transcription = { status: 'disabled' };
       saveMeta(meta);
     }
+    recordingAdmission.complete(session.id);
   }
 }
 
-/** Avisa no chat do canal de voz (e na DM de quem iniciou) que a transcrição terminou. */
-async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise<void> {
+const transcriptionNotificationRuns = new Map<string, Promise<void>>();
+const pendingTranscriptionNotificationIds = new Set<string>();
+const NOTIFICATION_RETRY_SWEEP_MS = 5_000;
+let notificationRetrySweepTimer: ReturnType<typeof setInterval> | undefined;
+let notificationRetrySweepRunning = false;
+const pendingDiscordSurfaceMigrationIds = new Set<string>();
+const pendingDiscordGuildSurfaceMigrationIds = new Set<string>();
+const DISCORD_SURFACE_MIGRATION_SWEEP_MS = 2_000;
+let discordSurfaceMigrationSweepTimer: ReturnType<typeof setInterval> | undefined;
+let discordSurfaceMigrationSweepRunning = false;
+let preferGuildSurfaceMigration = true;
+
+/** Single-flight por gravação: callback, sweep e boot nunca duplicam o mesmo fanout em processo. */
+function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise<void> {
+  const running = transcriptionNotificationRuns.get(meta.id);
+  if (running) return running;
+  const task = notifyTranscriptionOnce(meta, locale).finally(() => {
+    if (transcriptionNotificationRuns.get(meta.id) === task) transcriptionNotificationRuns.delete(meta.id);
+  });
+  transcriptionNotificationRuns.set(meta.id, task);
+  return task;
+}
+
+/** Avisa genericamente no canal e entrega os detalhes por DM às identidades históricas autorizadas. */
+async function notifyTranscriptionOnce(meta: RecordingMeta, locale: Locale): Promise<void> {
   const state = meta.transcription;
   if (!state || (state.status !== 'done' && state.status !== 'partial' && state.status !== 'error')) return;
+  // Checkpoint antes do primeiro efeito externo. Gravações novas já nascem com
+  // esta versão; a gravação aqui torna o recovery durável também para metas legadas.
+  let persisted = readMeta(meta.id) ?? meta;
+  if (
+    !Number.isFinite(persisted.notificationPolicyVersion) ||
+    (persisted.notificationPolicyVersion ?? 0) < NOTIFICATION_POLICY_VERSION
+  ) {
+    persisted.notificationPolicyVersion = NOTIFICATION_POLICY_VERSION;
+    saveMeta(persisted);
+  }
   const minutesDone = meta.minutes?.status === 'done';
   // gravação curtinha sem fala detectada: não prometer "transcrição pronta!"
   const emptyDone = state.status === 'done' && (readTranscript(meta.id)?.length ?? 0) === 0;
@@ -516,97 +678,344 @@ async function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise
           })
         : t(locale, 'transcript.failed', { error: shortError(state.error, locale) });
 
-  // A ata visível SEM login é o momento "uau": resumo + decisões + ações direto
-  // no Discord (o link continua sendo a fonte completa).
   const embeds = minutesDone ? buildMinutesEmbed(meta, locale) : [];
+  const privatePayload = { content: text, embeds };
+  const publicNotice = buildPublicTranscriptionNotice(locale);
+  const webhookTask = minutesDone ? deliverMinutesWebhookIfNeeded(meta) : Promise.resolve();
 
-  // canal de destino configurável (/config ata-canal); fallback = chat do canal de voz.
-  // ACESSO: só transmitir a ata pro canal configurado se a gravação for de um canal de voz
-  // visível a @everyone. Senão, a audiência do canal público excede quem tem acesso à
-  // gravação (checkAccess concede view via ViewChannel no canal de voz), vazando resumo/
-  // decisões de uma reunião RESTRITA. Restrito → chat do canal de voz (audiência = conjunto
-  // de acesso) + DM do iniciador, que já casam com a regra de acesso.
+  // O canal configurado recebe somente um aviso genérico. Resumo, decisões,
+  // ações, URL e ID nunca são publicados em canal, independentemente da audiência.
   const cfg = guildConfigStore.get(meta.guildId);
-  let allowConfigured = false;
-  if (minutesDone && cfg.minutesChannelId) {
-    // três estados, decididos por allowMinutesBroadcast: canal avaliável (checagem ao
-    // vivo vence), canal DELETADO (efêmero → vale o snapshot do início da gravação),
-    // indeterminado/transitório (fail-closed).
-    let liveEveryoneViewable: boolean | undefined;
-    let channelDeleted = false;
+  const targetId = cfg.minutesChannelId ?? meta.voiceChannelId;
+  let publicFailed = false;
+  let privateFailures = false;
+  let hasMorePrivateRecipients = false;
+  if (!persisted.publicNotifiedAt) {
+    let publicDelivered = false;
     try {
-      const guild = client.guilds.cache.get(meta.guildId);
-      let vc = guild ? (guild.channels.cache.get(meta.voiceChannelId) ?? null) : null;
-      if (guild && !vc) {
+      const channel = (await client.channels.fetch(targetId)) as TextBasedChannel | null;
+      // Defesa em profundidade: nem o aviso genérico vai para outro servidor
+      // (channels.fetch é global e guildconfig.json pode estar corrompido).
+      const sameGuild = channel && 'guildId' in channel && channel.guildId === meta.guildId;
+      if (channel && sameGuild && 'send' in channel) {
+        await channel.send(publicNotice);
+        publicDelivered = true;
+      } else {
+        throw new Error(sameGuild ? 'canal sem suporte a mensagens' : 'canal de outro servidor');
+      }
+    } catch {
+      // sem acesso ao canal configurado — tenta o chat do canal de voz como fallback
+      if (targetId !== meta.voiceChannelId) {
         try {
-          vc = await guild.channels.fetch(meta.voiceChannelId);
-        } catch (err) {
-          // 10003 Unknown Channel = confirmado apagado; qualquer outro erro = transitório
-          if (err && typeof err === 'object' && (err as { code?: unknown }).code === 10003) channelDeleted = true;
-          else throw err;
+          const vc = (await client.channels.fetch(meta.voiceChannelId)) as TextBasedChannel | null;
+          const sameGuild = vc && 'guildId' in vc && vc.guildId === meta.guildId;
+          if (vc && sameGuild && 'send' in vc) {
+            await vc.send(publicNotice);
+            publicDelivered = true;
+          }
+        } catch {
+          // a área privada continua mostrando tudo; o boot pode retentar
         }
       }
-      if (guild && vc && 'permissionsFor' in vc) {
-        liveEveryoneViewable = vc.permissionsFor(guild.roles.everyone)?.has(PermissionFlagsBits.ViewChannel) ?? false;
+    }
+    if (publicDelivered) {
+      const fresh = readMeta(meta.id);
+      if (fresh && !fresh.publicNotifiedAt) {
+        fresh.publicNotifiedAt = Date.now();
+        saveMeta(fresh);
+        persisted = fresh;
       }
-    } catch {
-      // transitório: liveEveryoneViewable fica undefined e channelDeleted false → nega
-    }
-    allowConfigured = allowMinutesBroadcast({
-      liveEveryoneViewable,
-      channelDeleted,
-      snapshotEveryoneViewable: meta.sourceEveryoneViewable,
-    });
-    if (!allowConfigured) {
-      // sem isso o admin do /config ata-canal acha que "às vezes não posta" é bug
-      console.log(
-        `Ata de ${meta.id}: origem restrita/indeterminada — redirecionada do canal configurado pro chat do canal de voz + DM.`,
-      );
-    }
+    } else publicFailed = true;
   }
-  const targetId = allowConfigured && cfg.minutesChannelId ? cfg.minutesChannelId : meta.voiceChannelId;
-  let delivered = false;
-  try {
-    const channel = (await client.channels.fetch(targetId)) as TextBasedChannel | null;
-    // defesa em profundidade: NUNCA postar ata fora do servidor da gravação
-    // (channels.fetch é global; um guildconfig.json corrompido não pode vazar ata)
-    const sameGuild = channel && 'guildId' in channel && channel.guildId === meta.guildId;
-    if (channel && sameGuild && 'send' in channel) {
-      await channel.send({ content: text, embeds });
-      delivered = true;
-    } else if (!sameGuild) throw new Error('canal de outro servidor');
-  } catch {
-    // sem acesso ao canal configurado — tenta o chat do canal de voz como fallback
-    if (targetId !== meta.voiceChannelId) {
-      try {
-        const vc = (await client.channels.fetch(meta.voiceChannelId)) as TextBasedChannel | null;
-        if (vc && 'send' in vc) {
-          await vc.send({ content: text, embeds });
-          delivered = true;
-        }
-      } catch {
-        // a página continua mostrando tudo
-      }
-    }
-  }
-  if (meta.startedBy) {
-    try {
-      await client.users.send(meta.startedBy.id, { content: text, embeds });
-      delivered = true;
-    } catch {
-      // DM fechada — canal cobre
-    }
-  }
-  // Marca o aviso como entregue SÓ se algum send funcionou — falha transiente
-  // de rede não pode significar "o link nunca chega"; o boot re-tenta.
-  if (delivered) {
+
+  if (!persisted.privateNotifiedAt) {
+    const alreadyDelivered = new Set(persisted.privateNotifiedUserIds ?? []);
+    const result = await deliverPrivateTranscriptionNotification(
+      meta,
+      privatePayload,
+      {
+        // Esta variante lança em falha transitória, permitindo retomar depois.
+        checkAccess: checkAccessForMcp,
+        send: (userId, payload) => client.users.send(userId, payload),
+        isPermanentFailure: isPermanentDiscordDmError,
+      },
+      {
+        alreadyDelivered,
+        cursor: persisted.privateNotificationCursor,
+        pendingUserIds: persisted.privateNotificationPendingUserIds,
+      },
+    );
     const fresh = readMeta(meta.id);
-    if (fresh && !fresh.notifiedAt) {
-      fresh.notifiedAt = Date.now();
+    if (fresh) {
+      fresh.privateNotifiedUserIds = [
+        ...new Set([...(fresh.privateNotifiedUserIds ?? []), ...result.deliveredUserIds]),
+      ];
+      fresh.privateNotificationCursor = result.nextCursor;
+      fresh.privateNotificationPendingUserIds = result.pendingUserIds;
+      hasMorePrivateRecipients = result.remainingRecipients > 0;
+      privateFailures = result.pendingUserIds.length > 0;
+      if (result.completed && !fresh.privateNotifiedAt) {
+        fresh.privateNotifiedAt = Date.now();
+        fresh.privateNotificationPendingUserIds = [];
+      }
+      // Cursor, pendências e confirmações são duráveis ANTES de qualquer timer.
       saveMeta(fresh);
     }
   }
-  if (minutesDone) await deliverMinutesWebhookIfNeeded(meta);
+
+  const fresh = readMeta(meta.id);
+  if (fresh) {
+    if (fresh.publicNotifiedAt && fresh.privateNotifiedAt) {
+      if (!fresh.notifiedAt) fresh.notifiedAt = Date.now();
+      delete fresh.notificationRetryAttempt;
+      delete fresh.notificationNextRetryAt;
+      delete fresh.notificationRetryExhaustedAt;
+      pendingTranscriptionNotificationIds.delete(meta.id);
+    } else {
+      const previousAttempt = Number.isFinite(fresh.notificationRetryAttempt)
+        ? Math.max(0, Math.trunc(fresh.notificationRetryAttempt ?? 0))
+        : 0;
+      const failed = publicFailed || privateFailures;
+      const nextAttempt = failed ? previousAttempt + 1 : previousAttempt;
+      fresh.notificationRetryAttempt = nextAttempt;
+      if (shouldExhaustNotificationRetries(nextAttempt, hasMorePrivateRecipients)) {
+        fresh.notificationRetryExhaustedAt ??= Date.now();
+        delete fresh.notificationNextRetryAt;
+        pendingTranscriptionNotificationIds.delete(meta.id);
+        console.warn('Notificação incompleta esgotou o orçamento de retries transitórios.');
+      } else {
+        delete fresh.notificationRetryExhaustedAt;
+        fresh.notificationNextRetryAt =
+          Date.now() + notificationRetryDelayMs(Math.max(1, nextAttempt), hasMorePrivateRecipients);
+        pendingTranscriptionNotificationIds.add(meta.id);
+      }
+    }
+    saveMeta(fresh);
+  }
+  await webhookTask;
+}
+
+async function retryDueTranscriptionNotifications(): Promise<void> {
+  if (notificationRetrySweepRunning || shuttingDown) return;
+  notificationRetrySweepRunning = true;
+  try {
+    const now = Date.now();
+    for (const recordingId of [...pendingTranscriptionNotificationIds]) {
+      const meta = readMeta(recordingId);
+      if (!meta || meta.notifiedAt || meta.notificationRetryExhaustedAt || !hasPersistedNotificationWork(meta)) {
+        pendingTranscriptionNotificationIds.delete(recordingId);
+        continue;
+      }
+      if (meta.status !== 'done') continue;
+      const retryAt = Number.isFinite(meta.notificationNextRetryAt) ? (meta.notificationNextRetryAt as number) : 0;
+      if (retryAt > now) continue;
+      const state = meta.transcription?.status;
+      if (state !== 'done' && state !== 'partial' && state !== 'error') continue;
+      if (meta.minutes?.status === 'pending' || meta.minutes?.status === 'running') continue;
+      const locale: Locale = meta.locale === 'en' ? 'en' : meta.locale === 'pt' ? 'pt' : config.defaultLocale;
+      await notifyTranscription(meta, locale).catch(() => {
+        // O próximo checkpoint continua no Set; não logar err.message para não
+        // ecoar payload/URL de integrações em falhas inesperadas.
+        console.warn('Retry de uma notificação falhou; será tentado novamente.');
+      });
+    }
+  } finally {
+    notificationRetrySweepRunning = false;
+  }
+}
+
+function startNotificationRetrySweep(): void {
+  if (notificationRetrySweepTimer) return;
+  notificationRetrySweepTimer = setInterval(() => {
+    void retryDueTranscriptionNotifications().catch(() =>
+      console.warn('Sweep de notificações falhou; será tentado novamente.'),
+    );
+  }, NOTIFICATION_RETRY_SWEEP_MS);
+  notificationRetrySweepTimer.unref();
+  void retryDueTranscriptionNotifications().catch(() =>
+    console.warn('Sweep inicial de notificações falhou; será tentado novamente.'),
+  );
+}
+
+/** Uma página global por rodada; cobre canais antigos e metas já expiradas. */
+async function migrateNextGuildDiscordSurface(now: number): Promise<boolean> {
+  for (const guildId of [...pendingDiscordGuildSurfaceMigrationIds]) {
+    const inventory = readDiscordSurfaceInventory();
+    const state = inventory.guilds[guildId];
+    if (state?.policyVersion === DISCORD_SURFACE_POLICY_VERSION) {
+      pendingDiscordGuildSurfaceMigrationIds.delete(guildId);
+      continue;
+    }
+    if (!client.guilds.cache.has(guildId)) {
+      // Sem acesso não é sucesso. Preserva o checkpoint para retomar num re-convite.
+      pendingDiscordGuildSurfaceMigrationIds.delete(guildId);
+      continue;
+    }
+    const retryAt = Number.isFinite(state?.nextRetryAt) ? (state?.nextRetryAt as number) : 0;
+    if (retryAt > now) continue;
+
+    pendingDiscordGuildSurfaceMigrationIds.delete(guildId);
+    try {
+      const guild = client.guilds.cache.get(guildId);
+      const locale: Locale = guild?.preferredLocale?.toLowerCase().startsWith('pt') ? 'pt' : config.defaultLocale;
+      const result = await migrateGuildDiscordSurfacesStep({
+        guildId,
+        state,
+        safeContent: t(locale, 'panel.greeting-done-private'),
+        client: createDiscordSurfaceClient(client),
+        persist: (checkpoint) => {
+          const latest = readDiscordSurfaceInventory();
+          latest.guilds[guildId] = checkpoint;
+          saveDiscordSurfaceInventory(latest);
+        },
+      });
+      const latest = readDiscordSurfaceInventory();
+      const saved = latest.guilds[guildId] ?? result.state;
+      if (result.complete) {
+        delete saved.retryAttempt;
+        delete saved.nextRetryAt;
+      } else {
+        saved.retryAttempt = 0;
+        saved.nextRetryAt = Date.now() + DISCORD_SURFACE_MIGRATION_SWEEP_MS;
+        pendingDiscordGuildSurfaceMigrationIds.add(guildId);
+      }
+      saved.updatedAt = Date.now();
+      latest.guilds[guildId] = saved;
+      saveDiscordSurfaceInventory(latest);
+    } catch {
+      pendingDiscordGuildSurfaceMigrationIds.add(guildId);
+      const latest = readDiscordSurfaceInventory();
+      const saved = latest.guilds[guildId] ?? {
+        guildId,
+        audits: [],
+        discovery: [],
+        updatedAt: Date.now(),
+      };
+      const previousAttempt = Number.isFinite(saved.retryAttempt)
+        ? Math.max(0, Math.trunc(saved.retryAttempt ?? 0))
+        : 0;
+      const attempt = previousAttempt + 1;
+      saved.retryAttempt = attempt;
+      saved.nextRetryAt = Date.now() + notificationRetryDelayMs(attempt, false);
+      saved.updatedAt = Date.now();
+      latest.guilds[guildId] = saved;
+      saveDiscordSurfaceInventory(latest);
+      console.warn('Uma etapa do inventário histórico do servidor falhou; será retomada com backoff.');
+    }
+    return true;
+  }
+  return false;
+}
+
+async function migrateNextDiscordSurface(): Promise<void> {
+  if (discordSurfaceMigrationSweepRunning || shuttingDown) return;
+  discordSurfaceMigrationSweepRunning = true;
+  try {
+    const now = Date.now();
+    if (preferGuildSurfaceMigration && (await migrateNextGuildDiscordSurface(now))) {
+      preferGuildSurfaceMigration = false;
+      return;
+    }
+    let processedMeta = false;
+    for (const recordingId of [...pendingDiscordSurfaceMigrationIds]) {
+      const meta = readMeta(recordingId);
+      if (!meta || meta.discordSurfacePolicyVersion === DISCORD_SURFACE_POLICY_VERSION) {
+        pendingDiscordSurfaceMigrationIds.delete(recordingId);
+        continue;
+      }
+      const retryAt = Number.isFinite(meta.discordSurfaceMigration?.nextRetryAt)
+        ? (meta.discordSurfaceMigration?.nextRetryAt as number)
+        : 0;
+      if (retryAt > now) continue;
+
+      // Rotaciona a fila: uma gravação com histórico grande não bloqueia as demais.
+      pendingDiscordSurfaceMigrationIds.delete(recordingId);
+      processedMeta = true;
+      try {
+        const cfg = guildConfigStore.get(meta.guildId);
+        const knownChannelIds = [meta.panelChannelId, meta.voiceChannelId, cfg.minutesChannelId].filter(
+          (channelId): channelId is string => Boolean(channelId),
+        );
+        const locale: Locale = meta.locale === 'en' ? 'en' : meta.locale === 'pt' ? 'pt' : config.defaultLocale;
+        const result = await migrateDiscordSurfacesStep({
+          meta,
+          knownChannelIds,
+          safeContent: t(locale, 'panel.greeting-done-private'),
+          client: createDiscordSurfaceClient(client),
+          persist: (checkpoint) => {
+            const latest = readMeta(checkpoint.id);
+            if (latest) saveMeta(mergeDiscordSurfaceMigrationCheckpoint(latest, checkpoint));
+          },
+        });
+        const latest = readMeta(recordingId);
+        if (!latest?.discordSurfaceMigration) {
+          preferGuildSurfaceMigration = true;
+          break;
+        }
+        if (result.complete) {
+          delete latest.discordSurfaceMigration.retryAttempt;
+          delete latest.discordSurfaceMigration.nextRetryAt;
+          saveMeta(latest);
+        } else {
+          const migration = latest.discordSurfaceMigration;
+          migration.retryAttempt = 0;
+          migration.nextRetryAt = Date.now() + DISCORD_SURFACE_MIGRATION_SWEEP_MS;
+          saveMeta(latest);
+          pendingDiscordSurfaceMigrationIds.add(recordingId);
+        }
+      } catch {
+        const fresh = readMeta(recordingId);
+        if (fresh) {
+          fresh.discordSurfaceMigration ??= {
+            audits: [],
+            discovery: [],
+            updatedAt: Date.now(),
+          };
+          const previousAttempt = Number.isFinite(fresh.discordSurfaceMigration.retryAttempt)
+            ? Math.max(0, Math.trunc(fresh.discordSurfaceMigration.retryAttempt ?? 0))
+            : 0;
+          const attempt = previousAttempt + 1;
+          fresh.discordSurfaceMigration.retryAttempt = attempt;
+          fresh.discordSurfaceMigration.nextRetryAt = Date.now() + notificationRetryDelayMs(attempt, false);
+          fresh.discordSurfaceMigration.updatedAt = Date.now();
+          saveMeta(fresh);
+          pendingDiscordSurfaceMigrationIds.add(recordingId);
+        }
+        // Não ecoa err.message: embeds históricos podem aparecer na resposta da API.
+        console.warn('Uma etapa da neutralização histórica falhou; será retomada com backoff.');
+      }
+      preferGuildSurfaceMigration = true;
+      break;
+    }
+    if (!processedMeta && (await migrateNextGuildDiscordSurface(now))) preferGuildSurfaceMigration = false;
+  } finally {
+    discordSurfaceMigrationSweepRunning = false;
+    if (
+      pendingDiscordSurfaceMigrationIds.size === 0 &&
+      pendingDiscordGuildSurfaceMigrationIds.size === 0 &&
+      discordSurfaceMigrationSweepTimer
+    ) {
+      clearInterval(discordSurfaceMigrationSweepTimer);
+      discordSurfaceMigrationSweepTimer = undefined;
+    }
+  }
+}
+
+function startDiscordSurfaceMigrationSweep(): void {
+  if (
+    discordSurfaceMigrationSweepTimer ||
+    (pendingDiscordSurfaceMigrationIds.size === 0 && pendingDiscordGuildSurfaceMigrationIds.size === 0)
+  )
+    return;
+  discordSurfaceMigrationSweepTimer = setInterval(() => {
+    void migrateNextDiscordSurface().catch(() =>
+      console.warn('Sweep da neutralização histórica falhou; será tentado novamente.'),
+    );
+  }, DISCORD_SURFACE_MIGRATION_SWEEP_MS);
+  discordSurfaceMigrationSweepTimer.unref();
+  void migrateNextDiscordSurface().catch(() =>
+    console.warn('Sweep inicial da neutralização histórica falhou; será tentado novamente.'),
+  );
 }
 
 const webhookDeliveries = new Map<string, Promise<void>>();
@@ -626,8 +1035,9 @@ function deliverMinutesWebhookIfNeeded(meta: RecordingMeta): Promise<void> {
         ok.webhookSentAt = Date.now();
         saveMeta(ok);
       }
-    } catch (err) {
-      console.warn(`Webhook da ata (${meta.id}) falhou (vai retentar no próximo boot):`, (err as Error).message);
+    } catch {
+      // Nunca imprimir err.message: erros de URL podem ecoar Basic Auth/segredos do env.
+      console.warn(`Webhook da ata (${meta.id}) falhou; vai retentar no próximo boot.`);
     }
   })().finally(() => webhookDeliveries.delete(meta.id));
   webhookDeliveries.set(meta.id, task);
@@ -746,6 +1156,82 @@ const MAX_ASK_ATTEMPTS_PER_HOUR_GUILD = 120;
 const MAX_ASKS_PER_HOUR = 10;
 const MAX_ASKS_PER_HOUR_GUILD = 30;
 const MAX_ASKS_PER_HOUR_GLOBAL = 60;
+/** Limita a clonagem de meta.json antes de qualquer leitura de ata/transcrição. */
+const MAX_ASK_ARCHIVE_IDS = 500;
+/** Limita também o conjunto já autorizado que `answerQuestion` pode materializar. */
+const MAX_ASK_AUTHORIZED_METAS = 300;
+
+interface AskArchiveDependencies {
+  listIdsInRange: typeof listGuildMetaIdsInRange;
+  readMeta: typeof readMeta;
+}
+
+export interface AuthorizedAskArchive {
+  authorized: ReturnType<typeof authorizeAskMetas>;
+  /** A janela tinha candidatos além da parte verificada com segurança. */
+  truncated: boolean;
+  scannedIds: number;
+}
+
+/**
+ * Percorre o índice leve por IDs e materializa no máximo uma meta por vez.
+ * Divergência de índice, erro da ACL ou documento incompleto falham fechados.
+ */
+export function collectAuthorizedAskArchive(
+  guildId: string,
+  fromMs: number,
+  toMs: number,
+  canAccess: (meta: RecordingMeta) => boolean,
+  dependencies: AskArchiveDependencies = {
+    listIdsInRange: listGuildMetaIdsInRange,
+    readMeta,
+  },
+): AuthorizedAskArchive {
+  const page = dependencies.listIdsInRange(guildId, fromMs, toMs, MAX_ASK_ARCHIVE_IDS);
+  const approved: RecordingMeta[] = [];
+  let scannedIds = 0;
+  let stoppedBeforePageEnd = false;
+  const canAccessFailClosed = (meta: RecordingMeta): boolean => {
+    try {
+      return canAccess(meta);
+    } catch {
+      return false;
+    }
+  };
+
+  for (let index = 0; index < page.ids.length; index++) {
+    const id = page.ids[index];
+    scannedIds++;
+    const meta = dependencies.readMeta(id);
+    if (
+      !meta ||
+      meta.id !== id ||
+      meta.guildId !== guildId ||
+      meta.startedAt < fromMs ||
+      meta.startedAt >= toMs ||
+      meta.status !== 'done' ||
+      !transcriptReady(meta)
+    ) {
+      continue;
+    }
+
+    if (!canAccessFailClosed(meta)) continue;
+
+    approved.push(meta);
+    if (approved.length >= MAX_ASK_AUTHORIZED_METAS) {
+      stoppedBeforePageEnd = index + 1 < page.ids.length;
+      break;
+    }
+  }
+
+  return {
+    // Revalida ao criar o tipo opaco: até uma falha entre seleção e entrega fecha acesso.
+    authorized: authorizeAskMetas(approved, canAccessFailClosed, MAX_ASK_AUTHORIZED_METAS),
+    truncated: page.truncated || stoppedBeforePageEnd,
+    scannedIds,
+  };
+}
+
 const askLimiter = new AskLimiter({
   maxConcurrent: MAX_CONCURRENT_ASKS,
   maxAttemptsPerUser: MAX_ASK_ATTEMPTS_PER_HOUR,
@@ -758,10 +1244,16 @@ const askLimiter = new AskLimiter({
 const manualRecordingStartLimiter = new ManualRecordingStartLimiter({
   userCooldownMs: config.manualRecordUserCooldownSec * 1000,
   guildCooldownMs: config.manualRecordGuildCooldownSec * 1000,
-  maxStartsPerGuild24h: config.manualRecordGuildStartsPer24h,
+  maxStartsPerGuild24h: config.recordingGuildStartsPer24h,
+});
+const recordingAdmission = new RecordingAdmissionGuard(path.join(config.recordingsDir, '.recording-admission.json'), {
+  maxStartsPerGuild24h: config.recordingGuildStartsPer24h,
+  maxStartsGlobalPerHour: config.recordingStartsGlobalPerHour,
+  maxStartsGlobal24h: config.recordingStartsGlobal24h,
+  maxPendingProcessing: config.recordingMaxPendingProcessing,
 });
 
-async function handlePerguntar(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function handlePerguntar(interaction: ChatInputCommandInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
   if (!interaction.guild) {
     await interaction.reply({ content: t(l, 'err.guild-only'), ephemeral: true });
@@ -788,17 +1280,17 @@ async function handlePerguntar(interaction: ChatInputCommandInteraction): Promis
     const range = temporal.range ?? resolveRange({ last: `${days}d` }, nowMs, config.timezone);
     // MESMA regra de acesso da web: só reuniões que essa pessoa pode abrir
     // A data escrita na pergunta vence a opção `dias`; sem data, vale a janela do comando.
-    const candidates = listGuildMetasInRange(interaction.guild.id, range.fromMs, range.toMs)
-      .filter((m) => m.status === 'done')
-      .filter((m) => transcriptReady(m));
-    const authorized = authorizeAskMetas(candidates, (meta) => memberCanAccessRecording(member, meta));
-    if (authorized.metas.length === 0) {
+    const archive = collectAuthorizedAskArchive(interaction.guild.id, range.fromMs, range.toMs, (meta) =>
+      memberCanAccessRecording(member, meta),
+    );
+    const scanNotice = archive.truncated ? `\n\n${t(l, 'ask.scan-truncated')}` : '';
+    if (archive.authorized.metas.length === 0) {
       await interaction.editReply(
-        temporal.label ? t(l, 'ask.no-period', { period: temporal.label }) : t(l, 'ask.no-meetings', { days }),
+        `${temporal.label ? t(l, 'ask.no-period', { period: temporal.label }) : t(l, 'ask.no-meetings', { days })}${scanNotice}`,
       );
       return;
     }
-    const result = await answerQuestion(question, authorized, l, {
+    const result = await answerQuestion(question, archive.authorized, l, {
       nowMs,
       timezone: config.timezone,
       fallbackRange: range,
@@ -809,13 +1301,15 @@ async function handlePerguntar(interaction: ChatInputCommandInteraction): Promis
       },
     });
     if (!result.answer) {
-      await interaction.editReply(t(l, 'ask.no-evidence'));
+      await interaction.editReply(`${t(l, 'ask.no-evidence')}${scanNotice}`);
       return;
     }
     console.log(
-      `Perguntar concluído: guild=${interaction.guild.id} período=${period} candidatas=${result.candidateMeetings} com-evidência=${result.matchedMeetings} reuniões=${result.meetingsUsed} chunks=${result.chunksUsed} contexto=${result.contextChars}`,
+      `Perguntar concluído: guild=${interaction.guild.id} período=${period} ids-verificados=${archive.scannedIds} arquivo-parcial=${archive.truncated} candidatas=${result.candidateMeetings} com-evidência=${result.matchedMeetings} reuniões=${result.meetingsUsed} chunks=${result.chunksUsed} contexto=${result.contextChars}`,
     );
-    await interaction.editReply(`${result.answer}\n\n${t(l, 'ask.footer', { n: result.meetingsUsed, period })}`);
+    await interaction.editReply(
+      `${result.answer}\n\n${t(l, 'ask.footer', { n: result.meetingsUsed, period })}${scanNotice}`,
+    );
   } catch (err) {
     if (err instanceof AskRateLimitError) {
       await interaction.editReply(t(l, 'ask.rate-limit')).catch(() => {});
@@ -949,7 +1443,10 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
     );
   } catch (err) {
     reservation.rollback();
-    if (err instanceof RecordingStartCancelledError) {
+    const protectionMessage = protectedRecordingStartMessage(err, l);
+    if (protectionMessage) {
+      await interaction.editReply(protectionMessage);
+    } else if (err instanceof RecordingStartCancelledError) {
       await interaction.editReply(t(l, 'record.start-cancelled'));
     } else if (err instanceof RecordingBusyError) {
       const info = sessionManager.startingInfo(interaction.guild.id);
@@ -986,25 +1483,31 @@ async function handleParar(interaction: ChatInputCommandInteraction | ButtonInte
     await interaction.reply({ content: t(l, 'err.guild-only'), ephemeral: true });
     return;
   }
-  const expectedSessionId = interaction.isButton() ? controlSessionId(interaction.customId, STOP_BUTTON_ID) : undefined;
-  if (interaction.isButton() && !expectedSessionId) {
+  const expectedControlToken = interaction.isButton()
+    ? controlSessionId(interaction.customId, STOP_BUTTON_ID)
+    : undefined;
+  if (interaction.isButton() && !expectedControlToken) {
     await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
     return;
   }
 
   const session = sessionManager.get(interaction.guild.id);
-  if (session && expectedSessionId && session.id !== expectedSessionId) {
+  if (session && expectedControlToken && session.controlToken !== expectedControlToken) {
     await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
     return;
   }
   if (!session) {
     const starting = sessionManager.startingInfo(interaction.guild.id);
     const controlsThisStart =
-      !interaction.isButton() || (expectedSessionId !== undefined && starting?.session?.id === expectedSessionId);
+      !interaction.isButton() ||
+      (expectedControlToken !== undefined && starting?.session?.controlToken === expectedControlToken);
     if (starting && controlsThisStart) {
       const member = interaction.member as GuildMember | null;
-      const channel = interaction.guild.channels.cache.get(starting.channelId);
-      if (!member || !channel?.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel)) {
+      const allowed = starting.session
+        ? canControlStarting(starting.session, member)
+        : !!member &&
+          (member.voice.channelId === starting.channelId || member.permissions.has(PermissionFlagsBits.ManageGuild));
+      if (!allowed) {
         await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
         return;
       }
@@ -1019,7 +1522,7 @@ async function handleParar(interaction: ChatInputCommandInteraction | ButtonInte
     }
     const stopping = sessionManager.stoppingSession(interaction.guild.id);
     if (stopping) {
-      if (expectedSessionId && stopping.id !== expectedSessionId) {
+      if (expectedControlToken && stopping.controlToken !== expectedControlToken) {
         await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
         return;
       }
@@ -1082,13 +1585,22 @@ function recordingChannelReady(channel: VoiceBasedChannel): boolean {
   );
 }
 
-/**
- * Nota é conteúdo da gravação: exige poder VER o canal gravado (salas
- * restritas não recebem notas de quem está de fora).
- */
+/** Nota/stop alteram conteúdo: só grants históricos ou admin atual controlam. */
 function canAnnotate(session: RecordingSession, member: GuildMember | null): boolean {
   if (!member) return false;
-  return session.voiceChannel.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel) ?? false;
+  return (
+    recordingIdentityGrant(member.id, session.meta).view || member.permissions.has(PermissionFlagsBits.ManageGuild)
+  );
+}
+
+/** Durante o start, presença ainda não foi persistida; aceita quem está na sala agora. */
+function canControlStarting(session: RecordingSession, member: GuildMember | null): boolean {
+  if (!member) return false;
+  return (
+    canAnnotate(session, member) ||
+    session.voiceChannel.members.has(member.id) ||
+    member.permissions.has(PermissionFlagsBits.ManageGuild)
+  );
 }
 
 async function handleNota(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -1120,13 +1632,13 @@ const markClicks = new MarkClickDeduper();
 /** 📌 de um toque: marca o momento SEM modal/digitação — a fricção mata o bookmark. */
 async function handleMarkButton(interaction: ButtonInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
-  const expectedSessionId = controlSessionId(interaction.customId, MARK_BUTTON_ID);
-  if (!expectedSessionId) {
+  const expectedControlToken = controlSessionId(interaction.customId, MARK_BUTTON_ID);
+  if (!expectedControlToken) {
     await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
     return;
   }
   const session = interaction.guild ? sessionManager.get(interaction.guild.id) : undefined;
-  if (!session || session.id !== expectedSessionId) {
+  if (!session || session.controlToken !== expectedControlToken) {
     await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
     return;
   }
@@ -1153,13 +1665,13 @@ async function handleMarkButton(interaction: ButtonInteraction): Promise<void> {
 
 async function handleNoteButton(interaction: ButtonInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
-  const expectedSessionId = controlSessionId(interaction.customId, NOTE_BUTTON_ID);
-  if (!expectedSessionId) {
+  const expectedControlToken = controlSessionId(interaction.customId, NOTE_BUTTON_ID);
+  if (!expectedControlToken) {
     await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
     return;
   }
   const session = interaction.guild ? sessionManager.get(interaction.guild.id) : undefined;
-  if (!session || session.id !== expectedSessionId) {
+  if (!session || session.controlToken !== expectedControlToken) {
     await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
     return;
   }
@@ -1168,9 +1680,9 @@ async function handleNoteButton(interaction: ButtonInteraction): Promise<void> {
     return;
   }
   const modal = new ModalBuilder()
-    // customId carrega id da sessão (um modal não pode cair em outra gravação) e
+    // customId carrega token efêmero da sessão (um modal não pode cair em outra gravação) e
     // o offset do CLIQUE (o timestamp da nota é o momento do clique, não do submit)
-    .setCustomId(`${NOTE_MODAL_ID}:${session.id}:${session.durationMs}`)
+    .setCustomId(`${NOTE_MODAL_ID}:${session.controlToken}:${session.durationMs}`)
     .setTitle(t(l, 'note.modal-title'))
     .addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
@@ -1188,8 +1700,8 @@ async function handleNoteButton(interaction: ButtonInteraction): Promise<void> {
 async function handleNoteModal(interaction: ModalSubmitInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
   const session = interaction.guild ? sessionManager.get(interaction.guild.id) : undefined;
-  const [, expectedSessionId, rawAt] = interaction.customId.split(':');
-  if (!session || session.id !== expectedSessionId) {
+  const [, expectedControlToken, rawAt] = interaction.customId.split(':');
+  if (!session || session.controlToken !== expectedControlToken) {
     await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
     return;
   }
@@ -1583,10 +2095,14 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
     } catch (err) {
       // rearma para tentar de novo no próximo movimento do canal
       setArmed(guild.id, channelId, true);
-      console.error(`Auto-record falhou em #${channel.name}:`, err);
+      const protectionAlert = protectedAutoRecordAlert(err);
+      if (protectionAlert) console.warn(`Auto-record bloqueado pela proteção (${guild.id}/${channelId}).`);
+      else console.error(`Auto-record falhou em #${channel.name}:`, err);
       void alertOwners(
         `autorecord-start:${guild.id}:${channelId}`,
-        `O auto-record não conseguiu iniciar em **#${safeName(channel.name)}** (${safeName(guild.name)}): ${shortError((err as Error).message, locale)}`,
+        protectionAlert
+          ? `${protectionAlert} Canal: **#${safeName(channel.name)}** (${safeName(guild.name)}).`
+          : `O auto-record não conseguiu iniciar em **#${safeName(channel.name)}** (${safeName(guild.name)}): ${shortError((err as Error).message, locale)}`,
       );
     }
   }
@@ -1609,20 +2125,21 @@ async function repairRecoveredSurfaces(): Promise<void> {
   // Sessões criadas nesta versão persistem a mensagem do painel. Depois de um
   // crash, neutraliza o painel vermelho e remove todos os controles antigos.
   for (const meta of recoveredRecordings) {
+    // Metas anteriores à política atual passam pela migração auditada abaixo;
+    // não fazemos uma edição histórica sem antes persistir o plano.
+    if (meta.discordSurfacePolicyVersion !== DISCORD_SURFACE_POLICY_VERSION) continue;
     if (!meta.panelChannelId || !meta.panelMessageId) continue;
     try {
       const channel = await client.channels.fetch(meta.panelChannelId);
       const sameGuild = channel && 'guildId' in channel && channel.guildId === meta.guildId;
       if (!sameGuild || !channel || !('messages' in channel)) continue;
       const message = await channel.messages.fetch(meta.panelMessageId);
+      if (!client.user || message.author.id !== client.user.id) continue;
       const l: Locale = meta.locale === 'en' ? 'en' : meta.locale === 'pt' ? 'pt' : config.defaultLocale;
-      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        new ButtonBuilder().setLabel(t(l, 'panel.btn-page')).setStyle(ButtonStyle.Link).setURL(pageUrl(meta.id)),
-      );
       await message.edit({
-        content: t(l, 'panel.recovered-after-restart', { url: pageUrl(meta.id) }),
+        content: t(l, 'panel.recovered-after-restart'),
         embeds: [],
-        components: [row],
+        components: [],
       });
     } catch (err) {
       console.warn(`Não consegui neutralizar painel recuperado de ${meta.id}:`, (err as Error).message);
@@ -1630,10 +2147,30 @@ async function repairRecoveredSurfaces(): Promise<void> {
   }
 }
 
+function needsRecoveredProcessing(meta: RecordingMeta, now = Date.now()): boolean {
+  if (meta.status !== 'done' || meta.participants.length === 0 || !transcriptionEnabled()) return false;
+  const transcriptionStatus = meta.transcription?.status;
+  const attempts = meta.transcription?.attempts ?? 0;
+  const recent = (meta.endedAt ?? 0) > now - 24 * 60 * 60 * 1000;
+  if (transcriptionStatus === 'pending' || transcriptionStatus === 'running') return true;
+  if (transcriptionStatus === undefined && recent) return true;
+  if (transcriptionStatus === 'partial' && attempts < MAX_TRANSCRIPTION_ATTEMPTS) return true;
+  if (
+    transcriptionStatus === 'error' &&
+    attempts < MAX_TRANSCRIPTION_ATTEMPTS &&
+    (meta.transcription?.retryScheduled === true || recent)
+  ) {
+    return true;
+  }
+  return (
+    (transcriptionStatus === 'done' || transcriptionStatus === 'partial') &&
+    (meta.minutes?.status === 'pending' || meta.minutes?.status === 'running')
+  );
+}
+
 client.once(Events.ClientReady, async () => {
-  // Marca ANTES de qualquer await: a partir daqui os caches de guild/canal são
-  // confiáveis e o checkAccess (web + API do MCP) pode avaliar acesso de verdade.
-  markClientReady();
+  // O observador de readiness roda antes deste listener; a partir daqui os
+  // caches de guild/canal já podem sustentar ACL web + MCP.
   startMonitor(); // alertas por DM ao dono (disco, etc.)
   console.log(`Kassinão online como ${client.user?.tag} 🎙️`);
   await repairRecoveredSurfaces();
@@ -1646,18 +2183,44 @@ client.once(Events.ClientReady, async () => {
   }
   // transcrições interrompidas por reinício voltam à fila — só agora, com o
   // client pronto, para as notificações de "pronta" conseguirem ser enviadas
+  const guildSurfaceInventory = readDiscordSurfaceInventory();
+  for (const guild of client.guilds.cache.values()) {
+    if (guildSurfaceInventory.guilds[guild.id]?.policyVersion !== DISCORD_SURFACE_POLICY_VERSION) {
+      pendingDiscordGuildSurfaceMigrationIds.add(guild.id);
+    }
+  }
   for (const meta of listMetas()) {
     if (meta.status !== 'done') continue;
-    const recent = (meta.endedAt ?? 0) > Date.now() - 24 * 60 * 60 * 1000;
+    if (meta.discordSurfacePolicyVersion !== DISCORD_SURFACE_POLICY_VERSION) {
+      pendingDiscordSurfaceMigrationIds.add(meta.id);
+    }
     const st = meta.transcription?.status;
+    const finalNotificationReady = st === 'done' || st === 'partial' || st === 'error';
+    if (
+      finalNotificationReady &&
+      !meta.notifiedAt &&
+      !meta.notificationRetryExhaustedAt &&
+      hasPersistedNotificationWork(meta)
+    ) {
+      pendingTranscriptionNotificationIds.add(meta.id);
+    }
+    const recent = (meta.endedAt ?? 0) > Date.now() - 24 * 60 * 60 * 1000;
     const tries = meta.transcription?.attempts ?? 0;
     // idioma da sessão persiste no meta — o recovery não pode chutar 'pt' num guild en
     const loc: Locale = meta.locale === 'en' ? 'en' : meta.locale === 'pt' ? 'pt' : config.defaultLocale;
     if (st === 'pending' || st === 'running' || (st === undefined && recent)) {
-      enqueueTranscription(meta.id, (m) => notifyTranscription(m, loc));
+      enqueueTranscription(
+        meta.id,
+        (m) => notifyTranscription(m, loc),
+        () => recordingAdmission.complete(meta.id),
+      );
     } else if (st === 'partial' && tries < MAX_TRANSCRIPTION_ATTEMPTS) {
       // rodada agendada morreu com o reinício — retoma só as faixas que faltam
-      enqueueTranscription(meta.id, (m) => notifyTranscription(m, loc));
+      enqueueTranscription(
+        meta.id,
+        (m) => notifyTranscription(m, loc),
+        () => recordingAdmission.complete(meta.id),
+      );
     } else if (
       st === 'error' &&
       tries < MAX_TRANSCRIPTION_ATTEMPTS &&
@@ -1665,22 +2228,27 @@ client.once(Events.ClientReady, async () => {
     ) {
       // erro com tentativas sobrando (ex.: 429 em cadeia + deploy no meio):
       // sem isso a gravação ficaria em erro pra sempre, em silêncio
-      enqueueTranscription(meta.id, (m) => notifyTranscription(m, loc));
+      enqueueTranscription(
+        meta.id,
+        (m) => notifyTranscription(m, loc),
+        () => recordingAdmission.complete(meta.id),
+      );
     } else if (st === 'done' || st === 'partial') {
       const ms = meta.minutes?.status;
       if (ms === 'pending' || ms === 'running') {
         // Retoma SÓ a ata que ficou pela metade num reinício. generateMinutesStep
         // grava 'running' como 1º passo, então interrupção real deixa pending/running.
-        enqueueMinutesOnly(meta.id, (m) => {
-          // só avisa se a ata retomada REALMENTE ficou pronta (não re-notifica a transcrição)
-          if (m.minutes?.status === 'done') notifyTranscription(m, loc);
-        });
-      } else if (
-        !meta.notifiedAt &&
-        (meta.minutes?.finishedAt ?? meta.transcription?.finishedAt ?? 0) > Date.now() - 30 * 60 * 1000
-      ) {
-        // terminou tudo mas o processo morreu ANTES do aviso (janela de 30min:
-        // metas antigas do upgrade não têm notifiedAt e JÁ foram avisadas — não spamear)
+        enqueueMinutesOnly(
+          meta.id,
+          (m) => {
+            // só avisa se a ata retomada REALMENTE ficou pronta (não re-notifica a transcrição)
+            if (m.minutes?.status === 'done') notifyTranscription(m, loc);
+          },
+          () => recordingAdmission.complete(meta.id),
+        );
+      } else if (shouldRecoverTranscriptionNotification(meta)) {
+        // Checkpoints novos retomam sem limite de idade. Só metas legadas, que não
+        // distinguem "nunca enviado" de "já enviado", conservam a janela de 30min.
         void notifyTranscription(meta, loc);
       }
     }
@@ -1688,6 +2256,8 @@ client.once(Events.ClientReady, async () => {
       void deliverMinutesWebhookIfNeeded(meta);
     }
   }
+  startNotificationRetrySweep();
+  startDiscordSurfaceMigrationSweep();
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -1761,6 +2331,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 // Boas-vindas ao entrar num servidor novo: onboarding sem precisar procurar nada.
 client.on(Events.GuildCreate, async (guild) => {
+  pendingDiscordGuildSurfaceMigrationIds.add(guild.id);
+  startDiscordSurfaceMigrationSweep();
   const l = localeOf(guild.preferredLocale);
   // Registra os comandos NESTE servidor na hora — sem isso, o registro global do
   // boot pode levar até 1h, e a pessoa digita /gravar logo após convidar e não vê nada.
@@ -1800,13 +2372,26 @@ client.on(Events.GuildCreate, async (guild) => {
 });
 
 client.on(Events.GuildDelete, (guild) => {
-  forgetGuildMembers(guild.id);
+  // Não marca completo: se o bot for convidado de novo, GuildCreate retoma o checkpoint.
+  pendingDiscordGuildSurfaceMigrationIds.delete(guild.id);
+});
+
+const directMessageLimiter = new DmMessageLimiter({
+  maxPerUser: 2,
+  maxGlobal: 60,
+  windowMs: 60_000,
+  maxTrackedUsers: 128,
 });
 
 // DM ao bot → responde o guia (onboarding). Não lê o conteúdo além de detectar
 // a FORMA "/comando" no início — pra explicar na lata por que não rodou.
-client.on(Events.MessageCreate, async (message) => {
+export async function handleDirectMessage(
+  message: Message,
+  limiter: Pick<DmMessageLimiter, 'admit'> = directMessageLimiter,
+): Promise<void> {
   if (message.author.bot || message.guildId) return; // só DMs de pessoas
+  // Antes de ler conteúdo, logar ou responder. Excesso é descartado em silêncio.
+  if (!limiter.admit(message.author.id)) return;
   // DM não expõe o locale do usuário → usa DEFAULT_LOCALE (padrão 'en' no repo;
   // defina DEFAULT_LOCALE=pt pra responder em português). Em servidores cada um vê no seu idioma.
   const l: Locale = config.defaultLocale;
@@ -1818,6 +2403,7 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     // o canal de DM pode chegar PARCIAL (Partials.Channel) — completa antes de enviar
     if (message.channel.partial) await message.channel.fetch();
+    if (!message.channel.isSendable()) return;
     if (cmd) {
       await message.channel.send(t(l, 'help.dm-command', { cmd: `/${cmd[1]}`, url: config.appUrl }));
       return;
@@ -1826,6 +2412,10 @@ client.on(Events.MessageCreate, async (message) => {
   } catch (err) {
     console.error(`Falha ao responder DM de ${message.author.id}:`, err);
   }
+}
+
+client.on(Events.MessageCreate, async (message) => {
+  await handleDirectMessage(message);
 });
 
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
@@ -1864,16 +2454,8 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   for (const channelId of channels) scheduleAutoRecordCheck(guild, channelId);
 });
 
-// Se a intent privilegiada GuildMembers estiver habilitada no futuro, invalida
-// imediatamente remoções/trocas de cargo. Sem ela, access.ts revalida via REST
-// autoritativo no máximo após o TTL (e SEM cache antes de exclusões).
-client.on(Events.GuildMemberUpdate, (_oldMember, newMember) => {
-  forgetMember(newMember.guild.id, newMember.id);
-});
-
 client.on(Events.GuildMemberRemove, (member) => {
   try {
-    forgetMember(member.guild.id, member.id);
     if (config.mcpEnabled) {
       const n = revokeUser(member.id);
       if (n > 0) console.log(`MCP: ${n} sessão(ões) revogada(s) — ${member.id} saiu de ${member.guild.name}.`);
@@ -1890,6 +2472,14 @@ async function gracefulShutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.log(`Recebido ${signal}: encerrando gravações ativas antes de sair...`);
   killPendingTranscriptions();
+  if (notificationRetrySweepTimer) {
+    clearInterval(notificationRetrySweepTimer);
+    notificationRetrySweepTimer = undefined;
+  }
+  if (discordSurfaceMigrationSweepTimer) {
+    clearInterval(discordSurfaceMigrationSweepTimer);
+    discordSurfaceMigrationSweepTimer = undefined;
+  }
   for (const timeout of pendingChecks.values()) clearTimeout(timeout);
   pendingChecks.clear();
   const starts = sessionManager.cancelAllStarts();
@@ -1924,6 +2514,14 @@ if (transcribeConfigError) {
 }
 
 recoveredRecordings = recoverInterruptedRecordings();
+const recoveredProcessing = new Map(
+  listMetas()
+    .filter((meta) => needsRecoveredProcessing(meta))
+    .map((meta) => [meta.id, { guildId: meta.guildId, startedAt: meta.startedAt }] as const),
+);
+if (!recordingAdmission.reconcile(recoveredProcessing)) {
+  console.error('A proteção durável de gravações não pôde ser reconciliada; novos inícios permanecerão bloqueados.');
+}
 startWebServer();
 startCleanupJob();
 client.login(config.token).catch((err) => {

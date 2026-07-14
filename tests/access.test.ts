@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { client } from '../src/discord/client';
 import {
   checkAccess,
-  forgetGuildMembers,
-  forgetMember,
-  MEMBER_CACHE_MAX_ENTRIES,
+  checkAccessForMcp,
+  createAccessRequestContext,
+  FreshMembershipBudget,
+  prevalidateGuildMembershipForMcp,
   recordingIdentityGrant,
+  TransientAccessError,
 } from '../src/web/access';
 import type { RecordingMeta } from '../src/store';
 
@@ -62,7 +64,6 @@ function installGuild(options: { admin?: boolean; seesChannel?: boolean; missing
 }
 
 afterEach(() => {
-  forgetGuildMembers(GUILD_ID);
   client.guilds.cache.delete(GUILD_ID);
 });
 
@@ -97,7 +98,7 @@ describe('ACL histórica das gravações', () => {
     });
   });
 
-  it('ações destrutivas podem ignorar o TTL e sempre usam REST com force', async () => {
+  it('ações destrutivas ignoram até o contexto da listagem e sempre usam REST com force', async () => {
     const { fetchMember } = installGuild({ admin: true });
     const recording = meta();
     const user = { id: USER_ID, name: 'Admin' };
@@ -109,30 +110,110 @@ describe('ACL histórica das gravações', () => {
     expect(fetchMember).toHaveBeenNthCalledWith(2, { user: USER_ID, force: true, cache: false });
   });
 
-  it('atualiza a recência no hit e remove a identidade realmente menos recente', async () => {
-    const fetchMember = vi.fn(async ({ user }: { user: string }) => ({
-      id: user,
-      permissions: { has: () => false },
-    }));
-    const guild = {
-      id: GUILD_ID,
-      members: { fetch: fetchMember },
-      channels: { cache: new Collection(), fetch: vi.fn() },
-    } as unknown as Guild;
-    client.guilds.cache.set(GUILD_ID, guild);
+  it('reconfirma membership pela REST em cada request de conteúdo', async () => {
+    const { fetchMember } = installGuild();
+    const recording = meta({ participants: [{ id: USER_ID, name: 'Alice' } as RecordingMeta['participants'][number]] });
+    const user = { id: USER_ID, name: 'Alice' };
 
-    for (let i = 0; i < MEMBER_CACHE_MAX_ENTRIES; i++) {
-      await checkAccess({ id: `member-${i}`, name: `Member ${i}` }, meta());
-    }
+    await expect(checkAccess(user, recording)).resolves.toEqual({ view: true, delete: false });
+    fetchMember.mockRejectedValueOnce(Object.assign(new Error('Unknown Member'), { code: 10007 }));
+    await expect(checkAccess(user, recording)).resolves.toEqual({ view: false, delete: false });
 
-    // member-0 vira o mais recente sem nova ida ao Discord.
-    await checkAccess({ id: 'member-0', name: 'Member 0' }, meta());
-    await checkAccess({ id: `member-${MEMBER_CACHE_MAX_ENTRIES}`, name: 'Member novo' }, meta());
+    expect(fetchMember).toHaveBeenCalledTimes(2);
+    expect(fetchMember).toHaveBeenNthCalledWith(1, { user: USER_ID, force: true, cache: false });
+    expect(fetchMember).toHaveBeenNthCalledWith(2, { user: USER_ID, force: true, cache: false });
+  });
 
-    // O hit anterior preserva member-0; a entrada realmente mais antiga (member-1) sai.
-    await checkAccess({ id: 'member-0', name: 'Member 0' }, meta());
-    await checkAccess({ id: 'member-1', name: 'Member 1' }, meta());
+  it('reutiliza a confirmação somente dentro da mesma listagem', async () => {
+    const { fetchMember } = installGuild();
+    const user = { id: USER_ID, name: 'Alice' };
+    const requestContext = createAccessRequestContext();
 
-    expect(fetchMember).toHaveBeenCalledTimes(MEMBER_CACHE_MAX_ENTRIES + 2);
+    await checkAccess(user, meta({ id: 'recording-a' }), { requestContext });
+    await checkAccess(user, meta({ id: 'recording-b' }), { requestContext });
+
+    expect(fetchMember).toHaveBeenCalledTimes(1);
+  });
+
+  it('trata guild desconhecida e Unknown Member como negação, mas falha REST conhecida como transitória', async () => {
+    const user = { id: USER_ID, name: 'Alice' };
+    await expect(
+      prevalidateGuildMembershipForMcp(user, 'guild-fora-do-gateway', createAccessRequestContext()),
+    ).resolves.toBe(false);
+
+    const { fetchMember } = installGuild({ missing: true });
+    await expect(prevalidateGuildMembershipForMcp(user, GUILD_ID, createAccessRequestContext())).resolves.toBe(false);
+
+    fetchMember.mockRejectedValueOnce(new Error('Discord timeout'));
+    await expect(prevalidateGuildMembershipForMcp(user, GUILD_ID, createAccessRequestContext())).rejects.toBeInstanceOf(
+      TransientAccessError,
+    );
+  });
+
+  it('trata meta órfã de guild removida como 404/fail-closed, não indisponibilidade global', async () => {
+    await expect(
+      checkAccessForMcp({ id: USER_ID, name: 'Alice' }, meta({ guildId: 'guild-removida-do-bot' })),
+    ).resolves.toEqual({ view: false, delete: false });
+  });
+
+  it('expõe falha transitória para listagem com cursor sem confundir com negação real', async () => {
+    const { fetchMember } = installGuild();
+    fetchMember.mockRejectedValueOnce(new Error('Discord timeout'));
+
+    await expect(
+      checkAccess({ id: USER_ID, name: 'Alice' }, meta(), { throwOnTransient: true }),
+    ).rejects.toBeInstanceOf(TransientAccessError);
+
+    fetchMember.mockRejectedValueOnce(Object.assign(new Error('Unknown Member'), { code: 10007 }));
+    await expect(checkAccess({ id: USER_ID, name: 'Alice' }, meta(), { throwOnTransient: true })).resolves.toEqual({
+      view: false,
+      delete: false,
+    });
+  });
+});
+
+describe('orçamento de membership autoritativo', () => {
+  const limits = {
+    perUserPerMinute: 2,
+    globalPerMinute: 3,
+    maxConcurrent: 1,
+    maxTrackedUsers: 10,
+  };
+
+  it('agrega todas as consultas do mesmo userId sem cachear o resultado', async () => {
+    const budget = new FreshMembershipBudget(limits, () => 1_000);
+    const task = vi.fn(async () => 'fresh');
+
+    await expect(budget.run('user-a', task)).resolves.toBe('fresh');
+    await expect(budget.run('user-a', task)).resolves.toBe('fresh');
+    await expect(budget.run('user-a', task)).rejects.toBeInstanceOf(TransientAccessError);
+    expect(task).toHaveBeenCalledTimes(2);
+  });
+
+  it('aplica teto global mesmo quando os userIds são diferentes', async () => {
+    const budget = new FreshMembershipBudget({ ...limits, perUserPerMinute: 10 }, () => 1_000);
+
+    await budget.run('user-a', async () => undefined);
+    await budget.run('user-b', async () => undefined);
+    await budget.run('user-c', async () => undefined);
+    await expect(budget.run('user-d', async () => undefined)).rejects.toBeInstanceOf(TransientAccessError);
+  });
+
+  it('recusa saturação concorrente e libera a vaga no finally', async () => {
+    const budget = new FreshMembershipBudget({ ...limits, perUserPerMinute: 10, globalPerMinute: 10 }, () => 1_000);
+    let release!: () => void;
+    const first = budget.run(
+      'user-a',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    await vi.waitFor(() => expect(budget.activeChecks).toBe(1));
+
+    await expect(budget.run('user-b', async () => undefined)).rejects.toBeInstanceOf(TransientAccessError);
+    release();
+    await first;
+    await expect(budget.run('user-b', async () => 'ok')).resolves.toBe('ok');
   });
 });

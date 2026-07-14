@@ -1,9 +1,18 @@
 import fs from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteRecording,
+  listGuildMetaIdsInRange,
+  listGuildMetaScanPageInRange,
   listGuildMetasInRange,
+  listMetaIdsPage,
+  listMetaIdsInRange,
+  listMetaScanPageInRange,
+  listMetasInRange,
   minutesPath,
+  readMinutesBounded,
+  readTranscriptForAggregateSearch,
+  readTranscriptBounded,
   readTranscriptForSearch,
   recordingDir,
   RecordingMeta,
@@ -61,6 +70,19 @@ describe('listGuildMetasInRange', () => {
     }
   });
 
+  it('recusa ata acima do teto antes de alocar e parsear o JSON', () => {
+    const value = meta('2026-07-09-minutes-bounded', '2026-07-09T12:00:00Z');
+    saveMinutes(value.id, {
+      resumo: 'x'.repeat(256),
+      decisoes: [],
+      acoes: [],
+      topicos: [],
+      porParticipante: [],
+    });
+
+    expect(readMinutesBounded(value.id, 64)).toMatchObject({ status: 'too_large' });
+  });
+
   it('respeita a janela real mesmo quando o dia local cruza dois prefixos UTC', () => {
     meta('2026-07-09-range-before', '2026-07-09T02:59:59Z');
     meta('2026-07-09-range-start', '2026-07-09T03:00:00Z');
@@ -88,6 +110,141 @@ describe('listGuildMetasInRange', () => {
       { limit: 2 },
     );
     expect(result).toHaveLength(2);
+  });
+
+  it('usa o índice já ordenado e não reordena toda a guild durante a consulta limitada', () => {
+    for (let index = 0; index < 40; index++) {
+      meta(`2026-07-09-indexed-range-${index}`, `2026-07-09T${String(index % 24).padStart(2, '0')}:00:00Z`);
+    }
+    const sortSpy = vi.spyOn(Array.prototype, 'sort');
+    const callsBefore = sortSpy.mock.calls.length;
+    const result = listGuildMetasInRange(
+      'guild-range-test',
+      Date.parse('2026-07-09T00:00:00Z'),
+      Date.parse('2026-07-10T00:00:00Z'),
+      { limit: 2 },
+    );
+    const callsAfter = sortSpy.mock.calls.length;
+    sortSpy.mockRestore();
+
+    expect(callsAfter).toBe(callsBefore);
+    expect(result).toHaveLength(2);
+    expect(result[0].startedAt).toBeGreaterThanOrEqual(result[1].startedAt);
+  });
+
+  it('reposiciona a meta quando guild ou startedAt mudam', () => {
+    const value = meta('2026-07-09-index-move', '2026-07-09T10:00:00Z');
+    saveMeta({ ...value, guildId: 'guild-range-new', startedAt: Date.parse('2026-07-09T18:00:00Z') });
+
+    expect(
+      listGuildMetasInRange(
+        'guild-range-test',
+        Date.parse('2026-07-09T00:00:00Z'),
+        Date.parse('2026-07-10T00:00:00Z'),
+      ).map((item) => item.id),
+    ).not.toContain(value.id);
+    expect(
+      listGuildMetasInRange(
+        'guild-range-new',
+        Date.parse('2026-07-09T00:00:00Z'),
+        Date.parse('2026-07-10T00:00:00Z'),
+      ).map((item) => item.id),
+    ).toEqual([value.id]);
+  });
+
+  it('limita a janela global em ordem recente e sinaliza continuação', () => {
+    for (let index = 0; index < 5; index++) {
+      meta(`2026-07-09-global-cap-${index}`, `2026-07-09T1${index}:00:00Z`);
+    }
+    const result = listMetasInRange(Date.parse('2026-07-09T00:00:00Z'), Date.parse('2026-07-10T00:00:00Z'), 2);
+
+    expect(result.metas.map((item) => item.id)).toEqual(['2026-07-09-global-cap-4', '2026-07-09-global-cap-3']);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('consulta ids globais e por guild sem materializar as metas', () => {
+    meta('2026-07-09-id-range-new', '2026-07-09T14:00:00Z');
+    meta('2026-07-09-id-range-old', '2026-07-09T13:00:00Z');
+    meta('2026-07-09-id-range-other', '2026-07-09T15:00:00Z', 'other-guild');
+    const from = Date.parse('2026-07-09T00:00:00Z');
+    const to = Date.parse('2026-07-10T00:00:00Z');
+
+    expect(listMetaIdsInRange(from, to, 2)).toEqual({
+      ids: ['2026-07-09-id-range-other', '2026-07-09-id-range-new'],
+      truncated: true,
+    });
+    expect(listGuildMetaIdsInRange('guild-range-test', from, to, 1)).toEqual({
+      ids: ['2026-07-09-id-range-new'],
+      truncated: true,
+    });
+  });
+
+  it('pagina apenas ids sem clonar o arquivo global inteiro', () => {
+    for (let index = 0; index < 5; index++) {
+      meta(`2026-07-09-id-page-${index}`, `2099-07-09T1${index}:00:00Z`);
+    }
+    const first = listMetaIdsPage(undefined, 2);
+    const second = listMetaIdsPage(first.nextCursor, 2);
+
+    expect(first.ids).toEqual(['2026-07-09-id-page-4', '2026-07-09-id-page-3']);
+    expect(first.nextCursor).toEqual({
+      startedAt: Date.parse('2099-07-09T13:00:00Z'),
+      id: '2026-07-09-id-page-3',
+    });
+    expect(second.ids).toEqual(['2026-07-09-id-page-2', '2026-07-09-id-page-1']);
+    expect(second.nextCursor).toEqual({
+      startedAt: Date.parse('2099-07-09T11:00:00Z'),
+      id: '2026-07-09-id-page-1',
+    });
+  });
+
+  it('mantém a continuação estável quando a timeline muda entre páginas', () => {
+    for (let index = 0; index < 5; index++) {
+      meta(`2026-07-09-stable-page-${index}`, `2098-07-09T1${index}:00:00Z`);
+    }
+    const first = listMetaIdsPage(undefined, 2);
+
+    meta('2026-07-09-stable-page-new', '2098-07-09T20:00:00Z');
+    deleteRecording('2026-07-09-stable-page-4');
+    const second = listMetaIdsPage(first.nextCursor, 2);
+
+    expect(first.ids).toEqual(['2026-07-09-stable-page-4', '2026-07-09-stable-page-3']);
+    expect(second.ids).toEqual(['2026-07-09-stable-page-2', '2026-07-09-stable-page-1']);
+  });
+
+  it('mantém o cursor da janela estável após inserção e exclusão da própria âncora', () => {
+    const from = Date.parse('2097-07-09T00:00:00Z');
+    const to = Date.parse('2097-07-10T00:00:00Z');
+    for (let index = 0; index < 5; index++) {
+      meta(`2026-07-09-stable-window-${index}`, `2097-07-09T1${index}:00:00Z`);
+    }
+    const first = listMetaScanPageInRange(from, to, undefined, 2);
+    const anchor = first.candidates.at(-1);
+    expect(anchor).toBeDefined();
+
+    meta('2026-07-09-stable-window-new', '2097-07-09T20:00:00Z');
+    deleteRecording(anchor!.id);
+    const second = listMetaScanPageInRange(from, to, anchor, 2);
+    const guildSecond = listGuildMetaScanPageInRange('guild-range-test', from, to, anchor, 2);
+
+    expect(first.candidates.map((item) => item.id)).toEqual([
+      '2026-07-09-stable-window-4',
+      '2026-07-09-stable-window-3',
+    ]);
+    expect(second.candidates.map((item) => item.id)).toEqual([
+      '2026-07-09-stable-window-2',
+      '2026-07-09-stable-window-1',
+    ]);
+    expect(guildSecond.candidates).toEqual(second.candidates);
+  });
+
+  it('não confunde metas mais novas fora da janela com truncamento interno', () => {
+    meta('2026-07-10-newer-outside', '2026-07-10T12:00:00Z');
+    meta('2026-07-09-only-inside', '2026-07-09T12:00:00Z');
+    const result = listMetasInRange(Date.parse('2026-07-09T00:00:00Z'), Date.parse('2026-07-10T00:00:00Z'), 5);
+
+    expect(result.metas.map((item) => item.id)).toEqual(['2026-07-09-only-inside']);
+    expect(result.truncated).toBe(false);
   });
 
   it('não deixa gravações de outra guild ocuparem o corte', () => {
@@ -120,5 +277,27 @@ describe('listGuildMetasInRange', () => {
     expect(result?.segments[0].text).toBe('Projeto Zéfiro');
     expect(result?.bytes).toBeGreaterThan(0);
     expect(readTranscriptForSearch(value.id, (result?.bytes ?? 1) - 1)).toBeUndefined();
+  });
+
+  it('recusa uma transcrição acima do teto antes de devolvê-la ao chamador', () => {
+    const value = meta('2026-07-09-transcript-direct-bound', '2026-07-09T12:00:00Z');
+    saveTranscript(value.id, [{ startMs: 0, endMs: 1_000, speaker: 'Ana', text: 'conteúdo privado' }]);
+    const accepted = readTranscriptBounded(value.id, 1_024);
+    expect(accepted.status).toBe('ok');
+    if (accepted.status !== 'ok') throw new Error('transcrição deveria caber no teto');
+
+    expect(readTranscriptBounded(value.id, accepted.bytes - 1)).toEqual({
+      status: 'too_large',
+      bytes: accepted.bytes,
+    });
+  });
+
+  it('esgota o orçamento agregado pelo tamanho sem ler ou parsear a transcrição', () => {
+    const value = meta('2026-07-09-transcript-aggregate-bound', '2026-07-09T12:00:00Z');
+    fs.writeFileSync(transcriptPath(value.id), `[${'JSON inválido'.repeat(32)}`, 'utf8');
+
+    expect(readTranscriptForAggregateSearch(value.id, 1_024, 64)).toMatchObject({
+      status: 'request_budget_exhausted',
+    });
   });
 });

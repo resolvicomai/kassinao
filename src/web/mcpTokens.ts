@@ -29,7 +29,12 @@ interface Session {
   /** último refresh bem-sucedido = conector em uso (sessões antigas não têm). */
   lastSeenAt?: number;
   /** Retry idempotente da rotação mais recente, sem guardar nenhum token. */
-  lastRefreshAttempt?: { id: string; fromGen: number; replayUntil: number };
+  lastRefreshAttempt?: {
+    id: string;
+    fromGen: number;
+    /** Campo do schema anterior; aceito só durante a migração e ignorado. */
+    replayUntil?: number;
+  };
 }
 
 const FILE = path.join(config.recordingsDir, '.mcp-sessions.json');
@@ -73,6 +78,7 @@ function load(): void {
     const parsed = JSON.parse(fs.readFileSync(FILE, 'utf8')) as unknown;
     if (!Array.isArray(parsed)) return;
     const now = Date.now();
+    let needsMigration = false;
     const valid = parsed
       .filter((value): value is Session => {
         if (!value || typeof value !== 'object') return false;
@@ -96,10 +102,22 @@ function load(): void {
               isRefreshAttemptId(s.lastRefreshAttempt.id) &&
               Number.isInteger(s.lastRefreshAttempt.fromGen) &&
               s.lastRefreshAttempt.fromGen >= 0 &&
-              s.lastRefreshAttempt.fromGen < (s.gen as number) &&
-              typeof s.lastRefreshAttempt.replayUntil === 'number' &&
-              Number.isFinite(s.lastRefreshAttempt.replayUntil)))
+              s.lastRefreshAttempt.fromGen === (s.gen as number) - 1 &&
+              (s.lastRefreshAttempt.replayUntil === undefined ||
+                (typeof s.lastRefreshAttempt.replayUntil === 'number' &&
+                  Number.isFinite(s.lastRefreshAttempt.replayUntil)))))
         );
+      })
+      .map((session): Session => {
+        if (!session.lastRefreshAttempt) return session;
+        if (session.lastRefreshAttempt.replayUntil !== undefined) needsMigration = true;
+        return {
+          ...session,
+          lastRefreshAttempt: {
+            id: session.lastRefreshAttempt.id,
+            fromGen: session.lastRefreshAttempt.fromGen,
+          },
+        };
       })
       .sort((a, b) => b.createdAt - a.createdAt);
     const perUser = new Map<string, number>();
@@ -110,7 +128,7 @@ function load(): void {
       sessions.set(session.sid, session);
       perUser.set(session.userId, owned + 1);
     }
-    if (sessions.size !== parsed.length) persist();
+    if (sessions.size !== parsed.length || needsMigration) persist();
   } catch {
     // primeiro uso — arquivo ainda não existe
   }
@@ -203,8 +221,6 @@ export function isRefreshAttemptId(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
 }
 
-const REFRESH_REPLAY_TTL_MS = 5 * 60_000;
-
 /**
  * Rotaciona o refresh: confere a geração apresentada, detecta reuso e emite a
  * próxima geração. `reuse` = alguém apresentou um refresh antigo (roubado) →
@@ -223,8 +239,7 @@ export function rotateSession(sid: string, presentedGen: number, attemptId?: str
     presentedGen === s.gen - 1 &&
     attemptId !== undefined &&
     s.lastRefreshAttempt?.id === attemptId &&
-    s.lastRefreshAttempt.fromGen === presentedGen &&
-    Date.now() <= s.lastRefreshAttempt.replayUntil
+    s.lastRefreshAttempt.fromGen === presentedGen
   ) {
     // A resposta anterior se perdeu depois da persistência. Reemite a mesma
     // geração em vez de interpretar o retry idêntico como roubo.
@@ -241,8 +256,7 @@ export function rotateSession(sid: string, presentedGen: number, attemptId?: str
   s.gen += 1;
   s.exp = Date.now() + config.mcpRefreshTtlDays * 86400000; // janela deslizante
   s.lastSeenAt = Date.now(); // refresh bem-sucedido = conector em uso
-  s.lastRefreshAttempt =
-    attemptId === undefined ? undefined : { id: attemptId, fromGen, replayUntil: Date.now() + REFRESH_REPLAY_TTL_MS };
+  s.lastRefreshAttempt = attemptId === undefined ? undefined : { id: attemptId, fromGen };
   persist();
   return { ok: true, gen: s.gen, userId: s.userId, name: s.name, exp: s.exp, replayed: false };
 }

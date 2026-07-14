@@ -12,22 +12,27 @@ import { isTranscribing, transcriptToMarkdown } from '../processing/transcribe';
 import { minutesToMarkdown } from '../processing/minutes';
 import { sessionManager } from '../recorder/manager';
 import { cleanInline } from '../sanitize';
+import { MAX_MINUTES_BYTES } from '../securityLimits';
 import { isLoopbackAddress } from '../util';
 import {
   audioBytesOf,
+  boundMinutesForResponse,
   deleteAudioOnly,
   deleteRecording,
   forgetAudioBytes,
-  listMetas,
+  listMetaIdsPage,
+  MetaTimelineCursor,
   readMeta,
   readMinutes,
-  readTranscript,
+  readMinutesBounded,
+  readTranscriptBounded,
   RecordingMeta,
+  TranscriptSegment,
   transcriptionNeedsAudio,
   transcriptReady,
 } from '../store';
-import { checkAccess } from './access';
-import { mountMcpApi } from './api';
+import { checkAccess, createAccessRequestContext, TransientAccessError, withFreshMembershipBudget } from './access';
+import { ApiRateLimiters, FixedWindowRateLimiter, mountMcpApi } from './api';
 import {
   beginLogin,
   finishLogin,
@@ -58,6 +63,7 @@ import { docsPage } from './docs';
 import { searchRecordings } from './search';
 import { localeCookie, localeFromValue, resolveWebLocale } from './site';
 import { beginDownload, endDownload, hasActiveDownloads } from './tracker';
+import { isOpaqueCursorToken, OpaqueCursorError, openOpaqueCursor, sealOpaqueCursor } from './opaqueCursor';
 
 const SPACE_GROTESK_FONT =
   require.resolve('@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2');
@@ -75,6 +81,69 @@ const PUBLIC_VISUALS = [
   ['meeting-demo-pt.png', 'image/png'],
   ['meeting-demo-en.png', 'image/png'],
 ] as const;
+
+const mcpConnectionCreationLimiter = new FixedWindowRateLimiter();
+const webHeavyReadLimiters = new ApiRateLimiters();
+
+export const WEB_DIRECT_TRANSCRIPT_MAX_BYTES = 5 * 1024 * 1024;
+export const WEB_DIRECT_TRANSCRIPT_MAX_SEGMENTS = 5_000;
+export const MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE = 100;
+const MAX_WEB_LIBRARY_GUILDS_PER_PAGE = 25;
+const MAX_WEB_LIBRARY_ITEMS_PER_PAGE = 100;
+const MAX_MEMBERSHIP_GUILDS_PER_ATTEMPT = 60;
+
+export function webHeavyReadRateLimited(userId: string): boolean {
+  return (
+    webHeavyReadLimiters.consumeKey(`web-heavy-user:${userId}`, 12, 60_000) ||
+    webHeavyReadLimiters.consumeGlobal('web-heavy-global', 30, 60_000)
+  );
+}
+
+export function encodeWebLibraryCursor(
+  cursor: MetaTimelineCursor,
+  userId: string,
+  context: string,
+  nowMs = Date.now(),
+): string {
+  return sealOpaqueCursor(cursor, {
+    secret: config.cookieSecret,
+    purpose: 'web-library',
+    subject: userId,
+    context,
+    nowMs,
+  });
+}
+
+export function parseWebLibraryCursor(
+  value: unknown,
+  userId: string,
+  context: string,
+  nowMs = Date.now(),
+): MetaTimelineCursor | undefined {
+  if (value === undefined) return undefined;
+  const parsed = openOpaqueCursor<unknown>(value, {
+    secret: config.cookieSecret,
+    purpose: 'web-library',
+    subject: userId,
+    context,
+    nowMs,
+  });
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    !Number.isSafeInteger((parsed as MetaTimelineCursor).startedAt) ||
+    (parsed as MetaTimelineCursor).startedAt < 0 ||
+    typeof (parsed as MetaTimelineCursor).id !== 'string' ||
+    (parsed as MetaTimelineCursor).id.length > 200 ||
+    !/^[a-zA-Z0-9-]+$/.test((parsed as MetaTimelineCursor).id)
+  )
+    throw new OpaqueCursorError();
+  return parsed as MetaTimelineCursor;
+}
+
+export function mcpConnectionCreationRateLimited(userId: string): boolean {
+  return mcpConnectionCreationLimiter.consume(`mcp-connect:${userId}`, 5, 60_000);
+}
 
 function pageLang(req: Request): Locale {
   return resolveWebLocale({
@@ -141,6 +210,26 @@ const MSG = {
     pt: 'Muitas requisições. Tente de novo em instantes.',
     en: 'Too many requests. Try again shortly.',
   },
+  transcriptTooLarge: {
+    pt: 'A transcrição excede o limite seguro para abrir inteira nesta página. A ata e o áudio continuam disponíveis.',
+    en: 'The transcript exceeds the safe limit for opening it all on this page. Meeting notes and audio remain available.',
+  },
+  transcriptUnavailable: {
+    pt: 'A transcrição está temporariamente indisponível. Recarregue em instantes.',
+    en: 'The transcript is temporarily unavailable. Reload shortly.',
+  },
+  minutesTooLarge: {
+    pt: 'A ata excede o limite seguro de 1 MiB e não foi aberta. O áudio e a transcrição continuam disponíveis.',
+    en: 'The meeting minutes exceed the safe 1 MiB limit and were not opened. Audio and transcript remain available.',
+  },
+  minutesUnavailable: {
+    pt: 'A ata está temporariamente indisponível. Recarregue em instantes.',
+    en: 'The meeting minutes are temporarily unavailable. Reload shortly.',
+  },
+  minutesResponseLimit: {
+    pt: 'A ata tem coleções acima do limite seguro para exportação completa. Abra a página para consultar a versão limitada com aviso.',
+    en: 'The meeting minutes contain collections above the safe full-export limit. Open the page for an explicitly limited view.',
+  },
   noAudio: { pt: 'Sem áudio disponível.', en: 'No audio available.' },
   recordingInProgress: { pt: 'Gravação em andamento.', en: 'Recording in progress.' },
   audioExpired: { pt: 'O áudio desta gravação expirou.', en: 'This recording audio has expired.' },
@@ -187,21 +276,95 @@ function sendRecordingUnavailable(res: Response, l: Locale, user: WebUser): void
  */
 function notReady(res: Response, l: Locale, user?: WebUser): boolean {
   if (isClientReady()) return false;
+  sendAccessTemporarilyUnavailable(res, l, user);
+  return true;
+}
+
+function sendAccessTemporarilyUnavailable(res: Response, l: Locale, user?: WebUser): void {
   res
     .status(503)
     .set('Retry-After', '5')
     .type('html')
     .send(messagePage(MSG.startingTitle[l], MSG.starting[l], user, l));
-  return true;
 }
 
 interface MembershipGuild {
   members: {
-    fetch(options: { user: string; force: true; cache: true }): Promise<unknown>;
+    fetch(options: { user: string; force: true; cache: false }): Promise<unknown>;
   };
 }
 
 export type CurrentGuildMembership = 'member' | 'not-member' | 'unavailable';
+type FreshMembershipRunner = typeof withFreshMembershipBudget;
+interface MembershipScanCursor {
+  index: number;
+  unavailable: boolean;
+}
+const membershipScanCursors = new Map<string, MembershipScanCursor>();
+
+function rememberMembershipScanCursor(userId: string, cursor: MembershipScanCursor): void {
+  membershipScanCursors.delete(userId);
+  membershipScanCursors.set(userId, cursor);
+  while (membershipScanCursors.size > 5_000) {
+    const oldest = membershipScanCursors.keys().next().value as string | undefined;
+    if (!oldest) break;
+    membershipScanCursors.delete(oldest);
+  }
+}
+
+export interface WebLibraryPage {
+  items: Array<{ meta: RecordingMeta; canDelete: boolean }>;
+  nextCursor?: number;
+  candidatesScanned: number;
+  guildsChecked: number;
+}
+
+/**
+ * Página por cursor ANTES da ACL, com continuação explícita. Isso impede que
+ * gravações novas e inacessíveis escondam para sempre uma antiga autorizada e
+ * mantém cada request abaixo dos orçamentos de membership do Discord.
+ */
+export async function collectWebLibraryPage(
+  user: WebUser,
+  metas: RecordingMeta[],
+  cursor = 0,
+  runCheck: typeof checkAccess = checkAccess,
+): Promise<WebLibraryPage> {
+  const items: WebLibraryPage['items'] = [];
+  const requestContext = createAccessRequestContext();
+  const checkedGuilds = new Set<string>();
+  let candidatesScanned = 0;
+  let index = Number.isSafeInteger(cursor) && cursor >= 0 ? Math.min(cursor, metas.length) : 0;
+
+  while (
+    index < metas.length &&
+    candidatesScanned < MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE &&
+    items.length < MAX_WEB_LIBRARY_ITEMS_PER_PAGE
+  ) {
+    const meta = metas[index];
+    if (meta.demo) {
+      index++;
+      continue;
+    }
+    if (!checkedGuilds.has(meta.guildId)) {
+      if (checkedGuilds.size >= MAX_WEB_LIBRARY_GUILDS_PER_PAGE) break;
+      checkedGuilds.add(meta.guildId);
+    }
+    const access = await runCheck(user, meta, { requestContext, throwOnTransient: true });
+    // Só consome a candidata depois de uma resposta conclusiva. Uma falha
+    // transitória aborta a página e a rota não emite cursor além desta meta.
+    index++;
+    candidatesScanned++;
+    if (access.view) items.push({ meta, canDelete: access.delete });
+  }
+
+  return {
+    items,
+    nextCursor: index < metas.length ? index : undefined,
+    candidatesScanned,
+    guildsChecked: checkedGuilds.size,
+  };
+}
 
 type DomainConfig = typeof config & {
   appUrl?: string;
@@ -461,18 +624,47 @@ export function webHostRoutingDecision(req: Request, origins = configuredWebOrig
 export async function currentGuildMembership(
   userId: string,
   guilds: Iterable<MembershipGuild> = client.guilds.cache.values(),
+  runCheck: FreshMembershipRunner = withFreshMembershipBudget,
 ): Promise<CurrentGuildMembership> {
-  let unavailable = false;
-  for (const guild of guilds) {
+  const savedCursor = membershipScanCursors.get(userId);
+  const start = savedCursor?.index ?? 0;
+  let unavailable = savedCursor?.unavailable ?? false;
+  const iterator = guilds[Symbol.iterator]();
+  let index = 0;
+  while (index < start) {
+    const skipped = iterator.next();
+    if (skipped.done) {
+      membershipScanCursors.delete(userId);
+      return unavailable ? 'unavailable' : 'not-member';
+    }
+    index++;
+  }
+  while (index < start + MAX_MEMBERSHIP_GUILDS_PER_ATTEMPT) {
+    const candidate = iterator.next();
+    if (candidate.done) {
+      membershipScanCursors.delete(userId);
+      return unavailable ? 'unavailable' : 'not-member';
+    }
+    const guild = candidate.value;
+    index++;
     try {
-      await guild.members.fetch({ user: userId, force: true, cache: true });
+      await runCheck(userId, () => guild.members.fetch({ user: userId, force: true, cache: false }));
+      membershipScanCursors.delete(userId);
       return 'member';
     } catch (err) {
+      // O orçamento acabou antes deste fetch. Retoma exatamente daqui na
+      // próxima janela em vez de condenar guilds depois da 60ª à fome eterna.
+      if (err instanceof TransientAccessError) {
+        rememberMembershipScanCursor(userId, { index: index - 1, unavailable });
+        return 'unavailable';
+      }
       const code = err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
       if (code !== 10007 && code !== 10013) unavailable = true;
+      rememberMembershipScanCursor(userId, { index, unavailable });
     }
   }
-  return unavailable ? 'unavailable' : 'not-member';
+  rememberMembershipScanCursor(userId, { index, unavailable });
+  return 'unavailable';
 }
 
 function configuredOriginForRequest(req: Request, origins = configuredWebOrigins()): string | undefined {
@@ -763,6 +955,14 @@ export function startWebServer(): void {
             return;
           }
           if (notReady(res, l, user)) return;
+          if (mcpConnectionCreationRateLimited(user.id)) {
+            res
+              .status(429)
+              .set('Retry-After', '30')
+              .type('html')
+              .send(messagePage(MSG.errorTitle[l], MSG.tooManyRequests[l], user, l));
+            return;
+          }
           const membership = await currentGuildMembership(user.id);
           if (membership === 'unavailable') {
             res
@@ -886,7 +1086,7 @@ export function startWebServer(): void {
     locale: Locale,
   ): {
     meta: RecordingMeta;
-    transcript: ReturnType<typeof readTranscript>;
+    transcript: TranscriptSegment[];
     minutes: ReturnType<typeof readMinutes>;
   } | null => {
     try {
@@ -960,7 +1160,7 @@ export function startWebServer(): void {
   const sendLocalizedOpenGraph = (res: Response, locale: Locale): void => {
     const f = path.join(process.cwd(), 'docs', locale === 'pt' ? 'og-pt.png' : 'og-en.png');
     if (!fs.existsSync(f)) {
-      res.status(404).send('sem og');
+      res.status(404).send(locale === 'pt' ? 'imagem social indisponível' : 'social image unavailable');
       return;
     }
     res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(f);
@@ -1017,39 +1217,106 @@ export function startWebServer(): void {
     const q = String(req.query.q ?? '')
       .trim()
       .slice(0, 100);
+    const rawCursor = req.query.cursor;
+    const requestedSort = String(req.query.sort ?? 'recent');
+    if (rawCursor !== undefined && !isOpaqueCursorToken(rawCursor)) {
+      res
+        .status(400)
+        .type('html')
+        .send(
+          messagePage(
+            MSG.errorTitle[l],
+            l === 'pt'
+              ? 'Esta continuação é inválida ou expirou. Volte ao início do arquivo.'
+              : 'This continuation is invalid or expired. Return to the start of the archive.',
+            undefined,
+            l,
+          ),
+        );
+      return;
+    }
     const user = getWebUser(req);
     if (!user) {
-      // next reconstruído de partes VALIDADAS (nunca originalUrl cru) — preserva a busca
-      beginLogin(res, q ? `/app?q=${encodeURIComponent(q)}` : '/app');
+      // next reconstruído de partes VALIDADAS (nunca originalUrl cru).
+      const next = new URLSearchParams();
+      if (q) next.set('q', q);
+      if (['recent', 'oldest', 'largest'].includes(requestedSort) && requestedSort !== 'recent')
+        next.set('sort', requestedSort);
+      if (rawCursor) next.set('cursor', rawCursor);
+      beginLogin(res, next.size ? `/app?${next.toString()}` : '/app');
       return;
     }
     if (notReady(res, l, user)) return;
-    // mesma regra da página individual (checkAccess) aplicada meta a meta —
-    // o cache de membership (45s) segura o custo pra listas de um time pequeno
-    const all = listMetas()
-      .filter((m) => !m.demo)
-      .sort((a, b) => b.startedAt - a.startedAt)
-      .slice(0, 300);
-    // tamanho em disco é infra, não conteúdo: só o dono da VPS (OWNER_IDS) vê —
-    // "quanto custa cada gravação" não é da conta de quem só participou da call
-    const owner = config.ownerIds.includes(user.id);
-    const items: RecordingIndexItem[] = [];
-    for (const m of all) {
-      try {
-        const access = await checkAccess(user, m);
-        if (access.view)
-          items.push({ meta: m, canDelete: access.delete, audioBytes: owner ? audioBytesOf(m.id) : undefined });
-      } catch {
-        // transitório: melhor omitir do índice do que travar a página
-      }
+    if (q && webHeavyReadRateLimited(user.id)) {
+      res
+        .status(429)
+        .set('Retry-After', '30')
+        .type('html')
+        .send(messagePage(MSG.errorTitle[l], MSG.tooManyRequests[l], user, l));
+      return;
     }
+    // O cursor é cifrado e autenticado com o usuário e a consulta efetiva como
+    // AAD. Reutilização entre contas/filtros e adulteração falham com 400.
+    const owner = config.ownerIds.includes(user.id);
+    const sort: RecordingsSort =
+      requestedSort === 'oldest' ? 'oldest' : requestedSort === 'largest' && owner ? 'largest' : 'recent';
+    const cursorContext = JSON.stringify({ q, sort });
+    let cursor: MetaTimelineCursor | undefined;
+    try {
+      cursor = parseWebLibraryCursor(rawCursor, user.id, cursorContext);
+    } catch (err) {
+      if (!(err instanceof OpaqueCursorError)) throw err;
+      res
+        .status(400)
+        .type('html')
+        .send(
+          messagePage(
+            MSG.errorTitle[l],
+            l === 'pt'
+              ? 'Esta continuação é inválida ou expirou. Volte ao início do arquivo.'
+              : 'This continuation is invalid or expired. Return to the start of the archive.',
+            user,
+            l,
+          ),
+        );
+      return;
+    }
+    // mesma regra da página individual (checkAccess) aplicada meta a meta. A
+    // confirmação REST é deduplicada só durante este request. O cursor avança
+    // pelas candidatas, não só pelas autorizadas, para nenhuma faixa do arquivo
+    // ficar permanentemente escondida atrás de ruído recente.
+    const candidatePage = listMetaIdsPage(cursor, MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE);
+    const candidates = candidatePage.ids.flatMap((id) => {
+      const meta = readMeta(id);
+      if (!meta) return [];
+      return [meta];
+    });
+    let library: WebLibraryPage;
+    try {
+      library = await collectWebLibraryPage(user, candidates);
+    } catch (err) {
+      if (!(err instanceof TransientAccessError)) throw err;
+      sendAccessTemporarilyUnavailable(res, l, user);
+      return;
+    }
+    const lastProcessed =
+      library.nextCursor !== undefined && library.nextCursor > 0 ? candidates[library.nextCursor - 1] : undefined;
+    const nextTimelineCursor = lastProcessed
+      ? { startedAt: lastProcessed.startedAt, id: lastProcessed.id }
+      : candidatePage.nextCursor;
+    const nextCursor = nextTimelineCursor
+      ? encodeWebLibraryCursor(nextTimelineCursor, user.id, cursorContext)
+      : undefined;
+    const items: RecordingIndexItem[] = library.items.map(({ meta, canDelete }) => ({
+      meta,
+      canDelete,
+      audioBytes: owner ? audioBytesOf(meta.id) : undefined,
+    }));
     // A busca usa sempre as 100 mais recentes, independentemente da ordenação
     // escolhida para a biblioteca. Ordenar por antigas/tamanho não pode mudar
     // silenciosamente o universo pesquisado.
     const searchableMetas = items.slice(0, 100).map((item) => item.meta);
     // ordenação server-side; "maiores" precisa dos bytes, então é só pro dono
-    const sortQ = String(req.query.sort ?? 'recent');
-    const sort: RecordingsSort = sortQ === 'oldest' ? 'oldest' : sortQ === 'largest' && owner ? 'largest' : 'recent';
     if (sort === 'oldest') items.sort((a, b) => a.meta.startedAt - b.meta.startedAt);
     else if (sort === 'largest') items.sort((a, b) => (b.audioBytes ?? 0) - (a.audioBytes ?? 0));
     // busca lê transcript.json (síncrono) — limita às 100 mais recentes pra não
@@ -1066,6 +1333,8 @@ export function startWebServer(): void {
         freeDiskMB: owner ? freeMB() : undefined,
         sort,
         flash,
+        nextCursor,
+        hasPreviousPage: !!cursor,
       }),
     );
   });
@@ -1090,11 +1359,43 @@ export function startWebServer(): void {
       return;
     }
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
-    // transcript é lido sempre que existir (mesmo em rodada de retry/parcial):
-    // conteúdo já entregue nunca some da página
-    const transcript = readTranscript(meta.id);
-    const minutes = meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
-    res.type('html').send(recordingPage(meta, { live, canDelete: access.delete, user, lang: l, transcript, minutes }));
+    let transcript: TranscriptSegment[] | undefined;
+    let transcriptNotice: string | undefined;
+    if (transcriptReady(meta)) {
+      if (webHeavyReadRateLimited(user.id)) {
+        res
+          .status(429)
+          .set('Retry-After', '30')
+          .type('html')
+          .send(messagePage(MSG.errorTitle[l], MSG.tooManyRequests[l], user, l));
+        return;
+      }
+      const bounded = readTranscriptBounded(meta.id, WEB_DIRECT_TRANSCRIPT_MAX_BYTES);
+      if (bounded.status === 'ok' && bounded.segments.length <= WEB_DIRECT_TRANSCRIPT_MAX_SEGMENTS) {
+        transcript = bounded.segments;
+      } else {
+        transcriptNotice = bounded.status === 'unavailable' ? MSG.transcriptUnavailable[l] : MSG.transcriptTooLarge[l];
+      }
+    }
+    let minutes: ReturnType<typeof readMinutes>;
+    let minutesNotice: string | undefined;
+    if (meta.minutes?.status === 'done') {
+      const result = readMinutesBounded(meta.id);
+      if (result.status === 'ok') minutes = result.minutes;
+      else minutesNotice = result.status === 'too_large' ? MSG.minutesTooLarge[l] : MSG.minutesUnavailable[l];
+    }
+    res.type('html').send(
+      recordingPage(meta, {
+        live,
+        canDelete: access.delete,
+        user,
+        lang: l,
+        transcript,
+        transcriptNotice,
+        minutes,
+        minutesNotice,
+      }),
+    );
   });
 
   app.get('/app/rec/:id/audio', async (req, res) => {
@@ -1171,18 +1472,31 @@ export function startWebServer(): void {
       sendRecordingUnavailable(res, l, user);
       return;
     }
-    const minutes = meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
-    if (!minutes) {
+    if (meta.minutes?.status !== 'done') {
       res
         .status(404)
         .type('html')
         .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
+    const result = readMinutesBounded(meta.id);
+    if (result.status === 'too_large') {
+      res.status(413).set('X-Kassinao-Max-Bytes', String(MAX_MINUTES_BYTES)).send(MSG.minutesTooLarge[l]);
+      return;
+    }
+    if (result.status === 'unavailable') {
+      res.status(503).set('Retry-After', '30').send(MSG.minutesUnavailable[l]);
+      return;
+    }
+    const bounded = boundMinutesForResponse(result.minutes);
+    if (bounded.truncated) {
+      res.status(413).send(MSG.minutesResponseLimit[l]);
+      return;
+    }
     res
       .type('text/markdown; charset=utf-8')
       .attachment(`kassinao-${meta.id}-ata.md`)
-      .send(minutesToMarkdown(meta, minutes));
+      .send(minutesToMarkdown(meta, bounded.minutes));
   });
 
   app.get('/app/rec/:id/transcricao.:ext(md|txt)', async (req, res) => {
@@ -1211,7 +1525,23 @@ export function startWebServer(): void {
         .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
-    const markdown = transcriptToMarkdown(meta, readTranscript(meta.id) ?? []);
+    if (webHeavyReadRateLimited(user.id)) {
+      res.status(429).set('Retry-After', '30').send(MSG.tooManyRequests[l]);
+      return;
+    }
+    const transcript = readTranscriptBounded(meta.id, WEB_DIRECT_TRANSCRIPT_MAX_BYTES);
+    if (
+      transcript.status === 'too_large' ||
+      (transcript.status === 'ok' && transcript.segments.length > WEB_DIRECT_TRANSCRIPT_MAX_SEGMENTS)
+    ) {
+      res.status(413).send(MSG.transcriptTooLarge[l]);
+      return;
+    }
+    if (transcript.status === 'unavailable') {
+      res.status(503).set('Retry-After', '30').send(MSG.transcriptUnavailable[l]);
+      return;
+    }
+    const markdown = transcriptToMarkdown(meta, transcript.segments);
     const ext = req.params.ext;
     res
       .type(ext === 'md' ? 'text/markdown; charset=utf-8' : 'text/plain; charset=utf-8')

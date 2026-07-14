@@ -3,14 +3,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { StoredCredentials } from './tokenAuth.js';
 
+const MAX_CREDENTIAL_STORE_BYTES = 64 * 1024;
+const MAX_STORED_URL_CHARS = 2_048;
+const MAX_STORED_REFRESH_TOKEN_CHARS = 4_096;
+
 function parseCredentials(raw: string): StoredCredentials {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     const value = parsed as Record<string, unknown>;
     return {
-      url: typeof value.url === 'string' ? value.url : undefined,
-      refreshToken: typeof value.refreshToken === 'string' ? value.refreshToken : undefined,
+      url: typeof value.url === 'string' && value.url.length <= MAX_STORED_URL_CHARS ? value.url : undefined,
+      refreshToken:
+        typeof value.refreshToken === 'string' && value.refreshToken.length <= MAX_STORED_REFRESH_TOKEN_CHARS
+          ? value.refreshToken
+          : undefined,
       refreshAttempt:
         typeof value.refreshAttempt === 'string' && /^[a-f0-9]{32}$/.test(value.refreshAttempt)
           ? value.refreshAttempt
@@ -69,6 +76,7 @@ export function loadCredentialStore(directory: string, file: string): StoredCred
     const openedStats = fs.fstatSync(fd);
     if (!openedStats.isFile()) throw unsafeStore('the token path is not a regular file.');
     assertOwnedByCurrentUser(openedStats, 'the token file');
+    if (openedStats.size > MAX_CREDENTIAL_STORE_BYTES) throw unsafeStore('the token file is too large.');
     if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
     return parseCredentials(fs.readFileSync(fd, 'utf8'));
   } finally {
@@ -79,6 +87,10 @@ export function loadCredentialStore(directory: string, file: string): StoredCred
 /** Grava o cofre por rename atômico e só retorna depois de fsync no arquivo/diretório. */
 export function saveCredentialStore(directory: string, file: string, credentials: StoredCredentials): void {
   protectDirectory(directory);
+  const payload = JSON.stringify(credentials);
+  if (Buffer.byteLength(payload, 'utf8') > MAX_CREDENTIAL_STORE_BYTES) {
+    throw unsafeStore('the token payload is too large.');
+  }
   const temporary = `${file}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
   const noFollow = process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW;
   try {
@@ -89,7 +101,7 @@ export function saveCredentialStore(directory: string, file: string, credentials
     );
     try {
       if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
-      fs.writeFileSync(fd, JSON.stringify(credentials));
+      fs.writeFileSync(fd, payload);
       fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);

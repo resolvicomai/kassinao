@@ -42,8 +42,8 @@ const STRINGS: Strings = {
     en: '⚠️ This server recorder is already busy. I did not create another recording.',
   },
   'err.recording-start-limited': {
-    pt: '⏳ Muitas gravações foram iniciadas recentemente. Tente de novo em {wait}. Um admin pode iniciar sem esse limite.',
-    en: '⏳ Too many recordings were started recently. Try again in {wait}. An admin can start without this limit.',
+    pt: '⏳ Muitas gravações foram iniciadas recentemente. Tente de novo em {wait}.',
+    en: '⏳ Too many recordings were started recently. Try again in {wait}.',
   },
   'err.record-no-access': {
     pt: '🔒 Você não pode iniciar uma gravação em **{channel}** porque não enxerga esse canal.',
@@ -116,57 +116,29 @@ const STRINGS: Strings = {
     pt: '⚠️ A captura parou, mas houve uma falha ao fechar todos os arquivos. Preservei o que consegui aqui: {url}',
     en: '⚠️ Capture stopped, but some files failed to close cleanly. I preserved what I could here: {url}',
   },
-  'record.stopped-link-incomplete': {
-    pt: '⚠️ Gravação encerrada após **{duration}**, mas uma faixa pode estar parcial. Preservei o que foi possível: {url}',
-    en: '⚠️ Recording stopped after **{duration}**, but one track may be partial. I preserved what was recoverable: {url}',
-  },
 
   // painel
   'panel.title-recording': { pt: '🔴 Gravando • {channel}', en: '🔴 Recording • {channel}' },
-  'panel.title-done': { pt: '✅ Gravação encerrada • {channel}', en: '✅ Recording finished • {channel}' },
   // saudação amigável (texto acima do painel) — deixa o time à vontade e explica o que rola
   'panel.greeting-recording': {
     pt: '👋 Oi, pessoal! Estou **gravando este canal** — no final eu gero a **ata** e a **transcrição** sozinho. 🔒 Só participantes, quem iniciou e admins atuais abrem depois; é preciso continuar no servidor.',
     en: "👋 Hey everyone! I'm **recording this channel** — I'll generate the **minutes** and **transcript** myself at the end. 🔒 Only participants, the starter, and current admins can open it later; server membership is still required.",
   },
-  'panel.greeting-done': {
-    pt: '✅ **Gravação encerrada!** Já tô preparando a transcrição e a ata — fica pronto em ~1 min. 🙌',
-    en: "✅ **Recording finished!** I'm putting together the transcript and minutes now — ready in ~1 min. 🙌",
+  'panel.greeting-done-private': {
+    pt: '⏹️ **Gravação encerrada.** Detalhes e links ficam somente nas DMs autorizadas e na área privada.',
+    en: '⏹️ **Recording finished.** Details and links stay only in authorized DMs and the private workspace.',
   },
-  'panel.greeting-done-empty': {
-    pt: '⏹️ **Gravação encerrada.** Ninguém falou, então não há transcrição nem ata — só gravar de novo quando quiser. 🙂',
-    en: "⏹️ **Recording finished.** Nobody spoke, so there's no transcript or minutes — just record again anytime. 🙂",
+  'panel.desc-recording-private': {
+    pt: '🔴 A captura está ativa e visível para consentimento. Os controles abaixo funcionam só para pessoas autorizadas; detalhes e links ficam fora do canal.',
+    en: '🔴 Capture is active and visible for consent. The controls below work only for authorized people; details and links stay out of the channel.',
   },
-  'panel.greeting-done-incomplete': {
-    pt: '⚠️ **Gravação encerrada com áudio parcial.** Pelo menos uma faixa não fechou limpa; preservei o que foi possível na página.',
-    en: '⚠️ **Recording finished with partial audio.** At least one track did not close cleanly; I preserved what was recoverable on the page.',
-  },
-  'panel.by-user': { pt: 'a pedido de {user}', en: 'requested by {user}' },
-  'panel.by-auto': { pt: 'automaticamente (auto-record)', en: 'automatically (auto-record)' },
-  'panel.desc-recording': {
-    pt: 'Comecei {rel}, {starter}.\n\n🎧 Uma faixa separada e sincronizada por pessoa\n🤖 Transcrição e ata geradas sozinhas no final\n📥 **[Abrir a página da gravação]({url})** — dá pra acompanhar e baixar até durante a call',
-    en: 'Started {rel}, {starter}.\n\n🎧 One separate, synced track per person\n🤖 Transcript and minutes generated automatically at the end\n📥 **[Open the recording page]({url})** — follow along and download even during the call',
-  },
-  'panel.desc-done': {
-    pt: 'Durou **{duration}** • Participaram: {participants}\n\n📥 **[Abrir a gravação]({url})** — áudio, transcrição e ata\n⏳ Disponível até {expires}',
-    en: 'Lasted **{duration}** • Participants: {participants}\n\n📥 **[Open the recording]({url})** — audio, transcript and minutes\n⏳ Available until {expires}',
-  },
-  'panel.desc-done-unlimited': {
-    pt: 'Durou **{duration}** • Participaram: {participants}\n\n📥 **[Abrir a gravação]({url})** — áudio, transcrição e ata\n♾️ Fica guardada até alguém apagar',
-    en: 'Lasted **{duration}** • Participants: {participants}\n\n📥 **[Open the recording]({url})** — audio, transcript and minutes\n♾️ Kept until someone deletes it',
-  },
-  'panel.no-participants': { pt: 'ninguém falou 🤷', en: 'nobody spoke 🤷' },
-  'panel.field-id': { pt: 'ID', en: 'ID' },
-  'panel.field-limit': { pt: 'Limite', en: 'Limit' },
-  'panel.field-events': { pt: 'Eventos', en: 'Events' },
   'panel.btn-stop': { pt: 'Parar gravação', en: 'Stop recording' },
   'panel.btn-note': { pt: 'Adicionar nota', en: 'Add a note' },
   'panel.btn-mark': { pt: 'Marcar momento', en: 'Mark moment' },
-  'panel.btn-page': { pt: 'Página da gravação', en: 'Recording page' },
   'panel.footer': { pt: 'Kassinão 🎙️', en: 'Kassinão 🎙️' },
   'panel.recovered-after-restart': {
-    pt: '⏹️ **A gravação foi encerrada por um reinício do bot.** Removi os controles antigos para eles não afetarem outra call.\n📥 {url}',
-    en: '⏹️ **The recording was stopped by a bot restart.** I removed the old controls so they cannot affect another call.\n📥 {url}',
+    pt: '⏹️ **A gravação foi encerrada por um reinício do bot.** Removi os controles antigos; detalhes continuam somente na área privada.',
+    en: '⏹️ **The recording was stopped by a bot restart.** I removed the old controls; details remain only in the private workspace.',
   },
 
   // DM para quem iniciou
@@ -206,8 +178,8 @@ const STRINGS: Strings = {
     en: '⚠️ The note was not added — the recording was stopping (or the text was empty).',
   },
   'note.no-access': {
-    pt: '🔒 Só quem enxerga o canal **{channel}** pode anotar nesta gravação.',
-    en: '🔒 Only people who can see **{channel}** can add notes to this recording.',
+    pt: '🔒 Só quem iniciou, esteve na call ou é admin atual pode adicionar notas nesta gravação.',
+    en: '🔒 Only the starter, people who joined the call, or current admins can add notes to this recording.',
   },
   'note.mark-text': { pt: '📌 momento marcado', en: '📌 moment marked' },
   'note.marked': {
@@ -226,17 +198,17 @@ const STRINGS: Strings = {
   },
   'config.title': { pt: '⚙️ Configuração deste servidor', en: '⚙️ This server’s configuration' },
   'config.minutes-channel-set': {
-    pt: '✅ A ata resumida de cada reunião será postada em {channel} (além do chat do canal de voz pro aviso).',
-    en: '✅ The minutes summary of each meeting will be posted in {channel} (the voice channel chat still gets the notice).',
+    pt: '✅ O aviso genérico de processamento será postado em {channel}. Detalhes e links ficam só nas DMs autorizadas.',
+    en: '✅ The generic processing notice will be posted in {channel}. Details and links stay in authorized DMs.',
   },
   'config.minutes-channel-cleared': {
-    pt: '✅ Canal de ata removido — a ata volta a ser postada só no chat do canal de voz.',
-    en: '✅ Minutes channel cleared — summaries go back to the voice channel chat only.',
+    pt: '✅ Canal de aviso removido — o aviso genérico volta ao chat do canal de voz.',
+    en: '✅ Notice channel cleared — the generic notice goes back to the voice channel chat.',
   },
-  'config.view-minutes-channel': { pt: '📋 Canal da ata: {channel}', en: '📋 Minutes channel: {channel}' },
+  'config.view-minutes-channel': { pt: '🔔 Canal de aviso: {channel}', en: '🔔 Notice channel: {channel}' },
   'config.view-minutes-channel-none': {
-    pt: '📋 Canal da ata: *(não configurado — vai pro chat do canal de voz)*',
-    en: '📋 Minutes channel: *(not set — goes to the voice channel chat)*',
+    pt: '🔔 Canal de aviso: *(não configurado — aviso genérico vai pro chat do canal de voz)*',
+    en: '🔔 Notice channel: *(not set — the generic notice goes to the voice channel chat)*',
   },
 
   // /perguntar (RAG nas reuniões)
@@ -255,6 +227,10 @@ const STRINGS: Strings = {
   'ask.no-evidence': {
     pt: '🔎 Encontrei reuniões nesse período, mas não achei evidência suficiente para responder com segurança.',
     en: '🔎 I found meetings in that period, but not enough evidence to answer safely.',
+  },
+  'ask.scan-truncated': {
+    pt: '-# ⚠️ não consegui verificar a janela inteira de uma vez. Este resultado cobre só a parte mais recente; reduza `dias` ou informe uma data/período na pergunta.',
+    en: '-# ⚠️ I could not check the entire window at once. This result covers only the most recent portion; reduce `days` or include a date/range in the question.',
   },
   'ask.busy': {
     pt: '⏳ Já estou processando o limite de perguntas agora. Tente de novo em instantes.',
@@ -325,6 +301,10 @@ const STRINGS: Strings = {
   },
 
   // transcrição
+  'transcript.private-notice': {
+    pt: '🔔 O processamento de uma gravação terminou. Pessoas autorizadas recebem os detalhes por DM.',
+    en: '🔔 A recording finished processing. Authorized people receive the details by DM.',
+  },
   'transcript.ready': {
     pt: '📝 Transcrição pronta! Já está na página 👉 {url}',
     en: '📝 Transcript ready! It’s on the page now 👉 {url}',
@@ -373,18 +353,18 @@ const STRINGS: Strings = {
   },
   'help.commands': { pt: 'Comandos', en: 'Commands' },
   'help.cmd-list': {
-    pt: '**/gravar** — entra no seu canal de voz e começa a gravar\n**/parar** — encerra e gera o link com áudio, transcrição e ata\n**/perguntar** — pergunte às suas reuniões; a IA responde só pra você, com o segundo exato\n**/nota** — anotação no momento atual (ou 📌 *Marcar momento* no painel, sem digitar)\n**/status** — mostra a gravação em andamento\n**/gravacoes** — suas gravações + link do índice web com busca\n**/autorecord** — (admin) grava sozinho quando entram pessoas num canal\n**/config** — (admin) canal onde a ata é postada\n**/sobre** — autor, licença e código-fonte',
-    en: '**/record** — joins your voice channel and starts recording\n**/stop** — ends it and generates the link with audio, transcript and minutes\n**/ask** — ask your meetings; the AI answers only to you, with the exact second\n**/note** — note at the current time (or 📌 *Mark moment* on the panel, no typing)\n**/status** — shows the recording in progress\n**/recordings** — your recordings + link to the searchable web index\n**/autorecord** — (admin) records automatically when people join a channel\n**/config** — (admin) channel where the minutes get posted\n**/about** — author, license and source code',
+    pt: '**/gravar** — entra no seu canal de voz e começa a gravar\n**/parar** — encerra e gera o link com áudio, transcrição e ata\n**/perguntar** — pergunte às suas reuniões; a IA responde só pra você, com o segundo exato\n**/nota** — anotação no momento atual (ou 📌 *Marcar momento* no painel, sem digitar)\n**/status** — mostra a gravação em andamento\n**/gravacoes** — suas gravações + link do índice web com busca\n**/autorecord** — (admin) grava sozinho quando entram pessoas num canal\n**/config** — (admin) canal do aviso genérico de processamento\n**/sobre** — autor, licença e código-fonte',
+    en: '**/record** — joins your voice channel and starts recording\n**/stop** — ends it and generates the link with audio, transcript and minutes\n**/ask** — ask your meetings; the AI answers only to you, with the exact second\n**/note** — note at the current time (or 📌 *Mark moment* on the panel, no typing)\n**/status** — shows the recording in progress\n**/recordings** — your recordings + link to the searchable web index\n**/autorecord** — (admin) records automatically when people join a channel\n**/config** — (admin) channel for the generic processing notice\n**/about** — author, license and source code',
   },
   'help.flow': { pt: 'Passo a passo', en: 'Quick start' },
   'help.perms': { pt: 'Permissões', en: 'Permissions' },
   'help.perms-body': {
-    pt: '• **Gravar**: qualquer membro. **Parar/anotar**: quem enxerga o canal gravado.\n• **Ver uma gravação**: exige continuar membro do servidor e ter **estado na call** (mesmo mutado), iniciado a gravação ou ser admin atual; ganhar acesso ao canal depois não abre o histórico.\n• **Apagar**: quem iniciou ou admin, com permissão revalidada na hora. **/autorecord** e **/config**: exigem *Gerenciar Servidor*.\n• **/perguntar** e a busca só usam reuniões que **você** pode abrir.',
-    en: '• **Record**: any member. **Stop/annotate**: whoever can see the recorded channel.\n• **Open a recording**: you must remain a server member and have **joined the call** (even muted), started the recording, or be a current admin; gaining channel access later does not unlock history.\n• **Delete**: starter or admin, with permission revalidated at that moment. **/autorecord** and **/config**: require *Manage Server*.\n• **/ask** and search only use meetings **you** can open.',
+    pt: '• **Gravar**: qualquer membro. **Parar/anotar**: quem iniciou, esteve na call ou é admin atual.\n• **Ver uma gravação**: exige continuar membro do servidor e ter **estado na call** (mesmo mutado), iniciado a gravação ou ser admin atual; ganhar acesso ao canal depois não abre o histórico.\n• **Apagar**: quem iniciou ou admin, com permissão revalidada na hora. **/autorecord** e **/config**: exigem *Gerenciar Servidor*.\n• **/perguntar** e a busca só usam reuniões que **você** pode abrir.',
+    en: '• **Record**: any member. **Stop/annotate**: the starter, people who joined the call, or current admins.\n• **Open a recording**: you must remain a server member and have **joined the call** (even muted), started the recording, or be a current admin; gaining channel access later does not unlock history.\n• **Delete**: starter or admin, with permission revalidated at that moment. **/autorecord** and **/config**: require *Manage Server*.\n• **/ask** and search only use meetings **you** can open.',
   },
   'help.flow-body': {
-    pt: '1. Entre num canal de voz e use **/gravar**\n2. Conversem normalmente (📌 marca momentos importantes)\n3. Use **/parar** — a ata resumida chega no canal (quem iniciou recebe o link por DM)\n4. Depois, é só **/perguntar** ("o que decidimos sobre X?") ou buscar no índice web',
-    en: '1. Join a voice channel and use **/record**\n2. Talk normally (📌 marks the important moments)\n3. Use **/stop** — the minutes summary lands in the channel (the starter gets the link via DM)\n4. Later, just **/ask** ("what did we decide about X?") or search the web index',
+    pt: '1. Entre num canal de voz e use **/gravar**\n2. Conversem normalmente (📌 marca momentos importantes)\n3. Use **/parar** — o canal recebe só um aviso genérico; pessoas autorizadas recebem detalhes por DM\n4. Depois, é só **/perguntar** ("o que decidimos sobre X?") ou buscar no índice web',
+    en: '1. Join a voice channel and use **/record**\n2. Talk normally (📌 marks the important moments)\n3. Use **/stop** — the channel gets only a generic notice; authorized people receive details by DM\n4. Later, just **/ask** ("what did we decide about X?") or search the web index',
   },
   'help.footer': { pt: 'Kassinão 🎙️ • use /ajuda a qualquer momento', en: 'Kassinão 🎙️ • use /help anytime' },
   // botões e tópicos do /ajuda (onboarding interativo)
@@ -394,8 +374,8 @@ const STRINGS: Strings = {
   'help.btn-privacy': { pt: '🔒 Privacidade', en: '🔒 Privacy' },
   'help.btn-auto': { pt: '🤖 Auto-record', en: '🤖 Auto-record' },
   'help.topic-record': {
-    pt: '🎥 **Como gravar**\n1. Entre num canal de voz e digite **/gravar** — eu entro e fico como `[GRAVANDO]` no apelido, pra todo mundo ver que a call está sendo gravada.\n2. Conversem normalmente. Cada pessoa vira uma **faixa separada** (atribuição perfeita de quem falou).\n3. Marque momentos com o botão **📌 Marcar momento** (um clique, sem digitar) ou **/nota**/📝 pra anotar com texto — tudo entra na transcrição, na ata e nos labels do Audacity.\n4. Encerre com **/parar** (ou o botão). A ata resumida chega no canal — e dá pra **baixar até durante** a gravação.\n\n⏹️ **Eu encerro sozinho** quando: o canal **esvazia**, atinge o **limite de {hours}h**, ou eu sou **desconectado**. (Se ninguém fala por ~5 min, eu só aviso no painel — não paro.)',
-    en: "🎥 **How to record**\n1. Join a voice channel and type **/record** — I join and show as `[RECORDING]` in my nickname, so everyone sees the call is being recorded.\n2. Talk normally. Each person becomes a **separate track** (perfect speaker attribution).\n3. Mark moments with the **📌 Mark moment** button (one click, no typing) or **/note**/📝 for a text note — everything flows into the transcript, the minutes and the Audacity labels.\n4. End with **/stop** (or the button). The minutes summary lands in the channel — and you can **download even while** recording.\n\n⏹️ **I stop on my own** when: the channel **empties**, it hits the **{hours}h limit**, or I get **disconnected**. (If nobody speaks for ~5 min I only warn on the panel — I don't stop.)",
+    pt: '🎥 **Como gravar**\n1. Entre num canal de voz e digite **/gravar** — eu entro e fico como `[GRAVANDO]` no apelido, pra todo mundo ver que a call está sendo gravada.\n2. Conversem normalmente. Cada pessoa vira uma **faixa separada** (atribuição perfeita de quem falou).\n3. Marque momentos com o botão **📌 Marcar momento** (um clique, sem digitar) ou **/nota**/📝 pra anotar com texto — tudo entra na transcrição, na ata e nos labels do Audacity.\n4. Encerre com **/parar** (ou o botão). O canal recebe só um aviso genérico; detalhes e links vão por DM para pessoas autorizadas — e dá pra **baixar até durante** a gravação.\n\n⏹️ **Eu encerro sozinho** quando: o canal **esvazia**, atinge o **limite de {hours}h**, ou eu sou **desconectado**. (Se ninguém fala por ~5 min, eu só aviso no painel — não paro.)',
+    en: "🎥 **How to record**\n1. Join a voice channel and type **/record** — I join and show as `[RECORDING]` in my nickname, so everyone sees the call is being recorded.\n2. Talk normally. Each person becomes a **separate track** (perfect speaker attribution).\n3. Mark moments with the **📌 Mark moment** button (one click, no typing) or **/note**/📝 for a text note — everything flows into the transcript, the minutes and the Audacity labels.\n4. End with **/stop** (or the button). The channel gets only a generic notice; details and links go by DM to authorized people — and you can **download even while** recording.\n\n⏹️ **I stop on my own** when: the channel **empties**, it hits the **{hours}h limit**, or I get **disconnected**. (If nobody speaks for ~5 min I only warn on the panel — I don't stop.)",
   },
   'help.topic-ask': {
     pt: '💬 **Perguntar às reuniões**\n• **/perguntar** entende tema, pessoa e data: "ações da Ana ontem", "o que decidimos semana passada?". A opção `dias:` define a janela quando você não cita uma data (padrão 30).\n• Eu respondo **só pra você** e só uso reuniões que **você pode acessar** — a mesma regra da página.\n• As fontes abrem a **ata** ou pulam pro **segundo exato** da transcrição.\n• Na **web**: o índice em {url}/app lista tudo que você pode abrir, com **busca** em transcrições, atas e notas.\n• No seu **assistente de IA** (qualquer um com MCP: Claude, Cursor…): conector em {url}/app/conectar-ia — ações pendentes entre reuniões, quem disse o quê, busca por período.',
@@ -536,8 +516,8 @@ const STRINGS: Strings = {
     en: '`/mcp new` is only for bot admins. For you, just open {url}/app/conectar-ia and sign in with Discord — self-serve, scoped to your own access. 👉',
   },
   'mcp.new': {
-    pt: '🔌 **Conectar assistente de IA** (código válido ~5 min, uso único).\n\n**Código:** `{code}`\n\nNo terminal:\n```\nnpx -y kassinao-mcp@1.0.4 exchange --stdin --url {mcpUrl}\n```\nCole o código quando o comando pedir. Ele salva o token fora da configuração e imprime o bloco pra colar no seu assistente de IA (qualquer um com MCP: Claude, Cursor…). Mais fácil ainda: abra {appUrl}/app/conectar-ia no navegador.',
-    en: '🔌 **Connect your AI assistant** (code valid ~5 min, single use).\n\n**Code:** `{code}`\n\nIn a terminal:\n```\nnpx -y kassinao-mcp@1.0.4 exchange --stdin --url {mcpUrl}\n```\nPaste the code when prompted. It stores the token outside the config and prints the block to paste into your AI assistant (anything MCP-capable: Claude, Cursor…). Even easier: open {appUrl}/app/conectar-ia in the browser.',
+    pt: '🔌 **Conectar assistente de IA** (código válido ~5 min, uso único).\n\n**Código:** `{code}`\n\nNo terminal:\n```\nnpx -y kassinao-mcp@1.0.5 exchange --stdin --url {mcpUrl}\n```\nCole o código quando o comando pedir. Ele salva o token fora da configuração e imprime o bloco pra colar no seu assistente de IA (qualquer um com MCP: Claude, Cursor…). Mais fácil ainda: abra {appUrl}/app/conectar-ia no navegador.',
+    en: '🔌 **Connect your AI assistant** (code valid ~5 min, single use).\n\n**Code:** `{code}`\n\nIn a terminal:\n```\nnpx -y kassinao-mcp@1.0.5 exchange --stdin --url {mcpUrl}\n```\nPaste the code when prompted. It stores the token outside the config and prints the block to paste into your AI assistant (anything MCP-capable: Claude, Cursor…). Even easier: open {appUrl}/app/conectar-ia in the browser.',
   },
   'mcp.revoked': {
     pt: '🔒 Pronto — revoguei {n} conector(es) de IA seu(s). Os tokens deixaram de funcionar na hora.',

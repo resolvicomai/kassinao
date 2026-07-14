@@ -16,17 +16,25 @@ import {
   EmbedBuilder,
   Guild,
   Message,
-  PermissionFlagsBits,
+  MessageCreateOptions,
   VoiceBasedChannel,
 } from 'discord.js';
 import prism from 'prism-media';
 import { config } from '../config';
 import { freeMB } from '../disk';
+import { DISCORD_SURFACE_POLICY_VERSION } from '../discordSurfaceMigration';
 import { Locale, t } from '../i18n';
 import { alertOwners } from '../monitor';
 import { safeName } from '../sanitize';
+import {
+  MAX_NOTES_PER_RECORDING,
+  MAX_PRESENCE_IDENTITIES,
+  MAX_PRESENCE_IDENTITIES_PER_RESPONSE,
+} from '../securityLimits';
 import { deleteRecording, pageUrl, RecordingMeta, saveMeta, tracksDir } from '../store';
+import { NOTIFICATION_POLICY_VERSION } from '../transcriptionNotification';
 import { safeSlice } from '../util';
+import { withFreshMembershipBudget } from '../web/access';
 import { UserTrack } from './UserTrack';
 
 export type StopReason =
@@ -37,12 +45,14 @@ export type StopReason =
   | 'desconectado'
   | 'canal-alterado'
   | 'disco-cheio'
+  | 'limite-presenca'
   | 'reinicio';
 
 export const STOP_BUTTON_ID = 'kassinao_stop';
 export const NOTE_BUTTON_ID = 'kassinao_note';
 export const MARK_BUTTON_ID = 'kassinao_mark';
 export const MAX_NOTE_LENGTH = 500;
+export { MAX_NOTES_PER_RECORDING, MAX_PRESENCE_IDENTITIES } from '../securityLimits';
 
 export class RecordingStartCancelledError extends Error {
   constructor() {
@@ -53,7 +63,6 @@ export class RecordingStartCancelledError extends Error {
 
 const SILENCE_WARN_MS = 5 * 60 * 1000;
 const PANEL_EDIT_MIN_INTERVAL_MS = 2500;
-const MAX_PANEL_EVENTS = 10;
 /** Teto de faixas simultâneas (1 ffmpeg por falante) — protege CPU/processos num VPS pequeno. */
 const MAX_TRACKS = 25;
 /** Teto do log de eventos no meta (entra/sai em loop não pode inflar o JSON sem limite). */
@@ -61,8 +70,15 @@ const MAX_EVENTS = 300;
 /** Anti-spam: entra/sai da MESMA pessoa dentro desta janela não gera novo evento. */
 const PRESENCE_EVENT_COOLDOWN_MS = 60_000;
 
+export function identityNameMayBeExposed(presence: RecordingMeta['presence'], userId: string): boolean {
+  const index = presence?.findIndex((entry) => entry.id === userId) ?? -1;
+  return index >= 0 && index < MAX_PRESENCE_IDENTITIES_PER_RESPONSE;
+}
+
 export class RecordingSession {
   readonly id: string;
+  /** Token efêmero dos controles Discord; nunca revela o id/URL da gravação. */
+  readonly controlToken: string;
   readonly guild: Guild;
   readonly voiceChannel: VoiceBasedChannel;
   startedAt: number;
@@ -101,6 +117,7 @@ export class RecordingSession {
     auto: boolean;
   }) {
     this.id = `${new Date().toISOString().slice(0, 10)}-${crypto.randomBytes(5).toString('hex')}`;
+    this.controlToken = crypto.randomBytes(12).toString('hex');
     this.guild = opts.guild;
     this.voiceChannel = opts.voiceChannel;
     this.locale = opts.locale;
@@ -114,11 +131,6 @@ export class RecordingSession {
       guildName: this.guild.name,
       voiceChannelId: this.voiceChannel.id,
       voiceChannelName: this.voiceChannel.name,
-      // snapshot no INÍCIO (audiência do consentimento): permissionsFor(role) é
-      // síncrono e vem do cache — se não der pra saber, fica undefined (desconhecido)
-      sourceEveryoneViewable: this.voiceChannel
-        .permissionsFor(this.guild.roles.everyone)
-        ?.has(PermissionFlagsBits.ViewChannel),
       startedBy: opts.startedBy,
       locale: this.locale,
       startedAt: this.startedAt,
@@ -127,6 +139,8 @@ export class RecordingSession {
       presence: [],
       events: [],
       notes: [],
+      notificationPolicyVersion: NOTIFICATION_POLICY_VERSION,
+      discordSurfacePolicyVersion: DISCORD_SURFACE_POLICY_VERSION,
     };
     this.addEvent(
       opts.startedBy
@@ -240,6 +254,17 @@ export class RecordingSession {
       }
       throwIfStartCancelled(signal);
 
+      // Faz a checagem imediatamente antes de ligar a captura. Se a sala já
+      // começa no teto, não existe uma identidade excedente para descartar:
+      // o início inteiro é desfeito de forma transacional, sem áudio gravado.
+      if (this.currentHumanMemberCount() >= MAX_PRESENCE_IDENTITIES) {
+        throw new Error(
+          this.locale === 'pt'
+            ? `o canal atingiu o limite seguro de ${MAX_PRESENCE_IDENTITIES} pessoas — a gravação não foi iniciada`
+            : `the channel reached the safe ${MAX_PRESENCE_IDENTITIES}-person limit — recording was not started`,
+        );
+      }
+
       this.captureStarted = true;
       // Primeiro estado persistido = painel visível e captura pronta. Uma queda
       // antes disso deixa só um diretório órfão, nunca uma gravação fantasma.
@@ -253,7 +278,10 @@ export class RecordingSession {
 
       // Presença: quem JÁ está na sala entra no registro agora (mesmo que nunca
       // desmute) — presença na call dá acesso à gravação, falar não é requisito.
-      this.snapshotPresence();
+      if (!this.snapshotPresence()) {
+        await this.stopPromise?.catch(() => {});
+        throw new RecordingStartCancelledError();
+      }
       this.sendStartDM();
     } catch (err) {
       await this.abortStart();
@@ -293,27 +321,99 @@ export class RecordingSession {
 
   // ---------- presença (quem está na call, falando ou não) ----------
 
+  private currentHumanMemberCount(): number {
+    const ids = new Set<string>();
+    for (const [, member] of this.voiceChannel.members) {
+      if (!member.user.bot) ids.add(member.id);
+    }
+    return ids.size;
+  }
+
+  /**
+   * Adiciona uma identidade sem jamais ultrapassar o teto. `limitReached`
+   * significa que esta própria identidade completou o ACL e a sessão deve
+   * encerrar antes de aceitar mais conteúdo.
+   */
+  private addPresenceIdentity(userId: string, name: string): { added: boolean; limitReached: boolean } {
+    const list = (this.meta.presence ??= []);
+    if (list.some((entry) => entry.id === userId)) {
+      return { added: false, limitReached: list.length >= MAX_PRESENCE_IDENTITIES };
+    }
+    if (list.length >= MAX_PRESENCE_IDENTITIES) {
+      return { added: false, limitReached: true };
+    }
+    list.push({ id: userId, name, joinedAtMs: Date.now() - this.startedAt });
+    return { added: true, limitReached: list.length >= MAX_PRESENCE_IDENTITIES };
+  }
+
+  /**
+   * Para primeiro, depois entrega o hook de ciclo de vida. Assim a proteção
+   * continua segura mesmo se o hook estiver ausente, falhar ou demorar; o hook
+   * de produção reencontra a mesma Promise idempotente em stop().
+   */
+  private stopAtPresenceLimit(): void {
+    if (this.stopping) return;
+    const reason: StopReason = 'limite-presenca';
+    const stopping = this.stop(reason);
+    if (this.onAutoStop) this.onAutoStop(this, reason);
+    else void stopping.catch((err) => console.error(`Erro encerrando ${this.id}:`, err));
+  }
+
+  /** Falha de persistência torna inseguro continuar captando: para em `finally`. */
+  private persistPresenceOrStop(limitReached: boolean): boolean {
+    let persisted = false;
+    try {
+      saveMeta(this.meta);
+      persisted = true;
+      return true;
+    } catch {
+      console.error(`Falha ao persistir presença da gravação ${this.id}; encerrando a captura.`);
+      return false;
+    } finally {
+      if (!persisted || limitReached) this.stopAtPresenceLimit();
+    }
+  }
+
   /**
    * Registra quem está no canal AGORA (idempotente — só adiciona quem falta).
    * Chamado no start() e de novo quando a sessão entra no manager: quem entrou
    * na janela entre os dois (o start leva ~1-2s de REST) não pode ficar de fora.
    */
-  snapshotPresence(): void {
-    const list = (this.meta.presence ??= []);
-    const names: string[] = [];
+  snapshotPresence(): boolean {
+    if (this.stopping) return false;
+    const addedIdentities: Array<{ id: string; name: string }> = [];
+    let limitReached = (this.meta.presence?.length ?? 0) >= MAX_PRESENCE_IDENTITIES;
     for (const [, member] of this.voiceChannel.members) {
-      if (member.user.bot || list.some((p) => p.id === member.id)) continue;
-      list.push({ id: member.id, name: member.displayName, joinedAtMs: Date.now() - this.startedAt });
-      names.push(member.displayName);
+      if (member.user.bot) continue;
+      const result = this.addPresenceIdentity(member.id, member.displayName);
+      if (result.limitReached) {
+        limitReached = true;
+      }
+      if (result.added) addedIdentities.push({ id: member.id, name: member.displayName });
+      if (result.limitReached) break;
     }
-    if (names.length === 0) return;
-    // no início vira UMA linha ("Na call: A, B, C"); retardatários da janela ganham linha própria
-    if (this.meta.events.length <= 1) {
-      this.addEvent(t(this.locale, 'event.present-initial', { names: names.map((n) => safeName(n)).join(', ') }));
-    } else {
-      for (const n of names) this.addEvent(t(this.locale, 'event.voice-joined', { name: safeName(n) }));
-    }
-    saveMeta(this.meta);
+    if (addedIdentities.length > 0) {
+      const visibleNames = addedIdentities
+        .filter(({ id }) => this.presenceNameMayBeExposed(id))
+        .map(({ name }) => name);
+      const hiddenCount = addedIdentities.length - visibleNames.length;
+      // no início vira UMA linha ("Na call: A, B, C"); retardatários da janela ganham linha própria
+      if (this.meta.events.length <= 1) {
+        const boundedNames = visibleNames.map((n) => safeName(n)).join(', ');
+        const suffix = hiddenCount > 0 ? `, +${hiddenCount}` : '';
+        this.addEvent(t(this.locale, 'event.present-initial', { names: `${boundedNames}${suffix}` }));
+      } else {
+        for (const n of visibleNames) this.addEvent(t(this.locale, 'event.voice-joined', { name: safeName(n) }));
+        if (hiddenCount > 0)
+          this.addEvent(
+            this.locale === 'pt'
+              ? `👥 +${hiddenCount} outras pessoas na call`
+              : `👥 +${hiddenCount} other people in call`,
+          );
+      }
+      this.persistPresenceOrStop(limitReached);
+    } else if (limitReached) this.stopAtPresenceLimit();
+    return !this.stopping;
   }
 
   /** Último evento de entra/sai por pessoa (anti-spam: loop de entra/sai não enche a timeline). */
@@ -326,23 +426,60 @@ export class RecordingSession {
     return true;
   }
 
+  private presenceNameMayBeExposed(userId: string): boolean {
+    return identityNameMayBeExposed(this.meta.presence, userId);
+  }
+
+  private addFirstSpeechEvent(userId: string, name: string): void {
+    this.addEvent(
+      this.presenceNameMayBeExposed(userId)
+        ? t(this.locale, 'event.joined', { name: safeName(name) })
+        : this.locale === 'pt'
+          ? '🎤 Uma pessoa falou pela primeira vez'
+          : '🎤 Someone spoke for the first time',
+    );
+  }
+
   /** Alguém entrou no canal gravado (chamado pelo VoiceStateUpdate). */
   noteVoiceJoin(userId: string, name: string): void {
     if (this.stopping) return;
     const list = (this.meta.presence ??= []);
     const existing = list.find((p) => p.id === userId);
+    let limitReached = list.length >= MAX_PRESENCE_IDENTITIES;
+    let eventAllowed: boolean;
     if (existing) {
       // voltou depois de sair: reabre a presença (mantém o 1º joinedAtMs)
-      if (existing.leftAtMs === undefined) return; // já estava dentro (evento duplicado)
+      if (existing.leftAtMs === undefined) {
+        if (limitReached) this.stopAtPresenceLimit();
+        return; // já estava dentro (evento duplicado)
+      }
+      // Alternância da mesma identidade dentro da janela não muda nem persiste
+      // presença; isso limita fsync/structuredClone a uma transição por minuto.
+      if (!this.presenceEventAllowed(userId)) return;
+      eventAllowed = true;
       delete existing.leftAtMs;
     } else {
-      list.push({ id: userId, name, joinedAtMs: Date.now() - this.startedAt });
+      const result = this.addPresenceIdentity(userId, name);
+      limitReached = result.limitReached;
+      // O teto já estava completo: a identidade não ganhou grant, portanto não
+      // a registra na timeline nem mantém a captura viva por mais um evento.
+      if (!result.added) {
+        this.stopAtPresenceLimit();
+        return;
+      }
+      eventAllowed = this.presenceEventAllowed(userId);
     }
-    if (this.presenceEventAllowed(userId)) {
-      this.addEvent(t(this.locale, 'event.voice-joined', { name: safeName(name) }));
+    if (eventAllowed) {
+      this.addEvent(
+        this.presenceNameMayBeExposed(userId)
+          ? t(this.locale, 'event.voice-joined', { name: safeName(name) })
+          : this.locale === 'pt'
+            ? '👥 Uma pessoa entrou na call'
+            : '👥 Someone joined the call',
+      );
       this.schedulePanelUpdate();
     }
-    saveMeta(this.meta);
+    this.persistPresenceOrStop(limitReached);
   }
 
   /** Alguém saiu do canal gravado. */
@@ -350,12 +487,17 @@ export class RecordingSession {
     if (this.stopping) return;
     const entry = this.meta.presence?.find((p) => p.id === userId && p.leftAtMs === undefined);
     if (!entry) return; // não estava registrado (ex.: bot) — nada a fazer
+    if (!this.presenceEventAllowed(`out:${userId}`)) return;
     entry.leftAtMs = Date.now() - this.startedAt;
-    if (this.presenceEventAllowed(`out:${userId}`)) {
-      this.addEvent(t(this.locale, 'event.voice-left', { name: safeName(name) }));
-      this.schedulePanelUpdate();
-    }
-    saveMeta(this.meta);
+    this.addEvent(
+      this.presenceNameMayBeExposed(userId)
+        ? t(this.locale, 'event.voice-left', { name: safeName(name) })
+        : this.locale === 'pt'
+          ? '🚪 Uma pessoa saiu da call'
+          : '🚪 Someone left the call',
+    );
+    this.schedulePanelUpdate();
+    this.persistPresenceOrStop(false);
   }
 
   /** Consentimento visível: o bot vira "[GRAVANDO] ..." enquanto grava. */
@@ -388,32 +530,40 @@ export class RecordingSession {
     }
   }
 
-  /** DM para quem iniciou, com o link da página (o acesso continua controlado pelo login). */
-  private sendStartDM(): void {
+  /** Confirma membership atual antes de colocar qualquer detalhe privado numa DM. */
+  private async sendStarterDM(payload: MessageCreateOptions): Promise<void> {
     const startedBy = this.meta.startedBy;
     if (!startedBy) return;
+    try {
+      await withFreshMembershipBudget(startedBy.id, () =>
+        this.guild.members.fetch({ user: startedBy.id, force: true, cache: false }),
+      );
+      await this.guild.client.users.send(startedBy.id, payload);
+    } catch {
+      // Saiu do servidor, Discord indisponível ou DM fechada: falha fechado.
+    }
+  }
+
+  /** DM para quem iniciou, com o link da página (o acesso continua controlado pelo login). */
+  private sendStartDM(): void {
     const l = this.locale;
-    this.guild.client.users
-      .send(startedBy.id, {
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0xed4245)
-            .setTitle(t(l, 'dm.title-start'))
-            .setDescription(
-              t(l, config.audioRetentionUnlimited ? 'dm.desc-start-unlimited' : 'dm.desc-start', {
-                channel: `#${safeName(this.voiceChannel.name)}`,
-                guild: safeName(this.guild.name),
-                url: this.pageUrl,
-                hours: config.maxRecordingHours,
-                expiresDays: config.retentionDays,
-              }),
-            )
-            .setFooter({ text: t(l, 'panel.footer') }),
-        ],
-      })
-      .catch(() => {
-        // DMs fechadas — o painel e o /gravacoes cobrem
-      });
+    void this.sendStarterDM({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xed4245)
+          .setTitle(t(l, 'dm.title-start'))
+          .setDescription(
+            t(l, config.audioRetentionUnlimited ? 'dm.desc-start-unlimited' : 'dm.desc-start', {
+              channel: `#${safeName(this.voiceChannel.name)}`,
+              guild: safeName(this.guild.name),
+              url: this.pageUrl,
+              hours: config.maxRecordingHours,
+              expiresDays: config.retentionDays,
+            }),
+          )
+          .setFooter({ text: t(l, 'panel.footer') }),
+      ],
+    });
   }
 
   private sendStopDM(): void {
@@ -432,18 +582,15 @@ export class RecordingSession {
             url: this.pageUrl,
             expires: `<t:${Math.floor((this.meta.expiresAt ?? endedAt) / 1000)}:D>`,
           });
-    // users.send funciona mesmo se a pessoa saiu do servidor (members.fetch não)
-    this.guild.client.users
-      .send(startedBy.id, {
-        embeds: [
-          new EmbedBuilder()
-            .setColor(this.meta.audioIncomplete ? 0xfee75c : empty ? 0x949ba4 : 0x57f287)
-            .setTitle(t(l, 'dm.title-stop'))
-            .setDescription(desc)
-            .setFooter({ text: t(l, 'panel.footer') }),
-        ],
-      })
-      .catch(() => {});
+    void this.sendStarterDM({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(this.meta.audioIncomplete ? 0xfee75c : empty ? 0x949ba4 : 0x57f287)
+          .setTitle(t(l, 'dm.title-stop'))
+          .setDescription(desc)
+          .setFooter({ text: t(l, 'panel.footer') }),
+      ],
+    });
   }
 
   /**
@@ -452,7 +599,7 @@ export class RecordingSession {
    * ou texto vazio) para o handler não confirmar sucesso à toa.
    */
   addNote(author: string, text: string, atMs?: number): boolean {
-    if (this.stopping) return false;
+    if (this.stopping || this.meta.notes.length >= MAX_NOTES_PER_RECORDING) return false;
     const clean = safeSlice(text.trim(), MAX_NOTE_LENGTH);
     if (!clean) return false;
     const cleanAuthor = author.replace(/[\r\n\t]+/g, ' ').slice(0, 80);
@@ -472,6 +619,16 @@ export class RecordingSession {
     // Bots não viram faixa: um bot de música "falando" 2h consumiria transcrição
     // e poluiria a ata. (Cache basta: membros de canal de voz estão no cache.)
     if (this.guild.members.cache.get(userId)?.user.bot) return;
+
+    // O VoiceStateUpdate pode ter se perdido numa reconexão. Falar também prova
+    // presença, portanto o ACL precisa ser atualizado ANTES de criar faixa. Se
+    // esta identidade completar o teto, ela ganha acesso e a captura para aqui.
+    const presence = this.addPresenceIdentity(userId, `usuario-${userId}`);
+    if (presence.added && !this.persistPresenceOrStop(presence.limitReached)) return;
+    if (presence.limitReached) {
+      this.stopAtPresenceLimit();
+      return;
+    }
 
     // Teto de faixas: cada falante = 1 ffmpeg contínuo. Num VPS pequeno, uma sala
     // gigante esgotaria CPU/processos. Novos falantes além do teto não são gravados
@@ -535,12 +692,6 @@ export class RecordingSession {
       index,
     };
     this.meta.participants.push(participant);
-    // quem fala obviamente está na call — garante presença mesmo se o
-    // VoiceStateUpdate se perdeu (ex.: reconexão do gateway)
-    const presence = (this.meta.presence ??= []);
-    if (!presence.some((p) => p.id === userId)) {
-      presence.push({ id: userId, name: participant.name, joinedAtMs: Date.now() - this.startedAt });
-    }
     saveMeta(this.meta);
 
     // Nome e avatar chegam via REST em segundo plano (não atrasa o áudio).
@@ -554,13 +705,13 @@ export class RecordingSession {
         participant.avatar = member.displayAvatarURL({ size: 128, extension: 'png' });
         const pres = this.meta.presence?.find((p) => p.id === userId);
         if (pres && pres.name.startsWith('usuario-')) pres.name = member.displayName;
-        this.addEvent(t(this.locale, 'event.joined', { name: safeName(member.displayName) }));
+        this.addFirstSpeechEvent(userId, member.displayName);
         saveMeta(this.meta);
         this.schedulePanelUpdate();
       })
       .catch(() => {
         if (this.stopping) return;
-        this.addEvent(t(this.locale, 'event.joined', { name: safeName(participant.name) }));
+        this.addFirstSpeechEvent(userId, participant.name);
         saveMeta(this.meta);
         this.schedulePanelUpdate();
       });
@@ -639,92 +790,44 @@ export class RecordingSession {
   private buildPanelPayload() {
     const l = this.locale;
     const isDone = this.meta.status === 'done';
+
+    // O canal serve para consentimento visível e controles durante a captura.
+    // Identidade, notas, eventos, id e URL ficam exclusivamente em superfícies
+    // autenticadas/DMs revalidadas, inclusive depois que a gravação termina.
+    if (isDone) {
+      return {
+        content: t(l, 'panel.greeting-done-private'),
+        embeds: [],
+        components: [],
+      };
+    }
+
     const embed = new EmbedBuilder()
-      .setColor(isDone ? 0x57f287 : 0xed4245)
-      .setTitle(
-        t(l, isDone ? 'panel.title-done' : 'panel.title-recording', {
-          channel: `#${safeName(this.voiceChannel.name)}`,
-        }),
-      )
+      .setColor(0xed4245)
+      .setTitle(t(l, 'panel.title-recording', { channel: `#${safeName(this.voiceChannel.name)}` }))
+      .setDescription(t(l, 'panel.desc-recording-private'))
       .setFooter({ text: t(l, 'panel.footer') });
 
-    if (isDone) {
-      const endedAt = this.meta.endedAt ?? Date.now();
-      embed.setDescription(
-        safeSlice(
-          t(l, config.audioRetentionUnlimited ? 'panel.desc-done-unlimited' : 'panel.desc-done', {
-            duration: formatDuration(endedAt - this.startedAt),
-            participants: joinNames(this.participantNames, l) || t(l, 'panel.no-participants'),
-            url: this.pageUrl,
-            expires: `<t:${Math.floor((this.meta.expiresAt ?? endedAt) / 1000)}:D>`,
-          }),
-          4000,
-        ),
-      );
-    } else {
-      embed.setDescription(
-        t(l, 'panel.desc-recording', {
-          rel: `<t:${Math.floor(this.startedAt / 1000)}:R>`,
-          starter: this.meta.startedBy
-            ? t(l, 'panel.by-user', { user: `<@${this.meta.startedBy.id}>` })
-            : t(l, 'panel.by-auto'),
-          url: this.pageUrl,
-        }),
-      );
-      embed.addFields(
-        { name: t(l, 'panel.field-id'), value: `\`${this.id}\``, inline: true },
-        { name: t(l, 'panel.field-limit'), value: `${config.maxRecordingHours}h`, inline: true },
-      );
-    }
-
-    // eventos mais recentes primeiro a entrar; corta por LINHA para não truncar no meio
-    const lines: string[] = [];
-    for (const e of this.meta.events.slice(-MAX_PANEL_EVENTS).reverse()) {
-      const line = safeSlice(`\`${formatOffset(e.atMs)}\` ${e.text}`, 180);
-      if (lines.join('\n').length + line.length + 1 > 1024) break;
-      lines.unshift(line);
-    }
-    if (lines.length > 0) {
-      embed.addFields({ name: t(l, 'panel.field-events'), value: lines.join('\n') });
-    }
-
     const row = new ActionRowBuilder<ButtonBuilder>();
-    if (!isDone) {
-      row.addComponents(
-        new ButtonBuilder()
-          .setCustomId(`${STOP_BUTTON_ID}:${this.id}`)
-          .setLabel(t(l, 'panel.btn-stop'))
-          .setEmoji('⏹️')
-          .setStyle(ButtonStyle.Danger),
-        new ButtonBuilder()
-          .setCustomId(`${MARK_BUTTON_ID}:${this.id}`)
-          .setLabel(t(l, 'panel.btn-mark'))
-          .setEmoji('📌')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(`${NOTE_BUTTON_ID}:${this.id}`)
-          .setLabel(t(l, 'panel.btn-note'))
-          .setEmoji('📝')
-          .setStyle(ButtonStyle.Secondary),
-      );
-    }
     row.addComponents(
-      new ButtonBuilder().setLabel(t(l, 'panel.btn-page')).setStyle(ButtonStyle.Link).setURL(this.pageUrl),
+      new ButtonBuilder()
+        .setCustomId(`${STOP_BUTTON_ID}:${this.controlToken}`)
+        .setLabel(t(l, 'panel.btn-stop'))
+        .setEmoji('⏹️')
+        .setStyle(ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`${MARK_BUTTON_ID}:${this.controlToken}`)
+        .setLabel(t(l, 'panel.btn-mark'))
+        .setEmoji('📌')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`${NOTE_BUTTON_ID}:${this.controlToken}`)
+        .setLabel(t(l, 'panel.btn-note'))
+        .setEmoji('📝')
+        .setStyle(ButtonStyle.Secondary),
     );
 
-    // saudação amigável em texto puro ACIMA do embed (sem @menção, não faz ping).
-    // Deixa o time à vontade e explica o que está acontecendo — consentimento visível.
-    // Gravação vazia (ninguém falou) não promete ata/transcrição.
-    const empty = this.meta.participants.length === 0;
-    const greetingKey = isDone
-      ? this.meta.audioIncomplete
-        ? 'panel.greeting-done-incomplete'
-        : empty
-          ? 'panel.greeting-done-empty'
-          : 'panel.greeting-done'
-      : 'panel.greeting-recording';
-    const content = t(l, greetingKey);
-    return { content, embeds: [embed], components: [row] };
+    return { content: t(l, 'panel.greeting-recording'), embeds: [embed], components: [row] };
   }
 
   /** Edita o painel com throttle para não estourar o rate limit do Discord. */
@@ -796,14 +899,17 @@ export class RecordingSession {
     this.addEvent(
       reason === 'manual'
         ? t(this.locale, 'event.stopped-manual', { name: safeName(stoppedBy?.name ?? '?') })
-        : t(this.locale, eventKey, { hours: config.maxRecordingHours }),
+        : reason === 'limite-presenca'
+          ? this.locale === 'pt'
+            ? `⏹️ Limite seguro de ${MAX_PRESENCE_IDENTITIES} pessoas atingido — gravação encerrada`
+            : `⏹️ Safe ${MAX_PRESENCE_IDENTITIES}-person limit reached — recording stopped`
+          : t(this.locale, eventKey, { hours: config.maxRecordingHours }),
       true, // evento de encerramento sempre entra, mesmo com o log no teto
     );
     saveMeta(this.meta);
 
-    // edição final do painel, sem throttle; se o painel sumiu, manda mensagem nova
-    // para o resumo (com o link) nunca se perder. Com teto: REST pendurado num
-    // shutdown não pode atrasar o processo até o SIGKILL.
+    // Edição final estritamente genérica. Link, participantes, eventos e notas
+    // seguem apenas por DM revalidada e nas superfícies autenticadas.
     await withTimeout(
       (async () => {
         try {
@@ -818,24 +924,6 @@ export class RecordingSession {
             if (this.voiceChannel.isTextBased()) await this.voiceChannel.send(this.buildPanelPayload());
           } catch {
             // sem permissão — o link continua acessível via /gravacoes
-          }
-        }
-
-        // O edit do painel é INVISÍVEL (a mensagem fica lá em cima no histórico):
-        // uma call que termina precisa de uma mensagem NOVA com o link, senão o
-        // time acha que a gravação se perdeu. Curta, sem embed — o painel é a fonte.
-        if (this.meta.participants.length > 0 && this.panelMessage) {
-          try {
-            if (this.voiceChannel.isTextBased()) {
-              await this.voiceChannel.send(
-                t(this.locale, this.meta.audioIncomplete ? 'record.stopped-link-incomplete' : 'record.stopped-link', {
-                  duration: formatDuration(endedAt - this.startedAt),
-                  url: this.pageUrl,
-                }),
-              );
-            }
-          } catch {
-            // sem permissão — painel/DM/gravacoes cobrem
           }
         }
       })(),

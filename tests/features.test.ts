@@ -63,6 +63,14 @@ describe('searchRecordings', () => {
     expect(searchRecordings([makeMeta('busca-teste-1')], '')).toHaveLength(0);
     expect(searchRecordings([makeMeta('busca-teste-1')], 'a')).toHaveLength(0);
   });
+
+  it('não aloca transcript acima do teto da busca web', () => {
+    const hits = searchRecordings([makeMeta('busca-teste-1')], 'amanha', 40, {
+      maxTranscriptBytesPerMeeting: 32,
+      maxTranscriptBytesPerRequest: 32,
+    });
+    expect(hits).toHaveLength(0);
+  });
 });
 
 describe('guildConfigStore', () => {

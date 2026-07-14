@@ -2,6 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
 import { t } from './i18n';
+import {
+  MAX_MINUTES_BYTES,
+  MAX_MINUTES_ITEMS_PER_COLLECTION,
+  MAX_MINUTES_PARTICIPANTS_PER_RESPONSE,
+  MAX_MINUTES_POINTS_PER_PARTICIPANT,
+} from './securityLimits';
 
 export interface Participant {
   id: string;
@@ -91,6 +97,57 @@ export interface MinutesState {
   finishedAt?: number;
 }
 
+export type DiscordSurfaceAuditSource = 'persisted-panel' | 'discovered-url';
+export type DiscordSurfaceAuditOutcome = 'planned' | 'sanitized' | 'missing' | 'not-owned' | 'wrong-guild';
+
+export interface DiscordSurfaceAuditEntry {
+  channelId: string;
+  messageId: string;
+  source: DiscordSurfaceAuditSource;
+  outcome: DiscordSurfaceAuditOutcome;
+  /** Hash do conteúdo/componentes no checkpoint; evita sobrescrever edição concorrente. */
+  plannedFingerprint?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DiscordSurfaceDiscoveryState {
+  channelId: string;
+  beforeMessageId?: string;
+  messagesScanned: number;
+  updatedAt: number;
+  completedAt?: number;
+  outcome?: 'complete' | 'missing' | 'wrong-guild';
+}
+
+export interface DiscordSurfaceMigrationState {
+  audits: DiscordSurfaceAuditEntry[];
+  discovery: DiscordSurfaceDiscoveryState[];
+  updatedAt: number;
+  completedAt?: number;
+  retryAttempt?: number;
+  nextRetryAt?: number;
+}
+
+/** Inventário por servidor: independe das metas, que podem já ter expirado. */
+export interface DiscordGuildSurfaceMigrationState {
+  guildId: string;
+  policyVersion?: number;
+  audits: DiscordSurfaceAuditEntry[];
+  discovery: DiscordSurfaceDiscoveryState[];
+  /** Próximo canal da rotação; evita starvation por histórico muito grande. */
+  nextDiscoveryIndex?: number;
+  channelsInventoriedAt?: number;
+  updatedAt: number;
+  completedAt?: number;
+  retryAttempt?: number;
+  nextRetryAt?: number;
+}
+
+export interface DiscordGuildSurfaceMigrationStore {
+  guilds: Record<string, DiscordGuildSurfaceMigrationState>;
+}
+
 export interface RecordingMeta {
   id: string;
   guildId: string;
@@ -100,11 +157,7 @@ export interface RecordingMeta {
   /** Painel do Discord, persistido para neutralização após crash/restart. */
   panelChannelId?: string;
   panelMessageId?: string;
-  /**
-   * O canal de voz era visível a @everyone no INÍCIO da gravação (audiência do
-   * consentimento). Fallback da entrega da ata quando o canal (efêmero) já foi
-   * apagado na hora de postar. Gravações antigas não têm este campo (= desconhecido).
-   */
+  /** Campo legado; preservado ao ler metas antigas, mas nunca concede acesso nem autoriza broadcast. */
   sourceEveryoneViewable?: boolean;
   /** Quem iniciou; null quando iniciada pelo auto-record. */
   startedBy: { id: string; name: string } | null;
@@ -130,6 +183,27 @@ export interface RecordingMeta {
   audioDeleted?: boolean;
   /** Quando o webhook da ata foi disparado (dedupe entre reinícios). */
   webhookSentAt?: number;
+  /** Fluxo de notificação durável; presente desde a criação nas gravações novas. */
+  notificationPolicyVersion?: number;
+  /** Quando o aviso genérico no canal foi confirmado. */
+  publicNotifiedAt?: number;
+  /** DMs privadas confirmadas; permite retomar falhas sem duplicar as já entregues. */
+  privateNotifiedUserIds?: string[];
+  /** Próxima identidade histórica ainda não percorrida pelo fanout privado. */
+  privateNotificationCursor?: number;
+  /** Identidades cuja confirmação autoritativa ou DM falhou e precisa de retry. */
+  privateNotificationPendingUserIds?: string[];
+  /** Quando todos os destinatários privados elegíveis foram avaliados sem falha transitória. */
+  privateNotifiedAt?: number;
+  /** Backoff persistido do aviso final; o sweep em processo retoma quando vencer. */
+  notificationRetryAttempt?: number;
+  notificationNextRetryAt?: number;
+  /** Falhas transitórias já foram tentadas até o orçamento; preserva estado sem retry infinito. */
+  notificationRetryExhaustedAt?: number;
+  /** Versão da política que garante ausência de detalhes/links em canais do Discord. */
+  discordSurfacePolicyVersion?: number;
+  /** Cursor e trilha de auditoria da neutralização das mensagens históricas do bot. */
+  discordSurfaceMigration?: DiscordSurfaceMigrationState;
   /** Quando o aviso final (canal/DM) foi enviado — o boot re-notifica se o processo morreu antes. */
   notifiedAt?: number;
   /** true apenas para a gravação de exemplo servida publicamente em /demo. */
@@ -154,26 +228,70 @@ function metaPath(id: string): string {
 
 const VALID_ID = /^[a-zA-Z0-9-]+$/;
 let metaCache: Map<string, RecordingMeta> | undefined;
-let guildMetaIds: Map<string, Set<string>> | undefined;
+/** IDs por guild, já ordenados por startedAt desc. */
+let guildMetaTimelineIds: Map<string, string[]> | undefined;
+/** IDs ordenados por startedAt desc; permite janelas limitadas sem varrer o arquivo inteiro. */
+let metaTimelineIds: string[] | undefined;
 
 function cloneMeta(meta: RecordingMeta): RecordingMeta {
   return structuredClone(meta);
 }
 
+function compareMetaIds(leftId: string, rightId: string): number {
+  const left = metaCache?.get(leftId);
+  const right = metaCache?.get(rightId);
+  const byTime = (right?.startedAt ?? 0) - (left?.startedAt ?? 0);
+  return byTime || leftId.localeCompare(rightId);
+}
+
+function removeTimelineId(timeline: string[] | undefined, id: string): void {
+  const index = timeline?.indexOf(id) ?? -1;
+  if (index >= 0) timeline?.splice(index, 1);
+}
+
+/** Insere sem reordenar o índice inteiro a cada saveMeta. */
+function insertTimelineId(timeline: string[], id: string): void {
+  let low = 0;
+  let high = timeline.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (compareMetaIds(id, timeline[middle]) < 0) high = middle;
+    else low = middle + 1;
+  }
+  timeline.splice(low, 0, id);
+}
+
 function cacheMeta(meta: RecordingMeta): void {
-  if (!metaCache || !guildMetaIds) return;
+  if (!metaCache || !guildMetaTimelineIds || !metaTimelineIds) return;
   const previous = metaCache.get(meta.id);
-  if (previous && previous.guildId !== meta.guildId) guildMetaIds.get(previous.guildId)?.delete(meta.id);
+  const guildPositionChanged = !previous || previous.guildId !== meta.guildId || previous.startedAt !== meta.startedAt;
+  const globalPositionChanged = !previous || previous.startedAt !== meta.startedAt;
+
+  if (guildPositionChanged && previous) {
+    const previousTimeline = guildMetaTimelineIds.get(previous.guildId);
+    removeTimelineId(previousTimeline, meta.id);
+    if (previousTimeline?.length === 0) guildMetaTimelineIds.delete(previous.guildId);
+  }
+  if (globalPositionChanged && previous) removeTimelineId(metaTimelineIds, meta.id);
+
   metaCache.set(meta.id, cloneMeta(meta));
-  const ids = guildMetaIds.get(meta.guildId) ?? new Set<string>();
-  ids.add(meta.id);
-  guildMetaIds.set(meta.guildId, ids);
+
+  if (guildPositionChanged) {
+    const guildTimeline = guildMetaTimelineIds.get(meta.guildId) ?? [];
+    insertTimelineId(guildTimeline, meta.id);
+    guildMetaTimelineIds.set(meta.guildId, guildTimeline);
+  }
+  if (globalPositionChanged) insertTimelineId(metaTimelineIds, meta.id);
+}
+
+function sortMetaTimeline(): void {
+  metaTimelineIds?.sort(compareMetaIds);
 }
 
 function ensureMetaCache(): void {
-  if (metaCache && guildMetaIds) return;
+  if (metaCache && guildMetaTimelineIds && metaTimelineIds) return;
   const cache = new Map<string, RecordingMeta>();
-  const byGuild = new Map<string, Set<string>>();
+  const byGuild = new Map<string, string[]>();
   let entries: fs.Dirent[] = [];
   try {
     entries = fs.readdirSync(config.recordingsDir, { withFileTypes: true });
@@ -187,15 +305,18 @@ function ensureMetaCache(): void {
       if (meta.id !== entry.name || !VALID_ID.test(meta.id)) continue;
       meta.notes ??= [];
       cache.set(meta.id, meta);
-      const ids = byGuild.get(meta.guildId) ?? new Set<string>();
-      ids.add(meta.id);
+      const ids = byGuild.get(meta.guildId) ?? [];
+      ids.push(meta.id);
       byGuild.set(meta.guildId, ids);
     } catch {
       // Diretório incompleto/corrompido não entra no índice.
     }
   }
   metaCache = cache;
-  guildMetaIds = byGuild;
+  guildMetaTimelineIds = byGuild;
+  metaTimelineIds = [...cache.keys()];
+  sortMetaTimeline();
+  for (const timeline of guildMetaTimelineIds.values()) timeline.sort(compareMetaIds);
 }
 
 // Fail-closed: os writes recebem ids gerados pelo servidor, então um id fora do
@@ -223,6 +344,24 @@ function writePrivateJsonAtomic(file: string, value: unknown, pretty = false): v
   }
   fs.renameSync(tmp, file);
   if (process.platform !== 'win32') fs.chmodSync(file, 0o600);
+}
+
+const discordSurfaceInventoryPath = (): string => path.join(config.recordingsDir, '.discord-surface-inventory.json');
+
+export function readDiscordSurfaceInventory(): DiscordGuildSurfaceMigrationStore {
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(discordSurfaceInventoryPath(), 'utf8'),
+    ) as Partial<DiscordGuildSurfaceMigrationStore>;
+    if (!parsed.guilds || typeof parsed.guilds !== 'object' || Array.isArray(parsed.guilds)) return { guilds: {} };
+    return structuredClone({ guilds: parsed.guilds });
+  } catch {
+    return { guilds: {} };
+  }
+}
+
+export function saveDiscordSurfaceInventory(state: DiscordGuildSurfaceMigrationStore): void {
+  writePrivateJsonAtomic(discordSurfaceInventoryPath(), state, true);
 }
 
 export function saveMeta(meta: RecordingMeta): void {
@@ -264,22 +403,71 @@ export interface SearchTranscriptRead {
   bytes: number;
 }
 
-/** Leitura usada por busca/RAG: arquivo fora do teto fica para a ata estruturada. */
-export function readTranscriptForSearch(id: string, maxBytes: number): SearchTranscriptRead | undefined {
-  if (!VALID_ID.test(id) || !Number.isFinite(maxBytes) || maxBytes <= 0) return undefined;
+export type BoundedTranscriptRead =
+  | { status: 'ok'; segments: TranscriptSegment[]; bytes: number }
+  | { status: 'too_large'; bytes: number }
+  | { status: 'unavailable' };
+
+/**
+ * Confere o tamanho no descritor antes de alocar/parsear o JSON. Como os writes
+ * são atômicos, o descritor continua apontando para a mesma versão do arquivo.
+ */
+export function readTranscriptBounded(id: string, maxBytes: number): BoundedTranscriptRead {
+  if (!VALID_ID.test(id) || !Number.isFinite(maxBytes) || maxBytes <= 0) return { status: 'unavailable' };
   let descriptor: number | undefined;
   try {
     descriptor = fs.openSync(transcriptPath(id), 'r');
-    if (fs.fstatSync(descriptor).size > maxBytes) return undefined;
+    const size = fs.fstatSync(descriptor).size;
+    if (size > maxBytes) return { status: 'too_large', bytes: size };
     const raw = fs.readFileSync(descriptor, 'utf8');
     const bytes = Buffer.byteLength(raw, 'utf8');
-    if (bytes > maxBytes) return undefined;
-    return { segments: JSON.parse(raw) as TranscriptSegment[], bytes };
+    if (bytes > maxBytes) return { status: 'too_large', bytes };
+    const segments = JSON.parse(raw) as unknown;
+    if (!Array.isArray(segments)) return { status: 'unavailable' };
+    return { status: 'ok', segments: segments as TranscriptSegment[], bytes };
   } catch {
-    return undefined;
+    return { status: 'unavailable' };
   } finally {
     if (descriptor !== undefined) fs.closeSync(descriptor);
   }
+}
+
+/** Leitura usada por busca/RAG: arquivo fora do teto fica para a ata estruturada. */
+export function readTranscriptForSearch(id: string, maxBytes: number): SearchTranscriptRead | undefined {
+  const result = readTranscriptBounded(id, maxBytes);
+  return result.status === 'ok' ? { segments: result.segments, bytes: result.bytes } : undefined;
+}
+
+export type AggregateSearchTranscriptRead =
+  | { status: 'ok'; segments: TranscriptSegment[]; bytes: number }
+  | { status: 'per_meeting_limit'; bytes: number }
+  | { status: 'request_budget_exhausted'; bytes?: number }
+  | { status: 'unavailable' };
+
+/**
+ * Aplica o menor teto antes de ler o arquivo e distingue o limite local do
+ * orçamento agregado, para que o chamador possa retomar antes da reunião.
+ */
+export function readTranscriptForAggregateSearch(
+  id: string,
+  maxBytesPerMeeting: number,
+  remainingRequestBytes: number,
+): AggregateSearchTranscriptRead {
+  if (
+    !Number.isFinite(maxBytesPerMeeting) ||
+    maxBytesPerMeeting <= 0 ||
+    !Number.isFinite(remainingRequestBytes) ||
+    remainingRequestBytes < 0
+  )
+    return { status: 'unavailable' };
+  if (remainingRequestBytes === 0) return { status: 'request_budget_exhausted' };
+
+  const result = readTranscriptBounded(id, Math.min(maxBytesPerMeeting, remainingRequestBytes));
+  if (result.status === 'ok') return result;
+  if (result.status === 'unavailable') return result;
+  return result.bytes > maxBytesPerMeeting
+    ? { status: 'per_meeting_limit', bytes: result.bytes }
+    : { status: 'request_budget_exhausted', bytes: result.bytes };
 }
 
 export function saveTranscript(id: string, segments: TranscriptSegment[]): void {
@@ -291,13 +479,97 @@ export function minutesPath(id: string): string {
   return path.join(recordingDir(id), 'minutes.json');
 }
 
-export function readMinutes(id: string): MeetingMinutes | undefined {
-  if (!VALID_ID.test(id)) return undefined;
+export type BoundedMinutesRead =
+  | { status: 'ok'; minutes: MeetingMinutes; bytes: number }
+  | { status: 'too_large'; bytes: number }
+  | { status: 'unavailable' };
+
+function isMeetingMinutes(value: unknown): value is MeetingMinutes {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const minutes = value as Partial<MeetingMinutes>;
+  return (
+    typeof minutes.resumo === 'string' &&
+    Array.isArray(minutes.decisoes) &&
+    minutes.decisoes.every((decision) => typeof decision === 'string') &&
+    Array.isArray(minutes.acoes) &&
+    minutes.acoes.every(
+      (action) =>
+        !!action &&
+        typeof action === 'object' &&
+        typeof action.tarefa === 'string' &&
+        (action.responsavel === undefined || typeof action.responsavel === 'string') &&
+        (action.prazo === undefined || typeof action.prazo === 'string'),
+    ) &&
+    Array.isArray(minutes.topicos) &&
+    minutes.topicos.every(
+      (topic) =>
+        !!topic && typeof topic === 'object' && typeof topic.titulo === 'string' && Number.isFinite(topic.inicioMs),
+    ) &&
+    Array.isArray(minutes.porParticipante) &&
+    minutes.porParticipante.every(
+      (person) =>
+        !!person &&
+        typeof person === 'object' &&
+        typeof person.nome === 'string' &&
+        Array.isArray(person.pontos) &&
+        person.pontos.every((point) => typeof point === 'string'),
+    )
+  );
+}
+
+/** Mede no descritor antes de alocar; JSON legado/corrompido falha fechado. */
+export function readMinutesBounded(id: string, maxBytes = MAX_MINUTES_BYTES): BoundedMinutesRead {
+  if (!VALID_ID.test(id) || !Number.isFinite(maxBytes) || maxBytes <= 0) return { status: 'unavailable' };
+  let descriptor: number | undefined;
   try {
-    return JSON.parse(fs.readFileSync(minutesPath(id), 'utf8')) as MeetingMinutes;
+    descriptor = fs.openSync(minutesPath(id), 'r');
+    const size = fs.fstatSync(descriptor).size;
+    if (size > maxBytes) return { status: 'too_large', bytes: size };
+    const raw = fs.readFileSync(descriptor, 'utf8');
+    const bytes = Buffer.byteLength(raw, 'utf8');
+    if (bytes > maxBytes) return { status: 'too_large', bytes };
+    const minutes = JSON.parse(raw) as unknown;
+    if (!isMeetingMinutes(minutes)) return { status: 'unavailable' };
+    return { status: 'ok', minutes, bytes };
   } catch {
-    return undefined;
+    return { status: 'unavailable' };
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
   }
+}
+
+export function readMinutes(id: string): MeetingMinutes | undefined {
+  const result = readMinutesBounded(id);
+  return result.status === 'ok' ? result.minutes : undefined;
+}
+
+export interface BoundedMinutesForResponse {
+  minutes: MeetingMinutes;
+  truncated: boolean;
+}
+
+/** Segunda barreira: arquivo aceitável não vira HTML/JSON sem limite. */
+export function boundMinutesForResponse(minutes: MeetingMinutes): BoundedMinutesForResponse {
+  const people = minutes.porParticipante.slice(0, MAX_MINUTES_PARTICIPANTS_PER_RESPONSE);
+  const truncated =
+    minutes.decisoes.length > MAX_MINUTES_ITEMS_PER_COLLECTION ||
+    minutes.acoes.length > MAX_MINUTES_ITEMS_PER_COLLECTION ||
+    minutes.topicos.length > MAX_MINUTES_ITEMS_PER_COLLECTION ||
+    minutes.porParticipante.length > MAX_MINUTES_PARTICIPANTS_PER_RESPONSE ||
+    people.some((person) => person.pontos.length > MAX_MINUTES_POINTS_PER_PARTICIPANT);
+  return {
+    minutes: {
+      resumo: minutes.resumo,
+      decisoes: minutes.decisoes.slice(0, MAX_MINUTES_ITEMS_PER_COLLECTION),
+      acoes: minutes.acoes.slice(0, MAX_MINUTES_ITEMS_PER_COLLECTION),
+      topicos: minutes.topicos.slice(0, MAX_MINUTES_ITEMS_PER_COLLECTION),
+      porParticipante: people.map((person) => ({
+        ...person,
+        pontos: person.pontos.slice(0, MAX_MINUTES_POINTS_PER_PARTICIPANT),
+      })),
+    },
+    truncated,
+  };
 }
 
 export function saveMinutes(id: string, minutes: MeetingMinutes): void {
@@ -309,25 +581,230 @@ export function deleteRecording(id: string): void {
   if (!VALID_ID.test(id)) return;
   fs.rmSync(recordingDir(id), { recursive: true, force: true });
   const previous = metaCache?.get(id);
-  if (previous) guildMetaIds?.get(previous.guildId)?.delete(id);
+  if (previous) {
+    const guildTimeline = guildMetaTimelineIds?.get(previous.guildId);
+    removeTimelineId(guildTimeline, id);
+    if (guildTimeline?.length === 0) guildMetaTimelineIds?.delete(previous.guildId);
+  }
   metaCache?.delete(id);
+  removeTimelineId(metaTimelineIds, id);
 }
 
 export function listMetas(): RecordingMeta[] {
   ensureMetaCache();
-  return [...(metaCache?.values() ?? [])].map(cloneMeta);
+  return (metaTimelineIds ?? []).flatMap((id) => {
+    const meta = metaCache?.get(id);
+    return meta ? [cloneMeta(meta)] : [];
+  });
+}
+
+export interface MetaTimelineCursor {
+  startedAt: number;
+  id: string;
+}
+
+export interface ListMetaIdsPageResult {
+  ids: string[];
+  nextCursor?: MetaTimelineCursor;
+}
+
+/**
+ * Cursor estável sobre a timeline: não clona metas privadas antes de o chamador
+ * aplicar seu teto/ACL. A âncora (startedAt, id) não muda quando gravações mais
+ * novas são inseridas ou removidas antes da próxima página.
+ */
+export function listMetaIdsPage(cursor: MetaTimelineCursor | undefined, limit = 100): ListMetaIdsPageResult {
+  ensureMetaCache();
+  const timeline = metaTimelineIds ?? [];
+  let start = 0;
+  if (cursor && Number.isFinite(cursor.startedAt) && VALID_ID.test(cursor.id)) {
+    // upper_bound da tupla (startedAt desc, id asc): inserções/remoções antes
+    // do cursor não deslocam a continuação nem fazem pular/duplicar páginas.
+    let low = 0;
+    let high = timeline.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const meta = metaCache?.get(timeline[middle]);
+      const relative = meta ? cursor.startedAt - meta.startedAt || meta.id.localeCompare(cursor.id) : 1;
+      if (relative <= 0) low = middle + 1;
+      else high = middle;
+    }
+    start = low;
+  }
+  const safeLimit = Number.isSafeInteger(limit) ? Math.min(Math.max(1, limit), 1_000) : 100;
+  const end = Math.min(start + safeLimit, timeline.length);
+  const last = end > start ? metaCache?.get(timeline[end - 1]) : undefined;
+  return {
+    ids: timeline.slice(start, end),
+    nextCursor: end < timeline.length && last ? { startedAt: last.startedAt, id: last.id } : undefined,
+  };
+}
+
+export interface ListMetasRangeResult {
+  metas: RecordingMeta[];
+  /** Existem metas adicionais na janela depois do teto solicitado. */
+  truncated: boolean;
+}
+
+export interface ListMetaIdsRangeResult {
+  ids: string[];
+  /** Existem ids adicionais na janela depois do teto solicitado. */
+  truncated: boolean;
+}
+
+export interface ListMetaScanPageResult {
+  /** Tuplas leves e estáveis; nenhuma metadata privada é clonada aqui. */
+  candidates: MetaTimelineCursor[];
+}
+
+function timelineStartAfterCursor(timeline: readonly string[], cursor: MetaTimelineCursor): number {
+  let low = 0;
+  let high = timeline.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const meta = metaCache?.get(timeline[middle]);
+    const relative = meta ? cursor.startedAt - meta.startedAt || meta.id.localeCompare(cursor.id) : 1;
+    if (relative <= 0) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function timelineScanPageInRange(
+  timeline: readonly string[],
+  fromMs: number,
+  toMs: number,
+  cursor: MetaTimelineCursor | undefined,
+  limit: number,
+): ListMetaScanPageResult {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs) return { candidates: [] };
+  const safeLimit = Number.isSafeInteger(limit) ? Math.min(Math.max(1, limit), 1_000) : 100;
+
+  let low = 0;
+  let high = timeline.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const startedAt = metaCache?.get(timeline[middle])?.startedAt ?? 0;
+    if (startedAt >= toMs) low = middle + 1;
+    else high = middle;
+  }
+  let index = low;
+  if (cursor) index = Math.max(index, timelineStartAfterCursor(timeline, cursor));
+
+  const candidates: MetaTimelineCursor[] = [];
+  for (; index < timeline.length && candidates.length < safeLimit; index++) {
+    const meta = metaCache?.get(timeline[index]);
+    if (!meta) continue;
+    if (meta.startedAt < fromMs) break;
+    candidates.push({ startedAt: meta.startedAt, id: meta.id });
+  }
+  return { candidates };
+}
+
+/**
+ * Página de candidatas globais dentro da janela. A âncora continua válida
+ * mesmo que itens mais novos sejam inseridos ou que a própria âncora seja apagada.
+ */
+export function listMetaScanPageInRange(
+  fromMs: number,
+  toMs: number,
+  cursor: MetaTimelineCursor | undefined,
+  limit: number,
+): ListMetaScanPageResult {
+  ensureMetaCache();
+  return timelineScanPageInRange(metaTimelineIds ?? [], fromMs, toMs, cursor, limit);
+}
+
+/** Mesma paginação estável, isolada no índice de uma guild. */
+export function listGuildMetaScanPageInRange(
+  guildId: string,
+  fromMs: number,
+  toMs: number,
+  cursor: MetaTimelineCursor | undefined,
+  limit: number,
+): ListMetaScanPageResult {
+  ensureMetaCache();
+  return timelineScanPageInRange(guildMetaTimelineIds?.get(guildId) ?? [], fromMs, toMs, cursor, limit);
+}
+
+function timelineIdsInRange(
+  timeline: readonly string[],
+  fromMs: number,
+  toMs: number,
+  limit: number,
+): ListMetaIdsRangeResult {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs) return { ids: [], truncated: false };
+  const safeLimit = Math.max(1, Math.floor(limit));
+
+  let low = 0;
+  let high = timeline.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const startedAt = metaCache?.get(timeline[middle])?.startedAt ?? 0;
+    if (startedAt >= toMs) low = middle + 1;
+    else high = middle;
+  }
+
+  const ids: string[] = [];
+  let truncated = false;
+  for (let index = low; index < timeline.length; index++) {
+    const meta = metaCache?.get(timeline[index]);
+    if (!meta) continue;
+    if (meta.startedAt < fromMs) break;
+    if (ids.length >= safeLimit) {
+      truncated = true;
+      break;
+    }
+    ids.push(meta.id);
+  }
+  return { ids, truncated };
+}
+
+/** Janela global limitada sem clonar os documentos de metadata. */
+export function listMetaIdsInRange(fromMs: number, toMs: number, limit: number): ListMetaIdsRangeResult {
+  ensureMetaCache();
+  return timelineIdsInRange(metaTimelineIds ?? [], fromMs, toMs, limit);
+}
+
+/**
+ * Lê uma janela global já ordenada com busca binária e teto rígido. O chamador
+ * pode então aplicar filtros/ACL sem transformar uma consulta desde epoch em
+ * uma ordenação e clonagem O(arquivo inteiro).
+ */
+export function listMetasInRange(fromMs: number, toMs: number, limit: number): ListMetasRangeResult {
+  const result = listMetaIdsInRange(fromMs, toMs, limit);
+  return {
+    metas: result.ids.flatMap((id) => {
+      const meta = metaCache?.get(id);
+      return meta ? [cloneMeta(meta)] : [];
+    }),
+    truncated: result.truncated,
+  };
 }
 
 export function listGuildMetas(guildId: string, limit = 5): RecordingMeta[] {
-  return listMetas()
-    .filter((m) => m.guildId === guildId)
-    .sort((a, b) => b.startedAt - a.startedAt)
-    .slice(0, limit);
+  ensureMetaCache();
+  const safeLimit = Math.max(1, Math.floor(limit));
+  return (guildMetaTimelineIds?.get(guildId) ?? []).slice(0, safeLimit).flatMap((id) => {
+    const meta = metaCache?.get(id);
+    return meta ? [cloneMeta(meta)] : [];
+  });
 }
 
 export interface ListGuildMetasRangeOptions {
   /** Quantas metas podem sair da consulta, já ordenadas da mais recente. */
   limit?: number;
+}
+
+/** Janela de uma guild limitada sem clonar os documentos de metadata. */
+export function listGuildMetaIdsInRange(
+  guildId: string,
+  fromMs: number,
+  toMs: number,
+  limit: number,
+): ListMetaIdsRangeResult {
+  ensureMetaCache();
+  return timelineIdsInRange(guildMetaTimelineIds?.get(guildId) ?? [], fromMs, toMs, limit);
 }
 
 /**
@@ -341,16 +818,12 @@ export function listGuildMetasInRange(
   toMs: number,
   options: ListGuildMetasRangeOptions = {},
 ): RecordingMeta[] {
-  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs) return [];
   const limit = options.limit === undefined ? Number.MAX_SAFE_INTEGER : Math.max(1, Math.floor(options.limit));
-  ensureMetaCache();
-  const ids = guildMetaIds?.get(guildId) ?? new Set<string>();
-  return [...ids]
-    .map((id) => metaCache?.get(id))
-    .filter((meta): meta is RecordingMeta => Boolean(meta && meta.startedAt >= fromMs && meta.startedAt < toMs))
-    .sort((a, b) => b.startedAt - a.startedAt)
-    .slice(0, limit)
-    .map(cloneMeta);
+  const result = listGuildMetaIdsInRange(guildId, fromMs, toMs, limit);
+  return result.ids.flatMap((id) => {
+    const meta = metaCache?.get(id);
+    return meta ? [cloneMeta(meta)] : [];
+  });
 }
 
 export function pageUrl(id: string): string {

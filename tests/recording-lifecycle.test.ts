@@ -29,6 +29,27 @@ describe('SessionRegistry — concorrência do ciclo de gravação', () => {
     expect(manager.reserveStart('g2', 'c2', 'suporte')).toBeDefined();
   });
 
+  it('aplica o teto global contando sessões iniciando, ativas e encerrando', () => {
+    const manager = new SessionRegistry<FakeSession>();
+    const starting = manager.reserveStart('g1', 'c1', 'daily', 3)!;
+    const activeReservation = manager.reserveStart('g2', 'c2', 'suporte', 3)!;
+    const stoppingReservation = manager.reserveStart('g3', 'c3', 'planning', 3)!;
+    const active = { id: 'active' };
+    const stopping = { id: 'stopping' };
+
+    expect(manager.attachStarting(activeReservation, active)).toBe(true);
+    expect(manager.commitStart(activeReservation, active)).toBe(true);
+    expect(manager.attachStarting(stoppingReservation, stopping)).toBe(true);
+    expect(manager.commitStart(stoppingReservation, stopping)).toBe(true);
+    expect(manager.beginStop('g3', stopping)).toBe('claimed');
+
+    expect(manager.busyCount()).toBe(3);
+    expect(manager.reserveStart('g4', 'c4', 'retro', 3)).toBeUndefined();
+
+    manager.releaseStart(starting);
+    expect(manager.reserveStart('g4', 'c4', 'retro', 3)).toBeDefined();
+  });
+
   it('cancelamento aborta o sinal e impede attach/commit tardio', () => {
     const manager = new SessionRegistry<FakeSession>();
     const reservation = manager.reserveStart('g1', 'c1', 'daily')!;

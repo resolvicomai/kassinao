@@ -30,6 +30,9 @@ services:
     env_file: .env
     environment:
       RECORDINGS_DIR: /app/recordings
+      # O .env também abastece o Compose/cloudflared. Sobrescreve no app para
+      # uma RCE nele não revelar a credencial do túnel.
+      TUNNEL_TOKEN: ''
       # Cache de modelos locais fica no único volume gravável; backup.sh exclui .cache.
       XDG_CACHE_HOME: /app/recordings/.cache
     # Sem publicar porta pra internet: o Cloudflare Tunnel abaixo alcança o bot

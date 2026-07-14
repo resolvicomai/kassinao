@@ -7,13 +7,16 @@ Thanks for your interest! Contributions of all kinds are welcome — bug reports
 ```bash
 git clone https://github.com/resolvicomai/kassinao.git
 cd kassinao
-npm install
+npm ci --userconfig .npmrc.security
 cp .env.example .env && chmod 600 .env
 # Fill in at least DISCORD_TOKEN, APPLICATION_ID and DISCORD_CLIENT_SECRET.
 npm run dev            # runs with auto-reload (tsx)
 ```
 
 Node.js **22+** is required (see `.nvmrc`). The project is TypeScript with `strict` mode.
+The checked-in npm security config compiles the Opus addon from the signed npm
+tarball and omits undeclared peer executables; a C/C++ toolchain is therefore
+required for the first install.
 
 ## Before opening a PR
 

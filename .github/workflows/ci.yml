@@ -13,6 +13,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      NPM_CONFIG_BUILD_FROM_SOURCE: 'true'
+      NPM_CONFIG_OMIT: 'peer'
     steps:
       # Actions pinadas em SHA (imutável) — tag @v4 poderia ser movida por um atacante.
       # O comentário mantém a versão legível; o Dependabot (github-actions) atualiza o SHA.
@@ -33,6 +36,11 @@ jobs:
             mcp/npm-shrinkwrap.json
       - name: Install root dependencies
         run: npm ci
+      - name: Verify native addons are built from signed npm sources
+        run: |
+          test "$(npm config get build-from-source)" = "true"
+          test "$(npm config get omit)" = "peer"
+          test ! -e node_modules/ffmpeg-static
       - name: Audit root dependencies
         run: npm audit --audit-level=high
       - name: Verify root dependency signatures

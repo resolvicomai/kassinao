@@ -28,6 +28,7 @@ import path from 'node:path';
 import { readApiJson } from './apiResponse.js';
 import { parseCredentialTokenResponse, refreshCredential, type CredentialTokenResponse } from './credentialRefresh.js';
 import { loadCredentialStore, saveCredentialStore } from './credentialStore.js';
+import { DEFAULT_HTTP_TIMEOUT_MS, strictFetch } from './http.js';
 import {
   createTokenProfileId,
   mayFallbackToEnvToken,
@@ -122,17 +123,25 @@ function saveStore(s: StoredCredentials, file = STORE_FILE): void {
 
 let accessToken = '';
 let accessExpMs = 0;
+const MAX_TOKEN_RESPONSE_BYTES = 32 * 1024;
 
 async function tryRefresh(token: string, attemptId: string): Promise<unknown | undefined> {
-  const r = await fetch(`${URL_BASE}/api/mcp/refresh`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ refresh_token: token, attempt_id: attemptId }),
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (mayFallbackToEnvToken(r.status)) return undefined;
-  if (!r.ok) throw new Error(`Could not refresh the token (HTTP ${r.status}). Try again in a moment.`);
-  return readApiJson(r);
+  return strictFetch(
+    `${URL_BASE}/api/mcp/refresh`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ refresh_token: token, attempt_id: attemptId }),
+      signal: AbortSignal.timeout(DEFAULT_HTTP_TIMEOUT_MS),
+    },
+    async (response) => {
+      if (mayFallbackToEnvToken(response.status)) return undefined;
+      if (!response.ok) {
+        throw new Error(`Could not refresh the token (HTTP ${response.status}). Try again in a moment.`);
+      }
+      return readApiJson(response, MAX_TOKEN_RESPONSE_BYTES);
+    },
+  );
 }
 
 async function refreshTokens(): Promise<void> {
@@ -164,19 +173,29 @@ async function apiGet(pathname: string, params: Record<string, unknown>): Promis
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
   }
+  type ApiResult = { unauthorized: true } | { unauthorized: false; data: unknown };
+  const request = (token: string): Promise<ApiResult> =>
+    strictFetch(url, { headers: { authorization: `Bearer ${token}` } }, async (response) => {
+      if (response.status === 401) return { unauthorized: true };
+      if (response.status === 503) {
+        throw new Error('Kassinão is starting or Discord is unavailable. Try again in a moment.');
+      }
+      return { unauthorized: false, data: await readApiJson(response) };
+    });
+
   let token = await getAccess();
-  let r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-  if (r.status === 401) {
+  let result = await request(token);
+  if (result.unauthorized) {
     // Another tool may have refreshed while this request still used the previous
     // access token. Reuse the new token and refresh only if the current one failed.
     if (token === accessToken) await refreshOnce();
     token = accessToken;
-    r = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    result = await request(token);
   }
-  if (r.status === 503) {
-    throw new Error('Kassinão is starting or Discord is unavailable. Try again in a moment.');
+  if (result.unauthorized) {
+    throw new Error('Kassinão request failed (HTTP 401). Try again in a moment.');
   }
-  return readApiJson(r);
+  return result.data;
 }
 
 // ---------- tool definitions ----------
@@ -202,7 +221,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'list_meetings',
     description:
-      'List recorded meetings in a time window (defaults to the last 30 days). Only meetings the user can access are returned. Each item carries transcriptStatus ("partial" = some speakers not transcribed yet), presentSilent (people in the call who never spoke) and audioDeleted (tiered retention: audio expired, text remains). Use for "what meetings happened between X and Y" / "list this week\'s calls".',
+      'List recorded meetings in a time window (defaults to the last 30 days). Only meetings the user can access are returned. Each item carries transcriptStatus ("partial" = some speakers not transcribed yet), presentSilent (people in the call who never spoke) and audioDeleted (tiered retention: audio expired, text remains). Follow nextCursor until null; only then continue with nextScanCursor. Use for "what meetings happened between X and Y" / "list this week\'s calls".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -212,7 +231,14 @@ const TOOLS: ToolDef[] = [
         participantId: { type: 'string' },
         status: { type: 'string', enum: ['done', 'recording'] },
         limit: { type: 'number' },
-        cursor: { type: 'string' },
+        cursor: {
+          type: 'string',
+          description: 'opaque nextCursor; continue result pagination before using nextScanCursor',
+        },
+        scanCursor: {
+          type: 'string',
+          description: 'opaque nextScanCursor; use only when nextCursor is null',
+        },
       },
     },
     call: (a) => apiGet('/api/meetings', a),
@@ -220,7 +246,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'pending_actions',
     description:
-      'Aggregate action items (task + owner + deadline) across meetings, bucketed by deadline: overdue, dueSoon, later, noDeadline, unparseable. Items include transcriptStatus — minutes built from a partial transcript may be missing actions. Use for "what is pending this week" / "my open action items". assignee="me" matches the token owner.',
+      'Aggregate action items (task + owner + deadline) across meetings, bucketed by deadline: overdue, dueSoon, later, noDeadline, unparseable. Items include transcriptStatus — minutes built from a partial transcript may be missing actions. Follow nextCursor until null; only then continue with nextScanCursor. Use for "what is pending this week" / "my open action items". assignee="me" matches the token owner.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -228,6 +254,15 @@ const TOOLS: ToolDef[] = [
         assignee: { type: 'string', description: '"me" or part of the assignee name' },
         meetingsWithin: { type: 'string', description: 'how far back to scan meetings (for example, "60d")' },
         guildId: { type: 'string' },
+        limit: { type: 'number' },
+        cursor: {
+          type: 'string',
+          description: 'opaque nextCursor; continue actions before using nextScanCursor',
+        },
+        scanCursor: {
+          type: 'string',
+          description: 'opaque nextScanCursor; use only when nextCursor is null',
+        },
       },
     },
     call: (a) => apiGet('/api/actions', a),
@@ -235,7 +270,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'search_meetings',
     description:
-      'Full-text search across transcripts, minutes and notes of accessible meetings, accent-insensitive, with deep links to the exact second. Use for "find where we discussed X".',
+      'Full-text search across transcripts, minutes and notes of accessible meetings, accent-insensitive, with deep links to the exact second. Follow nextCursor until null; only then continue with nextScanCursor. Use for "find where we discussed X".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -245,6 +280,14 @@ const TOOLS: ToolDef[] = [
         ...rangeProps,
         guildId: { type: 'string' },
         limit: { type: 'number' },
+        cursor: {
+          type: 'string',
+          description: 'opaque nextCursor; continue matches before using nextScanCursor',
+        },
+        scanCursor: {
+          type: 'string',
+          description: 'opaque nextScanCursor; use only when nextCursor is null',
+        },
       },
       required: ['query'],
     },
@@ -253,7 +296,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'who_said',
     description:
-      'Find transcript segments matching a query (accent-insensitive), with speaker, timestamp, surrounding context and a deep link. transcriptStatus="partial" means some speakers are not transcribed yet — absence of a match is not proof nobody said it. Use for "when did Ana talk about budget".',
+      'Find transcript segments matching a query (accent-insensitive), with speaker, timestamp, surrounding context and a deep link. transcriptStatus="partial" means some speakers are not transcribed yet — absence of a match is not proof nobody said it. Follow nextCursor until null; only then continue with nextScanCursor. Use for "when did Ana talk about budget".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -264,6 +307,14 @@ const TOOLS: ToolDef[] = [
         ...rangeProps,
         guildId: { type: 'string' },
         limit: { type: 'number' },
+        cursor: {
+          type: 'string',
+          description: 'opaque nextCursor; continue transcript matches before using nextScanCursor',
+        },
+        scanCursor: {
+          type: 'string',
+          description: 'opaque nextScanCursor; use only when nextCursor is null',
+        },
       },
       required: ['query'],
     },
@@ -298,18 +349,23 @@ async function runExchange(code: string): Promise<void> {
     console.error('Set KASSINAO_URL first (for example, KASSINAO_URL=https://kassinao.example.com).');
     process.exit(1);
   }
-  const r = await fetch(`${URL_BASE}/api/mcp/exchange`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ code }),
-  });
-  if (!r.ok) {
-    console.error(
-      `Could not exchange the code (HTTP ${r.status}). Codes expire in about 5 minutes and can only be used once. Generate another with /mcp new.`,
-    );
-    process.exit(1);
-  }
-  const data = parseCredentialTokenResponse(await readApiJson(r));
+  const data = await strictFetch(
+    `${URL_BASE}/api/mcp/exchange`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    },
+    async (response) => {
+      if (!response.ok) {
+        console.error(
+          `Could not exchange the code (HTTP ${response.status}). Codes expire in about 5 minutes and can only be used once. Generate another with /mcp new.`,
+        );
+        process.exit(1);
+      }
+      return parseCredentialTokenResponse(await readApiJson(response, MAX_TOKEN_RESPONSE_BYTES));
+    },
+  );
   const profile = createTokenProfileId();
   const profileStoreFile = path.join(STORE_DIR, tokenStoreFileName(URL_BASE, '', profile));
   saveStore({ url: URL_BASE, refreshToken: data.refresh_token }, profileStoreFile);
@@ -341,9 +397,18 @@ function isExchangeCode(value: string): boolean {
 
 async function readExchangeCode(): Promise<string> {
   if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function') {
-    const input = fs.readFileSync(0, 'utf8').trim();
-    if (input.length > 256) throw new Error('Invalid one-time connection code.');
-    return input;
+    const maxBytes = 256;
+    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (true) {
+      const read = fs.readSync(0, buffer, 0, Math.min(buffer.length, maxBytes + 1 - total), null);
+      if (read === 0) break;
+      total += read;
+      if (total > maxBytes) throw new Error('Invalid one-time connection code.');
+      chunks.push(Buffer.from(buffer.subarray(0, read)));
+    }
+    return Buffer.concat(chunks, total).toString('utf8').trim();
   }
 
   return new Promise<string>((resolve, reject) => {

@@ -4,11 +4,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci
+COPY package*.json .npmrc.security ./
+# @discordjs/opus inclui o código C/C++ no tarball assinado do npm. Compilar
+# localmente impede o postinstall de baixar um prebuild executável sem checksum.
+RUN npm_config_userconfig=/app/.npmrc.security npm ci
 COPY tsconfig.json ./
 COPY src ./src
-RUN npm run build && npm prune --omit=dev
+RUN npm run build && npm prune --omit=dev --omit=peer --ignore-scripts \
+    && test ! -e node_modules/ffmpeg-static
 
 # --- runtime ---
 FROM node:22-bookworm-slim@sha256:53ada149d435c38b14476cb57e4a7da73c15595aba79bd6971b547ceb6d018bf
@@ -27,9 +30,11 @@ RUN if [ "$LOCAL_TRANSCRIBE" = "1" ]; then \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
-# tini como init: garante que o SIGTERM do 'docker stop' chegue ao Node (PID 1
-# sem init ignora SIGTERM), permitindo o shutdown gracioso das gravações.
-RUN apt-get update && apt-get install -y --no-install-recommends tini && rm -rf /var/lib/apt/lists/*
+# ffmpeg e tini vêm dos repositórios Debian assinados. Não usamos ffmpeg-static:
+# seu postinstall baixa um executável fora do tarball verificado do npm.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg tini \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /app/recordings /home/node/.cache \
     && chown -R node:node /app /home/node/.cache

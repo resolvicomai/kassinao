@@ -18,6 +18,10 @@ export interface RefreshCredentialOptions {
   createAttemptId?: () => string;
 }
 
+const MAX_ACCESS_TOKEN_CHARS = 8_192;
+const MAX_REFRESH_TOKEN_CHARS = 4_096;
+const MAX_EXPIRY_CHARS = 64;
+
 export function parseCredentialTokenResponse(value: unknown): CredentialTokenResponse {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Kassinão returned an invalid token response.');
@@ -26,9 +30,13 @@ export function parseCredentialTokenResponse(value: unknown): CredentialTokenRes
   if (
     typeof response.access_token !== 'string' ||
     response.access_token.length === 0 ||
+    response.access_token.length > MAX_ACCESS_TOKEN_CHARS ||
     typeof response.refresh_token !== 'string' ||
     response.refresh_token.length === 0 ||
+    response.refresh_token.length > MAX_REFRESH_TOKEN_CHARS ||
     typeof response.access_expires_at !== 'string' ||
+    response.access_expires_at.length === 0 ||
+    response.access_expires_at.length > MAX_EXPIRY_CHARS ||
     !Number.isFinite(Date.parse(response.access_expires_at))
   ) {
     throw new Error('Kassinão returned an invalid token response.');

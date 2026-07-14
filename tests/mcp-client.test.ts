@@ -6,9 +6,10 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readApiJson } from '../mcp/src/apiResponse';
-import { refreshCredential } from '../mcp/src/credentialRefresh';
+import { parseCredentialTokenResponse, refreshCredential } from '../mcp/src/credentialRefresh';
 import { loadCredentialStore, saveCredentialStore } from '../mcp/src/credentialStore';
 import { withCredentialStoreLock } from '../mcp/src/credentialLock';
+import { DEFAULT_HTTP_TIMEOUT_MS, strictFetch } from '../mcp/src/http';
 import {
   mayFallbackToEnvToken,
   normalizeKassinaoUrl,
@@ -23,6 +24,7 @@ const execFileAsync = promisify(execFile);
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -67,6 +69,17 @@ describe.skipIf(process.platform === 'win32')('filesystem do token do conector M
     expect(loadCredentialStore(directory, path.join(directory, 'token.json'))).toEqual({});
   });
 
+  it('rejeita cofre grande antes de alocar ou parsear o conteúdo', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kassinao-mcp-large-store-'));
+    temporaryDirectories.push(root);
+    const directory = path.join(root, 'store');
+    const file = path.join(directory, 'token.json');
+    fs.mkdirSync(directory, { mode: 0o700 });
+    fs.writeFileSync(file, 'x'.repeat(64 * 1024 + 1), { mode: 0o600 });
+
+    expect(() => loadCredentialStore(directory, file)).toThrow(/too large/i);
+  });
+
   it('não abre uma segunda identidade de arquivo depois da validação', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kassinao-mcp-race-'));
     temporaryDirectories.push(root);
@@ -96,6 +109,139 @@ describe('URL do conector MCP', () => {
     expect(() => normalizeKassinaoUrl('http://kassinao.example.com')).toThrow(/HTTPS/);
     expect(() => normalizeKassinaoUrl('https://user:pass@example.com')).toThrow(/credentials/);
     expect(() => normalizeKassinaoUrl('https://example.com/sub')).toThrow(/path/);
+  });
+
+  it('recusa redirects em toda chamada HTTP autenticada', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await strictFetch(
+      'https://safe.example/api',
+      {
+        method: 'POST',
+        redirect: 'follow',
+        headers: { authorization: 'Bearer secret' },
+        body: '{"refresh_token":"secret"}',
+      },
+      () => undefined,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://safe.example/api',
+      expect.objectContaining({ method: 'POST', redirect: 'error' }),
+    );
+  });
+
+  it('aborta por timeout padrão quando a origem nunca responde', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(
+        (_input: string | URL | Request, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) throw new Error('strictFetch não passou AbortSignal');
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      const pending = strictFetch('https://slow.example/api', {}, () => undefined);
+      const rejected = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' });
+      await vi.advanceTimersByTimeAsync(DEFAULT_HTTP_TIMEOUT_MS);
+
+      await rejected;
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://slow.example/api',
+        expect.objectContaining({ redirect: 'error', signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('mantém o deadline até terminar de ler um body que parou após os headers', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn((_input: string | URL | Request, init?: RequestInit) => {
+        const signal = init?.signal;
+        if (!signal) throw new Error('strictFetch não passou AbortSignal');
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"partial":'));
+            signal.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+          },
+        });
+        return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'application/json' } }));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const pending = strictFetch('https://slow.example/api', {}, (response) => readApiJson(response));
+      const outcome = pending.then(
+        (value) => ({ kind: 'resolved' as const, value }),
+        (error: unknown) => ({ kind: 'rejected' as const, error }),
+      );
+      await vi.advanceTimersByTimeAsync(DEFAULT_HTTP_TIMEOUT_MS);
+
+      const result = await outcome;
+      expect(result).toMatchObject({
+        kind: 'rejected',
+        error: { name: 'TimeoutError', message: 'Kassinão request timed out. Try again in a moment.' },
+      });
+      if (result.kind === 'rejected') expect(String(result.error)).not.toContain('partial');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserva e obedece o AbortSignal explícito do refresh', async () => {
+    const controller = new AbortController();
+    const reason = new Error('refresh cancelado');
+    const fetchMock = vi.fn(
+      (_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          if (!signal) throw new Error('strictFetch não passou AbortSignal');
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pending = strictFetch('https://safe.example/api/mcp/refresh', { signal: controller.signal }, () => undefined);
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://safe.example/api/mcp/refresh',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it('mantém o timeout padrão mesmo com um AbortSignal externo que não dispara', async () => {
+    vi.useFakeTimers();
+    try {
+      const external = new AbortController();
+      const fetchMock = vi.fn(
+        (_input: string | URL | Request, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal;
+            if (!signal) throw new Error('strictFetch não passou AbortSignal');
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      const pending = strictFetch('https://slow.example/api', { signal: external.signal }, () => undefined);
+      const rejected = expect(pending).rejects.toMatchObject({
+        name: 'TimeoutError',
+        message: 'Kassinão request timed out. Try again in a moment.',
+      });
+      await vi.advanceTimersByTimeAsync(DEFAULT_HTTP_TIMEOUT_MS);
+
+      await rejected;
+      expect(external.signal.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -213,6 +359,8 @@ describe.skipIf(process.platform === 'win32')('exchange do conector MCP', () => 
       ) as Array<{ refreshToken: string }>;
       expect(stores.map((store) => store.refreshToken)).toEqual(['refresh-1', 'refresh-2']);
       expect(fs.existsSync(path.join(storeDir, 'token.json'))).toBe(false);
+      await expect(runExchange('x'.repeat(257))).rejects.toThrow(/invalid one-time connection code/i);
+      expect(exchanges).toBe(2);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
     }
@@ -220,6 +368,21 @@ describe.skipIf(process.platform === 'win32')('exchange do conector MCP', () => 
 });
 
 describe('refresh single-flight do conector MCP', () => {
+  it('recusa tokens de resposta grandes antes de persistir credenciais de rede', () => {
+    const valid = {
+      access_token: 'access-token',
+      access_expires_at: new Date(Date.now() + 60_000).toISOString(),
+      refresh_token: 'refresh-token',
+    };
+
+    expect(() => parseCredentialTokenResponse({ ...valid, access_token: 'a'.repeat(8_193) })).toThrow(
+      /invalid token response/i,
+    );
+    expect(() => parseCredentialTokenResponse({ ...valid, refresh_token: 'r'.repeat(4_097) })).toThrow(
+      /invalid token response/i,
+    );
+  });
+
   it('compartilha uma rotação concorrente e libera a próxima depois de concluir', async () => {
     let calls = 0;
     const refresh = singleFlight(async () => {
@@ -614,5 +777,16 @@ describe('fronteira de conteúdo não confiável do conector MCP', () => {
 
     await expect(readApiJson(response)).rejects.toThrow('Kassinão returned an invalid JSON response.');
     await expect(readApiJson(response)).rejects.not.toThrow(/IGNORE RULES|malformed upstream body/);
+  });
+
+  it('cancela JSON remoto acima do teto antes de concatenar ou parsear', async () => {
+    const response = new Response(JSON.stringify({ value: 'x'.repeat(4_096) }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+    const jsonSpy = vi.spyOn(response, 'json');
+
+    await expect(readApiJson(response, 256)).rejects.toThrow('Kassinão returned an invalid JSON response.');
+    expect(jsonSpy).not.toHaveBeenCalled();
   });
 });

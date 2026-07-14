@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allowMinutesBroadcast, safeSlice } from '../src/util';
+import { safeSlice } from '../src/util';
 import { localeOf, localizeEvent, t } from '../src/i18n';
 import { formatDuration, formatOffset, joinNames, sanitizeFilename } from '../src/recorder/RecordingSession';
 import {
@@ -219,26 +219,5 @@ describe('contrato de saída do LLM', () => {
     expect(isOutputLimitReason('length')).toBe(true);
     expect(isOutputLimitReason('stop', 'MAX_TOKENS')).toBe(true);
     expect(isOutputLimitReason('stop', 'STOP')).toBe(false);
-  });
-});
-
-describe('allowMinutesBroadcast (ata → canal configurado)', () => {
-  it('checagem ao vivo vence sempre que o canal é avaliável', () => {
-    expect(allowMinutesBroadcast({ liveEveryoneViewable: true, channelDeleted: false })).toBe(true);
-    expect(allowMinutesBroadcast({ liveEveryoneViewable: false, channelDeleted: false })).toBe(false);
-    // permissão apertou DEPOIS da call: o vivo (false) vence o snapshot (true)
-    expect(
-      allowMinutesBroadcast({ liveEveryoneViewable: false, channelDeleted: false, snapshotEveryoneViewable: true }),
-    ).toBe(false);
-  });
-  it('canal deletado (efêmero): vale o snapshot do início da gravação', () => {
-    expect(allowMinutesBroadcast({ channelDeleted: true, snapshotEveryoneViewable: true })).toBe(true);
-    expect(allowMinutesBroadcast({ channelDeleted: true, snapshotEveryoneViewable: false })).toBe(false);
-    // meta antigo sem snapshot: fail-closed
-    expect(allowMinutesBroadcast({ channelDeleted: true })).toBe(false);
-  });
-  it('indeterminado (transitório): fail-closed mesmo com snapshot público', () => {
-    expect(allowMinutesBroadcast({ channelDeleted: false })).toBe(false);
-    expect(allowMinutesBroadcast({ channelDeleted: false, snapshotEveryoneViewable: true })).toBe(false);
   });
 });
