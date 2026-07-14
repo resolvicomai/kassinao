@@ -4,6 +4,9 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { config } from '../src/config';
 import {
+  consumeExchangeCode,
+  consumeStagedExchangeCode,
+  createExchangeCode,
   createSession,
   isActiveSession,
   listUserSessions,
@@ -11,6 +14,7 @@ import {
   revokeUser,
   revokeUserSession,
   rotateSession,
+  stageExchangeCodeForDisplay,
 } from '../src/web/mcpTokens';
 
 describe('gestão individual de sessões MCP', () => {
@@ -74,5 +78,35 @@ describe('gestão individual de sessões MCP', () => {
     expect(isActiveSession(other.sid)).toBe(true);
     expect(revokeUserSession(userId, own.sid)).toBe(true);
     revokeUser(otherId);
+  });
+});
+
+describe('exibição PRG do código de conexão MCP', () => {
+  it('mantém o código no servidor, isolado por usuário, e o exibe uma única vez', () => {
+    const owner = `u-display-${crypto.randomUUID()}`;
+    const other = `u-display-other-${crypto.randomUUID()}`;
+    const exchangeCode = createExchangeCode(owner, 'Lia', 'Notebook');
+    stageExchangeCodeForDisplay(owner, exchangeCode, 'Notebook');
+
+    expect(consumeStagedExchangeCode(other)).toBeUndefined();
+    expect(consumeStagedExchangeCode(owner)).toEqual({
+      exchangeCode,
+      label: 'Notebook',
+    });
+    expect(consumeStagedExchangeCode(owner)).toBeUndefined();
+    expect(consumeExchangeCode(exchangeCode)).toEqual({ userId: owner, name: 'Lia', label: 'Notebook' });
+  });
+
+  it('não exibe um código depois de expirar', () => {
+    const owner = `u-display-exp-${crypto.randomUUID()}`;
+    vi.useFakeTimers();
+    try {
+      const now = Date.now();
+      stageExchangeCodeForDisplay(owner, 'codigo-expirado', undefined, now);
+      vi.setSystemTime(now + 5 * 60 * 1000 + 1);
+      expect(consumeStagedExchangeCode(owner)).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -46,7 +46,7 @@ function localValue(lang: DocsLang, value: string | LocalText): string {
 
 function codeBlock(label: string, value: string, copyLabel: string): string {
   return `<div class="code-block">
-    <div class="code-head"><span>${esc(label)}</span><button type="button" data-copy>${esc(copyLabel)}</button></div>
+    <div class="code-head"><span>${esc(label)}</span><div class="copy-controls"><span class="copy-status" data-copy-status role="status" aria-live="polite" aria-atomic="true"></span><button type="button" data-copy>${esc(copyLabel)}</button></div></div>
     <pre tabindex="0"><code>${esc(value)}</code></pre>
   </div>`;
 }
@@ -1053,7 +1053,6 @@ p { max-width: 72ch; }
 
 .code-head button {
   min-height: 31px;
-  margin-left: auto;
   padding: 0 10px;
   border: 1px solid #525357;
   border-radius: 6px;
@@ -1063,6 +1062,28 @@ p { max-width: 72ch; }
   font-weight: 700;
   cursor: pointer;
 }
+
+.code-head button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.copy-controls {
+  min-width: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.copy-status {
+  color: #b8bac1;
+  font-size: 11px;
+  font-weight: 650;
+  text-align: right;
+}
+
+.copy-status[data-state='error'] { color: #ffb1b1; }
 
 pre {
   width: 100%;
@@ -1633,6 +1654,8 @@ function docsScript(lang: DocsLang): string {
     lang === 'pt'
       ? {
           copied: 'Copiado',
+          copying: 'Copiando...',
+          copyFailed: 'Falha ao copiar',
           copy: 'Copiar',
           result: 'seção encontrada',
           results: 'seções encontradas',
@@ -1640,6 +1663,8 @@ function docsScript(lang: DocsLang): string {
         }
       : {
           copied: 'Copied',
+          copying: 'Copying...',
+          copyFailed: 'Copy failed',
           copy: 'Copy',
           result: 'section found',
           results: 'sections found',
@@ -1670,14 +1695,23 @@ function docsScript(lang: DocsLang): string {
     }
 
     function setMenu(open) {
+      var wasOpen = body.classList.contains('nav-open');
       body.classList.toggle('nav-open', open);
       menuButton.setAttribute('aria-expanded', String(open));
       syncSidebar(open);
       if (open) search.focus();
+      else if (wasOpen && window.innerWidth <= 980) {
+        // O clique no backdrop ainda pode devolver o foco ao próprio botão que
+        // acabou de ficar oculto. Espera o evento terminar antes de restaurar.
+        window.setTimeout(function(){ menuButton.focus(); }, 0);
+      }
     }
 
     function syncViewport() {
-      if (window.innerWidth > 980) body.classList.remove('nav-open');
+      if (window.innerWidth > 980) {
+        body.classList.remove('nav-open');
+        menuButton.setAttribute('aria-expanded', 'false');
+      }
       syncSidebar(body.classList.contains('nav-open'));
     }
 
@@ -1724,13 +1758,69 @@ function docsScript(lang: DocsLang): string {
       sections.forEach(function(section){ observer.observe(section); });
     }
 
+    function legacyCopy(value) {
+      return new Promise(function(resolve, reject){
+        var area = document.createElement('textarea');
+        area.value = value;
+        area.setAttribute('readonly', '');
+        area.setAttribute('aria-hidden', 'true');
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        var copied = false;
+        try { copied = document.execCommand('copy'); } catch (error) {}
+        area.remove();
+        if (copied) resolve();
+        else reject(new Error('copy failed'));
+      });
+    }
+
+    function copyText(value) {
+      if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') return legacyCopy(value);
+      return new Promise(function(resolve, reject){
+        var settled = false;
+        var timer = window.setTimeout(function(){
+          if (settled) return;
+          settled = true;
+          legacyCopy(value).then(resolve, reject);
+        }, 1200);
+        Promise.resolve().then(function(){ return navigator.clipboard.writeText(value); }).then(function(){
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          resolve();
+        }, function(){
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timer);
+          legacyCopy(value).then(resolve, reject);
+        });
+      });
+    }
+
     Array.prototype.slice.call(document.querySelectorAll('[data-copy]')).forEach(function(button){
       button.addEventListener('click', function(){
-        var code = button.closest('.code-block').querySelector('code').textContent || '';
-        navigator.clipboard.writeText(code).then(function(){
-          button.textContent = '${messages.copied}';
-          window.setTimeout(function(){ button.textContent = '${messages.copy}'; }, 1400);
-        }).catch(function(){ button.textContent = '${messages.copy}'; });
+        var block = button.closest('.code-block');
+        var code = block.querySelector('code').textContent || '';
+        var copyStatus = block.querySelector('[data-copy-status]');
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        copyStatus.removeAttribute('data-state');
+        copyStatus.textContent = '${messages.copying}';
+        copyText(code).then(function(){
+          button.removeAttribute('aria-busy');
+          copyStatus.textContent = '${messages.copied}';
+          window.setTimeout(function(){
+            copyStatus.textContent = '';
+            button.disabled = false;
+          }, 1800);
+        }).catch(function(){
+          button.disabled = false;
+          button.removeAttribute('aria-busy');
+          copyStatus.setAttribute('data-state', 'error');
+          copyStatus.textContent = '${messages.copyFailed}';
+        });
       });
     });
 

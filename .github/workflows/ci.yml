@@ -49,6 +49,7 @@ jobs:
       - run: npm run format:check
       - run: npm test
       - run: npm run build
+      - run: npm run typecheck:preview
       # o conector MCP é um pacote separado — sem este step, mcp/ quebrado passaria verde
       - name: Install MCP dependencies
         run: npm ci

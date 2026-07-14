@@ -243,7 +243,16 @@ window.kseek = function(ms){
   var p = document.getElementById('kplayer');
   if (p) {
     p.currentTime = Math.max(0, ms/1000);
-    p.play().catch(function(){});
+    p.play().catch(function(error){
+      // Deep links rodam sem gesto do usuário; bloqueio de autoplay e play
+      // interrompido não significam que o arquivo falhou. O tempo já foi
+      // posicionado e a pessoa pode apertar Play normalmente.
+      if (error && (error.name === 'NotAllowedError' || error.name === 'AbortError')) {
+        if (window.kplayerStatus) window.kplayerStatus('');
+        return;
+      }
+      if (window.kplayerStatus) window.kplayerStatus('error');
+    });
     return;
   }
   // sem player (áudio expirado/demo): abre a aba da transcrição e rola até o trecho
@@ -297,7 +306,29 @@ document.addEventListener('click',function(e){
 document.addEventListener('submit',function(e){
   var form=e.target;
   var message=form&&form.dataset&&form.dataset.confirm;
-  if(message&&!window.confirm(message))e.preventDefault();
+  if(message&&!window.confirm(message)){e.preventDefault();return;}
+  if(e.defaultPrevented||!form)return;
+  var button=e.submitter||form.querySelector('button[type="submit"],input[type="submit"]');
+  form.setAttribute('aria-busy','true');
+  if(button&&!button.disabled){
+    button.setAttribute('aria-busy','true');
+    button.dataset.submitBusy='true';
+    if(button.tagName==='BUTTON')button.dataset.submitLabel=button.textContent;
+    button.disabled=true;
+    if(button.tagName==='BUTTON')button.textContent=button.textContent.replace(/\\s*…?$/,'')+'…';
+  }
+});
+window.addEventListener('pageshow',function(event){
+  if(event.persisted){
+    var restore=document.body.dataset.restoreHref;
+    if(restore)location.replace(restore);else location.reload();
+    return;
+  }
+  document.querySelectorAll('[data-submit-busy="true"]').forEach(function(button){
+    button.disabled=false;button.removeAttribute('aria-busy');delete button.dataset.submitBusy;
+    if(button.dataset.submitLabel!==undefined){button.textContent=button.dataset.submitLabel;delete button.dataset.submitLabel;}
+    if(button.form)button.form.removeAttribute('aria-busy');
+  });
 });
 })();</script>`;
 
@@ -317,6 +348,8 @@ function shell(
     navAi?: boolean;
     /** O código MCP aparece uma única vez; trocar idioma nessa resposta o perderia. */
     lockLocale?: boolean;
+    /** Destino GET seguro ao restaurar uma resposta que não pode reaparecer do bfcache. */
+    restoreHref?: string;
   } = {},
 ): string {
   const lang = opts.lang === 'pt' ? 'pt' : 'en';
@@ -427,7 +460,7 @@ ${publicMeta}
 ${THEME_INIT}
 <style>${APP_CSS}</style>
 </head>
-<body class="${privateWorkspace ? 'workspace-body' : 'public-body'}${opts.wide ? ' wide' : ''}">
+<body class="${privateWorkspace ? 'workspace-body' : 'public-body'}${opts.wide ? ' wide' : ''}"${opts.restoreHref ? ` data-restore-href="${esc(opts.restoreHref)}"` : ''}>
 <a class="skip" href="#conteudo">${pt ? 'Pular para o conteúdo' : 'Skip to content'}</a>
 ${shellOpen}
 <main class="app-main" id="conteudo"><div class="page-frame">${body}</div></main>
@@ -463,6 +496,8 @@ export function recordingPage(
     minutes?: MeetingMinutes;
     minutesNotice?: string;
     demo?: boolean;
+    /** Confirmação transitória depois de uma mutação concluída. */
+    flash?: string;
   },
 ): string {
   const { live, lang: l } = opts;
@@ -533,7 +568,10 @@ export function recordingPage(
     playerFlow = `<div class="note" style="border-left-color:#6d7178;margin-top:14px">${p(l, 'audioExpired')}</div>`;
   } else if (!live && meta.participants.length > 0) {
     playerDock = `<div class="playerwrap">
-         <audio id="kplayer" preload="none" controls src="/app/rec/${meta.id}/audio"></audio>
+         <audio id="kplayer" preload="none" controls src="/app/rec/${meta.id}/audio"
+           data-loading="${l === 'pt' ? 'Carregando áudio…' : 'Loading audio…'}"
+           data-error="${l === 'pt' ? 'Não foi possível carregar o áudio. Atualize a página e tente de novo.' : 'Could not load the audio. Refresh the page and try again.'}"></audio>
+         <p id="kplayer-status" class="media-status muted" role="status" aria-live="polite" hidden></p>
          <div class="pctl">
            <span class="speed">
              <button type="button" data-r="1" class="on" aria-pressed="true" aria-label="${l === 'pt' ? 'Velocidade normal' : 'Normal speed'}">1x</button>
@@ -547,6 +585,9 @@ export function recordingPage(
   }
 
   const liveNote = live ? `<div class="note" role="status" aria-live="polite">${p(l, 'livenote')}</div>` : '';
+  const actionFlash = opts.flash
+    ? `<div class="note" role="status" aria-live="polite" style="border-left-color:var(--accent)">${esc(opts.flash)}</div>`
+    : '';
   const demoNote = demo ? `<div class="note">${p(l, 'demoBanner')}</div>` : '';
   const incompleteNote =
     !demo && meta.audioIncomplete
@@ -595,10 +636,10 @@ export function recordingPage(
     !demo && !live && !audioGone && meta.participants.length > 0
       ? `<section class="file-group"><div class="file-group-head"><span>${l === 'pt' ? 'Áudio' : 'Audio'}</span><small>${l === 'pt' ? 'Faixas e mix da call' : 'Tracks and full-call mix'}</small></div>
         <div class="downloads">
-          <a class="btn secondary" href="/app/rec/${meta.id}/download/mp3">MP3 <small>${p(l, 'mp3sub')}</small></a>
-          <a class="btn secondary" href="/app/rec/${meta.id}/download/flac">FLAC <small>${p(l, 'flacsub')}</small></a>
-          <a class="btn secondary" href="/app/rec/${meta.id}/download/mix">Mix <small>${p(l, 'mixsub')}</small></a>
-          <a class="btn secondary" href="/app/rec/${meta.id}/download/audacity">Audacity <small>${p(l, 'audacitysub')}</small></a>
+          <a class="btn secondary" data-download data-download-heavy data-loading="${l === 'pt' ? 'Preparando o download…' : 'Preparing download…'}" href="/app/rec/${meta.id}/download/mp3">MP3 <small>${p(l, 'mp3sub')}</small></a>
+          <a class="btn secondary" data-download data-download-heavy data-loading="${l === 'pt' ? 'Preparando o download…' : 'Preparing download…'}" href="/app/rec/${meta.id}/download/flac">FLAC <small>${p(l, 'flacsub')}</small></a>
+          <a class="btn secondary" data-download data-download-heavy data-loading="${l === 'pt' ? 'Preparando o download…' : 'Preparing download…'}" href="/app/rec/${meta.id}/download/mix">Mix <small>${p(l, 'mixsub')}</small></a>
+          <a class="btn secondary" data-download data-download-heavy data-loading="${l === 'pt' ? 'Preparando o download…' : 'Preparing download…'}" href="/app/rec/${meta.id}/download/audacity">Audacity <small>${p(l, 'audacitysub')}</small></a>
         </div>
         <p class="muted">${p(l, 'cooking')}</p></section>`
       : '';
@@ -606,8 +647,8 @@ export function recordingPage(
     !demo && ((opts.transcript?.length ?? 0) > 0 || !!visibleMinutes)
       ? `<section class="file-group"><div class="file-group-head"><span>${l === 'pt' ? 'Texto' : 'Text'}</span><small>${l === 'pt' ? 'Arquivos leves para compartilhar' : 'Lightweight files to share'}</small></div>
         <div class="downloads">
-          ${visibleMinutes && !minutesView?.truncated ? `<a class="btn secondary" href="/app/rec/${meta.id}/ata.md">${p(l, 'minutesDownload')}</a>` : ''}
-          ${(opts.transcript?.length ?? 0) > 0 ? `<a class="btn secondary" href="/app/rec/${meta.id}/transcricao.md">${p(l, 'transcriptDownload')}</a><a class="btn secondary" href="/app/rec/${meta.id}/transcricao.txt">${p(l, 'transcriptDownloadTxt')}</a>` : ''}
+          ${visibleMinutes && !minutesView?.truncated ? `<a class="btn secondary" data-download data-loading="${l === 'pt' ? 'Preparando o download…' : 'Preparing download…'}" href="/app/rec/${meta.id}/ata.md">${p(l, 'minutesDownload')}</a>` : ''}
+          ${(opts.transcript?.length ?? 0) > 0 ? `<a class="btn secondary" data-download data-loading="${l === 'pt' ? 'Preparando o download…' : 'Preparing download…'}" href="/app/rec/${meta.id}/transcricao.md">${p(l, 'transcriptDownload')}</a><a class="btn secondary" data-download data-loading="${l === 'pt' ? 'Preparando o download…' : 'Preparing download…'}" href="/app/rec/${meta.id}/transcricao.txt">${p(l, 'transcriptDownloadTxt')}</a>` : ''}
         </div></section>`
       : '';
   const filesState =
@@ -638,7 +679,7 @@ export function recordingPage(
                 ? 'Esta call não gerou material para baixar.'
                 : 'This call did not generate downloadable material.'
         }</span></div>`;
-  const downloads = `<h2>${l === 'pt' ? 'Arquivos da reunião' : 'Meeting files'}</h2><div class="file-list">${filesState}</div>`;
+  const downloads = `<h2>${l === 'pt' ? 'Arquivos da reunião' : 'Meeting files'}</h2><div class="file-list">${filesState}</div><p id="kdownload-status" class="media-status muted" role="status" aria-live="polite" data-heavy-done="${esc(l === 'pt' ? 'O download foi solicitado e pode continuar sendo preparado. Se nada acontecer, tente novamente.' : 'The download was requested and may still be preparing. If nothing happens, try again.')}" data-done="${esc(l === 'pt' ? 'Download solicitado. Se não começou, tente novamente.' : 'Download requested. If it did not start, try again.')}" hidden></p>`;
 
   // Gestão separada, com a consequência dita antes do clique. O
   // servidor revalida permissão/estado no POST (o confirm() não é a autoridade)
@@ -791,7 +832,7 @@ export function recordingPage(
         <a class="backlink" href="${demo ? publicSite('home', l, config).canonicalUrl : '/app'}">${demo ? (l === 'pt' ? 'Início' : 'Home') : l === 'pt' ? 'Reuniões' : 'Meetings'}</a>
         <div class="recording-titleline"><h1>${title}</h1>${badge}</div>
         ${subline}
-        <div class="recording-alerts">${demoNote}${liveNote}${incompleteNote}${transcriptNotice}${minutesNotice}${legacyContentNotice}</div>
+        <div class="recording-alerts">${actionFlash}${demoNote}${liveNote}${incompleteNote}${transcriptNotice}${minutesNotice}${legacyContentNotice}</div>
       </header>
       ${workspace}
       ${demoCta}
@@ -966,6 +1007,55 @@ const RECORDING_SCRIPT = `<script${CSP_NONCE_ATTR}>
     window.kshow(/^t=/.test(h) ? 'transcricao' : (panels.some(function(p){ return p.id === h; }) ? h : panels[0].id));
   }
   var player = document.getElementById('kplayer');
+  var playerStatus = document.getElementById('kplayer-status');
+  function setPlayerStatus(kind){
+    if(!playerStatus||!player)return;
+    if(!kind){playerStatus.hidden=true;playerStatus.textContent='';playerStatus.setAttribute('role','status');return;}
+    playerStatus.hidden=false;
+    playerStatus.textContent=kind==='error'?player.dataset.error:player.dataset.loading;
+    playerStatus.setAttribute('role',kind==='error'?'alert':'status');
+  }
+  window.kplayerStatus=setPlayerStatus;
+  if(player){
+    // preload=none pode disparar loadstart ao montar o elemento, mesmo sem
+    // baixar nada. Só anuncia carregamento quando há tentativa real de tocar.
+    player.addEventListener('play',function(){if(player.readyState<3)setPlayerStatus('loading');});
+    player.addEventListener('waiting',function(){setPlayerStatus('loading');});
+    player.addEventListener('stalled',function(){setPlayerStatus('loading');});
+    player.addEventListener('canplay',function(){setPlayerStatus('');});
+    player.addEventListener('playing',function(){setPlayerStatus('');});
+    player.addEventListener('error',function(){setPlayerStatus('error');});
+  }
+  var downloadStatus=document.getElementById('kdownload-status');
+  var downloadFeedback=0;
+  var downloadStatusTimer=null;
+  function finishDownloadFeedback(link,message,token){
+    link.removeAttribute('aria-busy');
+    if(!downloadStatus||token!==downloadFeedback)return;
+    downloadStatus.hidden=false;downloadStatus.textContent=message;
+    clearTimeout(downloadStatusTimer);
+    downloadStatusTimer=setTimeout(function(){
+      if(token!==downloadFeedback)return;
+      downloadStatus.hidden=true;downloadStatus.textContent='';
+    },12000);
+  }
+  document.querySelectorAll('[data-download]').forEach(function(link){
+    link.addEventListener('click',function(event){
+      if(link.getAttribute('aria-busy')==='true'){event.preventDefault();return;}
+      var token=++downloadFeedback;clearTimeout(downloadStatusTimer);
+      link.setAttribute('aria-busy','true');
+      if(downloadStatus){downloadStatus.hidden=false;downloadStatus.textContent=link.dataset.loading||'';}
+      if(link.hasAttribute('data-download-heavy')){
+        setTimeout(function(){
+          finishDownloadFeedback(link,downloadStatus?downloadStatus.dataset.heavyDone:'',token);
+        },12000);
+      }else{
+        setTimeout(function(){
+          finishDownloadFeedback(link,downloadStatus?downloadStatus.dataset.done:'',token);
+        },2000);
+      }
+    });
+  });
   // velocidade
   document.querySelectorAll('.speed button').forEach(function(b){
     b.addEventListener('click', function(){
@@ -1002,6 +1092,25 @@ const RECORDING_SCRIPT = `<script${CSP_NONCE_ATTR}>
   }
   // busca + filtro por falante
   var input = document.getElementById('ksearch');
+  var filterKey='k-transcript-state:'+location.pathname;
+  function saveFilter(){
+    try{
+      var off=[].slice.call(document.querySelectorAll('.fchip.off')).map(function(c){return c.dataset.sp;});
+      sessionStorage.setItem(filterKey,JSON.stringify({q:input?input.value:'',off:off}));
+    }catch(e){}
+  }
+  function restoreFilter(){
+    try{
+      var state=JSON.parse(sessionStorage.getItem(filterKey)||'null');
+      if(!state)return;
+      if(input&&typeof state.q==='string')input.value=state.q;
+      if(Array.isArray(state.off))document.querySelectorAll('.fchip').forEach(function(c){
+        var disabled=state.off.indexOf(c.dataset.sp)!==-1;
+        c.classList.toggle('off',disabled);
+        c.setAttribute('aria-pressed',String(!disabled));
+      });
+    }catch(e){}
+  }
   function normalizeText(value){
     try { return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
     catch(e) { return value.toLowerCase(); }
@@ -1027,20 +1136,59 @@ const RECORDING_SCRIPT = `<script${CSP_NONCE_ATTR}>
     var empty = document.getElementById('ksearch-empty');
     if (empty) empty.hidden = visible > 0;
   }
-  if (input) input.addEventListener('input', applyFilter);
+  if (input) input.addEventListener('input', function(){applyFilter();saveFilter();});
   document.querySelectorAll('.fchip').forEach(function(c){
     c.addEventListener('click', function(){
       c.classList.toggle('off');
       c.setAttribute('aria-pressed', String(!c.classList.contains('off')));
       applyFilter();
+      saveFilter();
     });
   });
+  restoreFilter();
+  applyFilter();
+  function legacyCopy(value){
+    return new Promise(function(resolve,reject){
+      var area=document.createElement('textarea');
+      area.value=value;area.setAttribute('readonly','');area.setAttribute('aria-hidden','true');
+      area.style.position='fixed';area.style.opacity='0';document.body.appendChild(area);area.select();
+      var ok=false;try{ok=document.execCommand('copy');}catch(e){}
+      area.remove();if(ok)resolve();else reject(new Error('copy failed'));
+    });
+  }
+  function copyText(value){
+    if(!navigator.clipboard||typeof navigator.clipboard.writeText!=='function')return legacyCopy(value);
+    return new Promise(function(resolve,reject){
+      var settled=false;
+      var timer=setTimeout(function(){
+        if(settled)return;
+        settled=true;
+        legacyCopy(value).then(resolve,reject);
+      },1200);
+      Promise.resolve().then(function(){return navigator.clipboard.writeText(value);}).then(function(){
+        if(settled)return;
+        settled=true;clearTimeout(timer);resolve();
+      },function(){
+        if(settled)return;
+        settled=true;clearTimeout(timer);legacyCopy(value).then(resolve,reject);
+      });
+    });
+  }
   // copiar itens de ação
   var cp = document.getElementById('kcopyact');
   if (cp) cp.addEventListener('click', function(){
-    navigator.clipboard.writeText(cp.dataset.txt).then(function(){
-      var old = cp.textContent; cp.textContent = cp.dataset.done || 'OK'; setTimeout(function(){ cp.textContent = old; }, 1200);
-    }).catch(function(){});
+    if(cp.disabled)return;
+    var old=cp.textContent;
+    cp.disabled=true;cp.setAttribute('aria-busy','true');
+    copyText(cp.dataset.txt||'').then(function(){
+      cp.removeAttribute('aria-busy');
+      cp.dataset.copyState='done';cp.textContent=cp.dataset.done||'OK';
+      setTimeout(function(){cp.textContent=old;delete cp.dataset.copyState;cp.disabled=false;},1200);
+    }).catch(function(){
+      cp.removeAttribute('aria-busy');
+      cp.dataset.copyState='error';cp.textContent=cp.dataset.error||'Copy failed';
+      setTimeout(function(){cp.textContent=old;delete cp.dataset.copyState;cp.disabled=false;},3000);
+    });
   });
 })();
 </script>`;
@@ -1074,7 +1222,7 @@ function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined,
       })
       .join('\n');
     parts.push(
-      `<h3 id="acoes">${p(l, 'mActions')} <button type="button" class="copybtn" id="kcopyact" data-txt="${esc(plain)}" data-done="${l === 'pt' ? 'Copiado' : 'Copied'}" aria-live="polite">${p(l, 'copyActions')}</button></h3><ul>${minutes.acoes
+      `<h3 id="acoes">${p(l, 'mActions')} <button type="button" class="copybtn" id="kcopyact" data-txt="${esc(plain)}" data-done="${l === 'pt' ? 'Copiado' : 'Copied'}" data-error="${l === 'pt' ? 'Não foi possível copiar' : 'Could not copy'}" aria-live="polite">${p(l, 'copyActions')}</button></h3><ul>${minutes.acoes
         .map((a) => {
           const bits = [
             a.responsavel ? `${p(l, 'mOwner')}: ${esc(a.responsavel)}` : '',
@@ -1534,18 +1682,44 @@ export function recordingsIndexPage(
   );
 }
 
-export function messagePage(title: string, message: string, user?: WebUser, lang?: Locale): string {
+export function messagePage(
+  title: string,
+  message: string,
+  user?: WebUser,
+  lang?: Locale,
+  opts: {
+    backHref?: string;
+    backLabel?: string;
+    active?: 'rec' | 'ai';
+    lockLocale?: boolean;
+  } = {},
+): string {
   // Páginas de mensagem/erro (404/403/etc.) nunca são beco sem saída - e nunca
   // jogam um usuário LOGADO de volta na landing: a casa dele é /app. Deslogado,
   // a saída é a ponte de login (a única ponte público→app).
   const pt = lang === 'pt';
+  const requestedBack = opts.backHref ?? '/app';
+  const backHref =
+    requestedBack.startsWith('/') &&
+    !requestedBack.startsWith('//') &&
+    !requestedBack.includes('\\') &&
+    ![...requestedBack].some((char) => char.charCodeAt(0) < 32)
+      ? requestedBack
+      : '/app';
+  const backLabel = opts.backLabel ?? (pt ? 'Voltar às reuniões' : 'Back to meetings');
   const back = user
-    ? `<a class="btn" href="/app">${pt ? 'Voltar às reuniões' : 'Back to meetings'}</a>`
-    : `<a class="btn" href="/auth/login?next=%2Fapp">${pt ? 'Entrar com Discord' : 'Sign in with Discord'}</a>`;
+    ? `<a class="btn" href="${esc(backHref)}">${esc(backLabel)}</a>`
+    : `<a class="btn" href="/auth/login?next=${encodeURIComponent(backHref)}">${pt ? 'Entrar com Discord' : 'Sign in with Discord'}</a>`;
   const body =
     `<section class="message-page"><h1>${esc(title)}</h1><p class="muted" style="margin-top:12px">${esc(message)}</p>` +
     `<div class="downloads" style="margin-top:18px">${back}</div></section>`;
-  return shell(title, body, { user, lang });
+  return shell(title, body, {
+    user,
+    lang,
+    active: opts.active,
+    lockLocale: opts.lockLocale,
+    restoreHref: backHref,
+  });
 }
 
 // CSS da landing (vitrine pública). Documento próprio, full-width - NÃO usa o
@@ -1629,6 +1803,7 @@ export function connectPage(opts: {
       <pre id="kcode" class="tokenbox" tabindex="0" aria-label="${esc(T('Código descartável MCP', 'One-time MCP code'))}">${esc(opts.exchangeCode)}</pre>
       <div class="downloads" style="margin-top:16px"><button id="kcopy" class="btn secondary" type="button">${esc(T('Copiar comando', 'Copy command'))}</button></div>
       <pre id="kcfg" class="tokenbox" tabindex="0" aria-label="${esc(T('Comando de conexão MCP', 'MCP connection command'))}">${esc(command)}</pre>
+      <p id="kcopy-status" class="muted" role="status" aria-live="polite"></p>
       <p class="connect-intro">${esc(
         T(
           'Já usa outros servidores MCP? Depois do comando, cole só o bloco "kassinao" impresso dentro de "mcpServers". Não substitua o arquivo inteiro. Requer Node 20 ou superior.',
@@ -1642,8 +1817,25 @@ export function connectPage(opts: {
         ),
       )}</p>
       <div class="downloads" style="margin-top:18px"><a class="btn secondary" href="/app/conectar-ia">${esc(T('Voltar às conexões', 'Back to connections'))}</a></div>
-      <script${CSP_NONCE_ATTR}>(function(){function wire(bid,tid){var b=document.getElementById(bid);if(!b)return;b.addEventListener('click',function(){var e=document.getElementById(tid);var t=e?e.textContent:'';navigator.clipboard.writeText(t||'').then(function(){var o=b.textContent;b.textContent='${esc(T('Copiado', 'Copied'))}';setTimeout(function(){b.textContent=o;},2000);}).catch(function(){});});}wire('kcopycode','kcode');wire('kcopy','kcfg');})();</script></section>`;
-    return shell(title, body, { lang: opts.lang, user: opts.user, active: 'ai', wide: true, lockLocale: true });
+      <script${CSP_NONCE_ATTR}>(function(){
+        function legacyCopy(value){return new Promise(function(resolve,reject){var a=document.createElement('textarea');a.value=value;a.setAttribute('readonly','');a.setAttribute('aria-hidden','true');a.style.position='fixed';a.style.opacity='0';document.body.appendChild(a);a.select();var ok=false;try{ok=document.execCommand('copy');}catch(e){}a.remove();if(ok)resolve();else reject(new Error('copy failed'));});}
+        function copyText(value){if(!navigator.clipboard||typeof navigator.clipboard.writeText!=='function')return legacyCopy(value);return new Promise(function(resolve,reject){var settled=false;var timer=setTimeout(function(){if(settled)return;settled=true;legacyCopy(value).then(resolve,reject);},1200);Promise.resolve().then(function(){return navigator.clipboard.writeText(value);}).then(function(){if(settled)return;settled=true;clearTimeout(timer);resolve();},function(){if(settled)return;settled=true;clearTimeout(timer);legacyCopy(value).then(resolve,reject);});});}
+        var copyFeedback=0;var copyStatusTimer=null;
+        function wire(bid,tid){var b=document.getElementById(bid);if(!b)return;var stateTimer=null;b.addEventListener('click',function(){if(b.disabled)return;var e=document.getElementById(tid);var t=e?e.textContent:'';var o=b.textContent;var status=document.getElementById('kcopy-status');var token=++copyFeedback;clearTimeout(copyStatusTimer);clearTimeout(stateTimer);delete b.dataset.copyState;if(status)status.textContent='${esc(T('Copiando…', 'Copying…'))}';b.disabled=true;b.setAttribute('aria-busy','true');copyText(t||'').then(function(){b.removeAttribute('aria-busy');b.dataset.copyState='done';b.textContent='${esc(T('Copiado', 'Copied'))}';if(status&&token===copyFeedback)status.textContent='${esc(T('Copiado.', 'Copied.'))}';stateTimer=setTimeout(function(){b.textContent=o;delete b.dataset.copyState;b.disabled=false;},2000);copyStatusTimer=setTimeout(function(){if(status&&token===copyFeedback)status.textContent='';},2000);}).catch(function(){b.disabled=false;b.removeAttribute('aria-busy');b.dataset.copyState='error';if(status&&token===copyFeedback)status.textContent='${esc(T('Não consegui copiar. Selecione o texto manualmente.', 'Could not copy. Select the text manually.'))}';if(e){e.focus();var r=document.createRange();r.selectNodeContents(e);var s=window.getSelection();if(s){s.removeAllRanges();s.addRange(r);}}stateTimer=setTimeout(function(){delete b.dataset.copyState;},3000);copyStatusTimer=setTimeout(function(){if(token===copyFeedback&&status)status.textContent='';},3000);});});}
+        wire('kcopycode','kcode');wire('kcopy','kcfg');
+        window.addEventListener('pagehide',function(event){
+          if(!event.persisted)return;
+          ['kcode','kcfg'].forEach(function(id){var node=document.getElementById(id);if(node)node.textContent='';});
+        });
+      })();</script></section>`;
+    return shell(title, body, {
+      lang: opts.lang,
+      user: opts.user,
+      active: 'ai',
+      wide: true,
+      lockLocale: true,
+      restoreHref: '/app/conectar-ia',
+    });
   }
 
   // Estado de gestão: lista das conexões da pessoa, com revogação individual.

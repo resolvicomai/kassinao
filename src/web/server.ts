@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import express, { NextFunction, Request, Response } from 'express';
+import express, { Express, NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { config } from '../config';
 import { freeMB } from '../disk';
@@ -42,13 +42,15 @@ import {
   scopeWebSessionToApp,
   WebUser,
 } from './auth';
-import { applyCspNonce, contentSecurityPolicy, createCspNonce } from './csp';
+import { applyCspNonce, contentSecurityPolicy, createCspNonce, referrerPolicyForPath } from './csp';
 import {
+  consumeStagedExchangeCode,
   createExchangeCode,
   listUserSessions,
   McpExchangeCodeCapacityError,
   revokeUser,
   revokeUserSession,
+  stageExchangeCodeForDisplay,
 } from './mcpTokens';
 import {
   connectPage,
@@ -167,6 +169,11 @@ const MSG = {
   },
   errorTitle: { pt: 'Erro', en: 'Error' },
   loginError: { pt: 'Erro inesperado no login. Tente de novo.', en: 'Unexpected login error. Try again.' },
+  invalidOriginTitle: { pt: 'Não foi possível confirmar a ação', en: 'Could not confirm the action' },
+  invalidOrigin: {
+    pt: 'A página não conseguiu comprovar que este envio veio do Kassinão. Volte às reuniões, abra a gravação e tente de novo.',
+    en: 'The page could not prove that this submission came from Kassinão. Return to meetings, open the recording, and try again.',
+  },
   cookErrorTitle: { pt: 'Erro no processamento', en: 'Processing error' },
   cookError: {
     pt: 'Não consegui gerar esse formato. Tente de novo em instantes.',
@@ -200,6 +207,16 @@ const MSG = {
   freeGone: {
     pt: 'O áudio desta gravação já tinha sido liberado — nada a fazer.',
     en: 'The audio of this recording was already released — nothing to do.',
+  },
+  freeErrorTitle: { pt: 'Não foi possível liberar o áudio', en: 'Could not release the audio' },
+  freeError: {
+    pt: 'A liberação não foi concluída. Reabra a gravação para conferir o estado atual e tente de novo.',
+    en: 'The release did not complete. Reopen the recording to check its current state and try again.',
+  },
+  deleteErrorTitle: { pt: 'Não foi possível apagar a gravação', en: 'Could not delete the recording' },
+  deleteError: {
+    pt: 'A exclusão não foi concluída. Reabra a gravação para conferir o estado atual e tente de novo.',
+    en: 'The deletion did not complete. Reopen the recording to check its current state and try again.',
   },
   startingTitle: { pt: 'Iniciando…', en: 'Starting up…' },
   starting: {
@@ -238,6 +255,8 @@ const MSG = {
     en: 'Too many recordings are being processed right now. Try again shortly.',
   },
   audioPrepareError: { pt: 'Erro ao preparar o áudio.', en: 'Could not prepare the audio.' },
+  audioUnavailableTitle: { pt: 'Áudio indisponível', en: 'Audio unavailable' },
+  downloadUnavailableTitle: { pt: 'Download indisponível', en: 'Download unavailable' },
   invalidFormat: { pt: 'Formato inválido.', en: 'Invalid format.' },
   downloadAfterStop: {
     pt: 'Gravação em andamento. Baixe depois de encerrar.',
@@ -259,6 +278,94 @@ const MSG = {
   },
 } as const;
 
+function recordingMessageOptions(id: string, l: Locale): Parameters<typeof messagePage>[4] {
+  return {
+    backHref: `/app/rec/${encodeURIComponent(id)}`,
+    backLabel: l === 'pt' ? 'Voltar à gravação' : 'Back to recording',
+    active: 'rec',
+  };
+}
+
+function connectMessageOptions(l: Locale): Parameters<typeof messagePage>[4] {
+  return {
+    backHref: '/app/conectar-ia',
+    backLabel: l === 'pt' ? 'Voltar a Conectar IA' : 'Back to Connect AI',
+    active: 'ai',
+  };
+}
+
+function appMessageOptions(req: Request, l: Locale): Parameters<typeof messagePage>[4] | undefined {
+  const pathname = req.originalUrl.split('?', 1)[0];
+  const recording = /^\/app\/rec\/([a-zA-Z0-9-]+)(?:\/|$)/.exec(pathname);
+  if (recording) return recordingMessageOptions(recording[1], l);
+  if (pathname.startsWith('/app/conectar-ia')) return connectMessageOptions(l);
+  if (pathname === '/app' || pathname.startsWith('/app/')) return { active: 'rec' };
+  return undefined;
+}
+
+export type WebOriginRejectionReason = 'null' | 'missing' | 'mismatch' | 'malformed';
+export type WebMutationRouteClass =
+  'recording-release' | 'recording-delete' | 'mcp-generate' | 'mcp-revoke' | 'logout' | 'other-app';
+export type WebDeliveryErrorClass = 'client-abort' | 'missing' | 'permission' | 'io' | 'other';
+
+const recordingMutationTails = new Map<string, Promise<void>>();
+
+/** Serializa as mutações destrutivas da mesma gravação entre abas/requests. */
+async function withRecordingMutationLock<T>(recordingId: string, operation: () => Promise<T>): Promise<T> {
+  const previous = recordingMutationTails.get(recordingId) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.catch(() => undefined).then(() => gate);
+  recordingMutationTails.set(recordingId, tail);
+  await previous.catch(() => undefined);
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (recordingMutationTails.get(recordingId) === tail) recordingMutationTails.delete(recordingId);
+  }
+}
+
+/** Reduz erros de transporte/filesystem a classes fechadas, sem caminho ou identificador. */
+export function webDeliveryErrorClass(error: unknown): WebDeliveryErrorClass {
+  const code = typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+  if (code === 'ECONNABORTED' || code === 'ECONNRESET') return 'client-abort';
+  if (code === 'ENOENT') return 'missing';
+  if (code === 'EACCES' || code === 'EPERM') return 'permission';
+  if (code === 'EIO' || code === 'ENOSPC') return 'io';
+  return 'other';
+}
+
+/** Classificação segura para observabilidade; nunca devolve o header recebido. */
+export function webOriginRejectionReason(
+  req: Request,
+  expectedBaseUrl = configuredWebOrigins().app,
+): WebOriginRejectionReason | undefined {
+  const origin = req.get('origin');
+  if (!origin) return req.get('sec-fetch-site') === 'cross-site' ? 'missing' : undefined;
+  if (origin === 'null') return 'null';
+  try {
+    return new URL(origin).origin === new URL(expectedBaseUrl).origin ? undefined : 'mismatch';
+  } catch {
+    return 'malformed';
+  }
+}
+
+/** Agrupa a rota sem registrar URL, gravação, usuário ou qualquer outro identificador. */
+export function webMutationRouteClass(req: Request): WebMutationRouteClass {
+  const pathname = req.originalUrl.split('?', 1)[0];
+  if (/^\/app\/rec\/[a-zA-Z0-9-]+\/liberar-audio$/.test(pathname)) return 'recording-release';
+  if (/^\/app\/rec\/[a-zA-Z0-9-]+\/delete$/.test(pathname)) return 'recording-delete';
+  if (pathname === '/app/conectar-ia/gerar') return 'mcp-generate';
+  if (pathname === '/app/conectar-ia/revogar' || pathname.startsWith('/app/conectar-ia/revogar/')) {
+    return 'mcp-revoke';
+  }
+  if (pathname === '/app/logout') return 'logout';
+  return 'other-app';
+}
+
 /** Inexistente e sem acesso são deliberadamente indistinguíveis. */
 function sendRecordingUnavailable(res: Response, l: Locale, user: WebUser): void {
   res
@@ -274,18 +381,23 @@ function sendRecordingUnavailable(res: Response, l: Locale, user: WebUser): void
  * Só entra DEPOIS do login (a rota já resolveu o usuário) — o fluxo OAuth usa REST,
  * não depende do gateway.
  */
-function notReady(res: Response, l: Locale, user?: WebUser): boolean {
+function notReady(res: Response, l: Locale, user?: WebUser, opts?: Parameters<typeof messagePage>[4]): boolean {
   if (isClientReady()) return false;
-  sendAccessTemporarilyUnavailable(res, l, user);
+  sendAccessTemporarilyUnavailable(res, l, user, opts);
   return true;
 }
 
-function sendAccessTemporarilyUnavailable(res: Response, l: Locale, user?: WebUser): void {
+function sendAccessTemporarilyUnavailable(
+  res: Response,
+  l: Locale,
+  user?: WebUser,
+  opts?: Parameters<typeof messagePage>[4],
+): void {
   res
     .status(503)
     .set('Retry-After', '5')
     .type('html')
-    .send(messagePage(MSG.startingTitle[l], MSG.starting[l], user, l));
+    .send(messagePage(MSG.startingTitle[l], MSG.starting[l], user, l, opts));
 }
 
 interface MembershipGuild {
@@ -724,7 +836,12 @@ export function sitemapForRoles(roles: WebHostRole[], origins = configuredWebOri
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries}\n</urlset>\n`;
 }
 
-export function startWebServer(): void {
+/**
+ * Monta a aplicação completa sem abrir socket. O processo de produção usa a
+ * mesma factory em `startWebServer`; testes exercitam HTTP real numa porta
+ * efêmera, sem outro servidor concorrente nem desvio das guardas de segurança.
+ */
+export function createWebApp(): Express {
   const app = express();
   app.disable('x-powered-by');
   // O guard de host e o router precisam concordar: variantes como /API ou
@@ -771,10 +888,10 @@ export function startWebServer(): void {
 
   // Um nonce diferente por resposta libera apenas os scripts que os templates
   // marcaram deliberadamente. Conteúdo injetado com <script> não recebe nonce.
-  app.use((_req, res, next) => {
+  app.use((req, res, next) => {
     const nonce = createCspNonce();
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Referrer-Policy', referrerPolicyForPath(req.path));
     res.setHeader('Content-Security-Policy', contentSecurityPolicy(nonce));
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     if (config.baseUrl.startsWith('https')) {
@@ -804,7 +921,20 @@ export function startWebServer(): void {
       legacyHeaders: false,
       skip: (req) => !isRateLimitedWebPath(req.path),
       handler: (req, res) => {
-        res.status(429).set('Retry-After', '30').send(MSG.tooManyRequests[pageLang(req)]);
+        const l = pageLang(req);
+        res.status(429).set('Retry-After', '30');
+        if (req.path === '/app' || req.path.startsWith('/app/')) {
+          res
+            .set('Cache-Control', 'private, no-store, max-age=0')
+            .set('Pragma', 'no-cache')
+            .set('Content-Language', l === 'pt' ? 'pt-BR' : 'en')
+            .type('html')
+            .send(
+              messagePage(MSG.errorTitle[l], MSG.tooManyRequests[l], getWebUser(req), l, appMessageOptions(req, l)),
+            );
+          return;
+        }
+        res.send(MSG.tooManyRequests[l]);
       },
     }),
   );
@@ -902,7 +1032,15 @@ export function startWebServer(): void {
   // navegador o envia; requests cross-site são recusados antes do handler.
   app.use('/app', (req: Request, res: Response, next: NextFunction) => {
     if (!isAllowedWebMutation(req)) {
-      res.status(403).type('text/plain').send('Origem inválida / invalid origin.');
+      const l = pageLang(req);
+      const reason = webOriginRejectionReason(req) ?? 'malformed';
+      console.warn(`Mutação web bloqueada: origin_reason=${reason} route_class=${webMutationRouteClass(req)}`);
+      res
+        .status(403)
+        .type('html')
+        .send(
+          messagePage(MSG.invalidOriginTitle[l], MSG.invalidOrigin[l], getWebUser(req), l, appMessageOptions(req, l)),
+        );
       return;
     }
     next();
@@ -955,13 +1093,13 @@ export function startWebServer(): void {
             res.redirect(303, '/app/conectar-ia');
             return;
           }
-          if (notReady(res, l, user)) return;
+          if (notReady(res, l, user, connectMessageOptions(l))) return;
           if (mcpConnectionCreationRateLimited(user.id)) {
             res
               .status(429)
               .set('Retry-After', '30')
               .type('html')
-              .send(messagePage(MSG.errorTitle[l], MSG.tooManyRequests[l], user, l));
+              .send(messagePage(MSG.errorTitle[l], MSG.tooManyRequests[l], user, l, connectMessageOptions(l)));
             return;
           }
           const membership = await currentGuildMembership(user.id);
@@ -970,14 +1108,14 @@ export function startWebServer(): void {
               .status(503)
               .set('Retry-After', '5')
               .type('html')
-              .send(messagePage(MSG.startingTitle[l], MSG.starting[l], user, l));
+              .send(messagePage(MSG.startingTitle[l], MSG.starting[l], user, l, connectMessageOptions(l)));
             return;
           }
           if (membership === 'not-member') {
             res
               .status(403)
               .type('html')
-              .send(messagePage(MSG.mcpMembershipTitle[l], MSG.mcpMembership[l], user, l));
+              .send(messagePage(MSG.mcpMembershipTitle[l], MSG.mcpMembership[l], user, l, connectMessageOptions(l)));
             return;
           }
           // apelido opcional ("Claude do notebook") — só exibição na lista de gestão
@@ -995,21 +1133,43 @@ export function startWebServer(): void {
               .status(503)
               .set('Retry-After', '60')
               .type('html')
-              .send(messagePage(MSG.mcpCapacityTitle[l], MSG.mcpCapacity[l], user, l));
+              .send(messagePage(MSG.mcpCapacityTitle[l], MSG.mcpCapacity[l], user, l, connectMessageOptions(l)));
             return;
           }
           console.log(
             `MCP: código de conexão criado para ${cleanInline(user.name)} (${cleanInline(user.id)}) via web${label ? ` — "${cleanInline(label)}"` : ''}.`,
           );
-          res
-            .set('Cache-Control', 'no-store')
-            .type('html')
-            .send(connectPage({ lang: l, user, exchangeCode, label }));
+          stageExchangeCodeForDisplay(user.id, exchangeCode, label);
+          res.redirect(303, '/app/conectar-ia/codigo');
         } catch (err) {
           next(err);
         }
       },
     );
+
+    app.get('/app/conectar-ia/codigo', (req, res) => {
+      const l = pageLang(req);
+      const user = getWebUser(req);
+      if (!user) {
+        beginLogin(res, '/app/conectar-ia/codigo');
+        return;
+      }
+      // A rota consome estado de exibição única. Um subdomínio irmão não pode
+      // esgotá-lo com <img> ou navegação forçada, mesmo sem conseguir ler a resposta.
+      if (req.get('sec-fetch-site') !== 'same-origin') {
+        res.redirect(303, '/app/conectar-ia');
+        return;
+      }
+      const staged = consumeStagedExchangeCode(user.id);
+      if (!staged) {
+        res.redirect(303, '/app/conectar-ia');
+        return;
+      }
+      res
+        .set('Cache-Control', 'no-store')
+        .type('html')
+        .send(connectPage({ lang: l, user, exchangeCode: staged.exchangeCode, label: staged.label }));
+    });
 
     // revoga UMA conexão — só do próprio usuário (revokeUserSession valida o dono)
     app.post('/app/conectar-ia/revogar/:sid', (req, res) => {
@@ -1025,7 +1185,7 @@ export function startWebServer(): void {
         console.log(
           `MCP: sessão ${cleanInline(req.params.sid)} revogada por ${cleanInline(user.name)} (${cleanInline(user.id)}) via web.`,
         );
-      res.redirect(ok ? '/app/conectar-ia?revoked=one' : '/app/conectar-ia');
+      res.redirect(303, ok ? '/app/conectar-ia?revoked=one' : '/app/conectar-ia');
     });
 
     app.post('/app/conectar-ia/revogar', (req, res) => {
@@ -1036,13 +1196,11 @@ export function startWebServer(): void {
       }
       const n = revokeUser(user.id);
       console.log(`MCP: ${n} sessão(ões) revogada(s) por ${cleanInline(user.name)} (${cleanInline(user.id)}) via web.`);
-      res.redirect('/app/conectar-ia?revoked=1');
+      res.redirect(303, '/app/conectar-ia?revoked=1');
     });
 
-    // A página do token é resposta direta de POST; o toggle EN/PT do topo faz
-    // GET ?lang=… na MESMA URL. Sem este fallback seria um 404 cru do Express —
-    // e a página de exibição única sumiria. O cookie de idioma já foi salvo
-    // pelo middleware; volta pra página canônica (novo token = gerar de novo).
+    // Fallbacks GET para URLs que só aceitam POST. A exibição única do código
+    // tem sua rota PRG própria acima; os demais caminhos voltam ao painel.
     app.get(['/app/conectar-ia/gerar', '/app/conectar-ia/revogar', '/app/conectar-ia/revogar/:sid'], (_req, res) => {
       res.redirect('/app/conectar-ia');
     });
@@ -1210,6 +1368,11 @@ export function startWebServer(): void {
     logoutWeb(req, res);
     res.redirect(303, '/');
   });
+  // Respostas de erro de um POST ainda exibem o seletor de idioma. O GET salva
+  // o locale no middleware e volta ao painel sem tentar repetir o logout.
+  app.get('/app/logout', (_req, res) => {
+    res.redirect(303, '/app');
+  });
 
   /** Home do app ("minhas gravações"): tudo que ESTA pessoa pode abrir, em todos
    *  os guilds — painel de GESTÃO: totais de disco (só OWNER_IDS), ordenação e ações. */
@@ -1342,13 +1505,14 @@ export function startWebServer(): void {
 
   app.get('/app/rec/:id', async (req, res) => {
     const l = pageLang(req);
+    const messageOpts = recordingMessageOptions(req.params.id, l);
     // login ANTES de checar existência: não vaza quais IDs existem a quem não logou
     const user = getWebUser(req);
     if (!user) {
       beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
-    if (notReady(res, l, user)) return;
+    if (notReady(res, l, user, messageOpts)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
       sendRecordingUnavailable(res, l, user);
@@ -1368,7 +1532,7 @@ export function startWebServer(): void {
           .status(429)
           .set('Retry-After', '30')
           .type('html')
-          .send(messagePage(MSG.errorTitle[l], MSG.tooManyRequests[l], user, l));
+          .send(messagePage(MSG.errorTitle[l], MSG.tooManyRequests[l], user, l, messageOpts));
         return;
       }
       const bounded = readTranscriptBounded(meta.id, WEB_DIRECT_TRANSCRIPT_MAX_BYTES);
@@ -1391,6 +1555,7 @@ export function startWebServer(): void {
         canDelete: access.delete,
         user,
         lang: l,
+        flash: req.query.freed === '1' ? MSG.freedFlash[l] : undefined,
         transcript,
         transcriptNotice,
         minutes,
@@ -1399,14 +1564,15 @@ export function startWebServer(): void {
     );
   });
 
-  app.get('/app/rec/:id/audio', async (req, res) => {
+  app.get('/app/rec/:id/audio', async (req, res, next) => {
     const l = pageLang(req);
+    const messageOpts = recordingMessageOptions(req.params.id, l);
     const user = getWebUser(req);
     if (!user) {
       beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
-    if (notReady(res, l, user)) return;
+    if (notReady(res, l, user, messageOpts)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
       sendRecordingUnavailable(res, l, user);
@@ -1420,18 +1586,27 @@ export function startWebServer(): void {
       return;
     }
     if (meta.participants.length === 0) {
-      res.status(404).send(MSG.noAudio[l]);
+      res
+        .status(404)
+        .type('html')
+        .send(messagePage(MSG.audioUnavailableTitle[l], MSG.noAudio[l], user, l, messageOpts));
       return;
     }
     // ao vivo: o mix seria parcial e não-cacheável (re-cozinha a cada hit) — bloqueia
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
     if (live) {
-      res.status(409).send(MSG.recordingInProgress[l]);
+      res
+        .status(409)
+        .type('html')
+        .send(messagePage(MSG.audioUnavailableTitle[l], MSG.recordingInProgress[l], user, l, messageOpts));
       return;
     }
     // retenção em camadas: o áudio pode já ter expirado (texto continua na página)
     if (meta.audioDeleted) {
-      res.status(410).send(MSG.audioExpired[l]);
+      res
+        .status(410)
+        .type('html')
+        .send(messagePage(MSG.audioUnavailableTitle[l], MSG.audioExpired[l], user, l, messageOpts));
       return;
     }
     // marca ANTES do cook (que pode levar minutos): delete/cleanup não apagam no meio
@@ -1441,27 +1616,46 @@ export function startWebServer(): void {
       // sendFile já trata Range (seek do player) e Content-Type por extensão
       res.sendFile(result.filePath, (err?: Error) => {
         endDownload(meta.id);
-        if (err && !res.headersSent) res.status(500).end();
+        if (!err) return;
+        const errorClass = webDeliveryErrorClass(err);
+        if (errorClass === 'client-abort') return;
+        console.error(`Falha no envio de mídia: delivery_error=${errorClass}`);
+        if (res.headersSent) {
+          next(new Error('media delivery failed'));
+          return;
+        }
+        res
+          .status(500)
+          .type('html')
+          .send(messagePage(MSG.audioUnavailableTitle[l], MSG.audioPrepareError[l], user, l, messageOpts));
       });
     } catch (err) {
       endDownload(meta.id);
       if (err instanceof CookBusyError) {
-        res.status(503).set('Retry-After', '20').send(MSG.processingBusy[l]);
+        res
+          .status(503)
+          .set('Retry-After', '20')
+          .type('html')
+          .send(messagePage(MSG.audioUnavailableTitle[l], MSG.processingBusy[l], user, l, messageOpts));
         return;
       }
       console.error(`Erro servindo áudio ${meta.id}:`, err);
-      res.status(500).send(MSG.audioPrepareError[l]);
+      res
+        .status(500)
+        .type('html')
+        .send(messagePage(MSG.audioUnavailableTitle[l], MSG.audioPrepareError[l], user, l, messageOpts));
     }
   });
 
   app.get('/app/rec/:id/ata.md', async (req, res) => {
     const l = pageLang(req);
+    const messageOpts = recordingMessageOptions(req.params.id, l);
     const user = getWebUser(req);
     if (!user) {
       beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
-    if (notReady(res, l, user)) return;
+    if (notReady(res, l, user, messageOpts)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
       sendRecordingUnavailable(res, l, user);
@@ -1477,21 +1671,32 @@ export function startWebServer(): void {
       res
         .status(404)
         .type('html')
-        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+        .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.notFound[l], user, l, messageOpts));
       return;
     }
     const result = readMinutesBounded(meta.id);
     if (result.status === 'too_large') {
-      res.status(413).set('X-Kassinao-Max-Bytes', String(MAX_MINUTES_BYTES)).send(MSG.minutesTooLarge[l]);
+      res
+        .status(413)
+        .set('X-Kassinao-Max-Bytes', String(MAX_MINUTES_BYTES))
+        .type('html')
+        .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.minutesTooLarge[l], user, l, messageOpts));
       return;
     }
     if (result.status === 'unavailable') {
-      res.status(503).set('Retry-After', '30').send(MSG.minutesUnavailable[l]);
+      res
+        .status(503)
+        .set('Retry-After', '30')
+        .type('html')
+        .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.minutesUnavailable[l], user, l, messageOpts));
       return;
     }
     const bounded = boundMinutesForResponse(result.minutes);
     if (bounded.truncated) {
-      res.status(413).send(MSG.minutesResponseLimit[l]);
+      res
+        .status(413)
+        .type('html')
+        .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.minutesResponseLimit[l], user, l, messageOpts));
       return;
     }
     res
@@ -1502,12 +1707,13 @@ export function startWebServer(): void {
 
   app.get('/app/rec/:id/transcricao.:ext(md|txt)', async (req, res) => {
     const l = pageLang(req);
+    const messageOpts = recordingMessageOptions(req.params.id, l);
     const user = getWebUser(req);
     if (!user) {
       beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
-    if (notReady(res, l, user)) return;
+    if (notReady(res, l, user, messageOpts)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
       sendRecordingUnavailable(res, l, user);
@@ -1523,11 +1729,15 @@ export function startWebServer(): void {
       res
         .status(404)
         .type('html')
-        .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+        .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.notFound[l], user, l, messageOpts));
       return;
     }
     if (webHeavyReadRateLimited(user.id)) {
-      res.status(429).set('Retry-After', '30').send(MSG.tooManyRequests[l]);
+      res
+        .status(429)
+        .set('Retry-After', '30')
+        .type('html')
+        .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.tooManyRequests[l], user, l, messageOpts));
       return;
     }
     const transcript = readTranscriptBounded(meta.id, WEB_DIRECT_TRANSCRIPT_MAX_BYTES);
@@ -1535,11 +1745,18 @@ export function startWebServer(): void {
       transcript.status === 'too_large' ||
       (transcript.status === 'ok' && transcript.segments.length > WEB_DIRECT_TRANSCRIPT_MAX_SEGMENTS)
     ) {
-      res.status(413).send(MSG.transcriptTooLarge[l]);
+      res
+        .status(413)
+        .type('html')
+        .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.transcriptTooLarge[l], user, l, messageOpts));
       return;
     }
     if (transcript.status === 'unavailable') {
-      res.status(503).set('Retry-After', '30').send(MSG.transcriptUnavailable[l]);
+      res
+        .status(503)
+        .set('Retry-After', '30')
+        .type('html')
+        .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.transcriptUnavailable[l], user, l, messageOpts));
       return;
     }
     const markdown = transcriptToMarkdown(meta, transcript.segments);
@@ -1550,17 +1767,21 @@ export function startWebServer(): void {
       .send(ext === 'md' ? markdown : markdown.replace(/[*#`]/g, ''));
   });
 
-  app.get('/app/rec/:id/download/:format', async (req, res) => {
+  app.get('/app/rec/:id/download/:format', async (req, res, next) => {
     const l = pageLang(req);
+    const messageOpts = recordingMessageOptions(req.params.id, l);
     const user = getWebUser(req);
     if (!user) {
       beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
-    if (notReady(res, l, user)) return;
+    if (notReady(res, l, user, messageOpts)) return;
     const format = req.params.format as CookFormat;
     if (!COOK_FORMATS.includes(format)) {
-      res.status(400).send(MSG.invalidFormat[l]);
+      res
+        .status(400)
+        .type('html')
+        .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.invalidFormat[l], user, l, messageOpts));
       return;
     }
     const meta = readMeta(req.params.id);
@@ -1577,11 +1798,17 @@ export function startWebServer(): void {
     // entre formatos), enchendo o disco. Bloqueia igual à rota /audio até encerrar.
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
     if (live) {
-      res.status(409).send(MSG.downloadAfterStop[l]);
+      res
+        .status(409)
+        .type('html')
+        .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.downloadAfterStop[l], user, l, messageOpts));
       return;
     }
     if (meta.audioDeleted) {
-      res.status(410).send(MSG.audioExpiredTextKept[l]);
+      res
+        .status(410)
+        .type('html')
+        .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.audioExpiredTextKept[l], user, l, messageOpts));
       return;
     }
     // marca ANTES do cook: o processamento (minutos, em gravações longas) já
@@ -1589,7 +1816,21 @@ export function startWebServer(): void {
     beginDownload(meta.id);
     try {
       const result = await cook(meta, format);
-      res.download(result.filePath, result.fileName, () => endDownload(meta.id));
+      res.download(result.filePath, result.fileName, (err?: Error) => {
+        endDownload(meta.id);
+        if (!err) return;
+        const errorClass = webDeliveryErrorClass(err);
+        if (errorClass === 'client-abort') return;
+        console.error(`Falha no envio de mídia: delivery_error=${errorClass}`);
+        if (res.headersSent) {
+          next(new Error('media delivery failed'));
+          return;
+        }
+        res
+          .status(500)
+          .type('html')
+          .send(messagePage(MSG.cookErrorTitle[l], MSG.cookError[l], user, l, messageOpts));
+      });
     } catch (err) {
       endDownload(meta.id);
       if (err instanceof CookBusyError) {
@@ -1597,14 +1838,14 @@ export function startWebServer(): void {
           .status(503)
           .set('Retry-After', '20')
           .type('html')
-          .send(messagePage(MSG.cookErrorTitle[l], MSG.cookError[l], user, l));
+          .send(messagePage(MSG.cookErrorTitle[l], MSG.cookError[l], user, l, messageOpts));
         return;
       }
       console.error(`Erro processando download ${meta.id}/${format}:`, err);
       res
         .status(500)
         .type('html')
-        .send(messagePage(MSG.cookErrorTitle[l], MSG.cookError[l], user, l));
+        .send(messagePage(MSG.cookErrorTitle[l], MSG.cookError[l], user, l, messageOpts));
     }
   });
 
@@ -1620,94 +1861,140 @@ export function startWebServer(): void {
     res.redirect(`/app/rec/${encodeURIComponent(req.params.id)}`);
   });
 
-  app.post('/app/rec/:id/liberar-audio', async (req, res) => {
+  app.post('/app/rec/:id/liberar-audio', async (req, res, next) => {
     const l = pageLang(req);
+    const messageOpts = recordingMessageOptions(req.params.id, l);
     const user = getWebUser(req);
     if (!user) {
       beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
-    if (notReady(res, l, user)) return;
-    const meta = readMeta(req.params.id);
-    if (!meta) {
-      sendRecordingUnavailable(res, l, user);
-      return;
-    }
-    const access = await checkAccess(user, meta, { freshMember: true });
-    if (!access.delete) {
-      sendRecordingUnavailable(res, l, user);
-      return;
-    }
-    if (meta.status === 'recording') {
+    if (notReady(res, l, user, messageOpts)) return;
+    try {
+      await withRecordingMutationLock(req.params.id, async () => {
+        const meta = readMeta(req.params.id);
+        if (!meta) {
+          sendRecordingUnavailable(res, l, user);
+          return;
+        }
+        const access = await checkAccess(user, meta, { freshMember: true });
+        if (!access.delete) {
+          sendRecordingUnavailable(res, l, user);
+          return;
+        }
+        // checkAccess faz REST e cede o event loop. Cleanup ou outra rotina pode
+        // ter removido a gravação nesse intervalo; nunca grave usando a meta stale.
+        const current = readMeta(req.params.id);
+        if (!current) {
+          sendRecordingUnavailable(res, l, user);
+          return;
+        }
+        if (current.status === 'recording') {
+          res
+            .status(409)
+            .type('html')
+            .send(messagePage(MSG.freeLiveTitle[l], MSG.freeLive[l], user, l, messageOpts));
+          return;
+        }
+        if (hasActiveDownloads(current.id) || isTranscribing(current.id) || transcriptionNeedsAudio(current)) {
+          res
+            .status(409)
+            .type('html')
+            .send(messagePage(MSG.freeBusyTitle[l], MSG.freeBusy[l], user, l, messageOpts));
+          return;
+        }
+        if (current.audioDeleted) {
+          // idempotente: dois cliques/abas não viram erro assustador
+          res.type('html').send(messagePage(MSG.freeGoneTitle[l], MSG.freeGone[l], user, l, messageOpts));
+          return;
+        }
+        deleteAudioOnly(current);
+        // cleanInline: nome vem do Discord (controlado pelo usuário) — sem quebra de
+        // linha/ANSI forjando entradas de log (log injection)
+        console.log(
+          `Áudio da gravação ${current.id} liberado por ${cleanInline(user.name)} (${cleanInline(user.id)}).`,
+        );
+        res.redirect(303, req.query.back === 'index' ? '/app?freed=1' : `/app/rec/${current.id}?freed=1#exportar`);
+      });
+    } catch (error) {
+      const errorClass = webDeliveryErrorClass(error);
+      console.error(`Falha ao liberar áudio: mutation_error=${errorClass}`);
+      if (res.headersSent) {
+        next(new Error('recording audio release failed'));
+        return;
+      }
       res
-        .status(409)
+        .status(500)
         .type('html')
-        .send(messagePage(MSG.freeLiveTitle[l], MSG.freeLive[l], user, l));
-      return;
+        .send(messagePage(MSG.freeErrorTitle[l], MSG.freeError[l], user, l, messageOpts));
     }
-    if (hasActiveDownloads(meta.id) || isTranscribing(meta.id) || transcriptionNeedsAudio(meta)) {
-      res
-        .status(409)
-        .type('html')
-        .send(messagePage(MSG.freeBusyTitle[l], MSG.freeBusy[l], user, l));
-      return;
-    }
-    if (meta.audioDeleted) {
-      // idempotente: dois cliques/abas não viram erro assustador
-      res.type('html').send(messagePage(MSG.freeGoneTitle[l], MSG.freeGone[l], user, l));
-      return;
-    }
-    deleteAudioOnly(meta);
-    // cleanInline: nome vem do Discord (controlado pelo usuário) — sem quebra de
-    // linha/ANSI forjando entradas de log (log injection)
-    console.log(`Áudio da gravação ${meta.id} liberado por ${cleanInline(user.name)} (${cleanInline(user.id)}).`);
-    res.redirect(req.query.back === 'index' ? '/app?freed=1' : `/app/rec/${meta.id}`);
   });
 
-  app.post('/app/rec/:id/delete', async (req, res) => {
+  app.post('/app/rec/:id/delete', async (req, res, next) => {
     const l = pageLang(req);
+    const messageOpts = recordingMessageOptions(req.params.id, l);
     const user = getWebUser(req);
     if (!user) {
       beginLogin(res, `/app/rec/${req.params.id}`);
       return;
     }
-    if (notReady(res, l, user)) return;
-    const meta = readMeta(req.params.id);
-    if (!meta) {
-      sendRecordingUnavailable(res, l, user);
-      return;
-    }
-    const access = await checkAccess(user, meta, { freshMember: true });
-    if (!access.delete) {
-      sendRecordingUnavailable(res, l, user);
-      return;
-    }
-    if (meta.status === 'recording') {
+    if (notReady(res, l, user, messageOpts)) return;
+    try {
+      await withRecordingMutationLock(req.params.id, async () => {
+        const meta = readMeta(req.params.id);
+        if (!meta) {
+          sendRecordingUnavailable(res, l, user);
+          return;
+        }
+        const access = await checkAccess(user, meta, { freshMember: true });
+        if (!access.delete) {
+          sendRecordingUnavailable(res, l, user);
+          return;
+        }
+        const current = readMeta(req.params.id);
+        if (!current) {
+          sendRecordingUnavailable(res, l, user);
+          return;
+        }
+        if (current.status === 'recording') {
+          res
+            .status(409)
+            .type('html')
+            .send(messagePage(MSG.deleteLiveTitle[l], MSG.deleteLive[l], user, l, messageOpts));
+          return;
+        }
+        if (hasActiveDownloads(current.id) || isTranscribing(current.id)) {
+          res
+            .status(409)
+            .type('html')
+            .send(messagePage(MSG.deleteBusyTitle[l], MSG.deleteBusy[l], user, l, messageOpts));
+          return;
+        }
+        deleteRecording(current.id);
+        forgetAudioBytes(current.id);
+        console.log(`Gravação ${current.id} apagada por ${cleanInline(user.name)} (${cleanInline(user.id)}).`);
+        // Post/Redirect/Get: atualizar a página nunca reenvia uma exclusão.
+        res.redirect(303, '/app?deleted=1');
+      });
+    } catch (error) {
+      const errorClass = webDeliveryErrorClass(error);
+      console.error(`Falha ao apagar gravação: mutation_error=${errorClass}`);
+      if (res.headersSent) {
+        next(new Error('recording deletion failed'));
+        return;
+      }
       res
-        .status(409)
+        .status(500)
         .type('html')
-        .send(messagePage(MSG.deleteLiveTitle[l], MSG.deleteLive[l], user, l));
-      return;
+        .send(messagePage(MSG.deleteErrorTitle[l], MSG.deleteError[l], user, l, messageOpts));
     }
-    if (hasActiveDownloads(meta.id) || isTranscribing(meta.id)) {
-      res
-        .status(409)
-        .type('html')
-        .send(messagePage(MSG.deleteBusyTitle[l], MSG.deleteBusy[l], user, l));
-      return;
-    }
-    deleteRecording(meta.id);
-    forgetAudioBytes(meta.id);
-    console.log(`Gravação ${meta.id} apagada por ${cleanInline(user.name)} (${cleanInline(user.id)}).`);
-    // veio do índice de gestão → volta pra lá (com flash); da página → mensagem clássica
-    if (req.query.back === 'index') {
-      res.redirect('/app?deleted=1');
-      return;
-    }
-    res.type('html').send(messagePage(MSG.deletedTitle[l], MSG.deleted[l], user, l));
   });
 
-  app.listen(config.port, () => {
+  return app;
+}
+
+export function startWebServer(): void {
+  createWebApp().listen(config.port, () => {
     console.log(`Servidor web em ${config.baseUrl} (porta ${config.port})`);
   });
 }

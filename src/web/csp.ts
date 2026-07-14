@@ -4,6 +4,23 @@ import crypto from 'node:crypto';
 export const CSP_NONCE_PLACEHOLDER = '__KASSINAO_CSP_NONCE__';
 export const CSP_NONCE_ATTR = ` nonce="${CSP_NONCE_PLACEHOLDER}"`;
 
+/**
+ * Política usada pelo documento que contém os formulários POST do app.
+ * Mantida junto dos demais headers de navegador para que o contrato seja
+ * testável sem duplicar uma string solta no servidor.
+ */
+export const WEB_REFERRER_POLICY = 'same-origin';
+export const DEFAULT_REFERRER_POLICY = 'no-referrer';
+
+/**
+ * O app privado precisa preservar Origin nos POSTs de formulário. Fora dele,
+ * sobretudo no callback OAuth que pode carregar code/state na query, não há
+ * motivo para enviar Referer nem a recursos same-origin.
+ */
+export function referrerPolicyForPath(pathname: string): string {
+  return pathname === '/app' || pathname.startsWith('/app/') ? WEB_REFERRER_POLICY : DEFAULT_REFERRER_POLICY;
+}
+
 function validNonce(nonce: string): boolean {
   return /^[A-Za-z0-9+/_=-]{20,128}$/.test(nonce);
 }

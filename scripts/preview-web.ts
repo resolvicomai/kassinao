@@ -44,23 +44,36 @@ type RecordingIndexItem = import('../src/web/page').RecordingIndexItem;
 type WebUser = import('../src/web/auth').WebUser;
 type WebSearchHit = import('../src/web/search').WebSearchHit;
 type Locale = import('../src/i18n').Locale;
+type DiscordDemoPhase = import('../src/web/discordDemo').DiscordDemoPhase;
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
 async function main(): Promise<void> {
-  const [expressModule, fsModule, pathModule, landingModule, docsModule, pageModule, siteModule, discordDemoModule] =
-    await Promise.all([
-      import('express'),
-      import('node:fs'),
-      import('node:path'),
-      import('../src/web/landing'),
-      import('../src/web/docs'),
-      import('../src/web/page'),
-      import('../src/web/site'),
-      import('../src/web/discordDemo'),
-    ]);
+  const [
+    expressModule,
+    fsModule,
+    pathModule,
+    landingModule,
+    docsModule,
+    pageModule,
+    siteModule,
+    discordDemoModule,
+    authModule,
+    cspModule,
+  ] = await Promise.all([
+    import('express'),
+    import('node:fs'),
+    import('node:path'),
+    import('../src/web/landing'),
+    import('../src/web/docs'),
+    import('../src/web/page'),
+    import('../src/web/site'),
+    import('../src/web/discordDemo'),
+    import('../src/web/auth'),
+    import('../src/web/csp'),
+  ]);
 
   const express = expressModule.default;
   const fs = fsModule.default;
@@ -70,6 +83,8 @@ async function main(): Promise<void> {
   const { connectPage, recordingPage, recordingsIndexPage } = pageModule;
   const { localeCookie, localeFromValue, resolveWebLocale } = siteModule;
   const { discordDemoPage } = discordDemoModule;
+  const { isAllowedWebMutation } = authModule;
+  const { referrerPolicyForPath } = cspModule;
 
   const rootDir = path.resolve(__dirname, '..');
   const exampleDir = path.join(rootDir, 'docs', 'example');
@@ -315,6 +330,10 @@ async function main(): Promise<void> {
 
   const app = express();
   app.disable('x-powered-by');
+  app.use((req, res, next) => {
+    res.set('Referrer-Policy', referrerPolicyForPath(req.path));
+    next();
+  });
 
   const pageLang = (req: import('express').Request): Locale =>
     resolveWebLocale({
@@ -328,6 +347,13 @@ async function main(): Promise<void> {
     const queryLocale = localeFromValue(req.query.lang);
     if (queryLocale) res.append('Set-Cookie', localeCookie(queryLocale, false));
     next();
+  });
+  app.use('/app', (req, res, next) => {
+    if (isAllowedWebMutation(req)) {
+      next();
+      return;
+    }
+    res.status(403).type('html').send('Origem inválida / invalid origin.');
   });
 
   const sendPublicPage = (res: import('express').Response, locale: Locale, html: string): void => {
@@ -434,7 +460,8 @@ async function main(): Promise<void> {
   app.get('/preview/discord-demo', (req, res) => {
     const locale = localeFromValue(req.query.lang) ?? 'pt';
     const rawPhase = String(req.query.phase ?? 'auto');
-    const phase = rawPhase === 'auto' ? 'auto' : Math.max(0, Math.min(4, Number(rawPhase) || 0));
+    const phase: DiscordDemoPhase =
+      rawPhase === 'auto' ? 'auto' : (Math.max(0, Math.min(4, Number(rawPhase) || 0)) as 0 | 1 | 2 | 3 | 4);
     res.type('html').send(discordDemoPage(locale, phase));
   });
 
@@ -451,14 +478,15 @@ async function main(): Promise<void> {
     else items.sort((a, b) => b.meta.startedAt - a.meta.startedAt);
 
     const noPreviewHits = /^(semresultado|no-results|zzzz)$/i.test(q);
+    const searchCandidate = previewItems.find((item) => (detailData.get(item.meta.id)?.transcript?.length ?? 0) > 0);
     const hits: WebSearchHit[] | undefined = q
-      ? noPreviewHits
+      ? noPreviewHits || !searchCandidate
         ? []
         : [
             {
-              metaId: doneMeta.id,
-              channelName: localizedPreviewMeta(doneMeta, locale).voiceChannelName,
-              startedAt: doneMeta.startedAt,
+              metaId: searchCandidate.meta.id,
+              channelName: localizedPreviewMeta(searchCandidate.meta, locale).voiceChannelName,
+              startedAt: searchCandidate.meta.startedAt,
               atMs: 12 * MINUTE,
               speaker: 'Priya',
               snippet:
@@ -479,11 +507,15 @@ async function main(): Promise<void> {
       freeDiskMB: 42 * 1024,
       sort,
       flash:
-        req.query.flash === '1'
+        req.query.freed === '1'
           ? locale === 'pt'
-            ? 'Estado fictício atualizado com sucesso.'
-            : 'Fictional state updated successfully.'
-          : undefined,
+            ? '🔇 Espaço liberado: o áudio foi apagado; transcrição, ata e notas continuam aqui.'
+            : '🔇 Space freed: the audio was deleted; transcript, minutes and notes remain.'
+          : req.query.deleted === '1'
+            ? locale === 'pt'
+              ? '🗑️ Gravação apagada para sempre.'
+              : '🗑️ Recording deleted forever.'
+            : undefined,
     });
   }
 
@@ -524,14 +556,17 @@ async function main(): Promise<void> {
       exp: now + 87 * DAY,
     },
   ];
+  let stagedPreviewConnection: { exchangeCode: string; label?: string } | undefined;
 
   app.get(['/preview/connect', '/app/conectar-ia'], (req, res) => {
     const locale = pageLang(req);
+    const revoked = req.query.revoked === '1' ? 'all' : req.query.revoked === 'one' ? 'one' : undefined;
     res.type('html').send(
       connectPage({
         lang: locale,
         user: previewUserFor(locale),
         sessions: previewConnections,
+        revoked,
       }),
     );
   });
@@ -542,10 +577,57 @@ async function main(): Promise<void> {
       connectPage({
         lang: locale,
         user: previewUserFor(locale),
-        refreshToken: 'preview-only-token-never-valid',
+        exchangeCode: 'preview-only-code-never-valid',
         label: locale === 'pt' ? 'Claude do notebook' : 'Claude on my laptop',
       }),
     );
+  });
+
+  app.post('/app/conectar-ia/gerar', express.urlencoded({ extended: false, limit: '2kb' }), (req, res) => {
+    const label = String((req.body as Record<string, unknown>)?.label ?? '')
+      .trim()
+      .slice(0, 40);
+    stagedPreviewConnection = {
+      exchangeCode: 'preview-only-code-never-valid',
+      label: label || undefined,
+    };
+    res.redirect(303, '/app/conectar-ia/codigo');
+  });
+
+  app.get('/app/conectar-ia/codigo', (req, res) => {
+    if (!stagedPreviewConnection) {
+      res.redirect(303, '/app/conectar-ia');
+      return;
+    }
+    const locale = pageLang(req);
+    const staged = stagedPreviewConnection;
+    stagedPreviewConnection = undefined;
+    res
+      .set('Cache-Control', 'no-store')
+      .type('html')
+      .send(
+        connectPage({
+          lang: locale,
+          user: previewUserFor(locale),
+          exchangeCode: staged.exchangeCode,
+          label: staged.label,
+        }),
+      );
+  });
+
+  app.post('/app/conectar-ia/revogar/:sid', (req, res) => {
+    const index = previewConnections.findIndex((connection) => connection.sid === req.params.sid);
+    if (index >= 0) previewConnections.splice(index, 1);
+    res.redirect(303, index >= 0 ? '/app/conectar-ia?revoked=one' : '/app/conectar-ia');
+  });
+
+  app.post('/app/conectar-ia/revogar', (_req, res) => {
+    previewConnections.splice(0, previewConnections.length);
+    res.redirect(303, '/app/conectar-ia?revoked=1');
+  });
+
+  app.get(['/app/conectar-ia/gerar', '/app/conectar-ia/revogar', '/app/conectar-ia/revogar/:sid'], (_req, res) => {
+    res.redirect(303, '/app/conectar-ia');
   });
 
   function renderDetail(
@@ -564,6 +646,12 @@ async function main(): Promise<void> {
       canDelete: localizedMeta.status !== 'recording',
       user: previewUserFor(locale),
       lang: locale,
+      flash:
+        req.query.freed === '1'
+          ? locale === 'pt'
+            ? '🔇 Espaço liberado: o áudio foi apagado; transcrição, ata e notas continuam aqui.'
+            : '🔇 Space freed: the audio was deleted; transcript, minutes and notes remain.'
+          : undefined,
       transcript: localizedTranscript,
       minutes: localizedMinutes,
     });
@@ -587,11 +675,103 @@ async function main(): Promise<void> {
   });
 
   app.get('/app/rec/:id/audio', (req, res) => {
-    if (!detailData.has(req.params.id)) {
+    const detail = detailData.get(req.params.id);
+    if (!detail) {
       res.status(404).end();
       return;
     }
+    if (detail.meta.audioDeleted) {
+      res.status(410).type('text').send('Áudio liberado neste estado sintético.');
+      return;
+    }
     res.type('audio/mpeg').set('Cache-Control', 'no-store').sendFile(demoAudioPath);
+  });
+
+  app.get('/app/rec/:id/download/:format', (req, res) => {
+    const detail = detailData.get(req.params.id);
+    const formats = new Set(['mp3', 'flac', 'mix', 'audacity']);
+    if (!detail || !formats.has(req.params.format)) {
+      res.status(404).type('text').send('Download sintético não encontrado no preview.');
+      return;
+    }
+    if (detail.meta.audioDeleted) {
+      res.status(410).type('text').send('O áudio já foi liberado neste estado sintético.');
+      return;
+    }
+    res
+      .type('text/plain; charset=utf-8')
+      .attachment(`kassinao-preview-${req.params.format}.txt`)
+      .send(
+        `Preview do download ${req.params.format}. Em produção, esta rota gera o arquivo real a partir das faixas protegidas.`,
+      );
+  });
+
+  app.get('/app/rec/:id/ata.md', (req, res) => {
+    const detail = detailData.get(req.params.id);
+    if (!detail?.minutes) {
+      res.status(404).type('text').send('Ata sintética não encontrada no preview.');
+      return;
+    }
+    res
+      .type('text/markdown; charset=utf-8')
+      .attachment(`kassinao-${req.params.id}-ata.md`)
+      .send(`# Ata do preview\n\n${detail.minutes.resumo}\n`);
+  });
+
+  app.get('/app/rec/:id/transcricao.:ext(md|txt)', (req, res) => {
+    const detail = detailData.get(req.params.id);
+    if (!detail?.transcript) {
+      res.status(404).type('text').send('Transcrição sintética não encontrada no preview.');
+      return;
+    }
+    const body = detail.transcript.map((segment) => `[${segment.speaker}] ${segment.text}`).join('\n');
+    res
+      .type(req.params.ext === 'md' ? 'text/markdown; charset=utf-8' : 'text/plain; charset=utf-8')
+      .attachment(`kassinao-${req.params.id}-transcricao.${req.params.ext}`)
+      .send(body);
+  });
+
+  app.post('/app/rec/:id/liberar-audio', (req, res) => {
+    const detail = detailData.get(req.params.id);
+    const item = previewItems.find((candidate) => candidate.meta.id === req.params.id);
+    if (!detail || !item) {
+      res.status(404).type('text').send('Estado sintético não encontrado no preview.');
+      return;
+    }
+    if (!item.canDelete || detail.meta.status === 'recording') {
+      res.status(409).type('text').send('Esta gravação fictícia não pode liberar áudio neste estado.');
+      return;
+    }
+    detail.meta.audioDeleted = true;
+    item.audioBytes = 0;
+    const target =
+      req.query.back === 'index' ? '/app?freed=1' : `/app/rec/${encodeURIComponent(req.params.id)}?freed=1#exportar`;
+    res.redirect(303, target);
+  });
+
+  app.post('/app/rec/:id/delete', (req, res) => {
+    const itemIndex = previewItems.findIndex((candidate) => candidate.meta.id === req.params.id);
+    const item = itemIndex >= 0 ? previewItems[itemIndex] : undefined;
+    if (!item || !detailData.has(req.params.id)) {
+      res.status(404).type('text').send('Estado sintético não encontrado no preview.');
+      return;
+    }
+    if (!item.canDelete || item.meta.status === 'recording') {
+      res.status(409).type('text').send('Esta gravação fictícia não pode ser apagada neste estado.');
+      return;
+    }
+    previewItems.splice(itemIndex, 1);
+    detailData.delete(req.params.id);
+    res.redirect(303, '/app?deleted=1');
+  });
+
+  app.get(['/app/rec/:id/delete', '/app/rec/:id/liberar-audio'], (req, res) => {
+    res.redirect(303, `/app/rec/${encodeURIComponent(req.params.id)}`);
+  });
+
+  app.post('/app/logout', (_req, res) => {
+    // O preview não cria sessão nem cookie: simula apenas o destino pós-logout.
+    res.redirect(303, '/?preview=logged-out');
   });
 
   app.get('/health', (_req, res) => {
