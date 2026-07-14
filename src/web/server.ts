@@ -596,12 +596,13 @@ export function webHostRoutingDecision(req: Request, origins = configuredWebOrig
         ? { action: 'pass', roles }
         : redirect(absoluteTarget(origins.public, req, canonicalPublicPath));
     }
-    if (has('mcp') && canonicalPublicPath === '/') {
+    if (has('mcp') && (canonicalPublicPath === '/' || canonicalPublicPath === '/en')) {
+      const docsPath = canonicalPublicPath === '/en' ? '/en' : '/';
       return {
         action: 'redirect',
         roles,
         status: 308,
-        target: `${origins.docs}/#mcp`,
+        target: `${origins.docs}${docsPath}#mcp`,
       };
     }
     if (has('docs') && (canonicalPublicPath === '/' || canonicalPublicPath === '/en')) {

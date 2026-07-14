@@ -281,6 +281,11 @@ describe('políticas HTTP da superfície web', () => {
       status: 308,
       target: 'https://docs.kassinao.cloud/#mcp',
     });
+    expect(webHostRoutingDecision(webRequest('mcp.kassinao.cloud', '/en'), splitOrigins)).toMatchObject({
+      action: 'redirect',
+      status: 308,
+      target: 'https://docs.kassinao.cloud/en#mcp',
+    });
   });
 
   it('faz redirects canônicos só em navegação e nunca encaminha mutações entre origens', () => {

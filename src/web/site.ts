@@ -115,7 +115,9 @@ export function publicSurfaceUrl(
  */
 export function mcpDiscoveryUrl(topology: string | PublicUrlTopology = '', locale: Locale = 'pt'): string {
   const urls = normalizeTopology(topology);
-  if (urls.mcpUrl && urls.mcpUrl !== urls.appUrl) return `${urls.mcpUrl}/`;
+  if (urls.mcpUrl && urls.mcpUrl !== urls.appUrl) {
+    return locale === 'en' ? `${urls.mcpUrl}/en` : `${urls.mcpUrl}/`;
+  }
   return `${publicSurfaceUrl('docs', locale, topology)}#mcp`;
 }
 

@@ -54,7 +54,9 @@ describe('arquitetura compartilhada de idioma e rotas web', () => {
     expect(publicSurfaceUrl('demo', 'en', topology)).toBe('https://kassinao.cloud/en/demo');
     expect(publicSurfaceUrl('docs', 'pt', topology)).toBe('https://docs.kassinao.cloud/');
     expect(publicSurfaceUrl('docs', 'en', topology)).toBe('https://docs.kassinao.cloud/en');
-    expect(mcpDiscoveryUrl(topology, 'en')).toBe('https://mcp.kassinao.cloud/');
+    expect(mcpDiscoveryUrl(topology, 'pt')).toBe('https://mcp.kassinao.cloud/');
+    expect(mcpDiscoveryUrl(topology, 'en')).toBe('https://mcp.kassinao.cloud/en');
+    expect(publicSite('home', 'en', topology).links.mcp).toBe('https://mcp.kassinao.cloud/en');
   });
 
   it('resolve idioma por escolha explícita, cookie, navegador e fallback nessa ordem', () => {

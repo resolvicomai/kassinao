@@ -284,13 +284,16 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     const en = discordDemoPage('en', 4);
     expect(pt).toContain('/gravar');
     expect(pt).toContain('/perguntar');
+    expect(pt).toContain('Produto &amp; IA');
     expect(pt).toContain('demo fictícia');
     expect(en).toContain('/record');
     expect(en).toContain('/ask');
+    expect(en).toContain('Product &amp; AI');
     expect(en).toContain('>general</div>');
     expect(en).toContain('fictional demo');
     expect(en).not.toContain('/gravar');
     expect(en).not.toContain('>geral</div>');
+    expect(en).not.toContain('Produto &amp; IA');
   });
 
   it('demo pública traduz eventos automáticos e volta para a home do idioma atual', () => {
