@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { parse as parseShellCommand } from 'shell-quote';
 import { config } from '../config';
 import { cleanInline, neutralizeFences } from '../sanitize';
 import {
@@ -18,7 +19,15 @@ import {
   TranscriptSegment,
 } from '../store';
 import { runFfmpeg } from './ffmpeg';
-import { fetchWithRetry } from './http';
+import {
+  abortableDelay,
+  assertGuildWorkActive,
+  createGuildWorkContext,
+  fetchWithRetry,
+  GuildWorkContext,
+  isGuildWorkPausedError,
+  UpstreamHttpError,
+} from './http';
 import { generateMinutes, minutesEnabled } from './minutes';
 import { batchIntervals, detectSpeechIntervals, extractBatch, filterHallucinations, mapBatchTimeToTrack } from './vad';
 
@@ -53,6 +62,87 @@ const ASR_MAX_WAIT_MS = 10 * 60 * 1000;
 
 /** PIDs (grupos) de comandos locais em voo — mortos no shutdown para não virarem órfãos. */
 const commandPids = new Set<number>();
+
+const SAFE_COMMAND_ENV = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'XDG_CACHE_HOME'] as const;
+
+export interface TranscribeCommandTemplate {
+  executable: string;
+  args: string[];
+}
+
+/**
+ * Aceita a conveniência de aspas de um comando shell, mas rejeita qualquer
+ * construção que dependa de um shell. O resultado sempre é executado como
+ * binário + argv, então caminhos de gravação nunca viram código.
+ */
+export function parseTranscribeCommandTemplate(template: string): TranscribeCommandTemplate {
+  if (!template.trim()) throw new Error('TRANSCRIBE_COMMAND está vazio');
+  if (template.length > 8_192) throw new Error('TRANSCRIBE_COMMAND excede 8192 caracteres');
+  if (/[$\r\n\0]/.test(template))
+    throw new Error('TRANSCRIBE_COMMAND não aceita expansão de variáveis, quebras de linha ou NUL');
+
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  for (const character of template) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'") quote = undefined;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '"') quote = undefined;
+      else if (character === '\\') escaped = true;
+      continue;
+    }
+    if (character === "'" || character === '"') quote = character;
+    else if (character === '\\') escaped = true;
+  }
+  if (quote || escaped) throw new Error('TRANSCRIBE_COMMAND contém aspas ou escape incompletos');
+
+  const parsed = parseShellCommand(template, {});
+  if (parsed.some((entry) => typeof entry !== 'string'))
+    throw new Error('TRANSCRIBE_COMMAND não aceita operadores, redirecionamentos, comentários ou glob');
+  const tokens = parsed as string[];
+  if (!tokens.length || !tokens[0]) throw new Error('TRANSCRIBE_COMMAND não informa um executável');
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0]))
+    throw new Error('TRANSCRIBE_COMMAND deve começar pelo executável; use env NOME=valor comando quando necessário');
+  if (tokens.length > 128 || tokens.some((token) => token.length > 4_096))
+    throw new Error('TRANSCRIBE_COMMAND excede os limites de argumentos');
+
+  const inputCount = tokens.filter((token) => token === '{input}').length;
+  const outputCount = tokens.filter((token) => token === '{output}').length;
+  if (inputCount !== 1 || outputCount !== 1 || tokens[0] === '{input}' || tokens[0] === '{output}') {
+    throw new Error('TRANSCRIBE_COMMAND exige {input} e {output} uma vez cada, como argumentos separados');
+  }
+  if (tokens.some((token) => token.includes('{input}') !== (token === '{input}')))
+    throw new Error('TRANSCRIBE_COMMAND exige {input} como argumento separado');
+  if (tokens.some((token) => token.includes('{output}') !== (token === '{output}')))
+    throw new Error('TRANSCRIBE_COMMAND exige {output} como argumento separado');
+
+  return { executable: tokens[0], args: tokens.slice(1) };
+}
+
+/** Ambiente mínimo entregue a um transcritor local; segredos não atravessam por herança. */
+export function buildTranscribeCommandEnvironment(
+  source: NodeJS.ProcessEnv,
+  extraNames: readonly string[],
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of [...SAFE_COMMAND_ENV, ...extraNames]) {
+    if (source[name] !== undefined) env[name] = source[name];
+  }
+  return env;
+}
+
+let guildProcessingAllowed: (guildId: string) => boolean = () => false;
+
+/** Index injeta o estado operacional do gateway sem acoplar o pipeline ao Discord. */
+export function setProcessingGuildGuard(guard: (guildId: string) => boolean): void {
+  guildProcessingAllowed = guard;
+}
 
 function killGroup(proc: { pid?: number; kill: (s: NodeJS.Signals) => void }): void {
   try {
@@ -103,6 +193,13 @@ export function validateTranscriptionConfig(): string | undefined {
     (!config.transcribeCommand.includes('{input}') || !config.transcribeCommand.includes('{output}'))
   )
     return 'TRANSCRIBE_PROVIDER=command exige TRANSCRIBE_COMMAND com os placeholders {input} e {output}';
+  if (p === 'command') {
+    try {
+      parseTranscribeCommandTemplate(config.transcribeCommand);
+    } catch (err) {
+      return (err as Error).message;
+    }
+  }
   if (!['none', 'assemblyai', 'openai', 'groq', 'gemini', 'command'].includes(p))
     return `TRANSCRIBE_PROVIDER desconhecido: ${p}`;
   return undefined;
@@ -172,6 +269,10 @@ export function enqueueTranscription(
     settle(recordingId);
     return;
   }
+  if (!guildProcessingAllowed(meta.guildId)) {
+    settle(recordingId);
+    return;
+  }
 
   const attempts = (meta.transcription?.attempts ?? 0) + 1;
   if (attempts > MAX_TRANSCRIPTION_ATTEMPTS) {
@@ -215,6 +316,17 @@ export function enqueueTranscription(
       }
       const st = fresh.transcription?.status;
       const tries = fresh.transcription?.attempts ?? 0;
+      // A guild pode ter voltado antes de o AbortSignal antigo terminar de
+      // desenrolar a pilha. Nesse caso GuildCreate já tentou retomar, mas viu
+      // `queued`; rearma aqui com a geração nova sem perder os callbacks.
+      if (st === 'pending') {
+        if (guildProcessingAllowed(fresh.guildId)) {
+          queueMicrotask(() => enqueueTranscription(recordingId, onDone));
+        } else {
+          settle(recordingId);
+        }
+        return;
+      }
       // Sobraram faixas (rate limit por hora) ou falhou tudo (ex.: 429 que não
       // cede): reagenda sozinho enquanto houver tentativa, e SÓ avisa no final.
       if ((st === 'partial' || st === 'error') && tries < MAX_TRANSCRIPTION_ATTEMPTS) {
@@ -233,6 +345,18 @@ export function enqueueTranscription(
         fresh.transcription = { status: st, ...fresh.transcription, retryScheduled: false };
         saveMeta(fresh);
         enqueueMinutesOnly(recordingId, onDone);
+        return;
+      }
+      // A guild pode pausar durante a ata e voltar antes de este job deixar
+      // `queued`. O evento de retomada então não consegue enfileirar nada. Se a
+      // transcrição já terminou e a ata voltou a pending/running, rearma aqui
+      // com a nova geração em vez de deixá-la presa até restart/outro evento.
+      if (transcriptReady(fresh) && (fresh.minutes?.status === 'pending' || fresh.minutes?.status === 'running')) {
+        if (guildProcessingAllowed(fresh.guildId)) {
+          queueMicrotask(() => enqueueMinutesOnly(recordingId, onDone));
+        } else {
+          settle(recordingId);
+        }
         return;
       }
       notifyDone(recordingId, onDone, fresh);
@@ -261,6 +385,10 @@ export function enqueueMinutesOnly(
     settle(recordingId);
     return;
   }
+  if (!guildProcessingAllowed(meta.guildId)) {
+    settle(recordingId);
+    return;
+  }
   const segments = readTranscript(recordingId);
   if (!segments || segments.length === 0) {
     notifyDone(recordingId, onDone, meta);
@@ -269,12 +397,18 @@ export function enqueueMinutesOnly(
   }
 
   queued.add(recordingId);
+  meta.minutes = { ...meta.minutes, status: 'pending', model: config.minutesModel };
+  saveMeta(meta);
   queue = queue
     .then(() => generateMinutesStep(recordingId, segments))
     .catch((err) => console.error(`Ata (retomada) de ${recordingId} falhou:`, err))
     .then(() => {
       queued.delete(recordingId);
       const fresh = readMeta(recordingId);
+      if (fresh?.minutes?.status === 'pending' && guildProcessingAllowed(fresh.guildId)) {
+        queueMicrotask(() => enqueueMinutesOnly(recordingId, onDone));
+        return;
+      }
       if (fresh) notifyDone(recordingId, onDone, fresh);
       settle(recordingId);
     });
@@ -289,6 +423,8 @@ async function transcribeRecording(recordingId: string): Promise<void> {
     }
     return;
   }
+  if (!guildProcessingAllowed(meta.guildId)) return;
+  const guildWork = createGuildWorkContext(meta.guildId, () => guildProcessingAllowed(meta.guildId));
 
   // Retomada por faixa: rodada anterior pode ter parado no rate limit por hora.
   // Faixas já transcritas não são reenviadas (não gastam cota de novo).
@@ -315,10 +451,12 @@ async function transcribeRecording(recordingId: string): Promise<void> {
   setAaiRecordingContext(meta);
 
   try {
+    assertGuildWorkActive(guildWork);
     const all: TranscriptSegment[] = [...previous];
     const failed: string[] = [];
 
     for (const participant of meta.participants) {
+      assertGuildWorkActive(guildWork);
       if (doneTrackIds.has(participant.id)) continue;
       const master = path.join(tracksDir(meta.id), participant.trackFile);
       if (!fs.existsSync(master)) {
@@ -329,6 +467,7 @@ async function transcribeRecording(recordingId: string): Promise<void> {
       // chunks-fantasma que quebram a transcrição. E uma faixa que falha não pode
       // derrubar as demais.
       const trackSec = await probeDurationSec(master);
+      assertGuildWorkActive(guildWork);
       if (trackSec <= 0) {
         doneTrackIds.add(participant.id);
         continue;
@@ -339,7 +478,9 @@ async function transcribeRecording(recordingId: string): Promise<void> {
           { ...participant, name: displayName.get(participant.id) ?? participant.name },
           trackSec,
           work,
+          guildWork,
         );
+        assertGuildWorkActive(guildWork);
         all.push(...segments);
         doneTrackIds.add(participant.id);
         // checkpoint: se a PRÓXIMA faixa estourar o rate limit, esta não se perde
@@ -351,7 +492,8 @@ async function transcribeRecording(recordingId: string): Promise<void> {
           saveMeta(cp);
         }
       } catch (err) {
-        console.error(`Transcrição da faixa de ${participant.name} (${meta.id}) falhou:`, (err as Error).message);
+        if (isGuildWorkPausedError(err)) throw err;
+        console.error(`Transcrição de uma faixa (${meta.id}) falhou:`, (err as Error).message);
         failed.push(participant.name);
       }
     }
@@ -362,6 +504,7 @@ async function transcribeRecording(recordingId: string): Promise<void> {
       throw new Error(`todas as faixas falharam (${failed.join(', ')})`);
     }
 
+    assertGuildWorkActive(guildWork);
     all.sort((a, b) => a.startMs - b.startMs);
     saveTranscript(meta.id, all);
 
@@ -383,10 +526,26 @@ async function transcribeRecording(recordingId: string): Promise<void> {
     // Ata com IA (mesma fila serial) — falha aqui NÃO derruba a transcrição já entregue.
     // Com faixas pendentes a ata espera a transcrição completar (senão sairia capenga).
     if (failed.length === 0 && all.length > 0 && minutesEnabled()) {
-      await generateMinutesStep(meta.id, all);
+      assertGuildWorkActive(guildWork);
+      await generateMinutesStep(meta.id, all, guildWork);
     }
   } catch (err) {
     const fresh = readMeta(meta.id);
+    if (isGuildWorkPausedError(err)) {
+      if (fresh) {
+        fresh.transcription = {
+          ...fresh.transcription,
+          status: 'pending',
+          provider: config.transcribeProvider,
+          attempts: Math.max(0, (fresh.transcription?.attempts ?? 1) - 1),
+          error: undefined,
+          finishedAt: undefined,
+          retryScheduled: false,
+        };
+        saveMeta(fresh);
+      }
+      return;
+    }
     if (fresh) {
       fresh.transcription = {
         ...fresh.transcription,
@@ -405,19 +564,39 @@ async function transcribeRecording(recordingId: string): Promise<void> {
 }
 
 /** Gera a ata após a transcrição. NUNCA relança — a transcrição já foi entregue. */
-async function generateMinutesStep(recordingId: string, segments: TranscriptSegment[]): Promise<void> {
+async function generateMinutesStep(
+  recordingId: string,
+  segments: TranscriptSegment[],
+  existingWork?: GuildWorkContext,
+): Promise<void> {
   const meta = readMeta(recordingId);
-  if (!meta) return;
+  if (!meta || !guildProcessingAllowed(meta.guildId)) return;
+  const guildWork = existingWork ?? createGuildWorkContext(meta.guildId, () => guildProcessingAllowed(meta.guildId));
+  assertGuildWorkActive(guildWork);
   meta.minutes = { status: 'running', model: config.minutesModel };
   saveMeta(meta);
   try {
-    const minutes = await generateMinutes(meta, segments);
+    const minutes = await generateMinutes(meta, segments, guildWork);
+    assertGuildWorkActive(guildWork);
     saveMinutes(recordingId, minutes);
     const fresh = readMeta(recordingId);
     if (!fresh) return;
     fresh.minutes = { status: 'done', model: config.minutesModel, finishedAt: Date.now() };
     saveMeta(fresh);
   } catch (err) {
+    if (isGuildWorkPausedError(err)) {
+      const fresh = readMeta(recordingId);
+      if (fresh) {
+        fresh.minutes = {
+          status: 'pending',
+          model: config.minutesModel,
+          error: undefined,
+          finishedAt: undefined,
+        };
+        saveMeta(fresh);
+      }
+      return;
+    }
     console.error(`Ata de ${recordingId} falhou:`, (err as Error).message);
     const fresh = readMeta(recordingId);
     if (fresh) {
@@ -437,14 +616,17 @@ async function transcribeTrack(
   participant: Participant,
   durationSec: number,
   work: string,
+  guildWork: GuildWorkContext,
 ): Promise<TranscriptSegment[]> {
   // VAD primeiro: as faixas são preenchidas com silêncio digital (sincronia), e
   // silêncio na API = alucinação ("Legenda Adriana Zanotto") + cota desperdiçada
   // (o rate limit da Groq é em SEGUNDOS DE ÁUDIO por hora). Só a fala viaja.
+  assertGuildWorkActive(guildWork);
   const intervals = await detectSpeechIntervals(masterFlac, durationSec);
+  assertGuildWorkActive(guildWork);
   if (intervals === undefined) {
     // detecção falhou — caminho antigo (chunks de 20 min com filtro de silêncio grosseiro)
-    return transcribeTrackLegacy(masterFlac, participant, durationSec, work);
+    return transcribeTrackLegacy(masterFlac, participant, durationSec, work, guildWork);
   }
   if (intervals.length === 0) return []; // ninguém falou nesta faixa — nada a enviar
 
@@ -452,9 +634,11 @@ async function transcribeTrack(
   const batches = batchIntervals(intervals, chunkSeconds());
 
   for (let i = 0; i < batches.length; i++) {
+    assertGuildWorkActive(guildWork);
     const batch = batches[i];
     const batchFile = path.join(work, `batch-${participant.index}-${i}.mp3`);
     await extractBatch(masterFlac, batch, batchFile);
+    assertGuildWorkActive(guildWork);
 
     // MP3 compactado ínfimo = só header/ruído residual — não gasta uma chamada
     if (fs.statSync(batchFile).size < 1024) {
@@ -464,7 +648,9 @@ async function transcribeTrack(
 
     let raw: RawSegment[];
     try {
-      raw = await transcribeChunk(batchFile, work, batch.durationSec);
+      assertGuildWorkActive(guildWork);
+      raw = await transcribeChunk(batchFile, work, batch.durationSec, guildWork);
+      assertGuildWorkActive(guildWork);
     } catch (err) {
       fs.rmSync(batchFile, { force: true });
       // conteúdo bloqueado/incodificável de UM lote vira lacuna, não mata a faixa
@@ -511,12 +697,14 @@ async function transcribeTrackLegacy(
   participant: Participant,
   durationSec: number,
   work: string,
+  guildWork: GuildWorkContext,
 ): Promise<TranscriptSegment[]> {
   const out: TranscriptSegment[] = [];
   const CHUNK = chunkSeconds();
   const chunks = Math.max(1, Math.ceil(durationSec / CHUNK));
 
   for (let i = 0; i < chunks; i++) {
+    assertGuildWorkActive(guildWork);
     const offset = i * CHUNK;
     const thisChunkSec = Math.min(CHUNK, Math.max(1, durationSec - offset));
     const chunkFile = path.join(work, `chunk-${participant.index}-${i}.mp3`);
@@ -537,6 +725,7 @@ async function transcribeTrackLegacy(
       '-y',
       chunkFile,
     ]);
+    assertGuildWorkActive(guildWork);
 
     // Guarda dupla contra chunk-fantasma: -ss perto/além do fim gera um MP3 só de
     // header (~260 bytes, mp3 de 48kbps tem >5KB por segundo real). E chunks que
@@ -547,10 +736,12 @@ async function transcribeTrackLegacy(
       fs.rmSync(chunkFile, { force: true });
       continue;
     }
+    assertGuildWorkActive(guildWork);
 
     let raw: RawSegment[];
     try {
-      raw = await transcribeChunk(chunkFile, work, thisChunkSec);
+      raw = await transcribeChunk(chunkFile, work, thisChunkSec, guildWork);
+      assertGuildWorkActive(guildWork);
     } catch (err) {
       fs.rmSync(chunkFile, { force: true });
       // conteúdo bloqueado/incodificável de UM chunk vira lacuna, não mata a faixa
@@ -619,20 +810,29 @@ async function chunkHasAudio(file: string, size: number): Promise<boolean> {
   }
 }
 
-function transcribeChunk(file: string, work: string, chunkSec: number): Promise<RawSegment[]> {
+function transcribeChunk(
+  file: string,
+  work: string,
+  chunkSec: number,
+  guildWork: GuildWorkContext,
+): Promise<RawSegment[]> {
+  assertGuildWorkActive(guildWork);
   switch (config.transcribeProvider) {
     case 'assemblyai':
       // fallback: se a AssemblyAI falhar por questão SISTÊMICA (crédito no fim,
       // 5xx, timeout) e houver GROQ_API_KEY, o mesmo chunk tenta no Whisper da
       // Groq — a transcrição não pode morrer por causa de um provedor fora do ar
-      return assemblyaiTranscribe(file, chunkSec).catch((err) => {
-        if (err instanceof ChunkContentError || !config.groqApiKey) throw err;
+      return assemblyaiTranscribe(file, chunkSec, guildWork).catch((err) => {
+        assertGuildWorkActive(guildWork);
+        if (err instanceof ChunkContentError || config.transcribeFallbackProvider !== 'groq' || !config.groqApiKey)
+          throw err;
         console.warn(`AssemblyAI falhou (${(err as Error).message}) — tentando o mesmo chunk na Groq.`);
         return whisperApi(
           'https://api.groq.com/openai/v1/audio/transcriptions',
           config.groqApiKey,
           'whisper-large-v3',
           file,
+          guildWork,
         );
       });
     case 'openai':
@@ -641,6 +841,7 @@ function transcribeChunk(file: string, work: string, chunkSec: number): Promise<
         config.openaiApiKey,
         config.transcribeModel || 'whisper-1',
         file,
+        guildWork,
       );
     case 'groq':
       return whisperApi(
@@ -649,11 +850,12 @@ function transcribeChunk(file: string, work: string, chunkSec: number): Promise<
         // large-v3 completo: erra bem menos em pt-BR que o -turbo (mesma cota free)
         config.transcribeModel || 'whisper-large-v3',
         file,
+        guildWork,
       );
     case 'gemini':
-      return geminiTranscribe(file);
+      return geminiTranscribe(file, guildWork);
     case 'command':
-      return commandTranscribe(file, work, chunkSec);
+      return commandTranscribe(file, work, chunkSec, guildWork);
     default:
       return Promise.resolve([]);
   }
@@ -675,10 +877,12 @@ let aaiKeyterms: string[] = [];
 /** Monta os keyterms da gravação: participantes (falando ou não) + servidor/canal + vocabulário fixo (env). */
 export function buildAaiKeyterms(meta: RecordingMeta): string[] {
   const terms = new Set<string>();
-  for (const p of meta.participants) terms.add(p.name);
-  for (const p of meta.presence ?? []) terms.add(p.name);
-  terms.add(meta.guildName);
-  terms.add(meta.voiceChannelName);
+  if (config.transcribeSendMeetingContext) {
+    for (const p of meta.participants) terms.add(p.name);
+    for (const p of meta.presence ?? []) terms.add(p.name);
+    terms.add(meta.guildName);
+    terms.add(meta.voiceChannelName);
+  }
   for (const t of config.transcribeKeyterms) terms.add(t);
   // limite da API: 1000 termos / 6 palavras por termo — teto defensivo bem menor
   // (a tokenização interna come capacidade; nomes + jargão cabem folgados em 200)
@@ -699,15 +903,26 @@ export function setAaiRecordingContext(meta: RecordingMeta | undefined): void {
  * Language: usa os 2 primeiros caracteres de TRANSCRIBE_LANGUAGE ('pt' cobre
  * pt-BR — é o grosso do treino deles em português).
  */
-async function assemblyaiTranscribe(file: string, chunkSec: number): Promise<RawSegment[]> {
+async function assemblyaiTranscribe(
+  file: string,
+  chunkSec: number,
+  guildWork: GuildWorkContext,
+): Promise<RawSegment[]> {
+  assertGuildWorkActive(guildWork);
   const auth = { Authorization: config.assemblyaiApiKey };
 
   const up = await fetchWithRetry(
     `${AAI_BASE}/upload`,
-    { method: 'POST', headers: { ...auth, 'Content-Type': 'application/octet-stream' }, body: fs.readFileSync(file) },
+    {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/octet-stream' },
+      body: fs.readFileSync(file),
+      signal: guildWork.signal,
+    },
     { attempts: 3 },
   );
   const { upload_url } = (await up.json()) as { upload_url?: string };
+  assertGuildWorkActive(guildWork);
   if (!upload_url) throw new Error('AssemblyAI upload não devolveu upload_url');
 
   const models = config.transcribeModel ? [config.transcribeModel] : ['universal-3-5-pro', 'universal-2'];
@@ -731,53 +946,74 @@ async function assemblyaiTranscribe(file: string, chunkSec: number): Promise<Raw
   const createJob = async (body: Record<string, unknown>) => {
     const create = await fetchWithRetry(
       `${AAI_BASE}/transcript`,
-      { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+      {
+        method: 'POST',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: guildWork.signal,
+      },
       { attempts: 3 },
     );
-    return (await create.json()) as { id?: string; status?: string; error?: string };
+    const result = (await create.json()) as { id?: string; status?: string; error?: string };
+    assertGuildWorkActive(guildWork);
+    return result;
   };
 
   let created: { id?: string; status?: string; error?: string };
   try {
     created = await createJob({ ...baseBody, ...extras });
   } catch (err) {
-    // 400 citando prompt/keyterms (ex.: roteou pra modelo sem suporte): degrada
-    // graciosamente pro job básico em vez de perder o chunk
-    const msg = (err as Error).message ?? '';
-    if (Object.keys(extras).length > 0 && /HTTP 4\d\d/.test(msg) && /prompt|keyterm/i.test(msg)) {
-      console.warn(`AssemblyAI recusou prompt/keyterms (${msg.slice(0, 120)}) — reenviando sem eles.`);
+    // 4xx citando prompt/keyterms: degrada pro job básico sem registrar o corpo
+    // remoto, que pode ecoar nomes ou trechos privados do contexto.
+    if (
+      Object.keys(extras).length > 0 &&
+      err instanceof UpstreamHttpError &&
+      err.status >= 400 &&
+      err.status < 500 &&
+      err.category === 'context-fields-rejected'
+    ) {
+      console.warn('AssemblyAI recusou prompt/keyterms — reenviando sem eles.');
       created = await createJob(baseBody);
     } else {
       throw err;
     }
   }
-  if (!created.id) throw new Error(`AssemblyAI não criou o job: ${created.error ?? 'sem id'}`);
+  if (!created.id) throw new Error('AssemblyAI não criou o job (sem id)');
 
   // poll proporcional à duração do áudio (piso 3 min, teto 30 min — os lotes têm
   // no máx. 20 min de fala, e um poll sem teto seguraria a fila serial por horas)
   const deadline = Date.now() + Math.min(30 * 60_000, Math.max(3 * 60_000, chunkSec * 1000));
   for (;;) {
-    await new Promise((r) => setTimeout(r, 3000));
-    const st = await fetchWithRetry(`${AAI_BASE}/transcript/${created.id}`, { headers: auth }, { attempts: 3 });
+    await abortableDelay(3000, guildWork.signal);
+    assertGuildWorkActive(guildWork);
+    const st = await fetchWithRetry(
+      `${AAI_BASE}/transcript/${created.id}`,
+      { headers: auth, signal: guildWork.signal },
+      { attempts: 3 },
+    );
     const job = (await st.json()) as { status?: string; error?: string };
+    assertGuildWorkActive(guildWork);
     if (job.status === 'completed') break;
     if (job.status === 'error') {
       // erro de CONTEÚDO (áudio ilegível) vira lacuna; resto é sistêmico → fallback/retry.
       // Cuidado pra NÃO classificar transiente como conteúdo (ex.: "unable to
       // download audio" contém "audio" mas é transiente) — por isso termos estreitos.
-      const msg = job.error ?? 'erro desconhecido';
-      if (/corrupt|unsupported|decode|too short|duration/i.test(msg)) throw new ChunkContentError(`AssemblyAI: ${msg}`);
-      throw new Error(`AssemblyAI: ${msg}`);
+      const msg = job.error ?? '';
+      if (/corrupt|unsupported|decode|too short|duration/i.test(msg)) {
+        throw new ChunkContentError('AssemblyAI recusou ou não decodificou o áudio');
+      }
+      throw new Error('AssemblyAI encerrou o job com erro');
     }
     if (Date.now() > deadline) throw new Error('AssemblyAI: transcrição não completou a tempo (poll timeout)');
   }
 
   const sent = await fetchWithRetry(
     `${AAI_BASE}/transcript/${created.id}/sentences`,
-    { headers: auth },
+    { headers: auth, signal: guildWork.signal },
     { attempts: 3 },
   );
   const data = (await sent.json()) as { sentences?: { text?: string; start?: number; end?: number }[] };
+  assertGuildWorkActive(guildWork);
   return (data.sentences ?? [])
     .filter((s) => typeof s.text === 'string' && s.text.trim())
     .map((s) => ({
@@ -789,7 +1025,14 @@ async function assemblyaiTranscribe(file: string, chunkSec: number): Promise<Raw
 
 // ---------- OpenAI / Groq (API compatível) ----------
 
-async function whisperApi(url: string, apiKey: string, model: string, file: string): Promise<RawSegment[]> {
+async function whisperApi(
+  url: string,
+  apiKey: string,
+  model: string,
+  file: string,
+  guildWork: GuildWorkContext,
+): Promise<RawSegment[]> {
+  assertGuildWorkActive(guildWork);
   const form = new FormData();
   form.append('file', new Blob([fs.readFileSync(file)], { type: 'audio/mpeg' }), path.basename(file));
   form.append('model', model);
@@ -805,12 +1048,14 @@ async function whisperApi(url: string, apiKey: string, model: string, file: stri
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}` },
       body: form,
+      signal: guildWork.signal,
     },
     // 429 com "try again in 8m": espera de verdade (a fila é serial e roda em
     // segundo plano) — melhor esperar que perder a faixa e gastar outra rodada
     { attempts: 4, maxWaitMs: ASR_MAX_WAIT_MS },
   );
   const data = (await resp.json()) as { segments?: { start: number; end: number; text: string }[]; text?: string };
+  assertGuildWorkActive(guildWork);
   if (data.segments) return data.segments.map((s) => ({ start: s.start, end: s.end, text: s.text }));
   // modelos sem timestamps (ex.: gpt-4o-transcribe) devolvem só o texto
   return data.text ? [{ start: 0, end: 0, text: data.text }] : [];
@@ -818,7 +1063,8 @@ async function whisperApi(url: string, apiKey: string, model: string, file: stri
 
 // ---------- Gemini ----------
 
-async function geminiTranscribe(file: string): Promise<RawSegment[]> {
+async function geminiTranscribe(file: string, guildWork: GuildWorkContext): Promise<RawSegment[]> {
+  assertGuildWorkActive(guildWork);
   const model = config.transcribeModel || 'gemini-3.5-flash';
   const audio = fs.readFileSync(file).toString('base64');
   const prompt =
@@ -834,11 +1080,13 @@ async function geminiTranscribe(file: string): Promise<RawSegment[]> {
         contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: 'audio/mpeg', data: audio } }] }],
         generationConfig: { temperature: 0, maxOutputTokens: 8192, responseMimeType: 'application/json' },
       }),
+      signal: guildWork.signal,
     },
   );
   const data = (await resp.json()) as {
     candidates?: { finishReason?: string; content?: { parts?: { text?: string }[] } }[];
   };
+  assertGuildWorkActive(guildWork);
   const candidate = data.candidates?.[0];
   // resposta interrompida (limite de saída, filtro de segurança/recitação) NÃO
   // pode virar transcrição "pronta"; é falha de conteúdo → lacuna neste chunk
@@ -866,52 +1114,74 @@ async function geminiTranscribe(file: string): Promise<RawSegment[]> {
 
 // ---------- Comando local (faster-whisper, whisper.cpp, Parakeet...) ----------
 
-async function commandTranscribe(file: string, work: string, chunkSec: number): Promise<RawSegment[]> {
+export async function commandTranscribe(
+  file: string,
+  work: string,
+  chunkSec: number,
+  guildWork: GuildWorkContext,
+): Promise<RawSegment[]> {
+  assertGuildWorkActive(guildWork);
   const outFile = path.join(work, `out-${crypto.randomBytes(3).toString('hex')}.json`);
-  // caminhos entram single-quoted no sh -c (diretórios com espaço não quebram o comando)
-  const shq = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
-  const cmd = config.transcribeCommand.replaceAll('{input}', shq(file)).replaceAll('{output}', shq(outFile));
+  const command = parseTranscribeCommandTemplate(config.transcribeCommand);
+  const args = command.args.map((arg) => (arg === '{input}' ? file : arg === '{output}' ? outFile : arg));
   // watchdog proporcional: um motor a 0,2× tempo real ainda passa; travamento real não
   const timeoutMs = Math.max(COMMAND_TIMEOUT_MS, chunkSec * 1000 * config.transcribeTimeoutFactor);
 
   await new Promise<void>((resolve, reject) => {
-    // detached: o kill de timeout derruba o grupo inteiro (sh + filhos), não só o sh
-    const proc = spawn('sh', ['-c', cmd], { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+    const env = buildTranscribeCommandEnvironment(process.env, config.transcribeCommandEnvAllowlist);
+    // Sem shell: nomes de arquivo e configuração nunca são reinterpretados como
+    // operadores. detached mantém o watchdog capaz de derrubar o grupo inteiro.
+    const proc = spawn(command.executable, args, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      detached: true,
+      env,
+      shell: false,
+    });
     if (proc.pid) commandPids.add(proc.pid);
-    let stderr = '';
-    proc.stderr.on('data', (d) => (stderr = (stderr + d).slice(-4096)));
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      guildWork.signal.removeEventListener('abort', onAbort);
+      if (proc.pid) commandPids.delete(proc.pid);
+      if (error) reject(error);
+      else resolve();
+    };
+    // Consome sem registrar: ferramentas locais podem ecoar caminhos, prompts ou
+    // trechos de áudio no stderr, e os logs Docker não são arquivo de reunião.
+    proc.stderr.resume();
     const timeout = setTimeout(() => {
       killGroup(proc);
-      reject(
+      finish(
         new Error(
           `TRANSCRIBE_COMMAND excedeu o tempo limite (~${Math.round(timeoutMs / 60000)} min) e foi morto — a fila segue`,
         ),
       );
     }, timeoutMs);
-    proc.on('error', (err) => {
-      clearTimeout(timeout);
-      if (proc.pid) commandPids.delete(proc.pid);
-      reject(err);
-    });
+    const onAbort = () => {
+      killGroup(proc);
+      finish(guildWork.signal.reason instanceof Error ? guildWork.signal.reason : new Error('processamento pausado'));
+    };
+    guildWork.signal.addEventListener('abort', onAbort, { once: true });
+    if (guildWork.signal.aborted) onAbort();
+    proc.on('error', (err) => finish(err));
     proc.on('close', (code) => {
-      clearTimeout(timeout);
-      if (proc.pid) commandPids.delete(proc.pid);
-      if (code === 0) resolve();
-      else reject(new Error(`TRANSCRIBE_COMMAND saiu com código ${code}: ${stderr.slice(-400)}`));
+      if (code === 0) finish();
+      else finish(new Error(`TRANSCRIBE_COMMAND saiu com código ${code}`));
     });
   });
 
   try {
+    assertGuildWorkActive(guildWork);
     const parsed = JSON.parse(fs.readFileSync(outFile, 'utf8')) as { start?: number; end?: number; text?: string }[];
     if (!Array.isArray(parsed)) throw new Error('não é um array');
     return parsed
       .filter((s) => typeof s.text === 'string')
       .map((s) => ({ start: Number(s.start) || 0, end: Number(s.end) || 0, text: s.text as string }));
   } catch (err) {
-    throw new Error(
-      `TRANSCRIBE_COMMAND deve escrever em {output} um JSON [{"start":s,"end":s,"text":"..."}] — ${(err as Error).message}`,
-      { cause: err },
-    );
+    if (isGuildWorkPausedError(err)) throw err;
+    throw new Error('TRANSCRIBE_COMMAND deve escrever em {output} um array JSON válido de segmentos', { cause: err });
   } finally {
     fs.rmSync(outFile, { force: true });
   }

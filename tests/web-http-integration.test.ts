@@ -23,15 +23,16 @@ const APP_ORIGIN = 'http://localhost:8080';
 const TEST_USER_ID = 'http-integration-user';
 const TEST_GUILD_ID = 'http-integration-guild';
 
-function signedSession(): { cookie: string; sid: string } {
+function signedSession(scope: 'full' | 'revoke-only' = 'full'): { cookie: string; sid: string } {
   const exp = Date.now() + 60_000;
-  const sid = createWebSession(TEST_USER_ID, exp);
+  const sid = createWebSession(TEST_USER_ID, exp, scope);
   const body = Buffer.from(
     JSON.stringify({
       typ: 'session',
       id: TEST_USER_ID,
       name: 'Pessoa de teste',
       avatar: null,
+      scope,
       exp,
       jti: sid,
     }),
@@ -160,6 +161,49 @@ describe('app privado por HTTP real', () => {
     expect(contextual.status).toBe(403);
     expect(contextual.body).toContain('href="/app/rec/origin-context"');
     expect(contextual.body).toContain('Voltar à gravação');
+    revokeWebSession(session.sid);
+  });
+
+  it('mostra a fronteira privada sem iniciar OAuth e não publica detalhes de health', async () => {
+    const boundary = await request('GET', '/app');
+    expect(boundary.status).toBe(200);
+    expect(boundary.body).toContain('Instância privada');
+    expect(boundary.body).toContain('/auth/login?next=%2Fapp');
+    expect(boundary.body).not.toContain('discord.com/oauth2/authorize');
+    expect(boundary.headers['x-robots-tag']).toBe('noindex, nofollow, noarchive');
+
+    const details = await request('GET', '/health/details');
+    expect(details.status).toBe(404);
+    expect(details.body).not.toContain('freeMB');
+    expect(details.body).not.toContain('activeRecordings');
+
+    const badHost = await request('GET', '/app', { host: 'evil.example' });
+    expect(badHost.status).toBe(421);
+    expect(badHost.headers['x-content-type-options']).toBe('nosniff');
+    expect(badHost.headers['content-security-policy']).toContain("default-src 'self'");
+  });
+
+  it('sanitiza erros do parser em bare-node sem devolver stack ou caminho local', async () => {
+    const malformed = await request('POST', '/api/mcp/exchange', { 'content-type': 'application/json' }, '{"code":');
+    expect(malformed.status).toBe(400);
+    expect(malformed.headers['content-type']).toContain('application/json');
+    expect(JSON.parse(malformed.body)).toEqual({ error: 'bad_request' });
+    expect(malformed.body).not.toContain('node_modules');
+    expect(malformed.body).not.toContain('/Users/');
+    expect(malformed.body).not.toContain('at ');
+  });
+
+  it('limita sessão de ex-membro a gestão e revogação das próprias conexões', async () => {
+    const session = signedSession('revoke-only');
+    const connections = await request('GET', '/app/conectar-ia', { cookie: session.cookie });
+    expect(connections.status).toBe(200);
+    expect(connections.body).toContain('Acesso somente para revogação');
+    expect(connections.body).not.toContain('action="/app/conectar-ia/gerar"');
+    expect(connections.body).not.toContain('href="/app" aria-current');
+
+    const recording = await request('GET', '/app/rec/qualquer', { cookie: session.cookie });
+    expect(recording.status).toBe(403);
+    expect(recording.body).not.toContain('Gravação não encontrada');
     revokeWebSession(session.sid);
   });
 

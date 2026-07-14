@@ -9,7 +9,7 @@ export function ffmpegPath(): string {
 const FFMPEG_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
- * Roda o ffmpeg até o fim; rejeita com o stderr em caso de erro. Watchdog de 30 min.
+ * Roda o ffmpeg até o fim; rejeita sem copiar stderr para o erro/log. Watchdog de 30 min.
  * `fullStderr`: capturar TUDO (até 8 MB) — obrigatório para quem PARSEIA o stderr
  * (ex.: silencedetect emite uma linha por silêncio; numa faixa longa as primeiras
  * linhas estouram a janela de 8 KB e o VAD "enxergaria" fala onde há silêncio).
@@ -41,7 +41,7 @@ export function runFfmpeg(
     proc.on('close', (code) => {
       clearTimeout(timeout);
       if (code === 0) resolve(stderr);
-      else reject(new Error(`ffmpeg saiu com código ${code}: ${stderr.slice(-800)}`));
+      else reject(new Error(`ffmpeg saiu com código ${code}`));
     });
   });
 }

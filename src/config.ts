@@ -3,6 +3,7 @@ import 'dotenv/config';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createGuildPolicy } from './guildPolicy';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -46,6 +47,19 @@ function numberEnv(name: string, fallback: number, rule: NumberRule): number {
   }
 }
 
+function choiceEnv<const T extends readonly string[]>(name: string, fallback: T[number], choices: T): T[number] {
+  const value = (process.env[name] || fallback).trim().toLowerCase();
+  if (!choices.includes(value)) {
+    console.error(`Configuração inválida: ${name} aceita somente ${choices.join(' | ')} (recebido: ${value})`);
+    process.exit(1);
+  }
+  return value as T[number];
+}
+
+function booleanEnv(name: string, fallback = false): boolean {
+  return choiceEnv(name, fallback ? 'true' : 'false', ['true', 'false'] as const) === 'true';
+}
+
 /** URLs públicas são origens, não prefixos: todas as rotas partem de /. */
 export function normalizeOrigin(name: string, raw: string): string {
   let url: URL;
@@ -83,11 +97,37 @@ type OriginEnvironment = Partial<
 export function resolveConfiguredOrigins(source: OriginEnvironment, localUrl: string): ConfiguredOrigins {
   const configured = (name: keyof typeof source, fallback: string): string =>
     normalizeOrigin(name, source[name]?.trim() || fallback);
-  const appUrl = source.APP_URL?.trim() ? configured('APP_URL', localUrl) : configured('BASE_URL', localUrl);
+  const rawApp = source.APP_URL?.trim();
+  const rawBase = source.BASE_URL?.trim();
+  if (rawApp && rawBase) {
+    const app = normalizeOrigin('APP_URL', rawApp);
+    const base = normalizeOrigin('BASE_URL', rawBase);
+    if (app !== base) throw new Error('APP_URL e BASE_URL apontam para origens diferentes');
+  }
+  const appUrl = rawApp ? configured('APP_URL', localUrl) : configured('BASE_URL', localUrl);
   const publicUrl = configured('PUBLIC_URL', appUrl);
   const docsUrl = configured('DOCS_URL', publicUrl);
   const mcpUrl = configured('MCP_URL', appUrl);
   return { appUrl, publicUrl, docsUrl, mcpUrl };
+}
+
+export function normalizeSourceUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`SOURCE_URL precisa ser uma URL absoluta http(s) (recebido: ${JSON.stringify(raw)})`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:')
+    throw new Error('SOURCE_URL aceita apenas http:// ou https://');
+  if (url.username || url.password || url.search || url.hash)
+    throw new Error('SOURCE_URL não pode conter credenciais, query ou hash');
+  return url.toString().replace(/\/$/, '');
+}
+
+function isLoopbackOrigin(origin: string): boolean {
+  const host = new URL(origin).hostname;
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
 }
 
 /** Segredos HMAC fracos não podem parecer configuração válida. */
@@ -96,6 +136,18 @@ export function validateSecret(name: string, value: string, minBytes = 32): stri
     throw new Error(`${name} precisa ter ao menos ${minBytes} bytes (gere com: openssl rand -hex 32)`);
   }
   return value;
+}
+
+/** Um segredo entregue a outra integração nunca pode reutilizar credenciais internas. */
+export function validateDedicatedSecret(
+  name: string,
+  value: string,
+  protectedSecrets: ReadonlyArray<readonly [name: string, value: string]>,
+): string {
+  const valid = validateSecret(name, value);
+  const conflict = protectedSecrets.find(([, protectedValue]) => protectedValue && protectedValue === valid);
+  if (conflict) throw new Error(`${name} não pode ser igual a ${conflict[0]} (isolamento de segurança)`);
+  return valid;
 }
 
 const recordingsDir = path.resolve(process.env.RECORDINGS_DIR || './recordings');
@@ -167,9 +219,10 @@ function deriveSecret(secret: string, label: string): string {
 const mcpSecret = process.env.MCP_SECRET || '';
 
 // Provider da ata, normalizado UMA vez (o default do modelo depende dele).
-const minutesProvider = (process.env.MINUTES_PROVIDER || (process.env.OPENROUTER_API_KEY ? 'openrouter' : 'groq'))
-  .trim()
-  .toLowerCase();
+const minutesProvider = choiceEnv('MINUTES_PROVIDER', process.env.OPENROUTER_API_KEY ? 'openrouter' : 'groq', [
+  'openrouter',
+  'groq',
+] as const);
 
 // Retenção: RETENTION_DAYS=0 desliga a expiração (áudio E texto ficam até alguém
 // apagar manualmente). Áudio ilimitado FORÇA texto ilimitado — não faz sentido a
@@ -180,10 +233,75 @@ const textRetentionDaysRaw = numberEnv('TEXT_RETENTION_DAYS', 90, { min: 0 });
 const textRetentionUnlimited = audioRetentionUnlimited || textRetentionDaysRaw <= 0;
 
 const port = numberEnv('PORT', 8080, { min: 1, max: 65535, integer: true });
+const WEB_BIND_ADDRESSES = new Set(['127.0.0.1', '::1', 'localhost', '0.0.0.0', '::']);
+
+/**
+ * O listener bare-node fecha em loopback por padrão. Wildcards continuam
+ * disponíveis, mas exigem uma escolha explícita do operador (Compose/Render
+ * usam isso dentro do isolamento do container).
+ */
+export function normalizeWebBindAddress(raw: string | undefined): string {
+  const value = raw?.trim() || '127.0.0.1';
+  if (!WEB_BIND_ADDRESSES.has(value)) {
+    throw new Error(
+      `WEB_BIND_ADDRESS aceita somente 127.0.0.1, ::1, localhost, 0.0.0.0 ou :: (recebido: ${JSON.stringify(value)})`,
+    );
+  }
+  return value;
+}
+
+let webBindAddress: string;
+try {
+  webBindAddress = normalizeWebBindAddress(process.env.WEB_BIND_ADDRESS);
+} catch (err) {
+  console.error(`Configuração inválida: ${(err as Error).message}`);
+  process.exit(1);
+}
 const localUrl = `http://localhost:${port}`;
+if (process.env.NODE_ENV === 'production' && !process.env.APP_URL?.trim() && !process.env.BASE_URL?.trim()) {
+  console.error('Configuração inválida: APP_URL é obrigatória em produção');
+  process.exit(1);
+}
 // APP_URL é a origem canônica do produto privado (OAuth, gravações e downloads).
 // BASE_URL continua aceito como alias retrocompatível para instalações existentes.
-const { appUrl, publicUrl, docsUrl, mcpUrl } = resolveConfiguredOrigins(process.env, localUrl);
+let configuredOrigins: ConfiguredOrigins;
+try {
+  configuredOrigins = resolveConfiguredOrigins(process.env, localUrl);
+} catch (err) {
+  console.error(`Configuração inválida: ${(err as Error).message}`);
+  process.exit(1);
+}
+const { appUrl, publicUrl, docsUrl, mcpUrl } = configuredOrigins;
+for (const [name, origin] of Object.entries({
+  APP_URL: appUrl,
+  PUBLIC_URL: publicUrl,
+  DOCS_URL: docsUrl,
+  MCP_URL: mcpUrl,
+})) {
+  if (origin.startsWith('http:') && !isLoopbackOrigin(origin)) {
+    console.error(`Configuração inválida: ${name} precisa usar HTTPS fora de localhost`);
+    process.exit(1);
+  }
+}
+if (process.env.BASE_URL?.trim()) {
+  console.warn('⚠️  BASE_URL é legado. Migre para APP_URL; quando ambos existem, precisam ser idênticos.');
+}
+
+let guildPolicy: ReturnType<typeof createGuildPolicy>;
+try {
+  guildPolicy = createGuildPolicy(process.env);
+} catch (err) {
+  console.error(`Configuração inválida: ${(err as Error).message}`);
+  process.exit(1);
+}
+
+let sourceUrl: string;
+try {
+  sourceUrl = normalizeSourceUrl(process.env.SOURCE_URL || 'https://github.com/resolvicomai/kassinao');
+} catch (err) {
+  console.error(`Configuração inválida: ${(err as Error).message}`);
+  process.exit(1);
+}
 // Vários módulos e integrações self-hosted ainda leem config.baseUrl. Seu
 // significado permanece sendo a origem do app, agora também exposta como appUrl.
 const baseUrl = appUrl;
@@ -206,6 +324,63 @@ const defaultTranscribePrompt = transcribeLanguage.startsWith('pt')
   ? 'Transcrição de uma reunião de trabalho informal em português do Brasil.'
   : '';
 
+const transcribeProvider = choiceEnv('TRANSCRIBE_PROVIDER', 'none', [
+  'none',
+  'assemblyai',
+  'openai',
+  'groq',
+  'gemini',
+  'command',
+] as const);
+const transcribeFallbackProvider = choiceEnv('TRANSCRIBE_FALLBACK_PROVIDER', 'none', ['none', 'groq'] as const);
+const transcribeCommandEnvAllowlist = (process.env.TRANSCRIBE_COMMAND_ENV_ALLOWLIST || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+for (const name of transcribeCommandEnvAllowlist) {
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) {
+    console.error(`Configuração inválida: TRANSCRIBE_COMMAND_ENV_ALLOWLIST contém nome inválido: ${name}`);
+    process.exit(1);
+  }
+}
+
+let openrouterSiteUrl = '';
+if (process.env.OPENROUTER_SITE_URL?.trim()) {
+  try {
+    openrouterSiteUrl = normalizeOrigin('OPENROUTER_SITE_URL', process.env.OPENROUTER_SITE_URL);
+  } catch (err) {
+    console.error(`Configuração inválida: ${(err as Error).message}`);
+    process.exit(1);
+  }
+}
+
+function normalizeWebhookUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('MINUTES_WEBHOOK_URL precisa ser uma URL absoluta');
+  }
+  if (url.username || url.password || url.hash || url.search)
+    throw new Error('MINUTES_WEBHOOK_URL não pode conter credenciais, query ou hash');
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopbackOrigin(url.origin))) {
+    throw new Error('MINUTES_WEBHOOK_URL precisa usar HTTPS fora de localhost');
+  }
+  return url.toString();
+}
+
+let minutesWebhookUrl = '';
+let minutesWebhookSecret = '';
+if (process.env.MINUTES_WEBHOOK_URL?.trim()) {
+  try {
+    minutesWebhookUrl = normalizeWebhookUrl(process.env.MINUTES_WEBHOOK_URL);
+    minutesWebhookSecret = validateSecret('MINUTES_WEBHOOK_SECRET', process.env.MINUTES_WEBHOOK_SECRET || '');
+  } catch (err) {
+    console.error(`Configuração inválida: ${(err as Error).message}`);
+    process.exit(1);
+  }
+}
+
 export const config = {
   token: required('DISCORD_TOKEN'),
   applicationId: required('APPLICATION_ID'),
@@ -213,7 +388,13 @@ export const config = {
   clientSecret: required('DISCORD_CLIENT_SECRET'),
   /** Se definido, registra os comandos só nesse servidor (atualização instantânea). */
   guildId: process.env.GUILD_ID || undefined,
+  /** Política de tenancy usada por Discord, web, MCP e recuperação. */
+  guildPolicy,
   port,
+  /** Interface do listener HTTP. Loopback por padrão; container opta por wildcard internamente. */
+  webBindAddress,
+  /** Quantidade exata de proxies confiáveis entre cliente e Express. 0 = nenhum. */
+  trustProxyHops: numberEnv('TRUST_PROXY_HOPS', 0, { min: 0, max: 10, integer: true }),
   /** Origem canônica do app privado, OAuth, gravações e downloads. Alias compatível de appUrl. */
   baseUrl,
   /** Origem canônica do app privado. APP_URL cai para BASE_URL e depois localhost. */
@@ -224,6 +405,8 @@ export const config = {
   docsUrl,
   /** Origem da API MCP. Cai para appUrl em instalações de origem única. */
   mcpUrl,
+  /** Repositório-fonte exibido por /sobre e pelas superfícies públicas. Não recebe dados. */
+  sourceUrl,
   /** true quando o repo do GitHub está público — libera os links "GitHub"/access.ts e a afirmação "auditável" na landing. Padrão false pra nunca servir link 404. */
   repoPublic: process.env.REPO_PUBLIC === 'true',
   recordingsDir,
@@ -266,11 +449,16 @@ export const config = {
 
   /**
    * Motor de transcrição: 'none' | 'assemblyai' | 'openai' | 'groq' | 'gemini' | 'command'.
-   * 'assemblyai' (Universal, top-3 em pt-BR) cai sozinho pro Groq se falhar e houver GROQ_API_KEY.
+   * 'assemblyai' (Universal) só usa fallback Groq quando o operador define
+   * TRANSCRIBE_FALLBACK_PROVIDER=groq e fornece GROQ_API_KEY.
    * 'command' roda um executável local (faster-whisper, whisper.cpp, Parakeet...)
    * definido em TRANSCRIBE_COMMAND com os placeholders {input} e {output}.
    */
-  transcribeProvider: (process.env.TRANSCRIBE_PROVIDER || 'none').toLowerCase(),
+  transcribeProvider,
+  /** Fallback externo precisa ser autorizado explicitamente; uma chave isolada não o liga. */
+  transcribeFallbackProvider,
+  /** Autoriza enviar nomes de participantes/servidor/canal ao provider ASR. */
+  transcribeSendMeetingContext: booleanEnv('TRANSCRIBE_SEND_MEETING_CONTEXT', false),
   transcribeModel: process.env.TRANSCRIBE_MODEL || '',
   transcribeLanguage,
   /** Prompt de contexto pro ASR (vocabulário/estilo) — reduz alucinação e melhora jargão. Whisper e Universal-3.5-Pro usam. */
@@ -285,6 +473,8 @@ export const config = {
     .map((s) => s.trim())
     .filter(Boolean),
   transcribeCommand: process.env.TRANSCRIBE_COMMAND || '',
+  /** Variáveis adicionais que o operador decidiu entregar ao comando local. */
+  transcribeCommandEnvAllowlist,
   /** Timeout do provider 'command' = max(10min, duração do chunk × este fator). */
   transcribeTimeoutFactor: numberEnv('TRANSCRIBE_TIMEOUT_FACTOR', 5, { min: Number.EPSILON }),
   openaiApiKey: process.env.OPENAI_API_KEY || '',
@@ -292,16 +482,18 @@ export const config = {
   geminiApiKey: process.env.GEMINI_API_KEY || '',
   assemblyaiApiKey: process.env.ASSEMBLYAI_API_KEY || '',
   openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
+  /** Referer opcional enviado ao OpenRouter. Vazio por padrão em self-host. */
+  openrouterSiteUrl,
 
   /**
    * Ata com IA (resumo + decisões + tarefas) gerada após a transcrição.
-   * 'auto' (padrão): liga sozinha quando há OPENROUTER_API_KEY ou GROQ_API_KEY.
-   * 'false' desliga. 'true' força.
+   * 'false' (padrão) desliga. 'true' liga deliberadamente. 'auto' existe apenas
+   * para compatibilidade com instalações antigas e liga quando encontra chave.
    * Provider: MINUTES_PROVIDER = openrouter | groq. Padrão: openrouter se houver
    * OPENROUTER_API_KEY (modelos melhores e sem o TPM apertado do free tier da
    * Groq, que estoura em call longa — HTTP 413), senão groq.
    */
-  minutesEnabled: (process.env.MINUTES_ENABLED || 'auto').toLowerCase(),
+  minutesEnabled: choiceEnv('MINUTES_ENABLED', 'false', ['true', 'false', 'auto'] as const),
   minutesProvider,
   minutesModel:
     process.env.MINUTES_MODEL || (minutesProvider === 'groq' ? 'llama-3.3-70b-versatile' : 'google/gemini-2.5-flash'),
@@ -312,7 +504,9 @@ export const config = {
    * senão viraria vetor de SSRF): recebe um POST JSON com a ata de cada reunião
    * ao ficar pronta. Útil para n8n/Zapier self-hosted → Notion/Jira/etc.
    */
-  minutesWebhookUrl: process.env.MINUTES_WEBHOOK_URL || '',
+  minutesWebhookUrl,
+  /** HMAC dedicado ao webhook; obrigatório quando a URL está configurada. */
+  minutesWebhookSecret,
 
   // ---------- MCP (conector para assistentes de IA) — opt-in via MCP_SECRET ----------
   /** Liga a API /api/* e o comando /mcp quando há MCP_SECRET. */
@@ -347,13 +541,6 @@ if (config.minFreeMbAbort > config.minFreeMbStart) {
   process.exit(1);
 }
 
-const baseHost = new URL(config.appUrl).hostname;
-if (config.appUrl.startsWith('http:') && !['localhost', '127.0.0.1', '::1'].includes(baseHost)) {
-  console.warn(
-    '⚠️  APP_URL/BASE_URL usa HTTP fora de localhost: cookies e OAuth ficam sem transporte seguro. Use HTTPS em produção.',
-  );
-}
-
 // Isolamento de blast-radius: o segredo do MCP não pode coincidir com o dos
 // cookies (senão um token de sessão web e um token de MCP se forjariam entre si,
 // exatamente a classe de bug do crítico histórico #1).
@@ -370,6 +557,25 @@ if (config.mcpEnabled) {
   }
   if (config.mcpAccessSecret === config.mcpRefreshSecret || !config.mcpAccessSecret || !config.mcpRefreshSecret) {
     console.error('Erro interno: derivação dos segredos MCP falhou.');
+    process.exit(1);
+  }
+}
+
+if (config.minutesWebhookUrl) {
+  try {
+    validateDedicatedSecret('MINUTES_WEBHOOK_SECRET', config.minutesWebhookSecret, [
+      ['COOKIE_SECRET', config.cookieSecret],
+      ['MCP_SECRET', config.mcpSecret],
+      ['DISCORD_TOKEN', config.token],
+      ['DISCORD_CLIENT_SECRET', config.clientSecret],
+      ['ASSEMBLYAI_API_KEY', config.assemblyaiApiKey],
+      ['OPENAI_API_KEY', config.openaiApiKey],
+      ['GROQ_API_KEY', config.groqApiKey],
+      ['GEMINI_API_KEY', config.geminiApiKey],
+      ['OPENROUTER_API_KEY', config.openrouterApiKey],
+    ]);
+  } catch (err) {
+    console.error(`Configuração inválida: ${(err as Error).message}`);
     process.exit(1);
   }
 }

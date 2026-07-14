@@ -516,8 +516,8 @@ const STRINGS: Strings = {
     en: '`/mcp new` is only for bot admins. For you, just open {url}/app/conectar-ia and sign in with Discord — self-serve, scoped to your own access. 👉',
   },
   'mcp.new': {
-    pt: '🔌 **Conectar assistente de IA** (código válido ~5 min, uso único).\n\n**Código:** `{code}`\n\nNo terminal:\n```\nnpx -y kassinao-mcp@1.0.5 exchange --stdin --url {mcpUrl}\n```\nCole o código quando o comando pedir. Ele salva o token fora da configuração e imprime o bloco pra colar no seu assistente de IA (qualquer um com MCP: Claude, Cursor…). Mais fácil ainda: abra {appUrl}/app/conectar-ia no navegador.',
-    en: '🔌 **Connect your AI assistant** (code valid ~5 min, single use).\n\n**Code:** `{code}`\n\nIn a terminal:\n```\nnpx -y kassinao-mcp@1.0.5 exchange --stdin --url {mcpUrl}\n```\nPaste the code when prompted. It stores the token outside the config and prints the block to paste into your AI assistant (anything MCP-capable: Claude, Cursor…). Even easier: open {appUrl}/app/conectar-ia in the browser.',
+    pt: '🔌 **Conectar assistente de IA** (código válido ~5 min, uso único).\n\n**Código:** `{code}`\n\nNo terminal:\n```\nnpx -y kassinao-mcp@1.0.6 exchange --stdin --url {mcpUrl}\n```\nCole o código quando o comando pedir. Ele salva o token fora da configuração e imprime o bloco pra colar no seu assistente de IA (qualquer um com MCP: Claude, Cursor…). Mais fácil ainda: abra {appUrl}/app/conectar-ia no navegador.',
+    en: '🔌 **Connect your AI assistant** (code valid ~5 min, single use).\n\n**Code:** `{code}`\n\nIn a terminal:\n```\nnpx -y kassinao-mcp@1.0.6 exchange --stdin --url {mcpUrl}\n```\nPaste the code when prompted. It stores the token outside the config and prints the block to paste into your AI assistant (anything MCP-capable: Claude, Cursor…). Even easier: open {appUrl}/app/conectar-ia in the browser.',
   },
   'mcp.revoked': {
     pt: '🔒 Pronto — revoguei {n} conector(es) de IA seu(s). Os tokens deixaram de funcionar na hora.',

@@ -43,6 +43,7 @@ import { safeSlice, shortError } from './util';
 import { startCleanupJob } from './cleanup';
 import { freeMB } from './disk';
 import { client } from './discord/client';
+import { GuildRuntimeBoundary } from './discord/guildRuntime';
 import { observeClientReadiness } from './discord/ready';
 import {
   DISCORD_SURFACE_POLICY_VERSION,
@@ -52,6 +53,7 @@ import {
 } from './discordSurfaceMigration';
 import { createDiscordSurfaceClient } from './discordSurfaceMigrationDiscord';
 import { alertOwners, startMonitor } from './monitor';
+import { enqueueMinutesWebhook, pauseMinutesWebhooksForGuild, resumeMinutesWebhooksForGuild } from './minutesWebhook';
 import { Locale, localeOf, t } from './i18n';
 import { autoRecordStore, isArmed, setArmed } from './recorder/autorecord';
 import { sessionManager } from './recorder/manager';
@@ -71,6 +73,14 @@ import {
 } from './recorder/lifecycle';
 import { cook } from './processing/cook';
 import {
+  assertGuildWorkActive,
+  createGuildWorkContext,
+  isGuildWorkPausedError,
+  pauseGuildProcessing,
+  resumeGuildProcessing,
+  runWithGuildWorkContext,
+} from './processing/http';
+import {
   formatDuration,
   formatOffset,
   MARK_BUTTON_ID,
@@ -86,6 +96,7 @@ import {
   enqueueTranscription,
   killPendingTranscriptions,
   MAX_TRANSCRIPTION_ATTEMPTS,
+  setProcessingGuildGuard,
   transcriptionEnabled,
   validateTranscriptionConfig,
 } from './processing/transcribe';
@@ -116,7 +127,7 @@ import {
   saveMeta,
   transcriptReady,
 } from './store';
-import { checkAccessForMcp, recordingIdentityGrant } from './web/access';
+import { checkAccessForMcp, recordingIdentityGrant, withFreshMembershipBudget } from './web/access';
 import { createExchangeCode, revokeUser } from './web/mcpTokens';
 import { resolveRange } from './web/range';
 import { startWebServer } from './web/server';
@@ -128,11 +139,14 @@ let recoveredRecordings: RecordingMeta[] = [];
 
 // Código-fonte oficial. Exibido no /sobre para creditar a autoria e cumprir a
 // obrigação da AGPL §13 (oferecer o fonte a quem interage com o bot pela rede).
-const SOURCE_URL = 'https://github.com/resolvicomai/kassinao';
+const SOURCE_URL = config.sourceUrl;
 
 // Instalado antes do login: reconnects fecham as superfícies privadas em 503
 // até todos os shards voltarem, sem transformar cache transitório em 404.
 observeClientReadiness(client);
+
+const guildRuntime = new GuildRuntimeBoundary(config.guildPolicy, (guildId) => client.guilds.cache.has(guildId));
+setProcessingGuildGuard((guildId) => guildRuntime.isOperational(guildId));
 
 // ---------- definição dos comandos (pt-BR nativo + localização em inglês) ----------
 
@@ -364,24 +378,15 @@ function buildCommands() {
 async function registerCommands(): Promise<void> {
   const rest = new REST().setToken(config.token);
   const body = buildCommands();
-  if (config.guildId) {
-    await rest.put(Routes.applicationGuildCommands(config.applicationId, config.guildId), { body });
-    console.log(`Comandos registrados no servidor ${config.guildId}.`);
-  } else {
-    // Sem GUILD_ID: registra em cada servidor onde o bot está (aparecem na hora,
-    // sem esperar a propagação global de até 1h). Fallback global se ainda não
-    // estiver em nenhum servidor.
-    const guildIds = [...client.guilds.cache.keys()];
-    if (guildIds.length > 0) {
-      await Promise.all(
-        guildIds.map((gid) => rest.put(Routes.applicationGuildCommands(config.applicationId, gid), { body })),
-      );
-      console.log(`Comandos registrados em ${guildIds.length} servidor(es) (aparecem na hora).`);
-    } else {
-      await rest.put(Routes.applicationCommands(config.applicationId), { body });
-      console.log('Comandos registrados globalmente (podem levar até 1h para aparecer).');
-    }
-  }
+  // Instâncias privadas nunca dependem da propagação global. Apagar comandos
+  // globais antigos impede que uma instalação que migrou de modo público ainda
+  // exponha superfícies em guilds fora do perímetro.
+  await rest.put(Routes.applicationCommands(config.applicationId), { body: [] });
+  const guildIds = guildRuntime.commandTargets(client.guilds.cache.keys(), config.guildId);
+  await Promise.all(
+    guildIds.map((guildId) => rest.put(Routes.applicationGuildCommands(config.applicationId, guildId), { body })),
+  );
+  console.log(`Comandos globais removidos; comandos registrados em ${guildIds.length} guild(s) autorizada(s).`);
 }
 
 // ---------- ciclo de vida das sessões ----------
@@ -463,6 +468,11 @@ async function startSession(opts: {
   locale: Locale;
   auto: boolean;
 }): Promise<RecordingSession> {
+  if (!guildRuntime.isOperational(opts.guild.id)) {
+    throw new Error(
+      opts.locale === 'pt' ? 'servidor fora do perímetro desta instância' : 'server outside this instance',
+    );
+  }
   if (shuttingDown) {
     throw new Error(opts.locale === 'pt' ? 'o bot está reiniciando' : 'the bot is restarting');
   }
@@ -575,6 +585,14 @@ function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
   // O boot recovery cobre tudo do zero.
   if (shuttingDown) return;
 
+  // A guild pode ter removido o bot enquanto RecordingSession.stop fechava os
+  // arquivos. Preserva o histórico bruto, mas não cozinha, transcreve, notifica,
+  // rearma automação nem envia dados para fora da VPS.
+  if (!guildRuntime.isOperational(session.guild.id)) {
+    recordingAdmission.complete(session.id);
+    return;
+  }
+
   const channelId = session.voiceChannel.id;
   // Limite de horas com a reunião ainda rolando: rearma para recomeçar sozinha
   // e cobrir o resto. Kick/movimento não rearma: pode ser ação de moderação.
@@ -637,6 +655,7 @@ let preferGuildSurfaceMigration = true;
 
 /** Single-flight por gravação: callback, sweep e boot nunca duplicam o mesmo fanout em processo. */
 function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise<void> {
+  if (!guildRuntime.isOperational(meta.guildId)) return Promise.resolve();
   const running = transcriptionNotificationRuns.get(meta.id);
   if (running) return running;
   const task = notifyTranscriptionOnce(meta, locale).finally(() => {
@@ -648,6 +667,7 @@ function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise<void>
 
 /** Avisa genericamente no canal e entrega os detalhes por DM às identidades históricas autorizadas. */
 async function notifyTranscriptionOnce(meta: RecordingMeta, locale: Locale): Promise<void> {
+  if (!guildRuntime.isOperational(meta.guildId)) return;
   const state = meta.transcription;
   if (!state || (state.status !== 'done' && state.status !== 'partial' && state.status !== 'error')) return;
   // Checkpoint antes do primeiro efeito externo. Gravações novas já nascem com
@@ -681,7 +701,7 @@ async function notifyTranscriptionOnce(meta: RecordingMeta, locale: Locale): Pro
   const embeds = minutesDone ? buildMinutesEmbed(meta, locale) : [];
   const privatePayload = { content: text, embeds };
   const publicNotice = buildPublicTranscriptionNotice(locale);
-  const webhookTask = minutesDone ? deliverMinutesWebhookIfNeeded(meta) : Promise.resolve();
+  if (minutesDone) enqueueMinutesWebhook(meta.id);
 
   // O canal configurado recebe somente um aviso genérico. Resumo, decisões,
   // ações, URL e ID nunca são publicados em canal, independentemente da audiência.
@@ -792,7 +812,6 @@ async function notifyTranscriptionOnce(meta: RecordingMeta, locale: Locale): Pro
     }
     saveMeta(fresh);
   }
-  await webhookTask;
 }
 
 async function retryDueTranscriptionNotifications(): Promise<void> {
@@ -807,6 +826,7 @@ async function retryDueTranscriptionNotifications(): Promise<void> {
         continue;
       }
       if (meta.status !== 'done') continue;
+      if (!guildRuntime.isOperational(meta.guildId)) continue;
       const retryAt = Number.isFinite(meta.notificationNextRetryAt) ? (meta.notificationNextRetryAt as number) : 0;
       if (retryAt > now) continue;
       const state = meta.transcription?.status;
@@ -840,6 +860,11 @@ function startNotificationRetrySweep(): void {
 /** Uma página global por rodada; cobre canais antigos e metas já expiradas. */
 async function migrateNextGuildDiscordSurface(now: number): Promise<boolean> {
   for (const guildId of [...pendingDiscordGuildSurfaceMigrationIds]) {
+    if (!guildRuntime.allows(guildId)) {
+      pendingDiscordGuildSurfaceMigrationIds.delete(guildId);
+      continue;
+    }
+    if (!guildRuntime.isOperational(guildId)) continue;
     const inventory = readDiscordSurfaceInventory();
     const state = inventory.guilds[guildId];
     if (state?.policyVersion === DISCORD_SURFACE_POLICY_VERSION) {
@@ -923,6 +948,11 @@ async function migrateNextDiscordSurface(): Promise<void> {
         pendingDiscordSurfaceMigrationIds.delete(recordingId);
         continue;
       }
+      if (!guildRuntime.allows(meta.guildId)) {
+        pendingDiscordSurfaceMigrationIds.delete(recordingId);
+        continue;
+      }
+      if (!guildRuntime.isOperational(meta.guildId)) continue;
       const retryAt = Number.isFinite(meta.discordSurfaceMigration?.nextRetryAt)
         ? (meta.discordSurfaceMigration?.nextRetryAt as number)
         : 0;
@@ -1018,32 +1048,6 @@ function startDiscordSurfaceMigrationSweep(): void {
   );
 }
 
-const webhookDeliveries = new Map<string, Promise<void>>();
-
-/** Webhook persistente e idempotente em memória; o boot retoma os não confirmados. */
-function deliverMinutesWebhookIfNeeded(meta: RecordingMeta): Promise<void> {
-  if (!config.minutesWebhookUrl || meta.minutes?.status !== 'done') return Promise.resolve();
-  const existing = webhookDeliveries.get(meta.id);
-  if (existing) return existing;
-  const task = (async () => {
-    const fresh = readMeta(meta.id);
-    if (!fresh || fresh.webhookSentAt) return;
-    try {
-      await postMinutesWebhook(fresh);
-      const ok = readMeta(meta.id);
-      if (ok && !ok.webhookSentAt) {
-        ok.webhookSentAt = Date.now();
-        saveMeta(ok);
-      }
-    } catch {
-      // Nunca imprimir err.message: erros de URL podem ecoar Basic Auth/segredos do env.
-      console.warn(`Webhook da ata (${meta.id}) falhou; vai retentar no próximo boot.`);
-    }
-  })().finally(() => webhookDeliveries.delete(meta.id));
-  webhookDeliveries.set(meta.id, task);
-  return task;
-}
-
 /** Embed com o essencial da ata (resumo + decisões + ações), truncado com folga. */
 function buildMinutesEmbed(meta: RecordingMeta, locale: Locale): EmbedBuilder[] {
   const minutes = readMinutes(meta.id);
@@ -1083,29 +1087,6 @@ function buildMinutesEmbed(meta: RecordingMeta, locale: Locale): EmbedBuilder[] 
     });
   }
   return [embed];
-}
-
-/** POST da ata pro webhook do operador (JSON estruturado, não formato Discord). */
-async function postMinutesWebhook(meta: RecordingMeta): Promise<void> {
-  const minutes = readMinutes(meta.id);
-  if (!minutes) return;
-  const response = await fetch(config.minutesWebhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      event: 'minutes.ready',
-      recordingId: meta.id,
-      url: pageUrl(meta.id),
-      guildName: meta.guildName,
-      channelName: meta.voiceChannelName,
-      startedAt: meta.startedAt,
-      endedAt: meta.endedAt,
-      participants: meta.participants.map((p) => p.name),
-      minutes,
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
 }
 
 // ---------- /config (por servidor, admin) ----------
@@ -1259,6 +1240,9 @@ export async function handlePerguntar(interaction: ChatInputCommandInteraction):
     await interaction.reply({ content: t(l, 'err.guild-only'), ephemeral: true });
     return;
   }
+  // Capturada no início: remover e readicionar a guild não reativa uma
+  // pergunta antiga que ainda estivesse materializando contexto.
+  const guildWork = createGuildWorkContext(interaction.guild.id, () => guildRuntime.isOperational(interaction.guildId));
   if (!minutesEnabled()) {
     await interaction.reply({ content: t(l, 'ask.disabled'), ephemeral: true });
     return;
@@ -1290,16 +1274,19 @@ export async function handlePerguntar(interaction: ChatInputCommandInteraction):
       );
       return;
     }
-    const result = await answerQuestion(question, archive.authorized, l, {
-      nowMs,
-      timezone: config.timezone,
-      fallbackRange: range,
-      fallbackPeriodLabel: period,
-      beforeLlm: () => {
-        const charge = askLimiter.charge(interaction.user.id, interaction.guild!.id);
-        if (charge !== 'accepted') throw new AskRateLimitError(charge);
-      },
-    });
+    const result = await runWithGuildWorkContext(guildWork, () =>
+      answerQuestion(question, archive.authorized, l, {
+        nowMs,
+        timezone: config.timezone,
+        fallbackRange: range,
+        fallbackPeriodLabel: period,
+        beforeLlm: () => {
+          const charge = askLimiter.charge(interaction.user.id, interaction.guild!.id);
+          if (charge !== 'accepted') throw new AskRateLimitError(charge);
+        },
+      }),
+    );
+    assertGuildWorkActive(guildWork);
     if (!result.answer) {
       await interaction.editReply(`${t(l, 'ask.no-evidence')}${scanNotice}`);
       return;
@@ -1311,6 +1298,7 @@ export async function handlePerguntar(interaction: ChatInputCommandInteraction):
       `${result.answer}\n\n${t(l, 'ask.footer', { n: result.meetingsUsed, period })}${scanNotice}`,
     );
   } catch (err) {
+    if (isGuildWorkPausedError(err)) return;
     if (err instanceof AskRateLimitError) {
       await interaction.editReply(t(l, 'ask.rate-limit')).catch(() => {});
       return;
@@ -2052,7 +2040,7 @@ const pendingChecks = new Map<string, NodeJS.Timeout>(); // `${guildId}:${channe
 const AUTO_DEBOUNCE_MS = 2000;
 
 function scheduleAutoRecordCheck(guild: Guild, channelId: string): void {
-  if (shuttingDown) return;
+  if (shuttingDown || !guildRuntime.isOperational(guild.id)) return;
   const key = `${guild.id}:${channelId}`;
   const existing = pendingChecks.get(key);
   if (existing) clearTimeout(existing);
@@ -2066,7 +2054,7 @@ function scheduleAutoRecordCheck(guild: Guild, channelId: string): void {
 }
 
 async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
-  if (shuttingDown) return;
+  if (shuttingDown || !guildRuntime.isOperational(guild.id)) return;
   const channel = guild.channels.cache.get(channelId);
   if (!channel || !channel.isVoiceBased()) return;
   const humans = channel.members.filter((m) => !m.user.bot).size;
@@ -2110,11 +2098,113 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
 
 // ---------- eventos do Discord ----------
 
+function pauseGuildWork(guildId: string, detached = true): void {
+  guildRuntime.markUnavailable(guildId);
+  // Corta imediatamente ASR/LLM/backoffs/comandos locais em voo. O checkpoint
+  // fica pendente para GuildAvailable/GuildCreate, sem qualquer novo egress.
+  pauseGuildProcessing(guildId);
+  for (const [key, timeout] of pendingChecks) {
+    if (!key.startsWith(`${guildId}:`)) continue;
+    clearTimeout(timeout);
+    pendingChecks.delete(key);
+  }
+  for (const rule of autoRecordStore.list(guildId)) setArmed(guildId, rule.channelId, false);
+  pauseMinutesWebhooksForGuild(guildId);
+  if (!detached) return;
+  pendingDiscordGuildSurfaceMigrationIds.delete(guildId);
+  for (const recordingId of [...pendingTranscriptionNotificationIds]) {
+    if (readMeta(recordingId)?.guildId === guildId) pendingTranscriptionNotificationIds.delete(recordingId);
+  }
+  for (const recordingId of [...pendingDiscordSurfaceMigrationIds]) {
+    if (readMeta(recordingId)?.guildId === guildId) pendingDiscordSurfaceMigrationIds.delete(recordingId);
+  }
+}
+
+function resumeGuildWork(guild: Guild): void {
+  guildRuntime.markAvailable(guild.id);
+  // Uma nova geração é criada; sinais antigos permanecem abortados e não
+  // podem "ressuscitar" uma chamada que começou antes da remoção.
+  resumeGuildProcessing(guild.id);
+  resumeMinutesWebhooksForGuild(guild.id);
+  reconcileOperationalProcessingAdmission();
+  for (const rule of autoRecordStore.list(guild.id)) scheduleAutoRecordCheck(guild, rule.channelId);
+
+  const inventory = readDiscordSurfaceInventory();
+  if (inventory.guilds[guild.id]?.policyVersion !== DISCORD_SURFACE_POLICY_VERSION) {
+    pendingDiscordGuildSurfaceMigrationIds.add(guild.id);
+  }
+  for (const meta of listMetas()) {
+    if (meta.guildId !== guild.id) continue;
+    if (meta.status !== 'done') continue;
+    if (meta.discordSurfacePolicyVersion !== DISCORD_SURFACE_POLICY_VERSION) {
+      pendingDiscordSurfaceMigrationIds.add(meta.id);
+    }
+    const status = meta.transcription?.status;
+    if (
+      (status === 'done' || status === 'partial' || status === 'error') &&
+      !meta.notifiedAt &&
+      !meta.notificationRetryExhaustedAt &&
+      hasPersistedNotificationWork(meta)
+    ) {
+      pendingTranscriptionNotificationIds.add(meta.id);
+    }
+    enqueueRecoveredProcessing(meta);
+  }
+  startDiscordSurfaceMigrationSweep();
+}
+
+async function stopGuildActivity(guild: Guild): Promise<void> {
+  pauseGuildWork(guild.id);
+  const starting = sessionManager.cancelStart(guild.id);
+  if (starting?.session) {
+    await starting.session
+      .abortStart()
+      .catch((err) => console.error(`Falha ao abortar início após saída da guild ${guild.id}:`, err));
+  }
+  const active = sessionManager.get(guild.id);
+  if (active) {
+    await stopSession(active, 'desconectado').catch((err) =>
+      console.error(`Falha ao encerrar gravação após saída da guild ${guild.id}:`, err),
+    );
+  }
+}
+
+async function clearGuildCommands(guildId: string): Promise<void> {
+  await new REST()
+    .setToken(config.token)
+    .put(Routes.applicationGuildCommands(config.applicationId, guildId), { body: [] });
+}
+
+async function evictUnauthorizedGuild(guild: Guild): Promise<void> {
+  pauseGuildWork(guild.id);
+  await clearGuildCommands(guild.id).catch(() =>
+    console.warn(`Não foi possível limpar comandos da guild não autorizada ${guild.id}; tentando sair mesmo assim.`),
+  );
+  await guild
+    .leave()
+    .then(() => console.warn(`Guild não autorizada removida do perímetro (${guild.id}).`))
+    .catch(() =>
+      console.error(`Não foi possível sair da guild não autorizada ${guild.id}; eventos seguem bloqueados.`),
+    );
+}
+
+async function enforceConnectedGuildBoundary(): Promise<void> {
+  for (const guild of [...client.guilds.cache.values()]) {
+    if (!guildRuntime.allows(guild.id)) {
+      await evictUnauthorizedGuild(guild);
+      continue;
+    }
+    if (guild.available) resumeGuildWork(guild);
+    else pauseGuildWork(guild.id, false);
+  }
+}
+
 async function repairRecoveredSurfaces(): Promise<void> {
   // Crash pode deixar o apelido [GRAVANDO] preso. Remove apenas o prefixo
   // conhecido; não inventa qual era o apelido anterior.
   const recoveredGuilds = new Set(recoveredRecordings.map((meta) => meta.guildId));
   for (const guild of client.guilds.cache.values()) {
+    if (!guildRuntime.isOperational(guild.id)) continue;
     if (!recoveredGuilds.has(guild.id)) continue;
     const me = guild.members.me;
     const nick = me?.nickname;
@@ -2125,6 +2215,7 @@ async function repairRecoveredSurfaces(): Promise<void> {
   // Sessões criadas nesta versão persistem a mensagem do painel. Depois de um
   // crash, neutraliza o painel vermelho e remove todos os controles antigos.
   for (const meta of recoveredRecordings) {
+    if (!guildRuntime.isOperational(meta.guildId)) continue;
     // Metas anteriores à política atual passam pela migração auditada abaixo;
     // não fazemos uma edição histórica sem antes persistir o plano.
     if (meta.discordSurfacePolicyVersion !== DISCORD_SURFACE_POLICY_VERSION) continue;
@@ -2148,7 +2239,13 @@ async function repairRecoveredSurfaces(): Promise<void> {
 }
 
 function needsRecoveredProcessing(meta: RecordingMeta, now = Date.now()): boolean {
-  if (meta.status !== 'done' || meta.participants.length === 0 || !transcriptionEnabled()) return false;
+  if (
+    !guildRuntime.allows(meta.guildId) ||
+    meta.status !== 'done' ||
+    meta.participants.length === 0 ||
+    !transcriptionEnabled()
+  )
+    return false;
   const transcriptionStatus = meta.transcription?.status;
   const attempts = meta.transcription?.attempts ?? 0;
   const recent = (meta.endedAt ?? 0) > now - 24 * 60 * 60 * 1000;
@@ -2168,15 +2265,68 @@ function needsRecoveredProcessing(meta: RecordingMeta, now = Date.now()): boolea
   );
 }
 
+function reconcileOperationalProcessingAdmission(): void {
+  const pending = new Map(
+    listMetas()
+      .filter((meta) => guildRuntime.isOperational(meta.guildId) && needsRecoveredProcessing(meta))
+      .map((meta) => [meta.id, { guildId: meta.guildId, startedAt: meta.startedAt }] as const),
+  );
+  if (!recordingAdmission.reconcile(pending)) {
+    console.error('A proteção durável de gravações não pôde ser reconciliada; novos inícios permanecerão bloqueados.');
+  }
+}
+
+function enqueueRecoveredProcessing(meta: RecordingMeta): void {
+  if (!guildRuntime.isOperational(meta.guildId) || meta.status !== 'done') return;
+  const status = meta.transcription?.status;
+  const recent = (meta.endedAt ?? 0) > Date.now() - 24 * 60 * 60 * 1000;
+  const attempts = meta.transcription?.attempts ?? 0;
+  const locale: Locale = meta.locale === 'en' ? 'en' : meta.locale === 'pt' ? 'pt' : config.defaultLocale;
+  const settled = () => recordingAdmission.complete(meta.id);
+  if (status === 'pending' || status === 'running' || (status === undefined && recent)) {
+    enqueueTranscription(meta.id, (fresh) => notifyTranscription(fresh, locale), settled);
+  } else if (status === 'partial' && attempts < MAX_TRANSCRIPTION_ATTEMPTS) {
+    enqueueTranscription(meta.id, (fresh) => notifyTranscription(fresh, locale), settled);
+  } else if (
+    status === 'error' &&
+    attempts < MAX_TRANSCRIPTION_ATTEMPTS &&
+    (meta.transcription?.retryScheduled === true || recent)
+  ) {
+    enqueueTranscription(meta.id, (fresh) => notifyTranscription(fresh, locale), settled);
+  } else if (
+    (status === 'done' || status === 'partial') &&
+    (meta.minutes?.status === 'pending' || meta.minutes?.status === 'running')
+  ) {
+    enqueueMinutesOnly(
+      meta.id,
+      (fresh) => {
+        if (fresh.minutes?.status === 'done') notifyTranscription(fresh, locale);
+      },
+      settled,
+    );
+  }
+  if (meta.minutes?.status === 'done' && !meta.webhookSentAt) enqueueMinutesWebhook(meta.id);
+}
+
 client.once(Events.ClientReady, async () => {
   // O observador de readiness roda antes deste listener; a partir daqui os
   // caches de guild/canal já podem sustentar ACL web + MCP.
-  startMonitor(); // alertas por DM ao dono (disco, etc.)
+  await enforceConnectedGuildBoundary();
+  reconcileOperationalProcessingAdmission();
   console.log(`Kassinão online como ${client.user?.tag} 🎙️`);
+  const guildScope =
+    config.guildPolicy.mode === 'private'
+      ? `privado (${config.guildPolicy.allowedGuildIds.length} guild(s))`
+      : 'todas as guilds (opt-in explícito)';
+  console.log(
+    `Configuração ativa: guilds=${guildScope}; ASR=${config.transcribeProvider}; fallback=${config.transcribeFallbackProvider}; atas=${config.minutesEnabled}/${config.minutesProvider}; webhook=${config.minutesWebhookUrl ? 'ativo' : 'inativo'}; MCP=${config.mcpEnabled ? 'ativo' : 'inativo'}.`,
+  );
+  startMonitor(); // alertas por DM ao dono (disco, etc.)
   await repairRecoveredSurfaces();
   await registerCommands().catch((err) => console.error('Falha ao registrar comandos:', err));
   // canais que já estavam cheios quando o bot subiu disparam o auto-record
   for (const guild of client.guilds.cache.values()) {
+    if (!guildRuntime.isOperational(guild.id)) continue;
     for (const rule of autoRecordStore.list(guild.id)) {
       scheduleAutoRecordCheck(guild, rule.channelId);
     }
@@ -2185,11 +2335,13 @@ client.once(Events.ClientReady, async () => {
   // client pronto, para as notificações de "pronta" conseguirem ser enviadas
   const guildSurfaceInventory = readDiscordSurfaceInventory();
   for (const guild of client.guilds.cache.values()) {
+    if (!guildRuntime.isOperational(guild.id)) continue;
     if (guildSurfaceInventory.guilds[guild.id]?.policyVersion !== DISCORD_SURFACE_POLICY_VERSION) {
       pendingDiscordGuildSurfaceMigrationIds.add(guild.id);
     }
   }
   for (const meta of listMetas()) {
+    if (!guildRuntime.isOperational(meta.guildId)) continue;
     if (meta.status !== 'done') continue;
     if (meta.discordSurfacePolicyVersion !== DISCORD_SURFACE_POLICY_VERSION) {
       pendingDiscordSurfaceMigrationIds.add(meta.id);
@@ -2204,56 +2356,10 @@ client.once(Events.ClientReady, async () => {
     ) {
       pendingTranscriptionNotificationIds.add(meta.id);
     }
-    const recent = (meta.endedAt ?? 0) > Date.now() - 24 * 60 * 60 * 1000;
-    const tries = meta.transcription?.attempts ?? 0;
-    // idioma da sessão persiste no meta — o recovery não pode chutar 'pt' num guild en
-    const loc: Locale = meta.locale === 'en' ? 'en' : meta.locale === 'pt' ? 'pt' : config.defaultLocale;
-    if (st === 'pending' || st === 'running' || (st === undefined && recent)) {
-      enqueueTranscription(
-        meta.id,
-        (m) => notifyTranscription(m, loc),
-        () => recordingAdmission.complete(meta.id),
-      );
-    } else if (st === 'partial' && tries < MAX_TRANSCRIPTION_ATTEMPTS) {
-      // rodada agendada morreu com o reinício — retoma só as faixas que faltam
-      enqueueTranscription(
-        meta.id,
-        (m) => notifyTranscription(m, loc),
-        () => recordingAdmission.complete(meta.id),
-      );
-    } else if (
-      st === 'error' &&
-      tries < MAX_TRANSCRIPTION_ATTEMPTS &&
-      (meta.transcription?.retryScheduled === true || recent)
-    ) {
-      // erro com tentativas sobrando (ex.: 429 em cadeia + deploy no meio):
-      // sem isso a gravação ficaria em erro pra sempre, em silêncio
-      enqueueTranscription(
-        meta.id,
-        (m) => notifyTranscription(m, loc),
-        () => recordingAdmission.complete(meta.id),
-      );
-    } else if (st === 'done' || st === 'partial') {
-      const ms = meta.minutes?.status;
-      if (ms === 'pending' || ms === 'running') {
-        // Retoma SÓ a ata que ficou pela metade num reinício. generateMinutesStep
-        // grava 'running' como 1º passo, então interrupção real deixa pending/running.
-        enqueueMinutesOnly(
-          meta.id,
-          (m) => {
-            // só avisa se a ata retomada REALMENTE ficou pronta (não re-notifica a transcrição)
-            if (m.minutes?.status === 'done') notifyTranscription(m, loc);
-          },
-          () => recordingAdmission.complete(meta.id),
-        );
-      } else if (shouldRecoverTranscriptionNotification(meta)) {
-        // Checkpoints novos retomam sem limite de idade. Só metas legadas, que não
-        // distinguem "nunca enviado" de "já enviado", conservam a janela de 30min.
-        void notifyTranscription(meta, loc);
-      }
-    }
-    if (meta.minutes?.status === 'done' && !meta.webhookSentAt) {
-      void deliverMinutesWebhookIfNeeded(meta);
+    enqueueRecoveredProcessing(meta);
+    if ((st === 'done' || st === 'partial') && shouldRecoverTranscriptionNotification(meta)) {
+      const locale: Locale = meta.locale === 'en' ? 'en' : meta.locale === 'pt' ? 'pt' : config.defaultLocale;
+      void notifyTranscription(meta, locale);
     }
   }
   startNotificationRetrySweep();
@@ -2262,6 +2368,9 @@ client.once(Events.ClientReady, async () => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    // DMs e guilds fora do perímetro são descartadas antes de qualquer reply,
+    // rate-limit, leitura de arquivo ou criação de credencial MCP.
+    if (!guildRuntime.isOperational(interaction.guildId)) return;
     if (interaction.isChatInputCommand()) {
       switch (interaction.commandName) {
         case 'gravar':
@@ -2331,18 +2440,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 // Boas-vindas ao entrar num servidor novo: onboarding sem precisar procurar nada.
 client.on(Events.GuildCreate, async (guild) => {
+  if (!guildRuntime.allows(guild.id)) {
+    await evictUnauthorizedGuild(guild);
+    return;
+  }
+  resumeGuildWork(guild);
   pendingDiscordGuildSurfaceMigrationIds.add(guild.id);
   startDiscordSurfaceMigrationSweep();
   const l = localeOf(guild.preferredLocale);
   // Registra os comandos NESTE servidor na hora — sem isso, o registro global do
   // boot pode levar até 1h, e a pessoa digita /gravar logo após convidar e não vê nada.
-  try {
-    await new REST()
-      .setToken(config.token)
-      .put(Routes.applicationGuildCommands(config.applicationId, guild.id), { body: buildCommands() });
-    console.log(`Comandos registrados no novo servidor ${guild.name} (${guild.id}).`);
-  } catch (err) {
-    console.error(`Falha ao registrar comandos no servidor ${guild.id}:`, err);
+  if (!config.guildId || config.guildId === guild.id) {
+    try {
+      await new REST()
+        .setToken(config.token)
+        .put(Routes.applicationGuildCommands(config.applicationId, guild.id), { body: buildCommands() });
+      console.log(`Comandos registrados no novo servidor autorizado ${guild.name} (${guild.id}).`);
+    } catch (err) {
+      console.error(`Falha ao registrar comandos no servidor ${guild.id}:`, err);
+    }
   }
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
@@ -2373,7 +2489,21 @@ client.on(Events.GuildCreate, async (guild) => {
 
 client.on(Events.GuildDelete, (guild) => {
   // Não marca completo: se o bot for convidado de novo, GuildCreate retoma o checkpoint.
-  pendingDiscordGuildSurfaceMigrationIds.delete(guild.id);
+  void stopGuildActivity(guild);
+});
+
+client.on(Events.GuildUnavailable, (guild) => {
+  // Indisponibilidade do gateway é transitória: pausa efeitos, mas não encerra,
+  // apaga ou revoga nada. GuildAvailable retoma as avaliações automáticas.
+  pauseGuildWork(guild.id, false);
+});
+
+client.on(Events.GuildAvailable, (guild) => {
+  if (!guildRuntime.allows(guild.id)) {
+    void evictUnauthorizedGuild(guild);
+    return;
+  }
+  resumeGuildWork(guild);
 });
 
 const directMessageLimiter = new DmMessageLimiter({
@@ -2383,15 +2513,40 @@ const directMessageLimiter = new DmMessageLimiter({
   maxTrackedUsers: 128,
 });
 
+function discordErrorCode(error: unknown): unknown {
+  return error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+}
+
+async function userSharesOperationalGuild(userId: string): Promise<boolean> {
+  for (const guild of client.guilds.cache.values()) {
+    if (!guildRuntime.isOperational(guild.id)) continue;
+    try {
+      await withFreshMembershipBudget(userId, () => guild.members.fetch({ user: userId, force: true, cache: false }));
+      return true;
+    } catch (error) {
+      // Unknown Member/User é uma negativa definitiva só para esta guild. Erros
+      // transitórios também fecham este caminho; outra guild ainda pode provar
+      // membership sem reutilizar cache de autorização.
+      const code = discordErrorCode(error);
+      if (code === 10007 || code === 10013) continue;
+    }
+  }
+  return false;
+}
+
 // DM ao bot → responde o guia (onboarding). Não lê o conteúdo além de detectar
 // a FORMA "/comando" no início — pra explicar na lata por que não rodou.
 export async function handleDirectMessage(
   message: Message,
   limiter: Pick<DmMessageLimiter, 'admit'> = directMessageLimiter,
+  canReceivePrivateHelp: (userId: string) => Promise<boolean> = userSharesOperationalGuild,
 ): Promise<void> {
   if (message.author.bot || message.guildId) return; // só DMs de pessoas
   // Antes de ler conteúdo, logar ou responder. Excesso é descartado em silêncio.
   if (!limiter.admit(message.author.id)) return;
+  // A URL do app e o guia operacional são privados. Sem confirmar membership
+  // atual em alguma guild autorizada, a DM é ignorada em silêncio.
+  if (!(await canReceivePrivateHelp(message.author.id).catch(() => false))) return;
   // DM não expõe o locale do usuário → usa DEFAULT_LOCALE (padrão 'en' no repo;
   // defina DEFAULT_LOCALE=pt pra responder em português). Em servidores cada um vê no seu idioma.
   const l: Locale = config.defaultLocale;
@@ -2420,6 +2575,7 @@ client.on(Events.MessageCreate, async (message) => {
 
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   const guild = oldState.guild;
+  if (!guildRuntime.isOperational(guild.id)) return;
 
   // Presença na gravação ativa: entrar/sair do canal gravado vira registro no
   // meta (acesso à gravação) + evento na linha do tempo — mesmo sem desmutar.
@@ -2452,17 +2608,6 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   if (oldState.channelId) channels.add(oldState.channelId);
   if (newState.channelId) channels.add(newState.channelId);
   for (const channelId of channels) scheduleAutoRecordCheck(guild, channelId);
-});
-
-client.on(Events.GuildMemberRemove, (member) => {
-  try {
-    if (config.mcpEnabled) {
-      const n = revokeUser(member.id);
-      if (n > 0) console.log(`MCP: ${n} sessão(ões) revogada(s) — ${member.id} saiu de ${member.guild.name}.`);
-    }
-  } catch (err) {
-    console.error('Erro revogando sessões MCP no guildMemberRemove:', err);
-  }
 });
 
 // ---------- shutdown gracioso ----------
@@ -2513,7 +2658,7 @@ if (transcribeConfigError) {
   process.exit(1);
 }
 
-recoveredRecordings = recoverInterruptedRecordings();
+recoveredRecordings = recoverInterruptedRecordings().filter((meta) => guildRuntime.allows(meta.guildId));
 const recoveredProcessing = new Map(
   listMetas()
     .filter((meta) => needsRecoveredProcessing(meta))

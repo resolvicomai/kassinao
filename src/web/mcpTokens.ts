@@ -337,6 +337,7 @@ interface PendingCode {
   name: string;
   label?: string;
   exp: number;
+  claimId?: string;
 }
 
 const codes = new Map<string, PendingCode>();
@@ -408,7 +409,9 @@ export function createExchangeCode(userId: string, name: string, label?: string)
   gcCodes();
   stagedExchangeCodes.delete(userId);
   const previous = codeByUser.get(userId);
-  if (previous) codes.delete(previous);
+  // Um exchange já reservado termina de forma atômica; gerar outro código não
+  // pode invalidá-lo entre a emissão da sessão e o commit.
+  if (previous && !codes.get(previous)?.claimId) codes.delete(previous);
   if (codes.size >= MAX_PENDING_EXCHANGE_CODES) {
     codeByUser.delete(userId);
     throw new McpExchangeCodeCapacityError();
@@ -419,12 +422,51 @@ export function createExchangeCode(userId: string, name: string, label?: string)
   return code;
 }
 
+export interface ExchangeCodeClaim {
+  code: string;
+  claimId: string;
+  userId: string;
+  name: string;
+  label?: string;
+}
+
+/** Reserva atômica: chamadas concorrentes não trocam o mesmo código duas vezes. */
+export function claimExchangeCode(code: string): ExchangeCodeClaim | undefined {
+  const c = codes.get(code);
+  if (!c || c.exp < Date.now()) {
+    if (c) {
+      codes.delete(code);
+      if (codeByUser.get(c.userId) === code) codeByUser.delete(c.userId);
+    }
+    return undefined;
+  }
+  if (c.claimId) return undefined;
+  const claimId = crypto.randomBytes(16).toString('hex');
+  c.claimId = claimId;
+  return { code, claimId, userId: c.userId, name: c.name, label: c.label };
+}
+
+/** Consome definitivamente somente a reserva que ainda pertence ao chamador. */
+export function commitExchangeCode(claim: ExchangeCodeClaim): boolean {
+  const c = codes.get(claim.code);
+  if (!c || c.claimId !== claim.claimId) return false;
+  codes.delete(claim.code);
+  if (codeByUser.get(c.userId) === claim.code) codeByUser.delete(c.userId);
+  if (stagedExchangeCodes.get(c.userId)?.exchangeCode === claim.code) stagedExchangeCodes.delete(c.userId);
+  return true;
+}
+
+/** Falha transitória libera a reserva sem renovar a validade original. */
+export function releaseExchangeCode(claim: ExchangeCodeClaim): boolean {
+  const c = codes.get(claim.code);
+  if (!c || c.claimId !== claim.claimId) return false;
+  delete c.claimId;
+  return true;
+}
+
 /** Consome o código (uso único: apagado em qualquer tentativa). undefined se inválido/expirado. */
 export function consumeExchangeCode(code: string): { userId: string; name: string; label?: string } | undefined {
-  const c = codes.get(code);
-  if (c) codes.delete(code);
-  if (c && codeByUser.get(c.userId) === code) codeByUser.delete(c.userId);
-  if (c && stagedExchangeCodes.get(c.userId)?.exchangeCode === code) stagedExchangeCodes.delete(c.userId);
-  if (!c || c.exp < Date.now()) return undefined;
-  return { userId: c.userId, name: c.name, label: c.label };
+  const claim = claimExchangeCode(code);
+  if (!claim || !commitExchangeCode(claim)) return undefined;
+  return { userId: claim.userId, name: claim.name, label: claim.label };
 }

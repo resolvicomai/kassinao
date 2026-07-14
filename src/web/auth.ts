@@ -1,13 +1,15 @@
 import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import { config } from '../config';
-import { createWebSession, isActiveWebSession, revokeWebSession } from './webSessions';
+import { createWebSession, revokeWebSession, webSessionScope, type WebSessionScope } from './webSessions';
 
 export interface WebUser {
   typ: 'session';
   id: string;
   name: string;
   avatar: string | null;
+  /** `revoke-only` nunca pode acessar dados nem criar um novo conector. */
+  scope: WebSessionScope;
   exp: number;
   /** Sessão ativa persistida; permite revogação real no logout. */
   jti: string;
@@ -25,6 +27,18 @@ export interface AccessIdentity {
   id: string;
   name: string;
 }
+
+export interface OAuthIdentity extends AccessIdentity {
+  avatar: string | null;
+}
+
+export type LoginAuthorization = 'full' | 'revoke-only' | 'denied' | 'unavailable';
+
+export type FinishLoginResult =
+  | { status: 'ok'; next: string; user: WebUser }
+  | { status: 'invalid' }
+  | { status: 'denied' }
+  | { status: 'unavailable' };
 
 /** Token de acesso do MCP (curto, em memória do conector, viaja em cada request). */
 export interface McpToken {
@@ -47,10 +61,8 @@ export interface McpRefreshToken {
   gen: number;
 }
 
-const SESSION_COOKIE = 'kassinao_session';
-const STATE_COOKIE = 'kassinao_state';
-const SESSION_PATH = '/app';
-const STATE_PATH = '/auth';
+const LEGACY_SESSION_COOKIE = 'kassinao_session';
+const LEGACY_STATE_COOKIE = 'kassinao_state';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_LOGIN_NEXT_BYTES = 2_048;
 const MAX_LOGIN_NEXT_JSON_BYTES = MAX_LOGIN_NEXT_BYTES + 2;
@@ -61,6 +73,34 @@ function appOrigin(): string {
   const domainConfig = config as DomainConfig;
   return domainConfig.appUrl ?? domainConfig.baseUrl;
 }
+
+export function webCookieSettings(origin: string): {
+  sessionName: string;
+  stateName: string;
+  sessionPath: string;
+  statePath: string;
+} {
+  const secure = origin.startsWith('https://');
+  return secure
+    ? {
+        sessionName: '__Host-kassinao_session',
+        stateName: '__Host-kassinao_state',
+        sessionPath: '/',
+        statePath: '/',
+      }
+    : {
+        sessionName: LEGACY_SESSION_COOKIE,
+        stateName: LEGACY_STATE_COOKIE,
+        sessionPath: '/app',
+        statePath: '/auth',
+      };
+}
+
+const COOKIE_SETTINGS = webCookieSettings(appOrigin());
+const SESSION_COOKIE = COOKIE_SETTINGS.sessionName;
+const STATE_COOKIE = COOKIE_SETTINGS.stateName;
+const SESSION_PATH = COOKIE_SETTINGS.sessionPath;
+const STATE_PATH = COOKIE_SETTINGS.statePath;
 
 // ---------- assinatura de tokens (HMAC-SHA256) ----------
 
@@ -127,12 +167,19 @@ function readCookie(req: Request, name: string): string | undefined {
   return undefined;
 }
 
+export function serializeWebCookie(
+  origin: string,
+  name: string,
+  value: string,
+  maxAgeMs: number,
+  cookiePath: string,
+): string {
+  const secure = origin.startsWith('https://') ? '; Secure' : '';
+  return `${name}=${encodeURIComponent(value)}; Path=${cookiePath}; Max-Age=${Math.floor(maxAgeMs / 1000)}; HttpOnly; SameSite=Lax${secure}`;
+}
+
 function setCookie(res: Response, name: string, value: string, maxAgeMs: number, cookiePath: string): void {
-  const secure = appOrigin().startsWith('https') ? '; Secure' : '';
-  res.append(
-    'Set-Cookie',
-    `${name}=${encodeURIComponent(value)}; Path=${cookiePath}; Max-Age=${Math.floor(maxAgeMs / 1000)}; HttpOnly; SameSite=Lax${secure}`,
-  );
+  res.append('Set-Cookie', serializeWebCookie(appOrigin(), name, value, maxAgeMs, cookiePath));
 }
 
 // ---------- sessão ----------
@@ -145,14 +192,16 @@ export function getWebUser(req: Request): WebUser | undefined {
   if (!Number.isFinite(user.exp) || user.exp < Date.now()) return undefined; // NaN/Infinity não vira token eterno
   if (typeof user.id !== 'string' || !user.id) return undefined;
   if (typeof user.jti !== 'string' || !user.jti) return undefined;
-  if (!isActiveWebSession(user.jti, user.id)) return undefined;
+  if (user.scope !== 'full' && user.scope !== 'revoke-only') return undefined;
+  if (webSessionScope(user.jti, user.id) !== user.scope) return undefined;
   return user;
 }
 
 export function clearStateCookie(res: Response): void {
   setCookie(res, STATE_COOKIE, '', 0, STATE_PATH);
-  // Migração da versão antiga, que usava Path=/ para todos os cookies.
-  setCookie(res, STATE_COOKIE, '', 0, '/');
+  // Migração das versões sem prefixo __Host- e dos caminhos antigos.
+  setCookie(res, LEGACY_STATE_COOKIE, '', 0, '/auth');
+  setCookie(res, LEGACY_STATE_COOKIE, '', 0, '/');
 }
 
 /**
@@ -165,8 +214,8 @@ export function logoutWeb(req: Request, res: Response): void {
     if (token?.typ === 'session' && typeof token.jti === 'string' && token.jti) revokeWebSession(token.jti);
   } finally {
     setCookie(res, SESSION_COOKIE, '', 0, SESSION_PATH);
-    // Também derruba sessões emitidas antes do escopo /app entrar em vigor.
-    setCookie(res, SESSION_COOKIE, '', 0, '/');
+    setCookie(res, LEGACY_SESSION_COOKIE, '', 0, '/app');
+    setCookie(res, LEGACY_SESSION_COOKIE, '', 0, '/');
   }
 }
 
@@ -188,7 +237,8 @@ export function scopeWebSessionToApp(req: Request, res: Response): void {
     !user.jti ||
     !Number.isFinite(user.exp) ||
     user.exp <= Date.now() ||
-    !isActiveWebSession(user.jti, user.id)
+    (user.scope !== 'full' && user.scope !== 'revoke-only') ||
+    webSessionScope(user.jti, user.id) !== user.scope
   ) {
     // Cookies antigos (sem jti) e sessões revogadas não são migrados.
     if (raw) {
@@ -198,7 +248,12 @@ export function scopeWebSessionToApp(req: Request, res: Response): void {
     return;
   }
   setCookie(res, SESSION_COOKIE, raw, user.exp - Date.now(), SESSION_PATH);
-  setCookie(res, SESSION_COOKIE, '', 0, '/');
+  if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) {
+    setCookie(res, LEGACY_SESSION_COOKIE, '', 0, '/app');
+    setCookie(res, LEGACY_SESSION_COOKIE, '', 0, '/');
+  } else if (SESSION_PATH !== '/') {
+    setCookie(res, SESSION_COOKIE, '', 0, '/');
+  }
 }
 
 /**
@@ -236,16 +291,17 @@ export function redirectUri(): string {
 
 export function beginLogin(res: Response, next: string): void {
   const state = crypto.randomBytes(16).toString('hex');
-  // apenas caminhos locais: "//evil.com" e "/\evil.com" são redirects externos no navegador
+  // OAuth só pode voltar ao namespace privado. Além de redirects externos, isto
+  // impede que um login iniciado pelo app seja usado como ponte para demo/docs.
   const safeNext =
-    /^\/(?![/\\])/.test(next) &&
+    /^\/app(?:[/?#]|$)/.test(next) &&
     !next.includes('\\') &&
     Buffer.byteLength(next, 'utf8') <= MAX_LOGIN_NEXT_BYTES &&
     // Aspas, controles e surrogates podem crescer ao serem escapados no JSON.
     // Limitar também a representação serializada mantém o cookie abaixo de 4 KiB.
     Buffer.byteLength(JSON.stringify(next), 'utf8') <= MAX_LOGIN_NEXT_JSON_BYTES
       ? next
-      : '/';
+      : '/app';
   const stateToken: StateToken = { typ: 'state', state, next: safeNext, exp: Date.now() + 10 * 60 * 1000 };
   setCookie(res, STATE_COOKIE, sign(stateToken, config.cookieSecret), 10 * 60 * 1000, STATE_PATH);
   const params = new URLSearchParams({
@@ -261,7 +317,11 @@ export function beginLogin(res: Response, next: string): void {
   res.redirect(`https://discord.com/oauth2/authorize?${params}`);
 }
 
-export async function finishLogin(req: Request, res: Response): Promise<string | undefined> {
+export async function finishLogin(
+  req: Request,
+  res: Response,
+  authorize: (identity: OAuthIdentity) => Promise<LoginAuthorization>,
+): Promise<FinishLoginResult> {
   const { code, state } = req.query as { code?: string; state?: string };
   const saved = verify<StateToken>(readCookie(req, STATE_COOKIE), config.cookieSecret);
   clearStateCookie(res); // consome o state: não fica vivo 10 min no navegador
@@ -274,7 +334,7 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
     !Number.isFinite(saved.exp) ||
     saved.exp <= Date.now()
   )
-    return undefined;
+    return { status: 'invalid' };
 
   const tokenResp = await fetch('https://discord.com/api/oauth2/token', {
     method: 'POST',
@@ -288,14 +348,15 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
     }),
     signal: AbortSignal.timeout(10_000),
   });
-  if (!tokenResp.ok) return undefined;
+  if (!tokenResp.ok) return { status: tokenResp.status === 429 || tokenResp.status >= 500 ? 'unavailable' : 'invalid' };
   const token = (await tokenResp.json()) as { access_token: string };
+  if (typeof token.access_token !== 'string' || !token.access_token) return { status: 'invalid' };
 
   const meResp = await fetch('https://discord.com/api/users/@me', {
     headers: { Authorization: `Bearer ${token.access_token}` },
     signal: AbortSignal.timeout(10_000),
   });
-  if (!meResp.ok) return undefined;
+  if (!meResp.ok) return { status: meResp.status === 429 || meResp.status >= 500 ? 'unavailable' : 'invalid' };
   const me = (await meResp.json()) as {
     id: string;
     username: string;
@@ -303,20 +364,33 @@ export async function finishLogin(req: Request, res: Response): Promise<string |
     avatar: string | null;
   };
 
-  if (!me.id) return undefined;
-  const exp = Date.now() + SESSION_TTL_MS;
-  const user: WebUser = {
-    typ: 'session',
+  if (!me.id || (typeof me.global_name !== 'string' && typeof me.username !== 'string')) {
+    return { status: 'invalid' };
+  }
+  const identity: OAuthIdentity = {
     id: me.id,
     name: me.global_name || me.username,
     avatar: me.avatar ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png?size=64` : null,
+  };
+  const authorization = await authorize(identity);
+  if (authorization === 'denied' || authorization === 'unavailable') return { status: authorization };
+  const exp = Date.now() + SESSION_TTL_MS;
+  const user: WebUser = {
+    typ: 'session',
+    ...identity,
+    scope: authorization,
     exp,
-    jti: createWebSession(me.id, exp),
+    jti: createWebSession(me.id, exp, authorization),
   };
   setCookie(res, SESSION_COOKIE, sign(user, config.cookieSecret), SESSION_TTL_MS, SESSION_PATH);
-  // Remove um eventual cookie legado Path=/ com o mesmo nome.
-  setCookie(res, SESSION_COOKIE, '', 0, '/');
-  return saved.next;
+  // Remove cookies antigos sem o prefixo de isolamento entre subdomínios.
+  if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) {
+    setCookie(res, LEGACY_SESSION_COOKIE, '', 0, '/app');
+    setCookie(res, LEGACY_SESSION_COOKIE, '', 0, '/');
+  } else if (SESSION_PATH !== '/') {
+    setCookie(res, SESSION_COOKIE, '', 0, '/');
+  }
+  return { status: 'ok', next: saved.next, user };
 }
 
 // ---------- tokens do MCP (HMAC com segredos DEDICADOS, isolados do cookie) ----------

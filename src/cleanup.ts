@@ -21,6 +21,13 @@ import { hasActiveDownloads } from './web/tracker';
  */
 export const transcriptionBlocksAudioTrim = transcriptionNeedsAudio;
 
+const RECORDING_DIRECTORY = /^\d{4}-\d{2}-\d{2}-[a-f0-9]{10}$/;
+
+/** Somente diretórios que o próprio RecordingSession pode criar entram no expurgo. */
+export function isCanonicalRecordingDirectory(name: string): boolean {
+  return RECORDING_DIRECTORY.test(name);
+}
+
 /** Apaga gravações expiradas e diretórios órfãos. Roda a cada hora. */
 export function startCleanupJob(): void {
   const run = () => {
@@ -90,11 +97,13 @@ export function startCleanupJob(): void {
     // diretórios sem meta.json (restos de falhas) com mais de 1 dia
     try {
       for (const entry of fs.readdirSync(config.recordingsDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
+        if (!entry.isDirectory() || entry.isSymbolicLink() || !isCanonicalRecordingDirectory(entry.name)) continue;
         const dir = path.join(config.recordingsDir, entry.name);
+        const stat = fs.lstatSync(dir);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) continue;
         if (fs.existsSync(path.join(dir, 'meta.json'))) continue;
         try {
-          if (fs.statSync(dir).mtimeMs < now - 24 * 60 * 60 * 1000) {
+          if (stat.mtimeMs < now - 24 * 60 * 60 * 1000) {
             fs.rmSync(dir, { recursive: true, force: true });
             removed++;
           }

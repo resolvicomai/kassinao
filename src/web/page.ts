@@ -18,7 +18,7 @@ import { APP_CSS } from './appStyles';
 import { CSP_NONCE_ATTR } from './csp';
 import type { SessionSummary } from './mcpTokens';
 import type { WebSearchHit } from './search';
-import { PUBLIC_LINKS, publicSite } from './site';
+import { publicSite } from './site';
 
 function esc(s: string): string {
   return s
@@ -364,11 +364,16 @@ function shell(
       : `<div class="langtoggle" aria-label="${pt ? 'Idioma' : 'Language'}"><a href="?lang=en" data-app-locale="en"${lang === 'en' ? ' class="on" aria-current="page"' : ''}>EN</a><a href="?lang=pt" data-app-locale="pt"${lang === 'pt' ? ' class="on" aria-current="page"' : ''}>PT</a></div>`;
   // A demo é uma prova pública com dados fictícios. O app continua isolado sob
   // /app, com autenticação, ACL e navegação próprias.
-  const brand = `<a class="brand" href="${opts.demo ? publicContext.links.home : '/app'}"><img src="/assets/kassinao-mark.png" width="26" height="26" alt=""><span>Kassinão</span></a>`;
+  const appHome = opts.user?.scope === 'revoke-only' ? '/app/conectar-ia' : '/app';
+  const brand = `<a class="brand" href="${opts.demo ? publicContext.links.home : appHome}"><img src="/assets/kassinao-mark.png" width="26" height="26" alt=""><span>Kassinão</span></a>`;
   const nav = opts.demo
-    ? `<nav aria-label="${pt ? 'Navegação principal' : 'Main navigation'}"><a href="${publicContext.links.docs}">Docs</a><a href="${publicContext.links.mcp}" target="_blank" rel="noopener noreferrer">MCP</a><a href="${PUBLIC_LINKS.github}" target="_blank" rel="noopener noreferrer">GitHub</a></nav>`
+    ? `<nav aria-label="${pt ? 'Navegação principal' : 'Main navigation'}"><a href="${publicContext.links.docs}">Docs</a><a href="${publicContext.links.mcp}" target="_blank" rel="noopener noreferrer">MCP</a><a href="${publicContext.links.github}" target="_blank" rel="noopener noreferrer">GitHub</a></nav>`
     : opts.user
-      ? `<nav class="sidebar-nav" aria-label="${pt ? 'Navegação do app' : 'App navigation'}"><a href="/app"${opts.active === 'rec' ? ' aria-current="page"' : ''}>${pt ? 'Reuniões' : 'Meetings'}</a>${
+      ? `<nav class="sidebar-nav" aria-label="${pt ? 'Navegação do app' : 'App navigation'}">${
+          opts.user.scope === 'full'
+            ? `<a href="/app"${opts.active === 'rec' ? ' aria-current="page"' : ''}>${pt ? 'Reuniões' : 'Meetings'}</a>`
+            : ''
+        }${
           config.mcpEnabled
             ? `<a href="/app/conectar-ia"${opts.active === 'ai' ? ' aria-current="page"' : ''}>${pt ? 'Conectar IA' : 'Connect AI'}</a>`
             : ''
@@ -402,7 +407,11 @@ function shell(
         <nav class="sidebar-resources" aria-label="${pt ? 'Recursos' : 'Resources'}">
           <span class="sidebar-label">${pt ? 'Recursos' : 'Resources'}</span>
           <a href="${publicContext.links.docs}">Docs</a>
-          <a href="${PUBLIC_LINKS.github}" target="_blank" rel="noopener noreferrer">GitHub</a>
+          ${
+            config.repoPublic
+              ? `<a href="${publicContext.links.github}" target="_blank" rel="noopener noreferrer">GitHub</a>`
+              : ''
+          }
         </nav>
         <div class="sidebar-footer">${userIdentity}${logout}</div>
       </aside>
@@ -1722,6 +1731,59 @@ export function messagePage(
   });
 }
 
+export function privateAccessPage(opts: {
+  lang: Locale;
+  next?: string;
+  state?: 'login' | 'denied' | 'unavailable';
+}): string {
+  const pt = opts.lang === 'pt';
+  const state = opts.state ?? 'login';
+  const safeNext =
+    opts.next?.startsWith('/app') && !opts.next.startsWith('//') && !opts.next.includes('\\') ? opts.next : '/app';
+  const title =
+    state === 'denied'
+      ? pt
+        ? 'Acesso restrito'
+        : 'Restricted access'
+      : state === 'unavailable'
+        ? pt
+          ? 'Discord indisponível'
+          : 'Discord unavailable'
+        : pt
+          ? 'Instância privada'
+          : 'Private instance';
+  const text =
+    state === 'denied'
+      ? pt
+        ? 'Esta conta não pertence a um servidor Discord autorizado nesta instância. Nenhuma sessão foi criada.'
+        : 'This account does not belong to an authorized Discord server on this instance. No session was created.'
+      : state === 'unavailable'
+        ? pt
+          ? 'Não foi possível confirmar seu acesso no Discord agora. Tente novamente em instantes.'
+          : 'Your Discord access could not be confirmed right now. Try again shortly.'
+        : pt
+          ? 'Este app não oferece cadastro público. Somente membros atuais dos servidores Discord autorizados pelo operador podem entrar.'
+          : 'This app has no public sign-up. Only current members of Discord servers authorized by the operator can sign in.';
+  const action =
+    state === 'denied'
+      ? ''
+      : `<a class="btn" href="/auth/login?next=${encodeURIComponent(safeNext)}">${esc(
+          pt
+            ? state === 'unavailable'
+              ? 'Tentar novamente'
+              : 'Entrar com Discord'
+            : state === 'unavailable'
+              ? 'Try again'
+              : 'Sign in with Discord',
+        )}</a>`;
+  const body = `<section class="message-page"><div class="eyebrow">${esc(pt ? 'Kassinão privado' : 'Private Kassinão')}</div><h1>${esc(title)}</h1>
+    <p class="muted" style="margin-top:12px">${esc(text)}</p>
+    <div class="downloads" style="margin-top:18px">${action}<a class="btn secondary" href="${esc(config.docsUrl)}">${esc(
+      pt ? 'Como hospedar o seu' : 'How to self-host yours',
+    )}</a></div></section>`;
+  return shell(title, body, { lang: opts.lang, active: 'rec' });
+}
+
 // CSS da landing (vitrine pública). Documento próprio, full-width - NÃO usa o
 // .card do shell(). Voz tipográfica sans real (a mesma família do sistema);
 // monoespaçado (.mono) fica reservado a timestamps, nomes de env var, comandos
@@ -1759,7 +1821,7 @@ export function connectPage(opts: {
   }
 
   if (opts.exchangeCode) {
-    const command = `npx -y kassinao-mcp@1.0.5 exchange --stdin --url ${config.mcpUrl}`;
+    const command = `npx -y kassinao-mcp@1.0.6 exchange --stdin --url ${config.mcpUrl}`;
     const localhostWarn = config.mcpUrl.startsWith('http://localhost')
       ? `<div class="note" role="alert">${esc(
           T(
@@ -1839,6 +1901,9 @@ export function connectPage(opts: {
   }
 
   // Estado de gestão: lista das conexões da pessoa, com revogação individual.
+  // Ex-membros recebem uma sessão limitada para não ficarem presos a tokens que
+  // não conseguem mais desligar. Essa tela não pode oferecer geração nem dados.
+  const revokeOnly = opts.user.scope === 'revoke-only';
   const sess = opts.sessions ?? [];
   const revokedMsg =
     opts.revoked === 'all'
@@ -1877,21 +1942,24 @@ export function connectPage(opts: {
              : ''
          }</section>`
       : `<section aria-labelledby="connections-title"><h2 id="connections-title">${esc(T('Suas conexões', 'Your connections'))}</h2>
-         <div class="empty-state compact"><strong>${esc(T('Nenhuma conexão ativa', 'No active connections'))}</strong><span class="muted">${esc(T('Gere uma conexão para começar.', 'Generate a connection to get started.'))}</span></div></section>`;
-  const body = `<section class="connect-page"><h1>${esc(title)}</h1>
-    ${revokedMsg}
-    <p class="connect-intro">${esc(
-      T(
-        'Ligue o Kassinão em qualquer assistente de IA com MCP (Claude, Cursor e outros) para perguntar sobre as suas calls em linguagem natural.',
-        'Plug Kassinão into any MCP-capable AI assistant (Claude, Cursor, and more) to ask about your calls in natural language.',
-      ),
-    )}</p>
-    <div class="security-note"><strong>${esc(T('Acesso individual', 'Individual access'))}</strong><span>${esc(
-      T(
-        'Cada pessoa entra com o próprio Discord, gerencia somente as próprias conexões e mantém o mesmo acesso às gravações.',
-        'Each person signs in with their own Discord, manages only their own connections, and keeps the same recording access.',
-      ),
-    )}</span></div>
+         <div class="empty-state compact"><strong>${esc(T('Nenhuma conexão ativa', 'No active connections'))}</strong><span class="muted">${esc(
+           revokeOnly
+             ? T('Não há mais conexões para revogar.', 'There are no remaining connections to revoke.')
+             : T('Gere uma conexão para começar.', 'Generate a connection to get started.'),
+         )}</span></div></section>`;
+  const generation = revokeOnly
+    ? `<div class="security-note" role="status"><strong>${esc(T('Acesso somente para revogação', 'Revocation-only access'))}</strong><span>${esc(
+        T(
+          'Sua conta não pertence mais a um servidor autorizado. Você pode apenas desligar suas conexões existentes e sair.',
+          'Your account no longer belongs to an authorized server. You can only revoke your existing connections and sign out.',
+        ),
+      )}</span></div>`
+    : `<div class="security-note"><strong>${esc(T('Acesso individual', 'Individual access'))}</strong><span>${esc(
+        T(
+          'Cada pessoa entra com o próprio Discord, gerencia somente as próprias conexões e mantém o mesmo acesso às gravações.',
+          'Each person signs in with their own Discord, manages only their own connections, and keeps the same recording access.',
+        ),
+      )}</span></div>
     <form class="genform" method="post" action="/app/conectar-ia/gerar">
       <label class="field-label" for="connection-label">${esc(T('Apelido da conexão (opcional)', 'Connection nickname (optional)'))}</label>
       <input id="connection-label" name="label" maxlength="40" autocomplete="off"
@@ -1903,7 +1971,16 @@ export function connectPage(opts: {
         'Você recebe um comando descartável que instala a conexão sem deixar o token na configuração. Gere uma por assistente para revogar cada acesso separadamente.',
         'You receive a one-time command that installs the connection without leaving the token in the config. Generate one per assistant so you can revoke each access separately.',
       ),
+    )}</p>`;
+  const body = `<section class="connect-page"><h1>${esc(title)}</h1>
+    ${revokedMsg}
+    <p class="connect-intro">${esc(
+      T(
+        'Ligue o Kassinão em qualquer assistente de IA com MCP (Claude, Cursor e outros) para perguntar sobre as suas calls em linguagem natural.',
+        'Plug Kassinão into any MCP-capable AI assistant (Claude, Cursor, and more) to ask about your calls in natural language.',
+      ),
     )}</p>
+    ${generation}
     ${list}</section>`;
   return shell(title, body, { lang: opts.lang, user: opts.user, active: 'ai', wide: true });
 }

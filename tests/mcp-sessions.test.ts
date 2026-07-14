@@ -4,6 +4,8 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { config } from '../src/config';
 import {
+  claimExchangeCode,
+  commitExchangeCode,
   consumeExchangeCode,
   consumeStagedExchangeCode,
   createExchangeCode,
@@ -11,6 +13,7 @@ import {
   isActiveSession,
   listUserSessions,
   planSessionCapacity,
+  releaseExchangeCode,
   revokeUser,
   revokeUserSession,
   rotateSession,
@@ -18,6 +21,19 @@ import {
 } from '../src/web/mcpTokens';
 
 describe('gestão individual de sessões MCP', () => {
+  it('reserva o código uma vez e o libera apenas em falha transitória', () => {
+    const code = createExchangeCode(`u-claim-${crypto.randomUUID()}`, 'Lia');
+    const first = claimExchangeCode(code);
+    expect(first).toBeDefined();
+    expect(claimExchangeCode(code)).toBeUndefined();
+    expect(first && releaseExchangeCode(first)).toBe(true);
+
+    const retry = claimExchangeCode(code);
+    expect(retry).toBeDefined();
+    expect(retry && commitExchangeCode(retry)).toBe(true);
+    expect(consumeExchangeCode(code)).toBeUndefined();
+  });
+
   it('remove e persiste a remoção ao encontrar uma sessão expirada no uso comum', () => {
     const userId = `u-exp-${crypto.randomUUID()}`;
     const created = createSession(userId, 'Lia');

@@ -19,7 +19,8 @@ Object.assign(process.env, {
   APPLICATION_ID: '000000000000000000',
   DISCORD_CLIENT_SECRET: 'preview-only-client-secret',
   COOKIE_SECRET: 'preview-only-cookie-secret-with-more-than-32-bytes',
-  BASE_URL: `http://localhost:${previewPort}`,
+  APP_URL: `http://localhost:${previewPort}`,
+  ALLOW_ALL_GUILDS: 'true',
   PORT: String(previewPort),
   RECORDINGS_DIR: '/tmp/kassinao-preview-recordings',
   RETENTION_DAYS: '7',
@@ -129,6 +130,7 @@ async function main(): Promise<void> {
     id: 'preview-user',
     name: 'Pessoa Preview',
     avatar: null,
+    scope: 'full',
     exp: now + DAY,
     jti: 'preview-session-never-persisted',
   };

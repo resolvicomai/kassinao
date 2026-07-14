@@ -32,7 +32,8 @@ import {
   scanVisibleCandidates,
 } from '../src/web/api';
 import { signMcpAccess, signMcpRefresh } from '../src/web/auth';
-import { createSession, revokeUser } from '../src/web/mcpTokens';
+import { createExchangeCode, createSession, isActiveSession, revokeUser } from '../src/web/mcpTokens';
+import { createWebSession, isActiveWebSession, revokeWebSession } from '../src/web/webSessions';
 
 describe('limites de disponibilidade da API MCP', () => {
   it('mantém o registro do rate limit dentro do teto mesmo com chaves distribuídas', () => {
@@ -1486,5 +1487,96 @@ describe('paginação das consultas agregadas MCP', () => {
       body: JSON.stringify({ refresh_token: nextBody.refresh_token }),
     });
     expect(legacyClient.status).toBe(200);
+  });
+
+  it('nega exchange e refresh quando membership não pode ser confirmada', async () => {
+    const retryId = `mcp-retry-${crypto.randomUUID()}`;
+    const retryCode = createExchangeCode(retryId, 'Retry');
+    fetchMember.mockRejectedValueOnce(new Error('Discord unavailable'));
+    const unavailableExchange = await fetch(`${baseUrl}/api/mcp/exchange`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: retryCode }),
+    });
+    expect(unavailableExchange.status).toBe(503);
+    await expect(unavailableExchange.json()).resolves.toEqual({ error: 'discord_unavailable' });
+
+    const successfulRetry = await fetch(`${baseUrl}/api/mcp/exchange`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: retryCode }),
+    });
+    expect(successfulRetry.status).toBe(200);
+    const retryTokens = (await successfulRetry.json()) as { refresh_token?: string };
+    expect(retryTokens.refresh_token).toEqual(expect.any(String));
+    const consumedRetry = await fetch(`${baseUrl}/api/mcp/exchange`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: retryCode }),
+    });
+    expect(consumedRetry.status).toBe(400);
+    revokeUser(retryId);
+
+    const outsiderId = `mcp-outsider-${crypto.randomUUID()}`;
+    const exchangeCode = createExchangeCode(outsiderId, 'Outsider');
+    fetchMember.mockRejectedValueOnce(Object.assign(new Error('Unknown Member'), { code: 10007 }));
+    const exchange = await fetch(`${baseUrl}/api/mcp/exchange`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: exchangeCode }),
+    });
+    expect(exchange.status).toBe(403);
+    await expect(exchange.json()).resolves.toEqual({ error: 'not_authorized' });
+
+    const departedId = `mcp-departed-${crypto.randomUUID()}`;
+    const departedSession = createSession(departedId, 'Departed');
+    const departedWebSid = createWebSession(departedId, Date.now() + 60_000);
+    const departedRefresh = signMcpRefresh({
+      id: departedId,
+      name: 'Departed',
+      exp: departedSession.exp,
+      jti: departedSession.sid,
+      gen: departedSession.gen,
+    });
+    fetchMember.mockRejectedValueOnce(Object.assign(new Error('Unknown Member'), { code: 10007 }));
+    try {
+      const deniedRefresh = await fetch(`${baseUrl}/api/mcp/refresh`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          refresh_token: departedRefresh,
+          attempt_id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        }),
+      });
+      expect(deniedRefresh.status).toBe(403);
+      await expect(deniedRefresh.json()).resolves.toEqual({ error: 'not_authorized' });
+      expect(isActiveSession(departedSession.sid)).toBe(false);
+      expect(isActiveWebSession(departedWebSid, departedId)).toBe(false);
+    } finally {
+      revokeUser(departedId);
+      revokeWebSession(departedWebSid);
+    }
+
+    const unavailableId = `mcp-unavailable-${crypto.randomUUID()}`;
+    const session = createSession(unavailableId, 'Unavailable');
+    const refreshToken = signMcpRefresh({
+      id: unavailableId,
+      name: 'Unavailable',
+      exp: session.exp,
+      jti: session.sid,
+      gen: session.gen,
+    });
+    fetchMember.mockRejectedValueOnce(new Error('Discord unavailable'));
+    try {
+      const refresh = await fetch(`${baseUrl}/api/mcp/refresh`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken, attempt_id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }),
+      });
+      expect(refresh.status).toBe(503);
+      await expect(refresh.json()).resolves.toEqual({ error: 'discord_unavailable' });
+    } finally {
+      revokeUser(unavailableId);
+    }
   });
 });

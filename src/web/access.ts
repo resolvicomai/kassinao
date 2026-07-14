@@ -1,5 +1,7 @@
 import { GuildMember, PermissionFlagsBits } from 'discord.js';
+import { config } from '../config';
 import { client } from '../discord/client';
+import { isClientReady } from '../discord/ready';
 import { RecordingMeta } from '../store';
 import { AccessIdentity } from './auth';
 
@@ -108,9 +110,129 @@ export class FreshMembershipBudget {
 }
 
 const freshMembershipBudget = new FreshMembershipBudget();
+// Login e lifecycle de tokens não podem ser derrubados porque uma varredura de
+// gravações consumiu o orçamento de ACL da mesma pessoa.
+const admissionMembershipBudget = new FreshMembershipBudget({
+  perUserPerMinute: 30,
+  globalPerMinute: 300,
+  maxConcurrent: 8,
+  maxTrackedUsers: 5_000,
+});
 
 export function withFreshMembershipBudget<T>(userId: string, task: () => Promise<T>): Promise<T> {
   return freshMembershipBudget.run(userId, task);
+}
+
+function withAdmissionMembershipBudget<T>(userId: string, task: () => Promise<T>): Promise<T> {
+  return admissionMembershipBudget.run(userId, task);
+}
+
+interface MembershipGuild {
+  /** Sempre existe nas guilds do discord.js; opcional só para doubles unitários antigos. */
+  id?: string;
+  members: {
+    fetch(options: { user: string; force: true; cache: false }): Promise<unknown>;
+  };
+}
+
+export type CurrentGuildMembership = 'member' | 'not-member' | 'unavailable';
+type FreshMembershipRunner = typeof withFreshMembershipBudget;
+interface MembershipScanCursor {
+  index: number;
+  unavailable: boolean;
+}
+
+const MAX_MEMBERSHIP_GUILDS_PER_ATTEMPT = 60;
+const membershipScanCursors = new Map<string, MembershipScanCursor>();
+const membershipChecksInFlight = new Map<string, Promise<CurrentGuildMembership>>();
+
+function rememberMembershipScanCursor(userId: string, cursor: MembershipScanCursor): void {
+  membershipScanCursors.delete(userId);
+  membershipScanCursors.set(userId, cursor);
+  while (membershipScanCursors.size > 5_000) {
+    const oldest = membershipScanCursors.keys().next().value as string | undefined;
+    if (!oldest) break;
+    membershipScanCursors.delete(oldest);
+  }
+}
+
+async function scanCurrentGuildMembership(
+  userId: string,
+  guilds: Iterable<MembershipGuild>,
+  runCheck: FreshMembershipRunner,
+): Promise<CurrentGuildMembership> {
+  const savedCursor = membershipScanCursors.get(userId);
+  const start = savedCursor?.index ?? 0;
+  let unavailable = savedCursor?.unavailable ?? false;
+  const iterator = guilds[Symbol.iterator]();
+  let index = 0;
+
+  while (index < start) {
+    const skipped = iterator.next();
+    if (skipped.done) {
+      membershipScanCursors.delete(userId);
+      return unavailable ? 'unavailable' : 'not-member';
+    }
+    index++;
+  }
+
+  let checked = 0;
+  while (checked < MAX_MEMBERSHIP_GUILDS_PER_ATTEMPT) {
+    const candidate = iterator.next();
+    if (candidate.done) {
+      membershipScanCursors.delete(userId);
+      return unavailable ? 'unavailable' : 'not-member';
+    }
+    const guild = candidate.value;
+    index++;
+
+    // Em produção toda guild tem id. Doubles sem id só são aceitos no modo
+    // deliberadamente aberto para manter os testes da primitiva independentes.
+    if (guild.id ? !config.guildPolicy.allows(guild.id) : config.guildPolicy.mode !== 'all') continue;
+    checked++;
+    try {
+      await runCheck(userId, () => guild.members.fetch({ user: userId, force: true, cache: false }));
+      membershipScanCursors.delete(userId);
+      return 'member';
+    } catch (err) {
+      if (err instanceof TransientAccessError) {
+        rememberMembershipScanCursor(userId, { index: index - 1, unavailable });
+        return 'unavailable';
+      }
+      if (!isUnknownMember(err)) unavailable = true;
+      rememberMembershipScanCursor(userId, { index, unavailable });
+    }
+  }
+
+  rememberMembershipScanCursor(userId, { index, unavailable });
+  return 'unavailable';
+}
+
+/**
+ * Confirma membership atual somente nas guilds autorizadas da instância.
+ * Chamadas de produção idênticas e simultâneas compartilham o mesmo fetch; testes
+ * com iteráveis/runners injetados permanecem isolados.
+ */
+export function currentGuildMembership(
+  userId: string,
+  guilds?: Iterable<MembershipGuild>,
+  runCheck?: FreshMembershipRunner,
+): Promise<CurrentGuildMembership> {
+  if (guilds || runCheck) {
+    return scanCurrentGuildMembership(
+      userId,
+      guilds ?? client.guilds.cache.values(),
+      runCheck ?? withAdmissionMembershipBudget,
+    );
+  }
+  if (!isClientReady()) return Promise.resolve('unavailable');
+  const existing = membershipChecksInFlight.get(userId);
+  if (existing) return existing;
+  const check = scanCurrentGuildMembership(userId, client.guilds.cache.values(), withAdmissionMembershipBudget).finally(
+    () => membershipChecksInFlight.delete(userId),
+  );
+  membershipChecksInFlight.set(userId, check);
+  return check;
 }
 
 // "Definitivamente não é membro daqui" (nega camadas de servidor, sem 503):
@@ -177,6 +299,7 @@ export async function prevalidateGuildMembershipForMcp(
   requestContext: AccessRequestContext,
 ): Promise<boolean> {
   if (!user.id || !guildId) return false;
+  if (!config.guildPolicy.allows(guildId)) return false;
   // Um guildId arbitrário fora do gateway não prova indisponibilidade: para
   // esta consulta ele é um escopo definitivamente inacessível e deve parecer
   // igual a Unknown Member. Só REST falhando numa guild conhecida vira 503.
@@ -212,6 +335,11 @@ async function computeAccess(
 ): Promise<AccessResult> {
   // Sem id não há acesso a nada (impede null/undefined "casar" com startedBy null).
   if (!user.id) return { view: false, delete: false, serverLayersUnknown: false };
+  // Dados históricos de uma guild removida da instância ficam preservados em
+  // disco, porém invisíveis e sem provocar nem uma consulta ao Discord.
+  if (!config.guildPolicy.allows(meta.guildId)) {
+    return { view: false, delete: false, serverLayersUnknown: false };
+  }
 
   const guild = client.guilds.cache.get(meta.guildId);
   if (!guild) {

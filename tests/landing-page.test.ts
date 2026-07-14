@@ -28,6 +28,8 @@ describe('landing page do Kassinão', () => {
       expect(html).not.toContain('href="/app');
       expect(html).not.toContain('/auth/login');
       expect(html).not.toContain('Entrar');
+      expect(html).not.toContain('app.kassinao.cloud');
+      expect(html).not.toContain('mcp.kassinao.cloud');
     }
   });
 
@@ -53,6 +55,7 @@ describe('landing page do Kassinão', () => {
     expect(pt).toContain('<html lang="pt-BR">');
     expect(pt).toContain('Para equipes que trabalham no Discord');
     expect(pt).toContain('Demo pública');
+    expect(pt).toContain('Não existe workspace hospedado ou cadastro público.');
     expect(pt).toContain('/og-pt.png');
     expect(pt).not.toContain('For teams that work on Discord');
 
@@ -60,6 +63,7 @@ describe('landing page do Kassinão', () => {
     expect(en).toContain('For teams that work on Discord');
     expect(en).toContain("Your call ends. The decisions don't disappear.");
     expect(en).toContain('Public demo');
+    expect(en).toContain('There is no hosted workspace or public signup.');
     expect(en).toContain('Your server. Your history. Your rules.');
     expect(en).toContain('/og-en.png');
     expect(en).not.toContain('Sua call termina. As decisões não somem.');
