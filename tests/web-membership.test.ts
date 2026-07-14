@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
 import { cleanInline } from '../src/sanitize';
 import type { RecordingMeta } from '../src/store';
-import { FreshMembershipBudget } from '../src/web/access';
+import { FreshMembershipBudget, TransientAccessError } from '../src/web/access';
 import { OpaqueCursorError } from '../src/web/opaqueCursor';
 import {
   collectWebLibraryPage,
@@ -240,6 +240,22 @@ describe('paginação ACL da biblioteca web', () => {
       candidatesScanned: MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE,
     });
     expect(second.items.map((item) => item.meta.id)).toEqual(['authorized-old']);
+  });
+
+  it('não transforma falha transitória em negação nem avalia candidatas posteriores', async () => {
+    const metas = [
+      libraryMeta('conclusive-denial', 'guild-a'),
+      libraryMeta('discord-unavailable', 'guild-b'),
+      libraryMeta('must-not-be-skipped', 'guild-c'),
+    ];
+    const runCheck = vi.fn(async (_user, meta: RecordingMeta) => {
+      if (meta.id === 'discord-unavailable') throw new TransientAccessError('Discord timeout');
+      return { view: false, delete: false };
+    });
+
+    await expect(collectWebLibraryPage(user, metas, 0, runCheck)).rejects.toBeInstanceOf(TransientAccessError);
+    expect(runCheck.mock.calls.map(([, meta]) => meta.id)).toEqual(['conclusive-denial', 'discord-unavailable']);
+    expect(runCheck.mock.calls[0]?.[2]).toMatchObject({ throwOnTransient: true });
   });
 });
 

@@ -40,11 +40,16 @@ import {
   isAllowedWebMutation,
   logoutWeb,
   scopeWebSessionToApp,
-  signMcpRefresh,
   WebUser,
 } from './auth';
 import { applyCspNonce, contentSecurityPolicy, createCspNonce } from './csp';
-import { createSession, listUserSessions, McpSessionCapacityError, revokeUser, revokeUserSession } from './mcpTokens';
+import {
+  createExchangeCode,
+  listUserSessions,
+  McpExchangeCodeCapacityError,
+  revokeUser,
+  revokeUserSession,
+} from './mcpTokens';
 import {
   connectPage,
   messagePage,
@@ -271,12 +276,16 @@ function sendRecordingUnavailable(res: Response, l: Locale, user: WebUser): void
  */
 function notReady(res: Response, l: Locale, user?: WebUser): boolean {
   if (isClientReady()) return false;
+  sendAccessTemporarilyUnavailable(res, l, user);
+  return true;
+}
+
+function sendAccessTemporarilyUnavailable(res: Response, l: Locale, user?: WebUser): void {
   res
     .status(503)
     .set('Retry-After', '5')
     .type('html')
     .send(messagePage(MSG.startingTitle[l], MSG.starting[l], user, l));
-  return true;
 }
 
 interface MembershipGuild {
@@ -341,14 +350,12 @@ export async function collectWebLibraryPage(
       if (checkedGuilds.size >= MAX_WEB_LIBRARY_GUILDS_PER_PAGE) break;
       checkedGuilds.add(meta.guildId);
     }
+    const access = await runCheck(user, meta, { requestContext, throwOnTransient: true });
+    // Só consome a candidata depois de uma resposta conclusiva. Uma falha
+    // transitória aborta a página e a rota não emite cursor além desta meta.
     index++;
     candidatesScanned++;
-    try {
-      const access = await runCheck(user, meta, { requestContext });
-      if (access.view) items.push({ meta, canDelete: access.delete });
-    } catch {
-      // A página privada continua fail-closed em falha transitória do Discord.
-    }
+    if (access.view) items.push({ meta, canDelete: access.delete });
   }
 
   return {
@@ -976,12 +983,13 @@ export function startWebServer(): void {
           const label = String((req.body as Record<string, unknown>)?.label ?? '')
             .trim()
             .slice(0, 40);
-          // O usuário recebe um REFRESH token (o conector troca por access via /api/mcp/refresh).
-          let session;
+          // O navegador recebe só um código descartável. O refresh token nasce na
+          // troca feita pelo conector e vai direto ao cofre local, nunca ao HTML/config.
+          let exchangeCode: string;
           try {
-            session = createSession(user.id, user.name, label);
+            exchangeCode = createExchangeCode(user.id, user.name, label);
           } catch (err) {
-            if (!(err instanceof McpSessionCapacityError)) throw err;
+            if (!(err instanceof McpExchangeCodeCapacityError)) throw err;
             res
               .status(503)
               .set('Retry-After', '60')
@@ -989,20 +997,13 @@ export function startWebServer(): void {
               .send(messagePage(MSG.mcpCapacityTitle[l], MSG.mcpCapacity[l], user, l));
             return;
           }
-          const refreshToken = signMcpRefresh({
-            id: user.id,
-            name: user.name,
-            exp: session.exp,
-            jti: session.sid,
-            gen: session.gen,
-          });
           console.log(
-            `MCP: sessão ${session.sid} criada para ${cleanInline(user.name)} (${cleanInline(user.id)}) via web${label ? ` — "${cleanInline(label)}"` : ''}.`,
+            `MCP: código de conexão criado para ${cleanInline(user.name)} (${cleanInline(user.id)}) via web${label ? ` — "${cleanInline(label)}"` : ''}.`,
           );
           res
             .set('Cache-Control', 'no-store')
             .type('html')
-            .send(connectPage({ lang: l, user, refreshToken, label }));
+            .send(connectPage({ lang: l, user, exchangeCode, label }));
         } catch (err) {
           next(err);
         }
@@ -1290,7 +1291,14 @@ export function startWebServer(): void {
       if (!meta) return [];
       return [meta];
     });
-    const library = await collectWebLibraryPage(user, candidates);
+    let library: WebLibraryPage;
+    try {
+      library = await collectWebLibraryPage(user, candidates);
+    } catch (err) {
+      if (!(err instanceof TransientAccessError)) throw err;
+      sendAccessTemporarilyUnavailable(res, l, user);
+      return;
+    }
     const lastProcessed =
       library.nextCursor !== undefined && library.nextCursor > 0 ? candidates[library.nextCursor - 1] : undefined;
     const nextTimelineCursor = lastProcessed

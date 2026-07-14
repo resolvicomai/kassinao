@@ -155,6 +155,21 @@ describe('ACL histórica das gravações', () => {
       checkAccessForMcp({ id: USER_ID, name: 'Alice' }, meta({ guildId: 'guild-removida-do-bot' })),
     ).resolves.toEqual({ view: false, delete: false });
   });
+
+  it('expõe falha transitória para listagem com cursor sem confundir com negação real', async () => {
+    const { fetchMember } = installGuild();
+    fetchMember.mockRejectedValueOnce(new Error('Discord timeout'));
+
+    await expect(
+      checkAccess({ id: USER_ID, name: 'Alice' }, meta(), { throwOnTransient: true }),
+    ).rejects.toBeInstanceOf(TransientAccessError);
+
+    fetchMember.mockRejectedValueOnce(Object.assign(new Error('Unknown Member'), { code: 10007 }));
+    await expect(checkAccess({ id: USER_ID, name: 'Alice' }, meta(), { throwOnTransient: true })).resolves.toEqual({
+      view: false,
+      delete: false,
+    });
+  });
 });
 
 describe('orçamento de membership autoritativo', () => {

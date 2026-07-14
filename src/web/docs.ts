@@ -1802,10 +1802,10 @@ WHISPER_MODEL=small`,
   "mcpServers": {
     "kassinao": {
       "command": "npx",
-      "args": ["-y", "kassinao-mcp@1.0.4"],
+      "args": ["-y", "kassinao-mcp@1.0.5"],
       "env": {
         "KASSINAO_URL": "${T('https://SEU-KASSINAO', 'https://YOUR-KASSINAO')}",
-        "KASSINAO_REFRESH_TOKEN": "${T('COLE_O_TOKEN', 'PASTE_THE_TOKEN')}"
+        "KASSINAO_PROFILE": "${T('PERFIL_IMPRESSO_PELO_COMANDO', 'PROFILE_PRINTED_BY_THE_COMMAND')}"
       }
     }
   }
@@ -2124,14 +2124,14 @@ WHISPER_MODEL=small`,
         <p>${esc(T('Defina um MCP_SECRET dedicado com no mínimo 32 bytes e reinicie. A página /app/conectar-ia e a API só existem quando esse segredo está presente.', 'Set a dedicated MCP_SECRET with at least 32 bytes and restart. The /app/conectar-ia page and API exist only when this secret is present.'))}</p>
         ${codeBlock(l === 'pt' ? 'Terminal' : 'Terminal', 'openssl rand -hex 32', copyLabel)}
         <h3>${esc(T('Conecte cada pessoa', 'Connect each person'))}</h3>
-        <p>${esc(T('Abra /app/conectar-ia, entre com Discord, gere uma conexão nomeada e copie a configuração exibida uma única vez. O computador cliente precisa de Node.js 20 ou superior.', 'Open /app/conectar-ia, sign in with Discord, create a named connection, and copy the configuration shown once. The client computer needs Node.js 20 or newer.'))}</p>
+        <p>${esc(T('Abra /app/conectar-ia, entre com Discord e gere uma conexão nomeada. Copie o código descartável e execute o comando exibido: ele pede o código com a entrada oculta, salva o token em um arquivo local protegido (0600 no macOS/Linux; ACL herdada do perfil no Windows) e imprime uma configuração sem segredo. O computador precisa de Node.js 20 ou superior.', 'Open /app/conectar-ia, sign in with Discord, and create a named connection. Copy the one-time code and run the displayed command: it asks for the code with hidden input, saves the token in a protected local file (0600 on macOS/Linux; inherited profile ACL on Windows), and prints a secret-free config. The computer needs Node.js 20 or newer.'))}</p>
         ${mcpConfig}
-        <p>${esc(T('Em ambiente sem navegador, um ID presente em OWNER_IDS pode gerar um código com /mcp novo e trocar pelo terminal.', 'Without a browser, an ID listed in OWNER_IDS can generate a code with /mcp new and exchange it in the terminal.'))}</p>
+        <p>${esc(T('O mesmo fluxo funciona sem navegador: um ID presente em OWNER_IDS gera um código com /mcp novo e faz a troca pelo terminal.', 'The same flow works without a browser: an ID listed in OWNER_IDS generates a code with /mcp new and exchanges it in the terminal.'))}</p>
         ${codeBlock(
           l === 'pt' ? 'Terminal' : 'Terminal',
           T(
-            'KASSINAO_URL=https://SEU-KASSINAO npx -y kassinao-mcp@1.0.4 exchange CODIGO',
-            'KASSINAO_URL=https://YOUR-KASSINAO npx -y kassinao-mcp@1.0.4 exchange CODE',
+            'npx -y kassinao-mcp@1.0.5 exchange --stdin --url https://SEU-KASSINAO',
+            'npx -y kassinao-mcp@1.0.5 exchange --stdin --url https://YOUR-KASSINAO',
           ),
           copyLabel,
         )}
@@ -2144,7 +2144,7 @@ WHISPER_MODEL=small`,
           <article class="mcp-tool"><code>get_meeting</code><p>${esc(T('Abre o dossiê completo de uma reunião.', 'Opens a complete meeting dossier.'))}</p></article>
         </div>
         <h3>${esc(T('Tokens e revogação', 'Tokens and revocation'))}</h3>
-        <p>${esc(T('O refresh token fica em ~/.config/kassinao-mcp com permissão 0600 e gira a cada renovação. Revogue uma conexão na página, use /mcp revogar-tudo ou gire MCP_SECRET para revogar todos.', 'The refresh token lives under ~/.config/kassinao-mcp with 0600 permissions and rotates on renewal. Revoke one connection on the page, use /mcp revoke-all, or rotate MCP_SECRET to revoke everyone.'))}</p>
+        <p>${esc(T('O refresh token fica em ~/.config/kassinao-mcp, protegido por modo 0600 no macOS/Linux e pelas ACLs herdadas do perfil no Windows, e gira a cada renovação. Revogue uma conexão na página, use /mcp revogar-tudo ou gire MCP_SECRET para revogar todos.', 'The refresh token lives under ~/.config/kassinao-mcp, protected by mode 0600 on macOS/Linux and by the inherited profile ACLs on Windows, and rotates on renewal. Revoke one connection on the page, use /mcp revoke-all, or rotate MCP_SECRET to revoke everyone.'))}</p>
       </section>
 
       <section class="doc-section" id="problemas" data-doc-section data-keywords="troubleshooting error not online commands missing oauth callback tunnel transcript minutes mcp 404 denied disk audio expired">

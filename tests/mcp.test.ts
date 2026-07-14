@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { Request } from 'express';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { cleanInline, cleanText, fenceUntrusted, neutralizeFences } from '../src/sanitize';
 import { formatInTz, RangeError, resolveRange } from '../src/web/range';
 import { getMcpUser, signMcpAccess, signMcpRefresh, verifyMcpRefresh } from '../src/web/auth';
@@ -9,6 +9,8 @@ import {
   createExchangeCode,
   createSession,
   isActiveSession,
+  MAX_PENDING_EXCHANGE_CODES,
+  McpExchangeCodeCapacityError,
   revokeUser,
   rotateSession,
 } from '../src/web/mcpTokens';
@@ -87,6 +89,12 @@ describe('tokens MCP (confusão de tipo — crítico histórico)', () => {
   it('access NÃO passa como refresh', () => {
     expect(verifyMcpRefresh(access)).toBeUndefined();
   });
+  it('refresh rejeita geração negativa ou fracionária', () => {
+    const negative = signMcpRefresh({ id: 'u1', name: 'A', exp: now + 60_000, jti: 'sidA', gen: -1 });
+    const fractional = signMcpRefresh({ id: 'u1', name: 'A', exp: now + 60_000, jti: 'sidA', gen: 0.5 });
+    expect(verifyMcpRefresh(negative)).toBeUndefined();
+    expect(verifyMcpRefresh(fractional)).toBeUndefined();
+  });
   it('access expirado é rejeitado', () => {
     const expired = signMcpAccess({ id: 'u1', name: 'A', exp: now - 1000, jti: 'sidA' });
     expect(getMcpUser(bearer(expired))).toBeUndefined();
@@ -115,6 +123,60 @@ describe('registro de sessões (revogação + rotação-com-reuso)', () => {
     expect(isActiveSession(s.sid)).toBe(false);
   });
 
+  it('reemite a mesma geração quando a tentativa idempotente perde a resposta', () => {
+    const userId = `u-retry-${crypto.randomUUID()}`;
+    const s = createSession(userId, 'Bob');
+    const attempt = '0123456789abcdef0123456789abcdef';
+
+    const first = rotateSession(s.sid, 0, attempt);
+    const retry = rotateSession(s.sid, 0, attempt);
+
+    expect(first).toMatchObject({ ok: true, gen: 1, replayed: false });
+    expect(retry).toMatchObject({ ok: true, gen: 1, replayed: true });
+    expect(isActiveSession(s.sid)).toBe(true);
+    revokeUser(userId);
+  });
+
+  it('continua revogando uma geração antiga com tentativa diferente', () => {
+    const userId = `u-reuse-${crypto.randomUUID()}`;
+    const s = createSession(userId, 'Bob');
+    rotateSession(s.sid, 0, '0123456789abcdef0123456789abcdef');
+
+    const reuse = rotateSession(s.sid, 0, 'fedcba9876543210fedcba9876543210');
+
+    expect(reuse).toMatchObject({ ok: false, reason: 'reuse' });
+    expect(isActiveSession(s.sid)).toBe(false);
+  });
+
+  it('mantém o retry idempotente depois de suspensão maior que cinco minutos', () => {
+    vi.useFakeTimers();
+    const userId = `u-suspended-retry-${crypto.randomUUID()}`;
+    try {
+      const s = createSession(userId, 'Bob');
+      const attempt = '0123456789abcdef0123456789abcdef';
+      rotateSession(s.sid, 0, attempt);
+      vi.advanceTimersByTime(6 * 60_000);
+
+      expect(rotateSession(s.sid, 0, attempt)).toMatchObject({ ok: true, gen: 1, replayed: true });
+      expect(isActiveSession(s.sid)).toBe(true);
+    } finally {
+      revokeUser(userId);
+      vi.useRealTimers();
+    }
+  });
+
+  it('encerra o retry anterior após a próxima rotação bem-sucedida', () => {
+    const userId = `u-old-retry-${crypto.randomUUID()}`;
+    const s = createSession(userId, 'Bob');
+    const firstAttempt = '0123456789abcdef0123456789abcdef';
+    const nextAttempt = 'fedcba9876543210fedcba9876543210';
+
+    expect(rotateSession(s.sid, 0, firstAttempt)).toMatchObject({ ok: true, gen: 1, replayed: false });
+    expect(rotateSession(s.sid, 1, nextAttempt)).toMatchObject({ ok: true, gen: 2, replayed: false });
+    expect(rotateSession(s.sid, 0, firstAttempt)).toMatchObject({ ok: false, reason: 'reuse' });
+    expect(isActiveSession(s.sid)).toBe(false);
+  });
+
   it('revokeUser derruba todas as sessões do usuário na hora', () => {
     const userId = `u-revoke-${crypto.randomUUID()}`;
     const a = createSession(userId, 'C');
@@ -126,8 +188,26 @@ describe('registro de sessões (revogação + rotação-com-reuso)', () => {
 
   it('código de troca é de uso único', () => {
     const userId = `u-code-${crypto.randomUUID()}`;
-    const code = createExchangeCode(userId, 'D');
-    expect(consumeExchangeCode(code)?.userId).toBe(userId);
+    const code = createExchangeCode(userId, 'D', 'Claude do notebook');
+    expect(consumeExchangeCode(code)).toMatchObject({ userId, label: 'Claude do notebook' });
     expect(consumeExchangeCode(code)).toBeUndefined(); // segunda vez não vale
+  });
+
+  it('mantém só um código pendente por usuário e limita o total global', () => {
+    const sameUser = `u-code-replace-${crypto.randomUUID()}`;
+    const first = createExchangeCode(sameUser, 'D');
+    const second = createExchangeCode(sameUser, 'D');
+    expect(consumeExchangeCode(first)).toBeUndefined();
+    expect(consumeExchangeCode(second)?.userId).toBe(sameUser);
+
+    const created: string[] = [];
+    try {
+      for (let index = 0; index < MAX_PENDING_EXCHANGE_CODES; index++) {
+        created.push(createExchangeCode(`u-cap-${index}`, 'D'));
+      }
+      expect(() => createExchangeCode('u-over-cap', 'D')).toThrow(McpExchangeCodeCapacityError);
+    } finally {
+      for (const code of created) consumeExchangeCode(code);
+    }
   });
 });

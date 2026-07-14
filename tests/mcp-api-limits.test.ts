@@ -16,6 +16,7 @@ import {
   deleteRecording,
   minutesPath,
   readMeta,
+  readTranscript,
   saveMeta,
   saveMinutes,
   saveTranscript,
@@ -30,7 +31,7 @@ import {
   resetMcpApiRateLimitsForTests,
   scanVisibleCandidates,
 } from '../src/web/api';
-import { signMcpAccess } from '../src/web/auth';
+import { signMcpAccess, signMcpRefresh } from '../src/web/auth';
 import { createSession, revokeUser } from '../src/web/mcpTokens';
 
 describe('limites de disponibilidade da API MCP', () => {
@@ -121,6 +122,7 @@ describe('paginação das consultas agregadas MCP', () => {
   let baseUrl: string;
   let authorization: string;
   let fetchMember: ReturnType<typeof vi.fn>;
+  let initialRefreshToken: string;
 
   beforeEach(() => resetMcpApiRateLimitsForTests());
 
@@ -209,6 +211,13 @@ describe('paginação das consultas agregadas MCP', () => {
 
     const session = createSession(userId, 'Lia');
     authorization = `Bearer ${signMcpAccess({ id: userId, name: 'Lia', exp: now + 60_000, jti: session.sid })}`;
+    initialRefreshToken = signMcpRefresh({
+      id: userId,
+      name: 'Lia',
+      exp: session.exp,
+      jti: session.sid,
+      gen: session.gen,
+    });
     const app = express();
     mountMcpApi(app);
     server = http.createServer(app);
@@ -443,6 +452,52 @@ describe('paginação das consultas agregadas MCP', () => {
       );
       expect(stale.status).toBe(400);
       await expect(stale.json()).resolves.toEqual({ error: 'bad_cursor' });
+    } finally {
+      saveTranscript(recordingId, original);
+    }
+  });
+
+  it('preserva contexto antes e depois nas fronteiras do chunk de /said', async () => {
+    const original = readTranscript(recordingId) ?? [];
+    const boundary = Array.from({ length: 5_002 }, (_, index) => ({
+      startMs: index * 1_000,
+      endMs: index * 1_000 + 500,
+      speaker: 'Lia',
+      text: index === 4_999 || index === 5_000 ? `needle-boundary ${index}` : `contexto ${index}`,
+    }));
+    saveTranscript(recordingId, boundary);
+    try {
+      const first = await fetch(
+        `${baseUrl}/api/said?meetingId=${encodeURIComponent(recordingId)}&query=needle-boundary&contextSegments=1`,
+        { headers: { authorization } },
+      );
+      const firstBody = (await first.json()) as {
+        results: Array<{ text: string; contextBefore: string[]; contextAfter: string[] }>;
+        nextCursor: string | null;
+      };
+      expect(first.status).toBe(200);
+      expect(firstBody.results).toEqual([
+        expect.objectContaining({
+          text: 'needle-boundary 4999',
+          contextBefore: ['contexto 4998'],
+          contextAfter: ['needle-boundary 5000'],
+        }),
+      ]);
+      expect(firstBody.nextCursor).toMatch(/^[A-Za-z0-9_-]+$/);
+
+      const second = await fetch(
+        `${baseUrl}/api/said?meetingId=${encodeURIComponent(recordingId)}&query=needle-boundary&contextSegments=1&cursor=${encodeURIComponent(firstBody.nextCursor!)}`,
+        { headers: { authorization } },
+      );
+      const secondBody = (await second.json()) as typeof firstBody;
+      expect(second.status).toBe(200);
+      expect(secondBody.results).toEqual([
+        expect.objectContaining({
+          text: 'needle-boundary 5000',
+          contextBefore: ['needle-boundary 4999'],
+          contextAfter: ['contexto 5001'],
+        }),
+      ]);
     } finally {
       saveTranscript(recordingId, original);
     }
@@ -879,6 +934,30 @@ describe('paginação das consultas agregadas MCP', () => {
     expect(response.status).toBe(200);
     expect(body.results).toHaveLength(1);
     expect([recordingId, secondRecordingId]).toContain(body.results[0].meetingId);
+  });
+
+  it('pagina resultados de busca depois de ordenar a janela limitada', async () => {
+    const url = `${baseUrl}/api/search?guildId=${encodeURIComponent(guildId)}&query=needle&limit=1`;
+    const first = await fetch(url, { headers: { authorization } });
+    const firstBody = (await first.json()) as {
+      results: { id: string }[];
+      nextCursor: string | null;
+      returned: number;
+    };
+
+    expect(first.status).toBe(200);
+    expect(firstBody.results.map((result) => result.id)).toEqual([recordingId]);
+    expect(firstBody.returned).toBe(1);
+    expect(firstBody.nextCursor).toMatch(/^[A-Za-z0-9_-]+$/);
+
+    const second = await fetch(`${url}&cursor=${encodeURIComponent(firstBody.nextCursor!)}`, {
+      headers: { authorization },
+    });
+    const secondBody = (await second.json()) as typeof firstBody;
+
+    expect(second.status).toBe(200);
+    expect(secondBody.results.map((result) => result.id)).toEqual([secondRecordingId]);
+    expect(secondBody.nextCursor).toBeNull();
   });
 
   it('pagina busca por âncora estável mesmo com inserção antes do cursor', async () => {
@@ -1374,5 +1453,38 @@ describe('paginação das consultas agregadas MCP', () => {
     expect(body).toMatchObject({ meetingsTruncated: true, meetingScanLimit: 300 });
     expect(body.nextCursor).toBeNull();
     expect(body.nextScanCursor).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  it('reemite a rotação após resposta perdida e avança normalmente depois', async () => {
+    const firstAttempt = '0123456789abcdef0123456789abcdef';
+    const rotate = (refreshToken: string, attemptId: string) =>
+      fetch(`${baseUrl}/api/mcp/refresh`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken, attempt_id: attemptId }),
+      });
+
+    const malformed = await rotate(initialRefreshToken, 'not-valid');
+    expect(malformed.status).toBe(400);
+
+    const first = await rotate(initialRefreshToken, firstAttempt);
+    const firstBody = (await first.json()) as { refresh_token: string };
+    const retry = await rotate(initialRefreshToken, firstAttempt);
+    const retryBody = (await retry.json()) as { refresh_token: string };
+
+    expect(first.status).toBe(200);
+    expect(retry.status).toBe(200);
+    expect(retryBody.refresh_token).toBe(firstBody.refresh_token);
+
+    const next = await rotate(firstBody.refresh_token, 'fedcba9876543210fedcba9876543210');
+    expect(next.status).toBe(200);
+    const nextBody = (await next.json()) as { refresh_token: string };
+
+    const legacyClient = await fetch(`${baseUrl}/api/mcp/refresh`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ refresh_token: nextBody.refresh_token }),
+    });
+    expect(legacyClient.status).toBe(200);
   });
 });

@@ -37,6 +37,13 @@ function nonCanonicalBody(payload: object, secret: string): string {
   return signBody(body, secret);
 }
 
+function incorrectMac(token: string): string {
+  const dot = token.indexOf('.');
+  const mac = token.slice(dot + 1);
+  const replacement = mac[0] === 'A' ? 'B' : 'A';
+  return `${token.slice(0, dot + 1)}${replacement}${mac.slice(1)}`;
+}
+
 function cookieHeader(token: string): string {
   return `kassinao_session=${encodeURIComponent(token)}`;
 }
@@ -88,6 +95,7 @@ describe('tokens assinados hostis falham fechados', () => {
     const macLength = validWebToken.length - dot - 1;
     const malformed = [
       `${validWebToken.slice(0, dot + 1)}${'é'.repeat(macLength)}`,
+      incorrectMac(validWebToken),
       nonCanonicalMac(validWebToken),
       nonCanonicalBody(webPayload, config.cookieSecret),
       signPayload({ ...webPayload, name: 'x'.repeat(7_000) }, config.cookieSecret),
@@ -105,6 +113,7 @@ describe('tokens assinados hostis falham fechados', () => {
     const macLength = validMcpToken.length - dot - 1;
     const malformed = [
       `${validMcpToken.slice(0, dot + 1)}${'é'.repeat(macLength)}`,
+      incorrectMac(validMcpToken),
       nonCanonicalMac(validMcpToken),
       nonCanonicalBody({ typ: 'mcp', ...mcpPayload }, config.mcpAccessSecret),
       signMcpAccess({ ...mcpPayload, name: 'x'.repeat(7_000) }),

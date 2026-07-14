@@ -189,6 +189,12 @@ export interface AccessCheckOptions {
   requestContext?: AccessRequestContext;
   /** Ignora até o contexto da listagem. Obrigatório antes de apagar dados. */
   freshMember?: boolean;
+  /**
+   * Não converte falha transitória do Discord em `view:false`. Listagens com
+   * cursor usam este modo para responder 503 sem pular uma candidata que ainda
+   * não teve a membership avaliada de forma conclusiva.
+   */
+  throwOnTransient?: boolean;
 }
 
 /** Grant ligado à presença histórica; só é aplicado depois de confirmar membership atual. */
@@ -249,6 +255,9 @@ export async function checkAccess(
   options: AccessCheckOptions = {},
 ): Promise<Access> {
   const r = await computeAccess(user, meta, options);
+  if (r.serverLayersUnknown && options.throwOnTransient) {
+    throw new TransientAccessError('camadas de acesso indisponíveis no momento');
+  }
   return { view: r.view, delete: r.delete };
 }
 

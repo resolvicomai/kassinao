@@ -201,7 +201,7 @@ More knobs — disk guard, disk-full alerts, off-site backup via rclone — are 
 
 1. Add the new `APP_URL/auth/callback` to Discord OAuth before switching production.
 2. Change DNS, tunnel routes, `APP_URL`, `PUBLIC_URL`, `DOCS_URL`, and `MCP_URL` in one maintenance window. Browser sessions do not cross domains, so users must sign in again.
-3. MCP tokens are pinned to the origin that issued them. Generate a new connection and replace `KASSINAO_URL` and its token together for every active client.
+3. MCP tokens are pinned to the origin that issued them. Generate a new connection and replace the complete config block printed by the exchange command in every active client.
 4. Verify every new origin, then remove the superseded OAuth callback, DNS records, and tunnel routes. Retired hostnames are not served by the application.
 
 ### Commands

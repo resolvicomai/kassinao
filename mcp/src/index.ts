@@ -14,19 +14,21 @@
  *
  * Usage:
  *   kassinao-mcp                  starts the MCP server (stdio) for Claude/Cursor
- *   kassinao-mcp exchange <code>  exchanges a /mcp new code and stores the tokens locally
+ *   kassinao-mcp exchange --stdin --url <origin>
+ *                                 reads a one-time code without putting it in argv/history
  *
  * Env:
  *   KASSINAO_URL             e.g. https://kassinao.example.com (required)
- *   KASSINAO_REFRESH_TOKEN   token generated in /app/conectar-ia (first use only; then stored)
+ *   KASSINAO_REFRESH_TOKEN   legacy bootstrap token (first use only; prefer exchange/profile)
  *   KASSINAO_PROFILE         non-secret local profile id printed by `exchange`
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readApiJson } from './apiResponse.js';
-import { loadCredentialStore } from './credentialStore.js';
-import { strictFetch } from './http.js';
+import { parseCredentialTokenResponse, refreshCredential, type CredentialTokenResponse } from './credentialRefresh.js';
+import { loadCredentialStore, saveCredentialStore } from './credentialStore.js';
+import { DEFAULT_HTTP_TIMEOUT_MS, strictFetch } from './http.js';
 import {
   createTokenProfileId,
   mayFallbackToEnvToken,
@@ -39,7 +41,8 @@ import {
 import { createToolErrorResponse, createToolResponse, MCP_UNTRUSTED_DESCRIPTION } from './toolOutput.js';
 
 function configuredUrl(): string {
-  const raw = process.env.KASSINAO_URL;
+  const urlFlag = process.argv.indexOf('--url');
+  const raw = urlFlag >= 0 ? process.argv[urlFlag + 1] : process.env.KASSINAO_URL;
   if (!raw) return '';
   try {
     return normalizeKassinaoUrl(raw);
@@ -112,82 +115,51 @@ function loadStore(): StoredCredentials {
   return {};
 }
 
-// Store the refresh token on disk with mode 0600. An OS vault such as Keychain,
-// DPAPI, or libsecret is a future improvement; the README documents the current model.
+// Store the refresh token in a protected local file (0600 on Unix; inherited
+// profile ACL on Windows). The README documents the current model.
 function saveStore(s: StoredCredentials, file = STORE_FILE): void {
-  fs.mkdirSync(STORE_DIR, { recursive: true, mode: 0o700 });
-  if (process.platform !== 'win32') fs.chmodSync(STORE_DIR, 0o700);
-  const tmp = `${file}.${process.pid}.tmp`;
-  try {
-    const fd = fs.openSync(tmp, 'w', 0o600);
-    try {
-      // Windows does not implement POSIX permissions. On Unix, a file reused after
-      // a crash must also be restored to mode 0600.
-      if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
-      fs.writeFileSync(fd, JSON.stringify(s));
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(tmp, file);
-    syncStoreDir(); // also makes the rename durable across a power failure
-  } finally {
-    fs.rmSync(tmp, { force: true });
-  }
+  saveCredentialStore(STORE_DIR, file, s);
 }
 
-// Precedence: stored rotated token > bootstrap-only env token. Reusing the env token
-// after rotation would trigger server-side reuse detection.
-const stored = loadStore();
-let refreshToken = selectBootstrapRefreshToken(stored, URL_BASE, ENV_REFRESH_TOKEN);
 let accessToken = '';
 let accessExpMs = 0;
+const MAX_TOKEN_RESPONSE_BYTES = 32 * 1024;
 
-interface TokenResponse {
-  access_token: string;
-  access_expires_at: string;
-  refresh_token: string;
-}
-
-async function tryRefresh(token: string): Promise<TokenResponse | undefined> {
-  const r = await strictFetch(`${URL_BASE}/api/mcp/refresh`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ refresh_token: token }),
-  });
-  if (mayFallbackToEnvToken(r.status)) return undefined;
-  if (!r.ok) throw new Error(`Could not refresh the token (HTTP ${r.status}). Try again in a moment.`);
-  return (await readApiJson(r)) as TokenResponse;
+async function tryRefresh(token: string, attemptId: string): Promise<unknown | undefined> {
+  return strictFetch(
+    `${URL_BASE}/api/mcp/refresh`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ refresh_token: token, attempt_id: attemptId }),
+      signal: AbortSignal.timeout(DEFAULT_HTTP_TIMEOUT_MS),
+    },
+    async (response) => {
+      if (mayFallbackToEnvToken(response.status)) return undefined;
+      if (!response.ok) {
+        throw new Error(`Could not refresh the token (HTTP ${response.status}). Try again in a moment.`);
+      }
+      return readApiJson(response, MAX_TOKEN_RESPONSE_BYTES);
+    },
+  );
 }
 
 async function refreshTokens(): Promise<void> {
   if (!URL_BASE) throw new Error('Set KASSINAO_URL (for example, https://kassinao.example.com).');
-  if (!refreshToken) {
-    const base = URL_BASE || '<your Kassinão URL>';
-    throw new Error(`No token found. Generate one at ${base}/app/conectar-ia or run: kassinao-mcp exchange <code>.`);
-  }
-  let data = await tryRefresh(refreshToken);
-  // A stored token may be dead after the user revokes everything and supplies a NEW
-  // env token. Try the env once instead of failing. If it works, rotation stores it
-  // and repairs the flow automatically.
-  const envTok = ENV_REFRESH_TOKEN;
-  if (!data && envTok && envTok !== refreshToken) {
-    data = await tryRefresh(envTok);
-  }
-  if (!data) {
-    const base = URL_BASE || '<your Kassinão URL>';
-    throw new Error(
-      `Could not refresh the token because it was revoked or expired. Generate a new one at ${base}/app/conectar-ia.`,
-    );
-  }
-  refreshToken = data.refresh_token; // rotation: persist the replacement immediately
+  const data = await refreshCredential({
+    storeFile: STORE_FILE,
+    currentUrl: URL_BASE,
+    environmentRefreshToken: ENV_REFRESH_TOKEN,
+    load: loadStore,
+    save: (credentials) => saveStore(credentials),
+    request: tryRefresh,
+  });
   accessToken = data.access_token;
   accessExpMs = Date.parse(data.access_expires_at) || Date.now() + 10 * 60 * 1000;
-  saveStore({ url: URL_BASE, refreshToken });
 }
 
 // Rotation is strict: parallel refreshes with the same generation revoke the session
-// as suspected reuse. All tools share one in-flight refresh.
+// as suspected reuse. singleFlight cobre este processo; o lock cobre os demais.
 const refreshOnce = singleFlight(refreshTokens);
 
 async function getAccess(): Promise<string> {
@@ -201,19 +173,29 @@ async function apiGet(pathname: string, params: Record<string, unknown>): Promis
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
   }
+  type ApiResult = { unauthorized: true } | { unauthorized: false; data: unknown };
+  const request = (token: string): Promise<ApiResult> =>
+    strictFetch(url, { headers: { authorization: `Bearer ${token}` } }, async (response) => {
+      if (response.status === 401) return { unauthorized: true };
+      if (response.status === 503) {
+        throw new Error('Kassinão is starting or Discord is unavailable. Try again in a moment.');
+      }
+      return { unauthorized: false, data: await readApiJson(response) };
+    });
+
   let token = await getAccess();
-  let r = await strictFetch(url, { headers: { authorization: `Bearer ${token}` } });
-  if (r.status === 401) {
+  let result = await request(token);
+  if (result.unauthorized) {
     // Another tool may have refreshed while this request still used the previous
     // access token. Reuse the new token and refresh only if the current one failed.
     if (token === accessToken) await refreshOnce();
     token = accessToken;
-    r = await strictFetch(url, { headers: { authorization: `Bearer ${token}` } });
+    result = await request(token);
   }
-  if (r.status === 503) {
-    throw new Error('Kassinão is starting or Discord is unavailable. Try again in a moment.');
+  if (result.unauthorized) {
+    throw new Error('Kassinão request failed (HTTP 401). Try again in a moment.');
   }
-  return readApiJson(r);
+  return result.data;
 }
 
 // ---------- tool definitions ----------
@@ -367,22 +349,27 @@ async function runExchange(code: string): Promise<void> {
     console.error('Set KASSINAO_URL first (for example, KASSINAO_URL=https://kassinao.example.com).');
     process.exit(1);
   }
-  const r = await strictFetch(`${URL_BASE}/api/mcp/exchange`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ code }),
-  });
-  if (!r.ok) {
-    console.error(
-      `Could not exchange the code (HTTP ${r.status}). Codes expire in about 5 minutes and can only be used once. Generate another with /mcp new.`,
-    );
-    process.exit(1);
-  }
-  const data = (await readApiJson(r)) as TokenResponse;
+  const data = await strictFetch(
+    `${URL_BASE}/api/mcp/exchange`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    },
+    async (response) => {
+      if (!response.ok) {
+        console.error(
+          `Could not exchange the code (HTTP ${response.status}). Codes expire in about 5 minutes and can only be used once. Generate another with /mcp new.`,
+        );
+        process.exit(1);
+      }
+      return parseCredentialTokenResponse(await readApiJson(response, MAX_TOKEN_RESPONSE_BYTES));
+    },
+  );
   const profile = createTokenProfileId();
   const profileStoreFile = path.join(STORE_DIR, tokenStoreFileName(URL_BASE, '', profile));
   saveStore({ url: URL_BASE, refreshToken: data.refresh_token }, profileStoreFile);
-  // The refresh token is already stored on disk with mode 0600; the config does not need it.
+  // The refresh token is already in its protected local store; the config does not need it.
   const cfg = JSON.stringify(
     {
       mcpServers: {
@@ -396,9 +383,70 @@ async function runExchange(code: string): Promise<void> {
     null,
     2,
   );
-  console.error(`Connected. Token stored at ~/.config/kassinao-mcp/${path.basename(profileStoreFile)} (0600).`);
+  const protection = process.platform === 'win32' ? 'inherited current-profile ACL' : '0600';
+  console.error(
+    `Connected. Token stored at ~/.config/kassinao-mcp/${path.basename(profileStoreFile)} (${protection}).`,
+  );
   console.error('Paste this block into claude_desktop_config.json (or the Cursor equivalent), then restart the app:\n');
   console.log(cfg); // stdout contains only the copy-ready config
+}
+
+function isExchangeCode(value: string): boolean {
+  return /^[A-Za-z0-9_-]{32}$/.test(value);
+}
+
+async function readExchangeCode(): Promise<string> {
+  if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function') {
+    const maxBytes = 256;
+    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (true) {
+      const read = fs.readSync(0, buffer, 0, Math.min(buffer.length, maxBytes + 1 - total), null);
+      if (read === 0) break;
+      total += read;
+      if (total > maxBytes) throw new Error('Invalid one-time connection code.');
+      chunks.push(Buffer.from(buffer.subarray(0, read)));
+    }
+    return Buffer.concat(chunks, total).toString('utf8').trim();
+  }
+
+  return new Promise<string>((resolve, reject) => {
+    const input = process.stdin;
+    const wasRaw = input.isRaw;
+    let value = '';
+    const finish = (err?: Error): void => {
+      input.off('data', onData);
+      input.setRawMode(wasRaw);
+      input.pause();
+      process.stderr.write('\n');
+      if (err) reject(err);
+      else resolve(value.trim());
+    };
+    const onData = (chunk: Buffer | string): void => {
+      for (const character of String(chunk)) {
+        if (character === '\r' || character === '\n') {
+          finish();
+          return;
+        }
+        if (character === '\u0003') {
+          finish(new Error('Connection cancelled.'));
+          return;
+        }
+        if (character === '\u0008' || character === '\u007f') {
+          value = value.slice(0, -1);
+          continue;
+        }
+        if (/^[A-Za-z0-9_-]$/.test(character) && value.length < 256) value += character;
+      }
+    };
+
+    input.setEncoding('utf8');
+    input.setRawMode(true);
+    input.on('data', onData);
+    process.stderr.write('Paste the one-time connection code (input hidden), then press Enter: ');
+    input.resume();
+  });
 }
 
 // ---------- MCP server ----------
@@ -438,11 +486,12 @@ async function runServer(): Promise<void> {
 async function main(): Promise<void> {
   const [cmd, arg] = process.argv.slice(2);
   if (cmd === 'exchange') {
-    if (!arg) {
-      console.error('Usage: kassinao-mcp exchange <code>');
+    const code = arg === '--stdin' ? await readExchangeCode() : undefined;
+    if (!code || !isExchangeCode(code)) {
+      console.error('Usage: kassinao-mcp exchange --stdin --url <origin>');
       process.exit(1);
     }
-    await runExchange(arg);
+    await runExchange(code);
     return;
   }
   await runServer();

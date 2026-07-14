@@ -3,6 +3,8 @@ import crypto from 'node:crypto';
 export interface StoredCredentials {
   url?: string;
   refreshToken?: string;
+  /** Nonce durável da tentativa ainda sem confirmação; permite retry idempotente. */
+  refreshAttempt?: string;
 }
 
 /** Refresh tokens require HTTPS; HTTP is allowed only for local development. */

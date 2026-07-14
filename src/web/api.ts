@@ -41,6 +41,7 @@ import { getMcpUser, McpToken, signMcpAccess, signMcpRefresh, verifyMcpRefresh }
 import {
   consumeExchangeCode,
   createSession,
+  isRefreshAttemptId,
   isActiveSession,
   McpSessionCapacityError,
   rotateSession,
@@ -866,7 +867,7 @@ export function mountMcpApi(app: Express): void {
       return;
     }
     try {
-      res.set('Cache-Control', 'no-store').json(issueTokens(claimed.userId, claimed.name));
+      res.set('Cache-Control', 'no-store').json(issueTokens(claimed.userId, claimed.name, claimed.label));
     } catch (err) {
       if (!(err instanceof McpSessionCapacityError)) throw err;
       res.status(503).set('Retry-After', '60').json({ error: 'session_capacity' });
@@ -879,12 +880,18 @@ export function mountMcpApi(app: Express): void {
       return;
     }
     const rt = typeof req.body?.refresh_token === 'string' ? req.body.refresh_token : undefined;
+    const rawAttempt = req.body?.attempt_id as unknown;
+    const attemptId = rawAttempt === undefined ? undefined : isRefreshAttemptId(rawAttempt) ? rawAttempt : null;
+    if (attemptId === null) {
+      res.status(400).json({ error: 'invalid_attempt' });
+      return;
+    }
     const parsed = verifyMcpRefresh(rt);
     if (!parsed) {
       res.status(401).json({ error: 'unauthorized' });
       return;
     }
-    const rot = rotateSession(parsed.jti, parsed.gen);
+    const rot = rotateSession(parsed.jti, parsed.gen, attemptId);
     if (!rot.ok) {
       // 'reuse' já matou a sessão; 'unknown' = revogada/expirada. Ambos → 401 uniforme.
       res.status(401).json({ error: 'unauthorized' });
@@ -1730,6 +1737,7 @@ export function mountMcpApi(app: Express): void {
             );
             break outer;
           }
+          const absoluteIndex = resumeAt + i;
           out.push({
             meetingId: m.id,
             url: pageUrl(m.id),
@@ -1738,8 +1746,12 @@ export function mountMcpApi(app: Express): void {
             speaker: cleanInline(s.speaker),
             startMs: s.startMs,
             text: neutralizeFences(cleanInline(s.text)),
-            contextBefore: segs.slice(Math.max(0, i - ctx), i).map((x) => neutralizeFences(cleanInline(x.text))),
-            contextAfter: segs.slice(i + 1, i + 1 + ctx).map((x) => neutralizeFences(cleanInline(x.text))),
+            contextBefore: transcript.segments
+              .slice(Math.max(0, absoluteIndex - ctx), absoluteIndex)
+              .map((x) => neutralizeFences(cleanInline(x.text))),
+            contextAfter: transcript.segments
+              .slice(absoluteIndex + 1, absoluteIndex + 1 + ctx)
+              .map((x) => neutralizeFences(cleanInline(x.text))),
             deepLink: deepLink(m.id, s.startMs),
           });
         }
@@ -1782,8 +1794,8 @@ export function mountMcpApi(app: Express): void {
 
 // ---------- auxiliares fora do closure ----------
 
-function issueTokens(userId: string, name: string): Record<string, unknown> {
-  const s = createSession(userId, name);
+function issueTokens(userId: string, name: string, label?: string): Record<string, unknown> {
+  const s = createSession(userId, name, label);
   return signPair(userId, name, s.sid, s.gen, s.exp);
 }
 

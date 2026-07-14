@@ -352,6 +352,7 @@ export function verifyMcpRefresh(token: string | undefined): McpRefreshToken | u
   if (!Number.isFinite(t.exp) || t.exp < Date.now()) return undefined; // NaN/Infinity não vira token eterno
   if (typeof t.id !== 'string' || !t.id) return undefined;
   if (typeof t.jti !== 'string' || !t.jti) return undefined;
+  if (!Number.isInteger(t.gen) || t.gen < 0) return undefined;
   return t;
 }
 
