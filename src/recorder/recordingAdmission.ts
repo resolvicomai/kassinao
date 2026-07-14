@@ -309,17 +309,47 @@ export class RecordingAdmissionGuard {
   }
 
   private load(): AdmissionState {
-    let stat: fs.Stats;
+    let expectedWindowsFile: fs.Stats | undefined;
+    if (process.platform === 'win32') {
+      try {
+        expectedWindowsFile = fs.lstatSync(this.file);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, entries: [] };
+        throw err;
+      }
+      if (!expectedWindowsFile.isFile() || expectedWindowsFile.isSymbolicLink()) {
+        throw new Error('arquivo de estado não é regular');
+      }
+    }
+    const safeOpenFlags =
+      fs.constants.O_RDONLY | (process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    let fd: number;
     try {
-      stat = fs.lstatSync(this.file);
+      fd = fs.openSync(this.file, safeOpenFlags);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, entries: [] };
       throw err;
     }
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('arquivo de estado não é regular');
-    if (stat.size > MAX_STATE_BYTES) throw new Error('arquivo de estado excede o limite');
-    if (process.platform !== 'win32') fs.chmodSync(this.file, 0o600);
-    return parseState(fs.readFileSync(this.file, 'utf8'));
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) throw new Error('arquivo de estado não é regular');
+      if (expectedWindowsFile && (expectedWindowsFile.dev !== stat.dev || expectedWindowsFile.ino !== stat.ino)) {
+        throw new Error('arquivo de estado mudou durante a abertura');
+      }
+      if (stat.size > MAX_STATE_BYTES) throw new Error('arquivo de estado excede o limite');
+      if (process.platform !== 'win32') fs.fchmodSync(fd, 0o600);
+      const payload = Buffer.allocUnsafe(MAX_STATE_BYTES + 1);
+      let total = 0;
+      while (total < payload.length) {
+        const read = fs.readSync(fd, payload, total, payload.length - total, null);
+        if (read === 0) break;
+        total += read;
+      }
+      if (total > MAX_STATE_BYTES) throw new Error('arquivo de estado excede o limite');
+      return parseState(payload.toString('utf8', 0, total));
+    } finally {
+      fs.closeSync(fd);
+    }
   }
 
   private persist(state: AdmissionState): void {

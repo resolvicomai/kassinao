@@ -178,4 +178,28 @@ describe('admissão durável de gravações', () => {
     });
     expect(fs.readFileSync(file, 'utf8')).toBe('{');
   });
+
+  it('falha fechado sem seguir symlink no arquivo de estado', () => {
+    if (process.platform === 'win32') return;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kassinao-recording-admission-'));
+    roots.push(root);
+    const target = path.join(root, 'target.json');
+    const file = path.join(root, '.recording-admission.json');
+    fs.writeFileSync(target, '{"version":1,"entries":[]}', { mode: 0o600 });
+    fs.symlinkSync(target, file);
+
+    const admission = new RecordingAdmissionGuard(file, {
+      maxStartsPerGuild24h: 2,
+      maxStartsGlobalPerHour: 3,
+      maxStartsGlobal24h: 5,
+      maxPendingProcessing: 3,
+    });
+
+    expect(admission.isHealthy()).toBe(false);
+    expect(admission.reserve('guild-a', 'manual', 1_000)).toEqual({
+      ok: false,
+      reason: 'storage-unavailable',
+    });
+    expect(fs.readFileSync(target, 'utf8')).toBe('{"version":1,"entries":[]}');
+  });
 });
