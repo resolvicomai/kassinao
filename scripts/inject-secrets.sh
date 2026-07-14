@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Injeta os 3 segredos no .env SEM eles passarem por chat/mensagem.
+# Injeta as 2 credenciais obrigatórias e o token opcional do túnel no .env sem
+# eles passarem por chat, argumentos do processo ou histórico do shell.
 # Rode este script UMA vez, cole cada valor quando pedido e aperte Enter.
 set -euo pipefail
 umask 077
@@ -40,13 +41,20 @@ read_secret() {
   printf -v "$destination" '%s' "$value"
 }
 
+read_optional_secret() {
+  local prompt="$1" destination="$2" value
+  IFS= read -r -s -p "$prompt" value
+  printf '\n'
+  printf -v "$destination" '%s' "$value"
+}
+
 echo "== Configuração dos segredos do Kassinão =="
 echo "(o que você colar aqui NÃO aparece em lugar nenhum além deste servidor)"
 echo
 
 read_secret "1) DISCORD_TOKEN (Bot > Token): " DTOKEN
 read_secret "2) DISCORD_CLIENT_SECRET (OAuth2 > Client Secret): " DSECRET
-read_secret "3) TUNNEL_TOKEN (token do túnel da Cloudflare): " TTOKEN
+read_optional_secret "3) TUNNEL_TOKEN (opcional; Enter para deixar vazio): " TTOKEN
 
 TMP_FILE="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
 awk '

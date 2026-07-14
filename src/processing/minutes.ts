@@ -1,7 +1,13 @@
 import { config } from '../config';
 import { cleanInline, cleanText, fenceUntrusted, neutralizeFences, UNTRUSTED_GUARD } from '../sanitize';
 import { MeetingMinutes, MinutesAction, MinutesPerson, MinutesTopic, RecordingMeta, TranscriptSegment } from '../store';
-import { fetchWithRetry } from './http';
+import {
+  abortableDelay,
+  assertGuildWorkActive,
+  currentGuildWorkContext,
+  fetchWithRetry,
+  GuildWorkContext,
+} from './http';
 import { msToClock } from './transcribe';
 
 /**
@@ -150,6 +156,8 @@ interface LlmChatOptions {
   json?: boolean;
   /** No OpenRouter, força saída aderente ao schema em vez de só "algum JSON". */
   schema?: { name: string; schema: JsonSchema };
+  /** Lease operacional da guild; ausente somente em chamadas interativas como /perguntar. */
+  work?: GuildWorkContext;
 }
 
 const MINUTES_JSON_SCHEMA: JsonSchema = {
@@ -254,7 +262,7 @@ export function isOutputLimitReason(...reasons: (string | undefined)[]): boolean
   });
 }
 
-/** A Ata liga sozinha quando há chave do provider escolhido, salvo MINUTES_ENABLED=false. */
+/** Ata com IA é opt-in; `auto` existe apenas para preservar instalações antigas. */
 export function minutesEnabled(): boolean {
   if (config.minutesEnabled === 'false') return false;
   const key = config.minutesProvider === 'openrouter' ? config.openrouterApiKey : config.groqApiKey;
@@ -270,6 +278,8 @@ export async function llmChat(
   maxTokens: number,
   opts: LlmChatOptions = {},
 ): Promise<string> {
+  const work = opts.work ?? currentGuildWorkContext();
+  if (work) assertGuildWorkActive(work);
   const openrouter = config.minutesProvider === 'openrouter';
   const url = openrouter
     ? 'https://openrouter.ai/api/v1/chat/completions'
@@ -279,9 +289,9 @@ export async function llmChat(
     'Content-Type': 'application/json',
     Authorization: `Bearer ${key}`,
   };
-  if (openrouter) {
-    // Identifica publicamente o produto, sem expor a origem privada das gravações.
-    headers['HTTP-Referer'] = config.publicUrl;
+  if (openrouter && config.openrouterSiteUrl) {
+    // Somente quando o operador autorizou explicitamente a identificação pública.
+    headers['HTTP-Referer'] = config.openrouterSiteUrl;
     headers['X-Title'] = 'Kassinao';
   }
   const resp = await fetchWithRetry(
@@ -290,6 +300,7 @@ export async function llmChat(
       method: 'POST',
       headers,
       body: JSON.stringify(buildLlmRequestBody(openrouter, config.minutesModel, system, user, maxTokens, opts)),
+      signal: work?.signal,
     },
     { attempts: 4, maxWaitMs: 90_000 },
   );
@@ -305,6 +316,7 @@ export async function llmChat(
       completion_tokens_details?: { reasoning_tokens?: number };
     };
   };
+  if (work) assertGuildWorkActive(work);
   const choice = data.choices?.[0];
   const reasons = [choice?.finish_reason, choice?.native_finish_reason]
     .filter(Boolean)
@@ -320,14 +332,19 @@ export async function llmChat(
   }
   const content = choice?.message?.content ?? '';
   if (!content.trim()) {
-    if (data.error?.message) console.warn(`LLM devolveu erro sem conteúdo: ${data.error.message.slice(0, 300)}`);
+    if (data.error?.message) console.warn('LLM devolveu erro sem conteúdo (provider reportou erro).');
     throw new Error('LLM devolveu resposta vazia');
   }
   return content;
 }
 
 /** Gera a ata a partir da transcrição via LLM (OpenRouter ou Groq). Lança em caso de falha. */
-export async function generateMinutes(meta: RecordingMeta, segments: TranscriptSegment[]): Promise<MeetingMinutes> {
+export async function generateMinutes(
+  meta: RecordingMeta,
+  segments: TranscriptSegment[],
+  work?: GuildWorkContext,
+): Promise<MeetingMinutes> {
+  if (work) assertGuildWorkActive(work);
   const prompts = buildMinutesPrompts(meta);
   const copy = MINUTES_COPY[prompts.locale];
   const system = prompts.system;
@@ -338,14 +355,14 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
   const outTokens = openrouter ? config.minutesMaxTokens : Math.min(config.minutesMaxTokens, GROQ_MAX_TOKENS);
 
   if (header.length + body.length <= maxSingle) {
-    return await minutesWithRetry(system, fenceUntrusted(`${header}\n${body}`), outTokens, copy.retryReminder);
+    return await minutesWithRetry(system, fenceUntrusted(`${header}\n${body}`), outTokens, copy.retryReminder, work);
   }
 
   if (openrouter) {
     // acima de 400k chars (call absurda): corta o miolo — começo e fim carregam decisões
     const half = Math.floor(MAX_CHARS_OPENROUTER / 2);
     const cut = `${body.slice(0, half)}\n\n${copy.middleOmitted}\n\n${body.slice(-half)}`;
-    return await minutesWithRetry(system, fenceUntrusted(`${header}\n${cut}`), outTokens, copy.retryReminder);
+    return await minutesWithRetry(system, fenceUntrusted(`${header}\n${cut}`), outTokens, copy.retryReminder, work);
   }
 
   // ---- map-reduce (Groq free tier, TPM 12k): blocos → notas parciais → ata final ----
@@ -365,12 +382,14 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
 
   const partials: string[] = [];
   for (let i = 0; i < blocks.length; i++) {
+    if (work) assertGuildWorkActive(work);
     const content = await llmChat(
       mapSystem,
       fenceUntrusted(`${header}\n[${copy.block} ${i + 1}/${blocks.length}]\n${blocks[i]}`),
       1024,
-      { schema: { name: 'notas_parciais', schema: PARTIAL_NOTES_JSON_SCHEMA } },
+      { schema: { name: 'notas_parciais', schema: PARTIAL_NOTES_JSON_SCHEMA }, work },
     );
+    if (work) assertGuildWorkActive(work);
     try {
       const parsed = JSON.parse(content) as { notas?: unknown[] };
       const notas = Array.isArray(parsed.notas) ? parsed.notas.map((n) => String(n)) : [content];
@@ -378,7 +397,7 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
     } catch {
       partials.push(`[${copy.partialBlock} ${i + 1}] ${content.slice(0, 1500)}`);
     }
-    if (i < blocks.length - 1) await new Promise((r) => setTimeout(r, GROQ_BLOCK_PAUSE_MS));
+    if (i < blocks.length - 1) await abortableDelay(GROQ_BLOCK_PAUSE_MS, work?.signal);
   }
 
   // reduce com teto: notas demais estourariam o mesmo TPM que o map-reduce contorna
@@ -386,9 +405,11 @@ export async function generateMinutes(meta: RecordingMeta, segments: TranscriptS
   if (joined.length > PARTIAL_TOTAL_CHARS) {
     joined = `${joined.slice(0, PARTIAL_TOTAL_CHARS)}\n${copy.excessNotesOmitted}`;
   }
-  await new Promise((r) => setTimeout(r, GROQ_BLOCK_PAUSE_MS));
+  if (work) assertGuildWorkActive(work);
+  await abortableDelay(GROQ_BLOCK_PAUSE_MS, work?.signal);
+  if (work) assertGuildWorkActive(work);
   const reduceUser = fenceUntrusted(`${header}\n${copy.partialNotes}:\n${joined}`);
-  return await minutesWithRetry(system, reduceUser, outTokens, copy.retryReminder);
+  return await minutesWithRetry(system, reduceUser, outTokens, copy.retryReminder, work);
 }
 
 /**
@@ -401,9 +422,11 @@ async function minutesWithRetry(
   user: string,
   maxTokens: number,
   retryReminder: string,
+  work?: GuildWorkContext,
 ): Promise<MeetingMinutes> {
-  const structured = { schema: { name: 'ata_reuniao', schema: MINUTES_JSON_SCHEMA } };
+  const structured = { schema: { name: 'ata_reuniao', schema: MINUTES_JSON_SCHEMA }, work };
   const first = await llmChat(system, user, maxTokens, structured);
+  if (work) assertGuildWorkActive(work);
   try {
     return normalizeMinutes(first);
   } catch (err) {
@@ -411,6 +434,7 @@ async function minutesWithRetry(
       `Ata: resposta fora do formato (${(err as Error).message}, ${first.length} chars). Tentando de novo com lembrete.`,
     );
     const reminded = `${system}\n${retryReminder}`;
+    if (work) assertGuildWorkActive(work);
     return normalizeMinutes(await llmChat(reminded, user, maxTokens, structured));
   }
 }

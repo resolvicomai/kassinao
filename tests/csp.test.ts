@@ -20,6 +20,7 @@ const user: WebUser = {
   id: 'csp-user',
   name: 'Alice',
   avatar: null,
+  scope: 'full',
   exp: Date.now() + 60_000,
   jti: 'csp-session',
 };

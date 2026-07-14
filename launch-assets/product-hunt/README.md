@@ -14,13 +14,15 @@
 
 > Kassinão turns Discord calls into searchable team memory. It records one track per speaker, then creates named transcripts, meeting notes, decisions, action items, and answers with source links. Ask inside Discord or from an MCP-capable AI assistant. It is free, AGPL open source, and self-hosted, with access rechecked against Discord membership and meeting permissions.
 
+> There is no hosted workspace or public signup. Each operator deploys their own Discord app, private URL, storage, and MCP API.
+
 **Fallback description, under 260 characters**
 
 > Kassinão is an open-source Discord bot that records one track per speaker and turns calls into named transcripts, meeting notes, action items, and sourced answers. Self-host it, choose your AI provider, and keep access tied to Discord permissions.
 
 **Primary URL**
 
-> https://kassinao.cloud/
+> https://kassinao.cloud/en
 
 **Pricing**
 
@@ -54,6 +56,8 @@ Recommended order: cover, animated workflow, speaker identity, answers and MCP. 
 >
 > Kassinão is free and AGPL open source. You self-host it, control retention, and choose local transcription or supported cloud providers. Recording stays visible inside Discord, and access to each meeting is rechecked against Discord membership and meeting permissions.
 >
+> There is no hosted workspace or public signup. The public site is a product demo and installation guide; your deployment owns the bot, private app, domain, storage, and MCP API.
+>
 > The public demo uses fictional data but the real product interface, so you can explore a finished meeting without signing in.
 >
 > I’d especially value feedback on three things: the Discord workflow, the self-hosting experience, and which meeting-memory query should become the next MCP tool.
@@ -75,8 +79,8 @@ Use a real local fixture and keep the “fictional demo” label visible. Higgsf
 
 ## Launch checklist
 
-- [ ] Deploy the English landing/demo on `kassinao.cloud`, docs on `docs.kassinao.cloud`, the private app on `app.kassinao.cloud`, and MCP discovery/API on `mcp.kassinao.cloud`.
-- [ ] Verify canonical URLs, Open Graph images, HTTPS and cross-domain navigation on all four origins.
+- [ ] Deploy the English landing/demo on `kassinao.cloud` and docs on `docs.kassinao.cloud`; verify the GitHub repository and npm package are public.
+- [ ] Verify canonical URLs, Open Graph images, HTTPS and public navigation. No CTA may open a private app or API.
 - [ ] Verify the public demo without authentication in a clean browser.
 - [ ] Confirm the Product Hunt primary URL opens the English landing.
 - [ ] Upload the square thumbnail and at least two 1270×760 gallery images.

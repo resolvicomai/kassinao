@@ -63,10 +63,11 @@ describe('tokens assinados hostis falham fechados', () => {
       id: `unicode-web-${crypto.randomUUID()}`,
       name: 'Pessoa',
       avatar: null,
+      scope: 'full',
       exp,
       jti: '',
     };
-    webPayload.jti = createWebSession(webPayload.id, exp);
+    webPayload.jti = createWebSession(webPayload.id, exp, webPayload.scope);
     validWebToken = signPayload(webPayload, config.cookieSecret);
 
     mcpPayload = { id: 'unicode-mcp', name: 'Pessoa', exp, jti: 'sid-unicode' };

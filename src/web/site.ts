@@ -19,6 +19,8 @@ export interface PublicUrlTopology {
   docsUrl?: string;
   /** Origem da API e descoberta MCP. */
   mcpUrl?: string;
+  /** Repositório publicado pelo operador ou pelo fork. */
+  sourceUrl?: string;
 }
 
 export interface PublicSiteContext {
@@ -66,6 +68,7 @@ interface NormalizedPublicTopology {
   publicUrl: string;
   docsUrl: string;
   mcpUrl: string;
+  sourceUrl: string;
 }
 
 function cleanOrigin(value: string | undefined): string {
@@ -75,7 +78,7 @@ function cleanOrigin(value: string | undefined): string {
 function normalizeTopology(input: string | PublicUrlTopology): NormalizedPublicTopology {
   if (typeof input === 'string') {
     const origin = cleanOrigin(input);
-    return { appUrl: origin, publicUrl: origin, docsUrl: origin, mcpUrl: origin };
+    return { appUrl: origin, publicUrl: origin, docsUrl: origin, mcpUrl: origin, sourceUrl: PUBLIC_LINKS.github };
   }
   const publicUrl = cleanOrigin(input.publicUrl);
   const appUrl = cleanOrigin(input.appUrl ?? input.baseUrl ?? publicUrl);
@@ -84,6 +87,7 @@ function normalizeTopology(input: string | PublicUrlTopology): NormalizedPublicT
     publicUrl,
     docsUrl: cleanOrigin(input.docsUrl ?? publicUrl),
     mcpUrl: cleanOrigin(input.mcpUrl ?? appUrl),
+    sourceUrl: cleanOrigin(input.sourceUrl ?? PUBLIC_LINKS.github),
   };
 }
 
@@ -110,14 +114,11 @@ export function publicSurfaceUrl(
 }
 
 /**
- * A origem MCP separada tem uma página de descoberta em /. Em instalações de
- * origem única, o link continua útil levando diretamente à seção MCP dos docs.
+ * O link MCP das superfícies públicas aponta sempre para a documentação.
+ * `MCP_URL` é a origem privada da API de cada operador, não um produto hospedado
+ * nem um destino público compartilhado.
  */
 export function mcpDiscoveryUrl(topology: string | PublicUrlTopology = '', locale: Locale = 'pt'): string {
-  const urls = normalizeTopology(topology);
-  if (urls.mcpUrl && urls.mcpUrl !== urls.appUrl) {
-    return locale === 'en' ? `${urls.mcpUrl}/en` : `${urls.mcpUrl}/`;
-  }
   return `${publicSurfaceUrl('docs', locale, topology)}#mcp`;
 }
 
@@ -144,7 +145,7 @@ export function publicSite(
       docs: publicSurfaceUrl('docs', locale, topology),
       demo: publicSurfaceUrl('demo', locale, topology),
       alternate: publicSurfaceUrl(surface, alternate, topology),
-      github: PUBLIC_LINKS.github,
+      github: normalizeTopology(topology).sourceUrl,
       mcp: mcpDiscoveryUrl(topology, locale),
     },
     cookie: (secure) => localeCookie(locale, secure),

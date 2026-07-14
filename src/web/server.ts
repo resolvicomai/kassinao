@@ -1,10 +1,10 @@
 import fs from 'node:fs';
+import type { Server as HttpServer } from 'node:http';
 import path from 'node:path';
 import express, { Express, NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { config } from '../config';
 import { freeMB } from '../disk';
-import { client } from '../discord/client';
 import { isClientReady } from '../discord/ready';
 import { Locale } from '../i18n';
 import { cook, CookBusyError, CookFormat, COOK_FORMATS } from '../processing/cook';
@@ -31,7 +31,7 @@ import {
   transcriptionNeedsAudio,
   transcriptReady,
 } from '../store';
-import { checkAccess, createAccessRequestContext, TransientAccessError, withFreshMembershipBudget } from './access';
+import { checkAccess, createAccessRequestContext, currentGuildMembership, TransientAccessError } from './access';
 import { ApiRateLimiters, FixedWindowRateLimiter, mountMcpApi } from './api';
 import {
   beginLogin,
@@ -42,7 +42,13 @@ import {
   scopeWebSessionToApp,
   WebUser,
 } from './auth';
-import { applyCspNonce, contentSecurityPolicy, createCspNonce, referrerPolicyForPath } from './csp';
+import {
+  applyCspNonce,
+  contentSecurityPolicy,
+  createCspNonce,
+  referrerPolicyForPath,
+  WEB_REFERRER_POLICY,
+} from './csp';
 import {
   consumeStagedExchangeCode,
   createExchangeCode,
@@ -59,13 +65,17 @@ import {
   RecordingIndexItem,
   recordingsIndexPage,
   RecordingsSort,
+  privateAccessPage,
 } from './page';
 import { landingPage } from './landing';
 import { docsPage } from './docs';
 import { searchRecordings } from './search';
 import { localeCookie, localeFromValue, resolveWebLocale } from './site';
-import { beginDownload, endDownload, hasActiveDownloads } from './tracker';
+import { acquireDownload, hasActiveDownloads } from './tracker';
 import { isOpaqueCursorToken, OpaqueCursorError, openOpaqueCursor, sealOpaqueCursor } from './opaqueCursor';
+import { revokeWebSessionsForUser } from './webSessions';
+
+export { currentGuildMembership } from './access';
 
 const SPACE_GROTESK_FONT =
   require.resolve('@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2');
@@ -92,7 +102,6 @@ export const WEB_DIRECT_TRANSCRIPT_MAX_SEGMENTS = 5_000;
 export const MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE = 100;
 const MAX_WEB_LIBRARY_GUILDS_PER_PAGE = 25;
 const MAX_WEB_LIBRARY_ITEMS_PER_PAGE = 100;
-const MAX_MEMBERSHIP_GUILDS_PER_ATTEMPT = 60;
 
 export function webHeavyReadRateLimited(userId: string): boolean {
   return (
@@ -254,6 +263,14 @@ const MSG = {
     pt: 'Muitas gravações estão sendo processadas agora. Tente de novo em instantes.',
     en: 'Too many recordings are being processed right now. Try again shortly.',
   },
+  badRequest: {
+    pt: 'A requisição não pôde ser interpretada. Recarregue a página e tente novamente.',
+    en: 'The request could not be interpreted. Reload the page and try again.',
+  },
+  unexpected: {
+    pt: 'Não foi possível concluir esta solicitação agora. Tente novamente em instantes.',
+    en: 'This request could not be completed right now. Try again shortly.',
+  },
   audioPrepareError: { pt: 'Erro ao preparar o áudio.', en: 'Could not prepare the audio.' },
   audioUnavailableTitle: { pt: 'Áudio indisponível', en: 'Audio unavailable' },
   downloadUnavailableTitle: { pt: 'Download indisponível', en: 'Download unavailable' },
@@ -400,28 +417,11 @@ function sendAccessTemporarilyUnavailable(
     .send(messagePage(MSG.startingTitle[l], MSG.starting[l], user, l, opts));
 }
 
-interface MembershipGuild {
-  members: {
-    fetch(options: { user: string; force: true; cache: false }): Promise<unknown>;
-  };
-}
-
-export type CurrentGuildMembership = 'member' | 'not-member' | 'unavailable';
-type FreshMembershipRunner = typeof withFreshMembershipBudget;
-interface MembershipScanCursor {
-  index: number;
-  unavailable: boolean;
-}
-const membershipScanCursors = new Map<string, MembershipScanCursor>();
-
-function rememberMembershipScanCursor(userId: string, cursor: MembershipScanCursor): void {
-  membershipScanCursors.delete(userId);
-  membershipScanCursors.set(userId, cursor);
-  while (membershipScanCursors.size > 5_000) {
-    const oldest = membershipScanCursors.keys().next().value as string | undefined;
-    if (!oldest) break;
-    membershipScanCursors.delete(oldest);
-  }
+function sendPrivateLoginRequired(res: Response, l: Locale, next = '/app'): void {
+  res
+    .status(200)
+    .type('html')
+    .send(privateAccessPage({ lang: l, next }));
 }
 
 export interface WebLibraryPage {
@@ -454,7 +454,7 @@ export async function collectWebLibraryPage(
     items.length < MAX_WEB_LIBRARY_ITEMS_PER_PAGE
   ) {
     const meta = metas[index];
-    if (meta.demo) {
+    if (meta.demo || !config.guildPolicy.allows(meta.guildId)) {
       index++;
       continue;
     }
@@ -605,7 +605,7 @@ export function webHostRoutingDecision(req: Request, origins = configuredWebOrig
   if (
     (!host || rolesForHost(host, origins).length === 0) &&
     isLoopbackAddress(req.socket.remoteAddress) &&
-    isPathPrefix(pathname, '/health')
+    pathname === '/health'
   ) {
     return { action: 'pass', roles: [] };
   }
@@ -627,7 +627,7 @@ export function webHostRoutingDecision(req: Request, origins = configuredWebOrig
   const redirect = (target: string): WebHostRoutingDecision =>
     isNavigation(req) ? { action: 'redirect', roles, status: 308, target } : { action: 'reject', roles, status: 404 };
 
-  if (isPathPrefix(pathname, '/health') || pathname === '/robots.txt' || pathname === '/sitemap.xml') {
+  if (pathname === '/health' || pathname === '/robots.txt' || pathname === '/sitemap.xml') {
     return { action: 'pass', roles };
   }
   if (isSharedStaticPath(pathname)) return { action: 'pass', roles };
@@ -643,30 +643,32 @@ export function webHostRoutingDecision(req: Request, origins = configuredWebOrig
 
   const authPath = isPathPrefixFolded(pathname, '/auth');
   if (authPath) {
+    // Nunca encaminhar `code`/`state` recebidos no host errado. Além de vazar a
+    // query para logs intermediários, o callback só é válido na origem exata.
+    if (canonicalRouteKey(pathname) === '/auth/callback' && !has('app')) {
+      return { action: 'reject', roles, status: 404 };
+    }
     const canonicalPath = canonicalPrefixPath(pathname, '/auth');
+    if (!has('app')) return { action: 'reject', roles, status: 404 };
     if (!isPathPrefix(pathname, '/auth')) return redirect(absoluteTarget(origins.app, req, canonicalPath));
     if (has('app')) return { action: 'pass', roles };
-    return redirect(absoluteTarget(origins.app, req));
+    return { action: 'reject', roles, status: 404 };
   }
 
   const appPath = isPathPrefixFolded(pathname, '/app');
   if (appPath) {
+    if (!has('app')) return { action: 'reject', roles, status: 404 };
     const canonicalPath = canonicalPrefixPath(pathname, '/app');
     if (!isPathPrefix(pathname, '/app') || pathname === '/app/') {
       return redirect(absoluteTarget(origins.app, req, canonicalPath));
     }
-    return has('app') ? { action: 'pass', roles } : redirect(absoluteTarget(origins.app, req));
+    return { action: 'pass', roles };
   }
 
   const oldAppPath =
     isPathPrefix(pathname, '/gravacoes') || isPathPrefix(pathname, '/rec') || isPathPrefix(pathname, '/conectar-ia');
   if (oldAppPath && !has('app')) {
-    const mapped = pathname.startsWith('/gravacoes')
-      ? pathname.replace(/^\/gravacoes/, '/app')
-      : pathname.startsWith('/rec')
-        ? pathname.replace(/^\/rec/, '/app/rec')
-        : pathname.replace(/^\/conectar-ia/, '/app/conectar-ia');
-    return redirect(absoluteTarget(origins.app, req, mapped));
+    return { action: 'reject', roles, status: 404 };
   }
 
   const routeKey = canonicalRouteKey(pathname);
@@ -693,6 +695,12 @@ export function webHostRoutingDecision(req: Request, origins = configuredWebOrig
       roles,
       path: pathWithOriginalQuery(req, routeKey === '/en' ? '/en/docs' : '/docs'),
     };
+  }
+
+  // A raiz do host dedicado do app é um alias interno. Não revela o hostname em
+  // redirect e não mistura a landing pública com o workspace privado.
+  if (has('app') && !has('public') && routeKey === '/') {
+    return { action: 'rewrite', roles, path: pathWithOriginalQuery(req, '/app') };
   }
 
   const canonicalPublicPath = new Map<string, string>([
@@ -729,55 +737,9 @@ export function webHostRoutingDecision(req: Request, origins = configuredWebOrig
   // O host do MCP é uma superfície mínima: API + descoberta na raiz. Não deixa
   // handlers públicos/privados futuros vazarem por acidente.
   if (has('mcp') && roles.length === 1) return { action: 'reject', roles, status: 404 };
+  if (has('app') && roles.length === 1) return { action: 'reject', roles, status: 404 };
 
   return { action: 'pass', roles };
-}
-
-/** Confirma membership pela REST do Discord; cache local nunca autoriza a criação. */
-export async function currentGuildMembership(
-  userId: string,
-  guilds: Iterable<MembershipGuild> = client.guilds.cache.values(),
-  runCheck: FreshMembershipRunner = withFreshMembershipBudget,
-): Promise<CurrentGuildMembership> {
-  const savedCursor = membershipScanCursors.get(userId);
-  const start = savedCursor?.index ?? 0;
-  let unavailable = savedCursor?.unavailable ?? false;
-  const iterator = guilds[Symbol.iterator]();
-  let index = 0;
-  while (index < start) {
-    const skipped = iterator.next();
-    if (skipped.done) {
-      membershipScanCursors.delete(userId);
-      return unavailable ? 'unavailable' : 'not-member';
-    }
-    index++;
-  }
-  while (index < start + MAX_MEMBERSHIP_GUILDS_PER_ATTEMPT) {
-    const candidate = iterator.next();
-    if (candidate.done) {
-      membershipScanCursors.delete(userId);
-      return unavailable ? 'unavailable' : 'not-member';
-    }
-    const guild = candidate.value;
-    index++;
-    try {
-      await runCheck(userId, () => guild.members.fetch({ user: userId, force: true, cache: false }));
-      membershipScanCursors.delete(userId);
-      return 'member';
-    } catch (err) {
-      // O orçamento acabou antes deste fetch. Retoma exatamente daqui na
-      // próxima janela em vez de condenar guilds depois da 60ª à fome eterna.
-      if (err instanceof TransientAccessError) {
-        rememberMembershipScanCursor(userId, { index: index - 1, unavailable });
-        return 'unavailable';
-      }
-      const code = err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
-      if (code !== 10007 && code !== 10013) unavailable = true;
-      rememberMembershipScanCursor(userId, { index, unavailable });
-    }
-  }
-  rememberMembershipScanCursor(userId, { index, unavailable });
-  return 'unavailable';
 }
 
 function configuredOriginForRequest(req: Request, origins = configuredWebOrigins()): string | undefined {
@@ -836,6 +798,32 @@ export function sitemapForRoles(roles: WebHostRole[], origins = configuredWebOri
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries}\n</urlset>\n`;
 }
 
+export function shouldNoIndexWebResponse(req: Request, origins = configuredWebOrigins()): boolean {
+  const pathname = req.path || '/';
+  if (
+    isPathPrefixFolded(pathname, '/app') ||
+    isPathPrefixFolded(pathname, '/auth') ||
+    isPathPrefixFolded(pathname, '/api') ||
+    isPathPrefixFolded(pathname, '/health')
+  )
+    return true;
+  const host = requestHost(req);
+  if (!host) return false;
+  const roles = rolesForHost(host, origins);
+  return roles.includes('app') || roles.includes('mcp');
+}
+
+/** A raiz do host dedicado do app vira /app; os headers precisam antecipar o rewrite. */
+export function referrerPolicyForWebRequest(req: Request, origins = configuredWebOrigins()): string {
+  const pathname = req.path || '/';
+  const host = requestHost(req);
+  if (pathname === '/' && host) {
+    const roles = rolesForHost(host, origins);
+    if (roles.includes('app') && !roles.includes('public')) return WEB_REFERRER_POLICY;
+  }
+  return referrerPolicyForPath(pathname);
+}
+
 /**
  * Monta a aplicação completa sem abrir socket. O processo de produção usa a
  * mesma factory em `startWebServer`; testes exercitam HTTP real numa porta
@@ -848,9 +836,32 @@ export function createWebApp(): Express {
   // /App/ não podem cair em handlers case-insensitive depois da classificação.
   app.set('case sensitive routing', true);
   app.set('strict routing', true);
-  // Atrás do Cloudflare Tunnel (1 proxy): faz req.ip refletir o IP real do cliente,
-  // pra o rate-limit por IP não ser burlado forjando X-Forwarded-For.
-  app.set('trust proxy', 1);
+  // Confia apenas na quantidade exata de hops declarada pelo operador. O default
+  // zero impede spoof de X-Forwarded-For numa VPS exposta diretamente.
+  app.set('trust proxy', config.trustProxyHops);
+
+  // Headers entram antes do guard de Host para também cobrir 404/421 e redirects.
+  // Um nonce diferente por resposta libera só scripts marcados pelo template.
+  app.use((req, res, next) => {
+    const nonce = createCspNonce();
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', referrerPolicyForWebRequest(req));
+    res.setHeader('Content-Security-Policy', contentSecurityPolicy(nonce));
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    if (shouldNoIndexWebResponse(req)) res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
+    if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+
+    const originalSend = res.send;
+    res.send = function (this: Response, body: Parameters<Response['send']>[0]): Response {
+      const contentType = String(res.getHeader('Content-Type') ?? '');
+      const securedBody =
+        typeof body === 'string' && contentType.toLowerCase().startsWith('text/html')
+          ? applyCspNonce(body, nonce)
+          : body;
+      return originalSend.call(this, securedBody);
+    } as Response['send'];
+    next();
+  });
 
   // A mesma aplicação atende quatro origens canônicas (e o alias www da landing),
   // mas cada uma expõe só sua superfície. A decisão acontece antes de rate-limit,
@@ -886,30 +897,6 @@ export function createWebApp(): Express {
     next();
   });
 
-  // Um nonce diferente por resposta libera apenas os scripts que os templates
-  // marcaram deliberadamente. Conteúdo injetado com <script> não recebe nonce.
-  app.use((req, res, next) => {
-    const nonce = createCspNonce();
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Referrer-Policy', referrerPolicyForPath(req.path));
-    res.setHeader('Content-Security-Policy', contentSecurityPolicy(nonce));
-    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-    if (config.baseUrl.startsWith('https')) {
-      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    }
-
-    const originalSend = res.send;
-    res.send = function (this: Response, body: Parameters<Response['send']>[0]): Response {
-      const contentType = String(res.getHeader('Content-Type') ?? '');
-      const securedBody =
-        typeof body === 'string' && contentType.toLowerCase().startsWith('text/html')
-          ? applyCspNonce(body, nonce)
-          : body;
-      return originalSend.call(this, securedBody);
-    } as Response['send'];
-    next();
-  });
-
   // Limite global reconhecido pelo ecossistema Express/CodeQL. A API tem um
   // limiter próprio e os healthchecks precisam permanecer disponíveis para o
   // Docker; todas as demais rotas, inclusive landing, assets e OAuth, entram.
@@ -939,10 +926,13 @@ export function createWebApp(): Express {
     }),
   );
 
-  // Remove o cookie legado Path=/ e mantém apenas sessões registradas com jti.
+  // Remove cookies legados e mantém apenas sessões registradas com jti.
   // Tokens antigos sem revogação server-side são encerrados no primeiro acesso.
   app.use('/app', (req, res, next) => {
-    if ((req.headers.cookie ?? '').includes('kassinao_session=')) scopeWebSessionToApp(req, res);
+    const cookies = req.headers.cookie ?? '';
+    if (cookies.includes('kassinao_session=') || cookies.includes('__Host-kassinao_session=')) {
+      scopeWebSessionToApp(req, res);
+    }
     next();
   });
 
@@ -992,19 +982,6 @@ export function createWebApp(): Express {
     });
   }
 
-  // Diagnóstico usado antes de deploy/restart, acessível só DENTRO do container
-  // (`docker exec ... fetch(localhost/health/details)`). Mantém o stop seguro sem
-  // anunciar ao mundo se há uma call ativa nem quanto disco resta.
-  app.get('/health/details', (req, res) => {
-    if (!isLoopbackAddress(req.socket.remoteAddress)) {
-      res.status(404).end();
-      return;
-    }
-    res
-      .set('Cache-Control', 'no-store')
-      .json({ ok: true, ready: isClientReady(), freeMB: freeMB(), activeRecordings: sessionManager.all().length });
-  });
-
   // Persiste a escolha de idioma (?lang=en|pt) num cookie de 1 ano.
   app.use((req, res, next) => {
     const q = localeFromValue(req.query.lang);
@@ -1046,6 +1023,45 @@ export function createWebApp(): Express {
     next();
   });
 
+  // Sessão de ex-membro existe apenas para ele desligar conectores que já eram
+  // seus. O gate vem antes de qualquer handler de gravação ou geração de token.
+  app.use('/app', (req, res, next) => {
+    const user = getWebUser(req);
+    if (!user || user.scope === 'full') {
+      next();
+      return;
+    }
+    const pathname = req.originalUrl.split('?', 1)[0];
+    const allowed =
+      pathname === '/app/logout' ||
+      (req.method === 'GET' && pathname === '/app/conectar-ia') ||
+      (req.method === 'POST' &&
+        (pathname === '/app/conectar-ia/revogar' || /^\/app\/conectar-ia\/revogar\/[A-Za-z0-9-]+$/.test(pathname)));
+    if (allowed) {
+      next();
+      return;
+    }
+    if (req.method === 'GET' && pathname === '/app') {
+      res.redirect(303, '/app/conectar-ia');
+      return;
+    }
+    const l = pageLang(req);
+    res
+      .status(403)
+      .type('html')
+      .send(
+        messagePage(
+          l === 'pt' ? 'Acesso somente para revogação' : 'Revocation-only access',
+          l === 'pt'
+            ? 'Esta sessão pode apenas listar e revogar suas conexões existentes.'
+            : 'This session can only list and revoke your existing connections.',
+          user,
+          l,
+          connectMessageOptions(l),
+        ),
+      );
+  });
+
   // API do MCP (/api/*) — só monta quando MCP_SECRET está definido (opt-in).
   mountMcpApi(app);
 
@@ -1069,12 +1085,16 @@ export function createWebApp(): Express {
     app.get('/app/conectar-ia', (req, res) => {
       const l = pageLang(req);
       const user = getWebUser(req);
+      if (!user) {
+        sendPrivateLoginRequired(res, l, '/app/conectar-ia');
+        return;
+      }
       const q = String(req.query.revoked ?? '');
       res.type('html').send(
         connectPage({
           lang: l,
           user,
-          sessions: user ? listUserSessions(user.id) : undefined,
+          sessions: listUserSessions(user.id),
           revoked: q === '1' ? 'all' : q === 'one' ? 'one' : undefined,
         }),
       );
@@ -1151,7 +1171,7 @@ export function createWebApp(): Express {
       const l = pageLang(req);
       const user = getWebUser(req);
       if (!user) {
-        beginLogin(res, '/app/conectar-ia/codigo');
+        sendPrivateLoginRequired(res, l, '/app/conectar-ia/codigo');
         return;
       }
       // A rota consome estado de exibição única. Um subdomínio irmão não pode
@@ -1175,7 +1195,7 @@ export function createWebApp(): Express {
     app.post('/app/conectar-ia/revogar/:sid', (req, res) => {
       const user = getWebUser(req);
       if (!user) {
-        beginLogin(res, '/app/conectar-ia');
+        res.redirect(303, '/app/conectar-ia');
         return;
       }
       const ok = revokeUserSession(user.id, req.params.sid);
@@ -1191,7 +1211,7 @@ export function createWebApp(): Express {
     app.post('/app/conectar-ia/revogar', (req, res) => {
       const user = getWebUser(req);
       if (!user) {
-        beginLogin(res, '/app/conectar-ia');
+        res.redirect(303, '/app/conectar-ia');
         return;
       }
       const n = revokeUser(user.id);
@@ -1332,7 +1352,7 @@ export function createWebApp(): Express {
   });
 
   app.get('/auth/login', (req, res) => {
-    beginLogin(res, String(req.query.next ?? '/'));
+    beginLogin(res, String(req.query.next ?? '/app'));
   });
 
   // Compatibilidade com favoritos antigos: GET nunca muda estado nem encerra a
@@ -1344,26 +1364,50 @@ export function createWebApp(): Express {
   app.get('/auth/callback', async (req, res) => {
     const l = pageLang(req);
     try {
-      const next = await finishLogin(req, res);
-      if (!next) {
+      const result = await finishLogin(req, res, async (identity) => {
+        const membership = await currentGuildMembership(identity.id);
+        if (membership === 'member') return 'full';
+        if (membership === 'unavailable') return 'unavailable';
+        const hasMcpConnections = listUserSessions(identity.id).length > 0;
+        // Uma conta confirmada fora do perímetro não mantém logins web antigos.
+        revokeWebSessionsForUser(identity.id);
+        return hasMcpConnections ? 'revoke-only' : 'denied';
+      });
+      if (result.status === 'invalid') {
         res
           .status(400)
           .type('html')
           .send(messagePage(MSG.loginFailTitle[l], MSG.loginFail[l], undefined, l));
         return;
       }
-      res.redirect(next);
+      if (result.status === 'denied') {
+        res
+          .status(403)
+          .type('html')
+          .send(privateAccessPage({ lang: l, state: 'denied' }));
+        return;
+      }
+      if (result.status === 'unavailable') {
+        res
+          .status(503)
+          .set('Retry-After', '5')
+          .type('html')
+          .send(privateAccessPage({ lang: l, state: 'unavailable' }));
+        return;
+      }
+      res.redirect(result.user.scope === 'revoke-only' ? '/app/conectar-ia' : result.next);
     } catch (err) {
-      console.error('Erro no callback OAuth:', err);
+      console.error(`Callback OAuth indisponível: ${(err as Error).name || 'Error'}`);
       res
-        .status(500)
+        .status(503)
+        .set('Retry-After', '5')
         .type('html')
-        .send(messagePage(MSG.errorTitle[l], MSG.loginError[l], undefined, l));
+        .send(privateAccessPage({ lang: l, state: 'unavailable' }));
     }
   });
 
-  // A rota vive em /app para o cookie Path=/app viajar na requisição e para
-  // herdar a proteção de Origin/Sec-Fetch aplicada a todas as mutações privadas.
+  // A rota vive em /app para herdar a proteção de Origin/Sec-Fetch aplicada a
+  // todas as mutações privadas.
   app.post('/app/logout', (req, res) => {
     logoutWeb(req, res);
     res.redirect(303, '/');
@@ -1407,7 +1451,7 @@ export function createWebApp(): Express {
       if (['recent', 'oldest', 'largest'].includes(requestedSort) && requestedSort !== 'recent')
         next.set('sort', requestedSort);
       if (rawCursor) next.set('cursor', rawCursor);
-      beginLogin(res, next.size ? `/app?${next.toString()}` : '/app');
+      sendPrivateLoginRequired(res, l, next.size ? `/app?${next.toString()}` : '/app');
       return;
     }
     if (notReady(res, l, user)) return;
@@ -1509,7 +1553,7 @@ export function createWebApp(): Express {
     // login ANTES de checar existência: não vaza quais IDs existem a quem não logou
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/app/rec/${req.params.id}`);
+      sendPrivateLoginRequired(res, l, `/app/rec/${req.params.id}`);
       return;
     }
     if (notReady(res, l, user, messageOpts)) return;
@@ -1569,7 +1613,7 @@ export function createWebApp(): Express {
     const messageOpts = recordingMessageOptions(req.params.id, l);
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/app/rec/${req.params.id}`);
+      sendPrivateLoginRequired(res, l, `/app/rec/${req.params.id}`);
       return;
     }
     if (notReady(res, l, user, messageOpts)) return;
@@ -1609,13 +1653,33 @@ export function createWebApp(): Express {
         .send(messagePage(MSG.audioUnavailableTitle[l], MSG.audioExpired[l], user, l, messageOpts));
       return;
     }
-    // marca ANTES do cook (que pode levar minutos): delete/cleanup não apagam no meio
-    beginDownload(meta.id);
+    // Reserva antes do cook: delete/cleanup não apagam no meio e um membro não
+    // consegue prender recursos da VPS com streams simultâneos ilimitados.
+    const download = acquireDownload(meta.id, user.id);
+    if (!download) {
+      res
+        .status(429)
+        .set('Retry-After', '30')
+        .type('html')
+        .send(messagePage(MSG.audioUnavailableTitle[l], MSG.tooManyRequests[l], user, l, messageOpts));
+      return;
+    }
+    let cookSettled = false;
+    let responseClosed = false;
+    res.once('close', () => {
+      responseClosed = true;
+      if (cookSettled) download.release();
+    });
     try {
       const result = await cook(meta, 'mix'); // mp3 único, cacheado após o 1º
+      cookSettled = true;
+      if (responseClosed) {
+        download.release();
+        return;
+      }
       // sendFile já trata Range (seek do player) e Content-Type por extensão
       res.sendFile(result.filePath, (err?: Error) => {
-        endDownload(meta.id);
+        download.release();
         if (!err) return;
         const errorClass = webDeliveryErrorClass(err);
         if (errorClass === 'client-abort') return;
@@ -1630,7 +1694,8 @@ export function createWebApp(): Express {
           .send(messagePage(MSG.audioUnavailableTitle[l], MSG.audioPrepareError[l], user, l, messageOpts));
       });
     } catch (err) {
-      endDownload(meta.id);
+      cookSettled = true;
+      download.release();
       if (err instanceof CookBusyError) {
         res
           .status(503)
@@ -1652,7 +1717,7 @@ export function createWebApp(): Express {
     const messageOpts = recordingMessageOptions(req.params.id, l);
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/app/rec/${req.params.id}`);
+      sendPrivateLoginRequired(res, l, `/app/rec/${req.params.id}`);
       return;
     }
     if (notReady(res, l, user, messageOpts)) return;
@@ -1710,7 +1775,7 @@ export function createWebApp(): Express {
     const messageOpts = recordingMessageOptions(req.params.id, l);
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/app/rec/${req.params.id}`);
+      sendPrivateLoginRequired(res, l, `/app/rec/${req.params.id}`);
       return;
     }
     if (notReady(res, l, user, messageOpts)) return;
@@ -1772,7 +1837,7 @@ export function createWebApp(): Express {
     const messageOpts = recordingMessageOptions(req.params.id, l);
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/app/rec/${req.params.id}`);
+      sendPrivateLoginRequired(res, l, `/app/rec/${req.params.id}`);
       return;
     }
     if (notReady(res, l, user, messageOpts)) return;
@@ -1811,13 +1876,32 @@ export function createWebApp(): Express {
         .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.audioExpiredTextKept[l], user, l, messageOpts));
       return;
     }
-    // marca ANTES do cook: o processamento (minutos, em gravações longas) já
-    // conta como download em andamento, então delete/cleanup não apagam no meio
-    beginDownload(meta.id);
+    // Reserva antes do cook: o processamento já conta como download em andamento
+    // e a cota impede streams simultâneos ilimitados por usuário ou globalmente.
+    const download = acquireDownload(meta.id, user.id);
+    if (!download) {
+      res
+        .status(429)
+        .set('Retry-After', '30')
+        .type('html')
+        .send(messagePage(MSG.downloadUnavailableTitle[l], MSG.tooManyRequests[l], user, l, messageOpts));
+      return;
+    }
+    let cookSettled = false;
+    let responseClosed = false;
+    res.once('close', () => {
+      responseClosed = true;
+      if (cookSettled) download.release();
+    });
     try {
       const result = await cook(meta, format);
+      cookSettled = true;
+      if (responseClosed) {
+        download.release();
+        return;
+      }
       res.download(result.filePath, result.fileName, (err?: Error) => {
-        endDownload(meta.id);
+        download.release();
         if (!err) return;
         const errorClass = webDeliveryErrorClass(err);
         if (errorClass === 'client-abort') return;
@@ -1832,7 +1916,8 @@ export function createWebApp(): Express {
           .send(messagePage(MSG.cookErrorTitle[l], MSG.cookError[l], user, l, messageOpts));
       });
     } catch (err) {
-      endDownload(meta.id);
+      cookSettled = true;
+      download.release();
       if (err instanceof CookBusyError) {
         res
           .status(503)
@@ -1866,7 +1951,7 @@ export function createWebApp(): Express {
     const messageOpts = recordingMessageOptions(req.params.id, l);
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/app/rec/${req.params.id}`);
+      res.redirect(303, `/app/rec/${encodeURIComponent(req.params.id)}`);
       return;
     }
     if (notReady(res, l, user, messageOpts)) return;
@@ -1935,7 +2020,7 @@ export function createWebApp(): Express {
     const messageOpts = recordingMessageOptions(req.params.id, l);
     const user = getWebUser(req);
     if (!user) {
-      beginLogin(res, `/app/rec/${req.params.id}`);
+      res.redirect(303, `/app/rec/${encodeURIComponent(req.params.id)}`);
       return;
     }
     if (notReady(res, l, user, messageOpts)) return;
@@ -1990,11 +2075,52 @@ export function createWebApp(): Express {
     }
   });
 
+  // Nunca delega ao error handler de desenvolvimento do Express: bare-node é
+  // suportado e não pode vazar stack, versão de dependência ou caminho do host.
+  app.use((error: unknown, req: Request, res: Response, next: NextFunction) => {
+    if (res.headersSent) {
+      next(error);
+      return;
+    }
+    const candidate = error as { status?: unknown; type?: unknown };
+    const rawStatus = typeof candidate?.status === 'number' ? candidate.status : 500;
+    const status = rawStatus >= 400 && rawStatus < 500 ? rawStatus : 500;
+    const errorClass =
+      candidate?.type === 'entity.parse.failed'
+        ? 'invalid-body'
+        : candidate?.type === 'entity.too.large'
+          ? 'body-too-large'
+          : status < 500
+            ? 'bad-request'
+            : 'internal';
+    console.error(`Falha HTTP sanitizada: class=${errorClass} status=${status}`);
+    res.set('Cache-Control', 'private, no-store, max-age=0').set('Pragma', 'no-cache');
+    if (req.path === '/api' || req.path.startsWith('/api/')) {
+      const code = status === 413 ? 'payload_too_large' : status < 500 ? 'bad_request' : 'internal';
+      res.status(status).json({ error: code });
+      return;
+    }
+    const l = pageLang(req);
+    res
+      .status(status)
+      .type('html')
+      .send(messagePage(MSG.errorTitle[l], status < 500 ? MSG.badRequest[l] : MSG.unexpected[l], undefined, l));
+  });
+
   return app;
 }
 
 export function startWebServer(): void {
-  createWebApp().listen(config.port, () => {
-    console.log(`Servidor web em ${config.baseUrl} (porta ${config.port})`);
+  const server = createWebApp().listen(config.port, config.webBindAddress, () => {
+    console.log(`Servidor web em ${config.baseUrl} (listener ${config.webBindAddress}:${config.port}).`);
   });
+  hardenHttpServer(server);
+}
+
+/** Limites do listener contra slowloris/churn sem limitar o tempo da resposta de download. */
+export function hardenHttpServer(server: HttpServer): void {
+  server.requestTimeout = 120_000;
+  server.headersTimeout = 10_000;
+  server.keepAliveTimeout = 5_000;
+  server.maxRequestsPerSocket = 1_000;
 }

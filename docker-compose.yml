@@ -2,10 +2,9 @@ services:
   kassinao:
     build:
       context: .
-      # Para transcrição local (TRANSCRIBE_PROVIDER=command), descomente para
-      # instalar Python + faster-whisper na imagem:
-      # args:
-      #   LOCAL_TRANSCRIBE: "1"
+      # Para transcrição local, defina LOCAL_TRANSCRIBE=1 antes do build.
+      args:
+        LOCAL_TRANSCRIBE: '${LOCAL_TRANSCRIBE:-0}'
     container_name: kassinao
     restart: unless-stopped
     # O processo roda sem root. Em instalação antiga, ajuste o volume uma vez:
@@ -29,22 +28,27 @@ services:
         max-file: '3'
     env_file: .env
     environment:
+      # Porta interna invariável: túnel, healthcheck e expose concordam.
+      # KASSINAO_HOST_PORT altera somente a porta publicada no host.
+      PORT: '8080'
+      # Wildcard existe apenas dentro da rede isolada do container. No host, a
+      # publicação abaixo continua presa a 127.0.0.1.
+      WEB_BIND_ADDRESS: '0.0.0.0'
       RECORDINGS_DIR: /app/recordings
       # O .env também abastece o Compose/cloudflared. Sobrescreve no app para
       # uma RCE nele não revelar a credencial do túnel.
       TUNNEL_TOKEN: ''
-      # Cache de modelos locais fica no único volume gravável; backup.sh exclui .cache.
-      XDG_CACHE_HOME: /app/recordings/.cache
-    # Sem publicar porta pra internet: o Cloudflare Tunnel abaixo alcança o bot
-    # pela rede interna do Docker. Nada exposto direto no IP do VPS.
+      # Cache de modelos é isolado das gravações e nunca entra no expurgo/backup.
+      XDG_CACHE_HOME: /home/node/.cache
+    # O listener fica acessível no HOST somente por loopback. Cloudflare Tunnel
+    # continua usando a rede interna; Nginx/Caddy local pode usar esta porta.
     expose:
       - '8080'
-    # Só pra dev/teste SEM túnel (expõe no IP do host, HTTP puro — o login OAuth
-    # do Discord exige https/localhost, então não serve pra produção). Descomente:
-    # ports:
-    #   - '8080:8080'
+    ports:
+      - '127.0.0.1:${KASSINAO_HOST_PORT:-8080}:8080'
     volumes:
       - ./recordings:/app/recordings:rw
+      - model-cache:/home/node/.cache:rw
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=1g,mode=1777
     # Auto-detecção de processo pendurado (event loop travado ≠ crash):
@@ -94,3 +98,6 @@ services:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN}
     depends_on:
       - kassinao
+
+volumes:
+  model-cache:

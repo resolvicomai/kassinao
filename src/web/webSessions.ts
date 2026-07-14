@@ -8,9 +8,12 @@ import { config } from '../config';
  * `jti` também precisa existir aqui; logout remove o registro e invalida até uma
  * cópia roubada do cookie. Persistência atômica mantém a revogação após restart.
  */
+export type WebSessionScope = 'full' | 'revoke-only';
+
 interface WebSession {
   sid: string;
   userId: string;
+  scope: WebSessionScope;
   exp: number;
   createdAt: number;
 }
@@ -29,6 +32,7 @@ function validSession(value: unknown): value is WebSession {
     s.sid.length > 0 &&
     typeof s.userId === 'string' &&
     s.userId.length > 0 &&
+    (s.scope === 'full' || s.scope === 'revoke-only') &&
     typeof s.exp === 'number' &&
     Number.isFinite(s.exp) &&
     typeof s.createdAt === 'number' &&
@@ -78,7 +82,7 @@ function gcWebSessions(write = true): number {
   return removed;
 }
 
-export function createWebSession(userId: string, exp: number): string {
+export function createWebSession(userId: string, exp: number, scope: WebSessionScope = 'full'): string {
   load();
   gcWebSessions(false);
   // OAuth repetido não pode fazer o arquivo crescer sem limite e transformar a
@@ -99,7 +103,7 @@ export function createWebSession(userId: string, exp: number): string {
     }
   }
   const sid = crypto.randomUUID();
-  sessions.set(sid, { sid, userId, exp, createdAt: Date.now() });
+  sessions.set(sid, { sid, userId, scope, exp, createdAt: Date.now() });
   persist();
   return sid;
 }
@@ -116,9 +120,35 @@ export function isActiveWebSession(sid: string, userId: string): boolean {
   return true;
 }
 
+/** Retorna o escopo persistido; cookie e registro precisam concordar. */
+export function webSessionScope(sid: string, userId: string): WebSessionScope | undefined {
+  load();
+  const session = sessions.get(sid);
+  if (!session || session.userId !== userId) return undefined;
+  if (session.exp <= Date.now()) {
+    sessions.delete(sid);
+    persist();
+    return undefined;
+  }
+  return session.scope;
+}
+
 export function revokeWebSession(sid: string): boolean {
   load();
   const removed = sessions.delete(sid);
   if (removed) persist();
+  return removed;
+}
+
+/** Revoga todos os logins de uma conta sem depender do cookie apresentado. */
+export function revokeWebSessionsForUser(userId: string): number {
+  load();
+  let removed = 0;
+  for (const [sid, session] of sessions) {
+    if (session.userId !== userId) continue;
+    sessions.delete(sid);
+    removed++;
+  }
+  if (removed > 0) persist();
   return removed;
 }

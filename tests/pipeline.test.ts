@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { parseRetryAfterMs } from '../src/processing/http';
+import { describe, expect, it, vi } from 'vitest';
+import { fetchWithRetry, parseRetryAfterMs } from '../src/processing/http';
 import {
   batchIntervals,
   filterHallucinations,
@@ -9,6 +9,20 @@ import {
 } from '../src/processing/vad';
 
 describe('parseRetryAfterMs', () => {
+  it('nunca incorpora o corpo remoto em erro ou log local', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('prompt privado sk-secret', { status: 400 })),
+    );
+    try {
+      const result = fetchWithRetry('https://provider.invalid', {}, { attempts: 1 });
+      await expect(result).rejects.toThrow('upstream HTTP 400');
+      await expect(result).rejects.not.toThrow(/prompt privado|sk-secret/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('lê o header Retry-After em segundos', () => {
     expect(parseRetryAfterMs(new Headers({ 'retry-after': '30' }), '')).toBe(30_000);
   });

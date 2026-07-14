@@ -4,7 +4,19 @@ import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
 
 export default tseslint.config(
-  { ignores: ['dist', 'node_modules', 'recordings', 'scratchpad', 'tests', 'mcp'] },
+  {
+    ignores: [
+      'dist',
+      'node_modules',
+      'recordings',
+      'scratchpad',
+      'tests',
+      'mcp',
+      // Checkouts efêmeros do Claude têm tsconfig próprio e não pertencem a
+      // este checkout; atravessá-los quebra a descoberta do projeto do parser.
+      '.claude/worktrees',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   prettier,
@@ -13,6 +25,22 @@ export default tseslint.config(
       // o projeto usa casts pragmáticos com a API do Discord/ffmpeg em alguns pontos
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    },
+  },
+  {
+    files: ['**/*.cjs'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: {
+        Buffer: 'readonly',
+        __dirname: 'readonly',
+        console: 'readonly',
+        process: 'readonly',
+        require: 'readonly',
+      },
+    },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
     },
   },
 );

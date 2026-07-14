@@ -167,10 +167,17 @@ describe('documentation page', () => {
     expect(html).toContain('/gravar [canal]');
     expect(html).toContain('/perguntar &lt;pergunta&gt; [dias]');
     expect(html).toContain('MCP_SECRET');
+    expect(html).toContain('ALLOWED_GUILD_IDS');
+    expect(html).toContain('ALLOW_ALL_GUILDS');
+    expect(html).toContain('TRUST_PROXY_HOPS');
+    expect(html).toContain('Não existe workspace hospedado nem cadastro público.');
+    expect(html).toContain('A URL não é segredo.');
     expect(html).toContain('Falha para o lado seguro');
     expect(html).not.toContain('/auth/login');
     expect(html).toContain('href="http://localhost:8080/demo"');
     expect(html).not.toContain('Abrir central');
+    expect(html).not.toContain('app.kassinao.cloud');
+    expect(html).not.toContain('mcp.kassinao.cloud');
   });
 
   it('renders the entire navigation and content in English', () => {
@@ -183,7 +190,23 @@ describe('documentation page', () => {
     expect(html).toContain('/record [channel]');
     expect(html).toContain('/ask &lt;question&gt; [days]');
     expect(html).toContain('Recording history');
-    expect(html).toContain('MANUAL_RECORD_GUILD_STARTS_PER_24H');
+    expect(html).toContain('There is no hosted workspace or public signup.');
+    expect(html).toContain('The URL is not a secret.');
+    expect(html).toContain('TRANSCRIBE_FALLBACK_PROVIDER');
+    expect(html).toContain('TRANSCRIBE_SEND_MEETING_CONTEXT');
+    expect(html).toContain('MINUTES_WEBHOOK_SECRET');
+    expect(html).toContain('RECORDING_MAX_CONCURRENT');
+    expect(html).toContain('RECORDING_GUILD_STARTS_PER_24H');
+    expect(html).toContain('RECORDING_STARTS_GLOBAL_PER_HOUR');
+    expect(html).toContain('RECORDING_STARTS_GLOBAL_PER_24H');
+    expect(html).toContain('RECORDING_MAX_PENDING_PROCESSING');
+    expect(html).not.toContain('MANUAL_RECORD_GUILD_STARTS_PER_24H');
+    expect(html).toContain('kassinao-mcp@1.0.6');
+    expect(html).toContain('X-Kassinao-Delivery-Id');
+    expect(html).toContain('X-Kassinao-Signature');
+    expect(html).toContain('HMAC-SHA256');
+    expect(html).toContain('compare in constant time');
+    expect(html).toContain('five minutes in the past or future');
     expect(html).toContain('href="http://localhost:8080/en/demo"');
     expect(html).not.toContain('>Copiar</button>');
     expect(html).toContain('>Copy</button>');
@@ -192,6 +215,7 @@ describe('documentation page', () => {
     expect(html).toContain('Default: generated and persisted');
     expect(html).toContain('Default: openrouter or groq');
     expect(html).toContain('Default: disabled');
+    expect(html).toContain('Default: false');
     expect(html).toContain('YOUR_APP_ID');
     expect(html).toContain('https://YOUR-KASSINAO');
     expect(html).toContain('PROFILE_PRINTED_BY_THE_COMMAND');
@@ -202,6 +226,8 @@ describe('documentation page', () => {
     expect(html).not.toMatch(/Default: (?:obrigat.ria|vazio|desligado|gerado e persistido)/iu);
     expect(html).not.toContain('Default: padrão do provider');
     expect(html).not.toContain('Default: openrouter ou groq');
+    expect(html).not.toContain('app.kassinao.cloud');
+    expect(html).not.toContain('mcp.kassinao.cloud');
   });
 
   it('keeps the page self-contained and free of banned typography', () => {

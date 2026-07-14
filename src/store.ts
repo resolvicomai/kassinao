@@ -183,6 +183,12 @@ export interface RecordingMeta {
   audioDeleted?: boolean;
   /** Quando o webhook da ata foi disparado (dedupe entre reinícios). */
   webhookSentAt?: number;
+  /** Identidade estável da entrega, preservada em todos os retries. */
+  webhookDeliveryId?: string;
+  /** Quantas tentativas já foram feitas para a entrega atual. */
+  webhookRetryAttempt?: number;
+  /** Próxima tentativa persistida; permite retomar depois de restart. */
+  webhookNextRetryAt?: number;
   /** Fluxo de notificação durável; presente desde a criação nas gravações novas. */
   notificationPolicyVersion?: number;
   /** Quando o aviso genérico no canal foi confirmado. */
