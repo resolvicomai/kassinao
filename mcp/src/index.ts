@@ -239,7 +239,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'list_meetings',
     description:
-      'List recorded meetings in a time window (defaults to the last 30 days). Only meetings the user can access are returned. Each item carries transcriptStatus ("partial" = some speakers not transcribed yet), presentSilent (people in the call who never spoke) and audioDeleted (tiered retention: audio expired, text remains). Use for "what meetings happened between X and Y" / "list this week\'s calls".',
+      'List recorded meetings in a time window (defaults to the last 30 days). Only meetings the user can access are returned. Each item carries transcriptStatus ("partial" = some speakers not transcribed yet), presentSilent (people in the call who never spoke) and audioDeleted (tiered retention: audio expired, text remains). Follow nextCursor until null; only then continue with nextScanCursor. Use for "what meetings happened between X and Y" / "list this week\'s calls".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -249,7 +249,14 @@ const TOOLS: ToolDef[] = [
         participantId: { type: 'string' },
         status: { type: 'string', enum: ['done', 'recording'] },
         limit: { type: 'number' },
-        cursor: { type: 'string' },
+        cursor: {
+          type: 'string',
+          description: 'opaque nextCursor; continue result pagination before using nextScanCursor',
+        },
+        scanCursor: {
+          type: 'string',
+          description: 'opaque nextScanCursor; use only when nextCursor is null',
+        },
       },
     },
     call: (a) => apiGet('/api/meetings', a),
@@ -257,7 +264,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'pending_actions',
     description:
-      'Aggregate action items (task + owner + deadline) across meetings, bucketed by deadline: overdue, dueSoon, later, noDeadline, unparseable. Items include transcriptStatus — minutes built from a partial transcript may be missing actions. Use for "what is pending this week" / "my open action items". assignee="me" matches the token owner.',
+      'Aggregate action items (task + owner + deadline) across meetings, bucketed by deadline: overdue, dueSoon, later, noDeadline, unparseable. Items include transcriptStatus — minutes built from a partial transcript may be missing actions. Follow nextCursor until null; only then continue with nextScanCursor. Use for "what is pending this week" / "my open action items". assignee="me" matches the token owner.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -265,6 +272,15 @@ const TOOLS: ToolDef[] = [
         assignee: { type: 'string', description: '"me" or part of the assignee name' },
         meetingsWithin: { type: 'string', description: 'how far back to scan meetings (for example, "60d")' },
         guildId: { type: 'string' },
+        limit: { type: 'number' },
+        cursor: {
+          type: 'string',
+          description: 'opaque nextCursor; continue actions before using nextScanCursor',
+        },
+        scanCursor: {
+          type: 'string',
+          description: 'opaque nextScanCursor; use only when nextCursor is null',
+        },
       },
     },
     call: (a) => apiGet('/api/actions', a),
@@ -272,7 +288,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'search_meetings',
     description:
-      'Full-text search across transcripts, minutes and notes of accessible meetings, accent-insensitive, with deep links to the exact second. Use for "find where we discussed X".',
+      'Full-text search across transcripts, minutes and notes of accessible meetings, accent-insensitive, with deep links to the exact second. Follow nextCursor until null; only then continue with nextScanCursor. Use for "find where we discussed X".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -282,6 +298,14 @@ const TOOLS: ToolDef[] = [
         ...rangeProps,
         guildId: { type: 'string' },
         limit: { type: 'number' },
+        cursor: {
+          type: 'string',
+          description: 'opaque nextCursor; continue matches before using nextScanCursor',
+        },
+        scanCursor: {
+          type: 'string',
+          description: 'opaque nextScanCursor; use only when nextCursor is null',
+        },
       },
       required: ['query'],
     },
@@ -290,7 +314,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'who_said',
     description:
-      'Find transcript segments matching a query (accent-insensitive), with speaker, timestamp, surrounding context and a deep link. transcriptStatus="partial" means some speakers are not transcribed yet — absence of a match is not proof nobody said it. Use for "when did Ana talk about budget".',
+      'Find transcript segments matching a query (accent-insensitive), with speaker, timestamp, surrounding context and a deep link. transcriptStatus="partial" means some speakers are not transcribed yet — absence of a match is not proof nobody said it. Follow nextCursor until null; only then continue with nextScanCursor. Use for "when did Ana talk about budget".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -301,6 +325,14 @@ const TOOLS: ToolDef[] = [
         ...rangeProps,
         guildId: { type: 'string' },
         limit: { type: 'number' },
+        cursor: {
+          type: 'string',
+          description: 'opaque nextCursor; continue transcript matches before using nextScanCursor',
+        },
+        scanCursor: {
+          type: 'string',
+          description: 'opaque nextScanCursor; use only when nextCursor is null',
+        },
       },
       required: ['query'],
     },

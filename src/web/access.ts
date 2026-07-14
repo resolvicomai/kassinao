@@ -163,6 +163,27 @@ function fetchMemberForCheck(
   return check;
 }
 
+/**
+ * Pré-valida o escopo explícito de uma consulta MCP antes de olhar o arquivo
+ * daquela guild. `false` significa definitivamente "não é membro"; qualquer
+ * estado incerto continua sendo 503, nunca uma resposta vazia enganosa.
+ *
+ * Isso não substitui a ACL por gravação. Com o mesmo requestContext, cada meta
+ * ainda passa por checkAccessForMcp reutilizando apenas esta confirmação REST.
+ */
+export async function prevalidateGuildMembershipForMcp(
+  user: AccessIdentity,
+  guildId: string,
+  requestContext: AccessRequestContext,
+): Promise<boolean> {
+  if (!user.id || !guildId) return false;
+  // Um guildId arbitrário fora do gateway não prova indisponibilidade: para
+  // esta consulta ele é um escopo definitivamente inacessível e deve parecer
+  // igual a Unknown Member. Só REST falhando numa guild conhecida vira 503.
+  if (!client.guilds.cache.has(guildId)) return false;
+  return (await fetchMemberForCheck(guildId, user.id, { requestContext })) !== null;
+}
+
 export interface AccessCheckOptions {
   /** Deduplica a confirmação por usuário+guild somente dentro desta listagem. */
   requestContext?: AccessRequestContext;
@@ -188,8 +209,10 @@ async function computeAccess(
 
   const guild = client.guilds.cache.get(meta.guildId);
   if (!guild) {
-    // Membership atual é pré-condição de TODOS os grants: sem guild, fail-closed.
-    return { view: false, delete: false, serverLayersUnknown: true };
+    // Com o gateway global pronto, uma guild ausente significa que o bot não
+    // está mais nela. A meta órfã é negação definitiva/404 e não pode derrubar
+    // uma varredura multi-tenant com 503. Startup continua coberto pelo readinessGate.
+    return { view: false, delete: false, serverLayersUnknown: false };
   }
 
   let member: GuildMember | null;

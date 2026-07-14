@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import express, { Express, NextFunction, Request, Response } from 'express';
 import { config } from '../config';
 import { isClientReady } from '../discord/ready';
@@ -5,25 +6,37 @@ import { minutesToMarkdown } from '../processing/minutes';
 import { transcriptToMarkdown } from '../processing/transcribe';
 import { cleanInline, cleanText, neutralizeFences } from '../sanitize';
 import {
+  MAX_MINUTES_BYTES,
+  MAX_MINUTES_ITEMS_PER_COLLECTION,
+  MAX_MINUTES_PARTICIPANTS_PER_RESPONSE,
+  MAX_MINUTES_POINTS_PER_PARTICIPANT,
   MAX_NOTES_PER_RECORDING,
   MAX_PRESENCE_IDENTITIES,
   MAX_PRESENCE_IDENTITIES_PER_RESPONSE,
 } from '../securityLimits';
 import {
-  listGuildMetaIdsInRange,
-  listMetaIdsInRange,
+  boundMinutesForResponse,
+  listGuildMetaScanPageInRange,
+  listMetaScanPageInRange,
   MeetingMinutes,
+  MetaTimelineCursor,
   pageUrl,
   readMeta,
   readMinutes,
+  readMinutesBounded,
   readTranscriptBounded,
-  readTranscriptForSearch,
+  readTranscriptForAggregateSearch,
   RecordingMeta,
   textExpiryOf,
   transcriptReady,
   TranscriptSegment,
 } from '../store';
-import { checkAccessForMcp, createAccessRequestContext, TransientAccessError } from './access';
+import {
+  checkAccessForMcp,
+  createAccessRequestContext,
+  prevalidateGuildMembershipForMcp,
+  TransientAccessError,
+} from './access';
 import { getMcpUser, McpToken, signMcpAccess, signMcpRefresh, verifyMcpRefresh } from './auth';
 import {
   consumeExchangeCode,
@@ -32,6 +45,7 @@ import {
   McpSessionCapacityError,
   rotateSession,
 } from './mcpTokens';
+import { OpaqueCursorError, openOpaqueCursor, sealOpaqueCursor } from './opaqueCursor';
 import { formatInTz, RangeError as WindowError, RangeInput, resolveRange, ResolvedRange } from './range';
 
 /**
@@ -86,6 +100,11 @@ export class FixedWindowRateLimiter {
     return this.buckets.size;
   }
 
+  reset(): void {
+    this.buckets.clear();
+    this.nextSweepAt = 0;
+  }
+
   consume(key: string, max: number, windowMs: number): boolean {
     const now = this.now();
     const current = this.buckets.get(key);
@@ -135,9 +154,19 @@ export class ApiRateLimiters {
   consumeGlobal(key: string, max: number, windowMs: number): boolean {
     return this.global.consume(key, max, windowMs);
   }
+
+  reset(): void {
+    this.keyed.reset();
+    this.global.reset();
+  }
 }
 
 const rateLimiters = new ApiRateLimiters();
+
+export function resetMcpApiRateLimitsForTests(): void {
+  if (process.env.NODE_ENV !== 'test') throw new Error('test_only');
+  rateLimiters.reset();
+}
 
 function rateLimited(key: string, max: number, windowMs: number): boolean {
   return rateLimiters.consumeKey(key, max, windowMs);
@@ -169,6 +198,10 @@ function rangeFromQuery(req: Request): RangeInput {
   return { from: qstr(req, 'from'), to: qstr(req, 'to'), preset: qstr(req, 'preset'), last: qstr(req, 'last') };
 }
 
+function rangeFingerprint(input: RangeInput): readonly unknown[] {
+  return [input.from ?? null, input.to ?? null, input.preset ?? null, input.last ?? null];
+}
+
 // ---------- serializadores (limpam conteúdo de terceiros) ----------
 
 function deepLink(id: string, ms: number): string {
@@ -180,10 +213,10 @@ function meetingSummary(m: RecordingMeta): Record<string, unknown> {
   // sem isso a IA responde "quem estava na call?" factualmente errado
   const spoke = new Set(m.participants.map((p) => p.id));
   const presence = m.presence ?? [];
-  const silent = presence
-    .slice(0, MAX_PRESENCE_IDENTITIES_PER_RESPONSE)
-    .filter((p) => !spoke.has(p.id))
-    .map((p) => cleanInline(p.name));
+  const silentPresence = presence.filter((p) => !spoke.has(p.id));
+  const participants = m.participants.slice(0, MAX_PRESENCE_IDENTITIES_PER_RESPONSE).map((p) => cleanInline(p.name));
+  const silentLimit = Math.max(0, MAX_PRESENCE_IDENTITIES_PER_RESPONSE - participants.length);
+  const silent = silentPresence.slice(0, silentLimit).map((p) => cleanInline(p.name));
   return {
     id: m.id,
     url: pageUrl(m.id),
@@ -192,12 +225,14 @@ function meetingSummary(m: RecordingMeta): Record<string, unknown> {
     startedAtISO: formatInTz(m.startedAt),
     endedAtISO: m.endedAt ? formatInTz(m.endedAt) : null,
     durationMin: m.endedAt ? Math.round((m.endedAt - m.startedAt) / 60000) : null,
-    participants: m.participants.map((p) => cleanInline(p.name)),
+    participants,
     participantCount: m.participants.length,
+    participantsTruncated: m.participants.length > participants.length,
+    participantLimit: MAX_PRESENCE_IDENTITIES_PER_RESPONSE,
     /** Presentes que NÃO falaram (mutados/só ouvindo). */
     presentSilent: silent,
-    presentSilentTruncated: presence.length > MAX_PRESENCE_IDENTITIES_PER_RESPONSE,
-    presentSilentLimit: MAX_PRESENCE_IDENTITIES_PER_RESPONSE,
+    presentSilentTruncated: silentPresence.length > silent.length,
+    presentSilentLimit: silentLimit,
     presenceLimit: MAX_PRESENCE_IDENTITIES,
     presentCount: presence.length || m.participants.length,
     startedByName: m.startedBy ? cleanInline(m.startedBy.name) : null,
@@ -228,21 +263,31 @@ function cleanSegments(id: string, segs: TranscriptSegment[]): Record<string, un
 }
 
 function cleanMinutes(m: MeetingMinutes): Record<string, unknown> {
+  const { minutes } = boundMinutesForResponse(m);
   return {
-    resumo: neutralizeFences(cleanText(m.resumo)),
-    decisoes: m.decisoes.map((d) => neutralizeFences(cleanInline(d))),
-    acoes: m.acoes.map((a) => ({
+    resumo: neutralizeFences(cleanText(minutes.resumo)),
+    decisoes: minutes.decisoes.map((d) => neutralizeFences(cleanInline(d))),
+    acoes: minutes.acoes.map((a) => ({
       tarefa: neutralizeFences(cleanInline(a.tarefa)),
       responsavel: a.responsavel ? cleanInline(a.responsavel) : null,
       prazo: a.prazo ? cleanInline(a.prazo) : null,
     })),
-    topicos: m.topicos.map((t) => ({ titulo: neutralizeFences(cleanInline(t.titulo)), inicioMs: t.inicioMs })),
-    porParticipante: m.porParticipante.map((p) => ({
+    topicos: minutes.topicos.map((t) => ({
+      titulo: neutralizeFences(cleanInline(t.titulo)),
+      inicioMs: t.inicioMs,
+    })),
+    porParticipante: minutes.porParticipante.map((p) => ({
       nome: cleanInline(p.nome),
       pontos: p.pontos.map((x) => neutralizeFences(cleanInline(x))),
     })),
   };
 }
+
+const MINUTES_RESPONSE_LIMITS = {
+  itemsPerCollection: MAX_MINUTES_ITEMS_PER_COLLECTION,
+  participants: MAX_MINUTES_PARTICIPANTS_PER_RESPONSE,
+  pointsPerParticipant: MAX_MINUTES_POINTS_PER_PARTICIPANT,
+} as const;
 
 // ---------- acesso: metas visíveis dentro de uma janela ----------
 
@@ -251,6 +296,209 @@ interface MetaFilters {
   channelId?: string;
   participantId?: string;
   status?: string;
+}
+
+interface ScanCursorOptions {
+  rawCursor?: string;
+  rawResultCursor?: string;
+  resultKind?: AggregateCursorKind;
+  context: string;
+}
+
+interface VisibleWindowResult {
+  metas: RecordingMeta[];
+  anchors: MetaTimelineCursor[];
+  truncated: boolean;
+  nextScanCursor: string | null;
+  stopReason: 'visible' | 'guild' | 'candidate' | null;
+  range: ResolvedRange;
+  resume?: AggregateCursorPayload;
+}
+
+interface CandidateForScan {
+  id: string;
+  guildId: string;
+}
+
+export interface VisibleCandidateScanResult<T> {
+  metas: T[];
+  anchors: MetaTimelineCursor[];
+  /** Última candidata consumida; a candidata que bateu no teto fica para a próxima página. */
+  lastProcessed?: MetaTimelineCursor;
+  limitReached: boolean;
+  stopReason: 'visible' | 'guild' | null;
+}
+
+/**
+ * Núcleo isolável do scanner. O 26º guild não é consumido e a 301ª meta
+ * visível é autorizada, mas fica ancorada para a próxima requisição. Assim
+ * nenhum item some entre páginas e nenhuma meta devolvida escapa da ACL.
+ */
+export async function scanVisibleCandidates<T extends CandidateForScan>(
+  candidates: readonly MetaTimelineCursor[],
+  options: {
+    maxVisible: number;
+    maxGuilds: number;
+    load: (id: string) => T | undefined;
+    matches: (meta: T, candidate: MetaTimelineCursor) => boolean;
+    authorize: (meta: T) => Promise<boolean>;
+  },
+): Promise<VisibleCandidateScanResult<T>> {
+  const metas: T[] = [];
+  const anchors: MetaTimelineCursor[] = [];
+  const checkedGuilds = new Set<string>();
+  let lastProcessed: MetaTimelineCursor | undefined;
+
+  for (const candidate of candidates) {
+    const meta = options.load(candidate.id);
+    if (!meta || !options.matches(meta, candidate)) {
+      lastProcessed = candidate;
+      continue;
+    }
+    if (!checkedGuilds.has(meta.guildId)) {
+      if (checkedGuilds.size >= options.maxGuilds)
+        return { metas, anchors, lastProcessed, limitReached: true, stopReason: 'guild' };
+      checkedGuilds.add(meta.guildId);
+    }
+
+    const allowed = await options.authorize(meta);
+    if (allowed && metas.length >= options.maxVisible)
+      return { metas, anchors, lastProcessed, limitReached: true, stopReason: 'visible' };
+    if (allowed) {
+      metas.push(meta);
+      anchors.push(candidate);
+    }
+    lastProcessed = candidate;
+  }
+  return { metas, anchors, lastProcessed, limitReached: false, stopReason: null };
+}
+
+interface ScanCursorPayload {
+  anchor: MetaTimelineCursor;
+  fromMs: number;
+  toMs: number;
+}
+
+type AggregateCursorKind = 'actions' | 'search' | 'said';
+type AggregateCursorPhase = 'search-minutes' | 'search-transcript' | 'search-notes';
+
+interface AggregateCursorPayload extends ScanCursorPayload {
+  kind: AggregateCursorKind;
+  /** Índice bruto da próxima ação/segmento na mesma reunião. */
+  suboffset?: number;
+  /** Evita repetir minutes/notes ao retomar um pedaço posterior do transcript. */
+  phase?: AggregateCursorPhase;
+  /** SHA-256 sem segredo do conteúdo posicional; o token inteiro é AEAD. */
+  version?: string;
+}
+
+function scanContext(route: string, rangeInput: readonly unknown[], filters: readonly unknown[]): string {
+  const canonical = JSON.stringify([1, route, ...rangeInput, ...filters]);
+  return crypto.createHash('sha256').update(canonical, 'utf8').digest('base64url');
+}
+
+function cursorOptions(user: McpToken, context: string) {
+  return {
+    secret: config.mcpAccessSecret,
+    purpose: 'mcp-scan',
+    subject: user.id,
+    context,
+  } as const;
+}
+
+function resultCursorOptions(user: McpToken, context: string, kind: AggregateCursorKind) {
+  return {
+    secret: config.mcpAccessSecret,
+    purpose: `mcp-result-${kind}`,
+    subject: user.id,
+    context,
+  } as const;
+}
+
+function validTimelineCursor(cursor: unknown): cursor is MetaTimelineCursor {
+  if (!cursor || typeof cursor !== 'object') return false;
+  const candidate = cursor as Partial<MetaTimelineCursor>;
+  return (
+    Number.isSafeInteger(candidate.startedAt) &&
+    (candidate.startedAt as number) >= 0 &&
+    typeof candidate.id === 'string' &&
+    candidate.id.length > 0 &&
+    candidate.id.length <= 256 &&
+    /^[a-zA-Z0-9-]+$/.test(candidate.id)
+  );
+}
+
+function openScanCursor(user: McpToken, raw: string | undefined, context: string): ScanCursorPayload | undefined {
+  if (!raw) return undefined;
+  const cursor = openOpaqueCursor<ScanCursorPayload>(raw, cursorOptions(user, context));
+  if (
+    !cursor ||
+    !validTimelineCursor(cursor.anchor) ||
+    !Number.isSafeInteger(cursor.fromMs) ||
+    !Number.isSafeInteger(cursor.toMs) ||
+    cursor.fromMs < 0 ||
+    cursor.fromMs >= cursor.toMs
+  )
+    throw new OpaqueCursorError();
+  return cursor;
+}
+
+function sealScanCursor(user: McpToken, cursor: MetaTimelineCursor, range: ResolvedRange, context: string): string {
+  return sealOpaqueCursor(
+    { anchor: cursor, fromMs: range.fromMs, toMs: range.toMs } satisfies ScanCursorPayload,
+    cursorOptions(user, context),
+  );
+}
+
+function openResultCursor(
+  user: McpToken,
+  raw: string,
+  context: string,
+  expectedKind: AggregateCursorKind,
+): AggregateCursorPayload {
+  const cursor = openOpaqueCursor<AggregateCursorPayload>(raw, resultCursorOptions(user, context, expectedKind));
+  if (
+    !cursor ||
+    cursor.kind !== expectedKind ||
+    !validTimelineCursor(cursor.anchor) ||
+    !Number.isSafeInteger(cursor.fromMs) ||
+    !Number.isSafeInteger(cursor.toMs) ||
+    cursor.fromMs < 0 ||
+    cursor.fromMs >= cursor.toMs ||
+    (cursor.suboffset !== undefined &&
+      (!Number.isSafeInteger(cursor.suboffset) || cursor.suboffset < 0 || cursor.suboffset > 1_000_000)) ||
+    (cursor.phase !== undefined &&
+      (cursor.kind !== 'search' || !['search-minutes', 'search-transcript', 'search-notes'].includes(cursor.phase))) ||
+    (cursor.version !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(cursor.version)) ||
+    (cursor.kind === 'search' && cursor.suboffset !== undefined && cursor.phase === undefined) ||
+    (cursor.phase !== undefined && (cursor.suboffset ?? 0) > 0 && cursor.version === undefined)
+  )
+    throw new OpaqueCursorError();
+  return cursor;
+}
+
+function sealResultCursor(
+  user: McpToken,
+  kind: AggregateCursorKind,
+  anchor: MetaTimelineCursor,
+  range: ResolvedRange,
+  context: string,
+  suboffset?: number,
+  phase?: AggregateCursorPhase,
+  version?: string,
+): string {
+  return sealOpaqueCursor(
+    {
+      kind,
+      anchor,
+      fromMs: range.fromMs,
+      toMs: range.toMs,
+      ...(suboffset === undefined ? {} : { suboffset }),
+      ...(phase === undefined ? {} : { phase }),
+      ...(version === undefined ? {} : { version }),
+    } satisfies AggregateCursorPayload,
+    resultCursorOptions(user, context, kind),
+  );
 }
 
 /** Participou = falou, esteve presente sem falar, ou iniciou a gravação. */
@@ -271,41 +519,77 @@ async function visibleInWindow(
   user: McpToken,
   range: ResolvedRange,
   f: MetaFilters,
+  cursorOptionsForRequest: ScanCursorOptions,
   maxVisible = MAX_LIST_MEETINGS,
-): Promise<{ metas: RecordingMeta[]; truncated: boolean }> {
-  const out: RecordingMeta[] = [];
-  const boundedWindow = f.guildId
-    ? listGuildMetaIdsInRange(f.guildId, range.fromMs, range.toMs, MAX_CANDIDATE_METAS_PER_REQUEST)
-    : listMetaIdsInRange(range.fromMs, range.toMs, MAX_CANDIDATE_METAS_PER_REQUEST);
-  let truncated = boundedWindow.truncated;
+): Promise<VisibleWindowResult> {
   const requestContext = createAccessRequestContext();
-  const checkedGuilds = new Set<string>();
-  for (const id of boundedWindow.ids) {
-    const m = readMeta(id);
-    if (!m) continue;
-    if (m.demo) continue;
-    if (f.guildId && m.guildId !== f.guildId) continue;
-    if (f.channelId && m.voiceChannelId !== f.channelId) continue;
-    if (f.status && m.status !== f.status) continue;
-    if (f.participantId && !recordingIncludesUser(m, f.participantId)) continue;
-    if (!checkedGuilds.has(m.guildId)) {
-      if (checkedGuilds.size >= MAX_ACCESS_GUILDS_PER_REQUEST) {
-        truncated = true;
-        continue;
-      }
-      checkedGuilds.add(m.guildId);
-    }
-    const access = await checkAccessForMcp(user, m, { requestContext });
-    if (!access.view) continue;
-    out.push(m);
-    // Lê uma autorizada além do teto para poder declarar truncamento em vez de
-    // fazer reuniões antigas sumirem silenciosamente do contrato MCP.
-    if (out.length > maxVisible) {
-      out.length = maxVisible;
-      return { metas: out, truncated: true };
-    }
+  // O escopo explícito é confirmado ANTES de abrir cursor ou consultar índice.
+  // Quem não é membro recebe a mesma página vazia, sem oráculo de cardinalidade.
+  if (f.guildId && !(await prevalidateGuildMembershipForMcp(user, f.guildId, requestContext))) {
+    return { metas: [], anchors: [], truncated: false, nextScanCursor: null, stopReason: null, range };
   }
-  return { metas: out, truncated };
+
+  if (cursorOptionsForRequest.rawCursor && cursorOptionsForRequest.rawResultCursor) throw new OpaqueCursorError();
+  const resume = cursorOptionsForRequest.rawResultCursor
+    ? openResultCursor(
+        user,
+        cursorOptionsForRequest.rawResultCursor,
+        cursorOptionsForRequest.context,
+        cursorOptionsForRequest.resultKind ?? 'search',
+      )
+    : undefined;
+  if (cursorOptionsForRequest.rawResultCursor && !cursorOptionsForRequest.resultKind) throw new OpaqueCursorError();
+  const scanCursor = resume ?? openScanCursor(user, cursorOptionsForRequest.rawCursor, cursorOptionsForRequest.context);
+  const effectiveRange: ResolvedRange = scanCursor
+    ? {
+        ...range,
+        fromMs: scanCursor.fromMs,
+        toMs: scanCursor.toMs,
+        fromISO: formatInTz(scanCursor.fromMs),
+        toISO: formatInTz(scanCursor.toMs),
+      }
+    : range;
+  const includeResumeAnchor = resume?.suboffset !== undefined;
+  const pageLimit = MAX_CANDIDATE_METAS_PER_REQUEST - (includeResumeAnchor ? 1 : 0);
+  const page = f.guildId
+    ? listGuildMetaScanPageInRange(f.guildId, effectiveRange.fromMs, effectiveRange.toMs, scanCursor?.anchor, pageLimit)
+    : listMetaScanPageInRange(effectiveRange.fromMs, effectiveRange.toMs, scanCursor?.anchor, pageLimit);
+  const candidates = includeResumeAnchor ? [resume!.anchor, ...page.candidates] : page.candidates;
+  const scan = await scanVisibleCandidates(candidates, {
+    maxVisible,
+    maxGuilds: MAX_ACCESS_GUILDS_PER_REQUEST,
+    load: readMeta,
+    matches: (m, candidate) =>
+      m.startedAt === candidate.startedAt &&
+      (m.id !== scanCursor?.anchor.id ||
+        (includeResumeAnchor &&
+          candidate.id === resume?.anchor.id &&
+          candidate.startedAt === resume?.anchor.startedAt)) &&
+      !m.demo &&
+      (!f.guildId || m.guildId === f.guildId) &&
+      (!f.channelId || m.voiceChannelId === f.channelId) &&
+      (!f.status || m.status === f.status) &&
+      (!f.participantId || recordingIncludesUser(m, f.participantId)),
+    authorize: async (m) => (await checkAccessForMcp(user, m, { requestContext })).view,
+  });
+
+  // Exatamente 500 também devolve continuação. Isso pode gerar uma página
+  // vazia final, mas não consulta a 501ª candidata nem revela cardinalidade bruta.
+  const budgetReached = scan.limitReached || candidates.length >= MAX_CANDIDATE_METAS_PER_REQUEST;
+  const stopReason = scan.stopReason ?? (budgetReached ? 'candidate' : null);
+  const nextScanCursor =
+    budgetReached && scan.lastProcessed
+      ? sealScanCursor(user, scan.lastProcessed, effectiveRange, cursorOptionsForRequest.context)
+      : null;
+  return {
+    metas: scan.metas,
+    anchors: scan.anchors,
+    truncated: nextScanCursor !== null,
+    nextScanCursor,
+    stopReason,
+    range: effectiveRange,
+    resume,
+  };
 }
 
 /** Resolve uma gravação SÓ se o usuário pode vê-la; senão 404 (igual a inexistente). */
@@ -332,12 +616,65 @@ interface SearchHit {
   deepLink?: string;
 }
 
+interface SearchSourceItem {
+  text: string;
+  hit: SearchHit;
+}
+
+const SEARCH_PHASES: readonly AggregateCursorPhase[] = ['search-minutes', 'search-transcript', 'search-notes'];
+
+function minutesSearchItems(minutes: MeetingMinutes): SearchSourceItem[] {
+  return [
+    {
+      text: minutes.resumo,
+      hit: { where: 'summary', snippet: neutralizeFences(cleanInline(minutes.resumo)).slice(0, 240) },
+    },
+    ...minutes.decisoes.map((decision) => ({
+      text: decision,
+      hit: { where: 'decision', snippet: neutralizeFences(cleanInline(decision)) },
+    })),
+    ...minutes.acoes.map((action) => ({
+      text: action.tarefa,
+      hit: { where: 'action', snippet: neutralizeFences(cleanInline(action.tarefa)) },
+    })),
+    ...minutes.topicos.map((topic) => ({
+      text: topic.titulo,
+      hit: {
+        where: 'topic',
+        snippet: neutralizeFences(cleanInline(topic.titulo)),
+        atMs: topic.inicioMs,
+      },
+    })),
+  ];
+}
+
+function noteSearchItems(meta: RecordingMeta): SearchSourceItem[] {
+  return meta.notes.slice(0, MAX_NOTES_PER_MEETING).map((note) => ({
+    text: note.text,
+    hit: {
+      where: 'note',
+      atMs: note.atMs,
+      snippet: neutralizeFences(cleanInline(note.text)),
+      deepLink: deepLink(meta.id, note.atMs),
+    },
+  }));
+}
+
 /** Normaliza pra busca: minúsculas + sem acentos ("orcamento" acha "orçamento"). */
 function searchNorm(s: string): string {
   return s
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
+}
+
+function positionalContentVersion(domain: string, value: unknown): string {
+  return crypto
+    .createHash('sha256')
+    .update(domain, 'utf8')
+    .update('\0', 'utf8')
+    .update(JSON.stringify(value), 'utf8')
+    .digest('base64url');
 }
 
 export function normalizedSearchTerms(query: string): string[] {
@@ -480,12 +817,16 @@ function mcpUserOf(res: Response): McpToken {
   return res.locals.mcpUser as McpToken;
 }
 
-/** Envolve handler async: RangeError→400, TransientAccessError→503, resto→500. */
+/** Envolve handler async: input inválido→400, acesso transitório→503, resto→500. */
 function handle(fn: (req: Request, res: Response) => Promise<void>) {
   return (req: Request, res: Response): void => {
     fn(req, res).catch((err: unknown) => {
       if (err instanceof WindowError) {
         res.status(400).json({ error: 'bad_range', message: err.message });
+        return;
+      }
+      if (err instanceof OpaqueCursorError) {
+        res.status(400).json({ error: 'bad_cursor' });
         return;
       }
       if (err instanceof TransientAccessError) {
@@ -565,33 +906,48 @@ export function mountMcpApi(app: Express): void {
     scanRateGate,
     handle(async (req, res) => {
       const user = mcpUserOf(res);
-      const range = resolveRange(rangeFromQuery(req), Date.now());
+      const rangeInput = rangeFromQuery(req);
+      const range = resolveRange(rangeInput, Date.now());
       const filters: MetaFilters = {
         guildId: qstr(req, 'guildId'),
         channelId: qstr(req, 'channelId'),
         participantId: qstr(req, 'participantId'),
         status: qstr(req, 'status'),
       };
-      const { metas: all, truncated: meetingsTruncated } = await visibleInWindow(
+      const limit = qint(req, 'limit', 20, 100);
+      const resultCursor = qstr(req, 'cursor');
+      const scanCursor = qstr(req, 'scanCursor');
+      if (resultCursor && scanCursor) throw new OpaqueCursorError();
+      const visible = await visibleInWindow(
         user,
         range,
         filters,
-        MAX_LIST_MEETINGS,
+        {
+          rawCursor: resultCursor ?? scanCursor,
+          context: scanContext('meetings', rangeFingerprint(rangeInput), [
+            filters.guildId ?? null,
+            filters.channelId ?? null,
+            filters.participantId ?? null,
+            filters.status ?? null,
+          ]),
+        },
+        limit,
       );
-      const limit = qint(req, 'limit', 20, 100);
-      const offset = qint(req, 'cursor', 1, 100000) - 1 || 0;
-      const page = all.slice(offset, offset + limit);
+      const all = visible.metas;
+      const nextCursor = visible.stopReason === 'visible' ? visible.nextScanCursor : null;
+      const nextScanCursor = visible.stopReason === 'visible' ? null : visible.nextScanCursor;
       res.json({
-        resolvedFrom: range.fromISO,
-        resolvedTo: range.toISO,
-        label: range.label,
+        resolvedFrom: visible.range.fromISO,
+        resolvedTo: visible.range.toISO,
+        label: visible.range.label,
         total: all.length,
-        meetingsTruncated,
+        meetingsTruncated: visible.truncated,
         meetingScanLimit: MAX_LIST_MEETINGS,
         candidateScanLimit: MAX_CANDIDATE_METAS_PER_REQUEST,
         guildScanLimit: MAX_ACCESS_GUILDS_PER_REQUEST,
-        meetings: page.map(meetingSummary),
-        nextCursor: offset + limit < all.length ? String(offset + limit + 1) : null,
+        meetings: all.map(meetingSummary),
+        nextCursor,
+        nextScanCursor,
       });
     }),
   );
@@ -609,8 +965,20 @@ export function mountMcpApi(app: Express): void {
       const include = new Set((qstr(req, 'include') ?? 'meta,minutes,transcript,notes,timeline').split(','));
       const body: Record<string, unknown> = { ...meetingSummary(meta) };
       if (include.has('minutes') && meta.minutes?.status === 'done') {
-        const min = readMinutes(meta.id);
-        if (min) body.minutes = cleanMinutes(min);
+        const result = readMinutesBounded(meta.id);
+        body.minutesByteLimit = MAX_MINUTES_BYTES;
+        body.minutesLimits = MINUTES_RESPONSE_LIMITS;
+        if (result.status === 'ok') {
+          const bounded = boundMinutesForResponse(result.minutes);
+          body.minutes = cleanMinutes(bounded.minutes);
+          body.minutesBytes = result.bytes;
+          body.minutesTruncated = bounded.truncated;
+        } else {
+          body.minutes = null;
+          body.minutesTruncated = true;
+          body.minutesUnavailableReason = result.status;
+          if (result.status === 'too_large') body.minutesBytes = result.bytes;
+        }
       }
       if (include.has('transcript') && transcriptReady(meta)) {
         const transcript = readTranscriptBounded(meta.id, MCP_DIRECT_TRANSCRIPT_MAX_BYTES);
@@ -640,8 +1008,9 @@ export function mountMcpApi(app: Express): void {
         body.noteLimit = MAX_NOTES_PER_MEETING;
       }
       if (include.has('timeline')) {
-        body.timeline = buildTimeline(meta);
-        body.timelineTruncated = meta.events.length > 500 || meta.notes.length > MAX_NOTES_PER_MEETING;
+        const timeline = buildTimeline(meta);
+        body.timeline = timeline.items;
+        body.timelineTruncated = timeline.truncated;
         body.timelineEventLimit = 500;
         body.timelineNoteLimit = MAX_NOTES_PER_MEETING;
       }
@@ -708,12 +1077,33 @@ export function mountMcpApi(app: Express): void {
         res.status(404).json({ error: 'not_found' });
         return;
       }
-      const min = meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
-      if (!min) {
+      if (meta.minutes?.status !== 'done') {
         res.json({ id: meta.id, status: meta.minutes?.status ?? 'none', minutes: null });
         return;
       }
-      res.json({ id: meta.id, status: 'done', minutes: cleanMinutes(min) });
+      const result = readMinutesBounded(meta.id);
+      if (result.status === 'too_large') {
+        res.status(413).json({
+          error: 'minutes_too_large',
+          maxBytes: MAX_MINUTES_BYTES,
+          bytes: result.bytes,
+        });
+        return;
+      }
+      if (result.status === 'unavailable') {
+        res.status(503).set('Retry-After', '30').json({ error: 'minutes_unavailable' });
+        return;
+      }
+      const bounded = boundMinutesForResponse(result.minutes);
+      res.json({
+        id: meta.id,
+        status: 'done',
+        bytes: result.bytes,
+        maxBytes: MAX_MINUTES_BYTES,
+        minutes: cleanMinutes(bounded.minutes),
+        minutesTruncated: bounded.truncated,
+        minutesLimits: MINUTES_RESPONSE_LIMITS,
+      });
     }),
   );
 
@@ -729,16 +1119,37 @@ export function mountMcpApi(app: Express): void {
       }
       const format = qstr(req, 'format') ?? 'ata.md';
       if (format === 'ata.md') {
-        const min = meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
-        if (!min) {
+        if (meta.minutes?.status !== 'done') {
           res.status(404).json({ error: 'no_minutes' });
+          return;
+        }
+        const result = readMinutesBounded(meta.id);
+        if (result.status === 'too_large') {
+          res.status(413).json({
+            error: 'minutes_too_large',
+            maxBytes: MAX_MINUTES_BYTES,
+            bytes: result.bytes,
+          });
+          return;
+        }
+        if (result.status === 'unavailable') {
+          res.status(503).set('Retry-After', '30').json({ error: 'minutes_unavailable' });
+          return;
+        }
+        const bounded = boundMinutesForResponse(result.minutes);
+        if (bounded.truncated) {
+          res.status(413).json({
+            error: 'minutes_response_limit',
+            limits: MINUTES_RESPONSE_LIMITS,
+            use: 'minutes_endpoint_with_truncation_metadata',
+          });
           return;
         }
         res.json({
           id: meta.id,
           format,
           filename: `kassinao-${meta.id}-ata.md`,
-          content: minutesToMarkdown(meta, min),
+          content: minutesToMarkdown(meta, bounded.minutes),
         });
         return;
       }
@@ -789,22 +1200,37 @@ export function mountMcpApi(app: Express): void {
       const user = mcpUserOf(res);
       const now = Date.now();
       // janela das REUNIÕES a varrer (onde as ações nasceram); default 60 dias
-      const meetingRange = resolveRange({ last: qstr(req, 'meetingsWithin') ?? '60d' }, now);
-      const { metas, truncated: meetingsTruncated } = await visibleInWindow(
-        user,
-        meetingRange,
-        { guildId: qstr(req, 'guildId') },
-        MAX_AGGREGATE_MEETINGS,
-      );
+      const meetingsWithin = qstr(req, 'meetingsWithin') ?? '60d';
+      const meetingRangeInput: RangeInput = { last: meetingsWithin };
+      const meetingRange = resolveRange(meetingRangeInput, now);
       const withinDays = qint(req, 'withinDays', 7, 365);
-      const dueLimit = now + withinDays * 86400000;
-      const todayStart = resolveRange({ preset: 'today' }, now).fromMs;
       const assignee = qstr(req, 'assignee');
       const meName = cleanInline(user.name).toLowerCase();
+      const assigneeFilter = assignee === 'me' ? meName : assignee?.toLowerCase();
+      const guildId = qstr(req, 'guildId');
+      const actionContext = scanContext('actions', rangeFingerprint(meetingRangeInput), [
+        guildId ?? null,
+        withinDays,
+        assigneeFilter ?? null,
+      ]);
+      const visible = await visibleInWindow(
+        user,
+        meetingRange,
+        { guildId },
+        {
+          rawCursor: qstr(req, 'scanCursor'),
+          rawResultCursor: qstr(req, 'cursor'),
+          resultKind: 'actions',
+          context: actionContext,
+        },
+        MAX_AGGREGATE_MEETINGS,
+      );
+      const metas = visible.metas;
+      const dueLimit = now + withinDays * 86400000;
+      const todayStart = resolveRange({ preset: 'today' }, now).fromMs;
       const limit = qint(req, 'limit', 100, 500);
-      const offset = qint(req, 'cursor', 1, 10_000) - 1;
-      let total = 0;
       let returned = 0;
+      let nextCursor: string | null = null;
 
       const buckets = {
         overdue: [] as unknown[],
@@ -815,20 +1241,45 @@ export function mountMcpApi(app: Express): void {
       };
       type ActionBucket = keyof typeof buckets;
       const add = (bucket: ActionBucket, item: unknown): void => {
-        const index = total++;
-        if (index < offset || returned >= limit) return;
         buckets[bucket].push(item);
         returned++;
       };
-      for (const m of metas) {
-        if (m.minutes?.status !== 'done') continue;
+      actions: for (let metaIndex = 0; metaIndex < metas.length; metaIndex++) {
+        const m = metas[metaIndex];
+        const anchor = visible.anchors[metaIndex];
+        const resumesThisMeeting =
+          visible.resume?.kind === 'actions' &&
+          visible.resume.anchor.id === anchor.id &&
+          visible.resume.anchor.startedAt === anchor.startedAt;
+        if (m.minutes?.status !== 'done') {
+          if (resumesThisMeeting) throw new OpaqueCursorError();
+          continue;
+        }
         const min = readMinutes(m.id);
-        if (!min) continue;
-        for (const a of min.acoes.slice(0, MAX_ACTIONS_PER_MEETING)) {
+        if (!min) {
+          if (resumesThisMeeting) throw new OpaqueCursorError();
+          continue;
+        }
+        const actionsVersion = positionalContentVersion('actions', min.acoes);
+        if (resumesThisMeeting && visible.resume?.version !== actionsVersion) throw new OpaqueCursorError();
+        const resumeAt = resumesThisMeeting ? (visible.resume?.suboffset ?? 0) : 0;
+        const chunkEnd = Math.min(resumeAt + MAX_ACTIONS_PER_MEETING, min.acoes.length);
+        for (let actionIndex = resumeAt; actionIndex < chunkEnd; actionIndex++) {
+          const a = min.acoes[actionIndex];
           const resp = a.responsavel ? cleanInline(a.responsavel) : '';
-          if (assignee) {
-            const want = assignee === 'me' ? meName : assignee.toLowerCase();
-            if (!resp.toLowerCase().includes(want)) continue;
+          if (assigneeFilter && !resp.toLowerCase().includes(assigneeFilter)) continue;
+          if (returned >= limit) {
+            nextCursor = sealResultCursor(
+              user,
+              'actions',
+              anchor,
+              visible.range,
+              actionContext,
+              actionIndex,
+              undefined,
+              actionsVersion,
+            );
+            break actions;
           }
           const item = {
             tarefa: neutralizeFences(cleanInline(a.tarefa)),
@@ -855,17 +1306,30 @@ export function mountMcpApi(app: Express): void {
           else if (parsed <= dueLimit) add('dueSoon', item);
           else add('later', item);
         }
+        if (chunkEnd < min.acoes.length) {
+          nextCursor = sealResultCursor(
+            user,
+            'actions',
+            anchor,
+            visible.range,
+            actionContext,
+            chunkEnd,
+            undefined,
+            actionsVersion,
+          );
+          break actions;
+        }
       }
       res.json({
         scannedMeetings: metas.length,
-        meetingsTruncated,
+        meetingsTruncated: visible.truncated,
         meetingScanLimit: MAX_AGGREGATE_MEETINGS,
         candidateScanLimit: MAX_CANDIDATE_METAS_PER_REQUEST,
         guildScanLimit: MAX_ACCESS_GUILDS_PER_REQUEST,
         withinDays,
-        total,
         returned,
-        nextCursor: offset + returned < total ? String(offset + returned + 1) : null,
+        nextCursor,
+        nextScanCursor: nextCursor ? null : visible.nextScanCursor,
         ...buckets,
       });
     }),
@@ -888,88 +1352,211 @@ export function mountMcpApi(app: Express): void {
         return;
       }
       const scope = new Set((qstr(req, 'scope') ?? 'transcript,minutes,notes').split(','));
-      const range = resolveRange(rangeFromQuery(req), Date.now());
-      const { metas, truncated: meetingsTruncated } = await visibleInWindow(
+      const rangeInput = rangeFromQuery(req);
+      const range = resolveRange(rangeInput, Date.now());
+      const guildId = qstr(req, 'guildId');
+      const searchContext = scanContext('search', rangeFingerprint(rangeInput), [
+        guildId ?? null,
+        q,
+        mode,
+        [...scope].sort(),
+      ]);
+      const visible = await visibleInWindow(
         user,
         range,
-        { guildId: qstr(req, 'guildId') },
+        { guildId },
+        {
+          rawCursor: qstr(req, 'scanCursor'),
+          rawResultCursor: qstr(req, 'cursor'),
+          resultKind: 'search',
+          context: searchContext,
+        },
         MAX_AGGREGATE_MEETINGS,
       );
+      const metas = visible.metas;
       const limit = qint(req, 'limit', 20, 100);
-      const offset = qint(req, 'cursor', 1, 10_000) - 1;
 
       const results: Record<string, unknown>[] = [];
+      let nextCursor: string | null = null;
+      let lastReturnedAnchor: MetaTimelineCursor | undefined;
       let skippedTranscripts = 0;
       let transcriptBytesScanned = 0;
       let transcriptSegmentsScanned = 0;
       let transcriptBudgetExhausted = false;
-      for (const m of metas) {
+      searchMeetings: for (let metaIndex = 0; metaIndex < metas.length; metaIndex++) {
+        const m = metas[metaIndex];
+        const anchor = visible.anchors[metaIndex];
         const hits: SearchHit[] = [];
-        if (scope.has('minutes') && m.minutes?.status === 'done') {
-          const min = readMinutes(m.id);
-          if (min) collectMinutesHits(min, terms, mode, hits, MAX_SEARCH_HITS_PER_MEETING);
-        }
-        if (scope.has('transcript') && transcriptReady(m) && hits.length < MAX_SEARCH_HITS_PER_MEETING) {
-          const transcript = transcriptBudgetExhausted
-            ? undefined
-            : readTranscriptForSearch(m.id, MAX_TRANSCRIPT_SEARCH_BYTES);
-          if (!transcript && !transcriptBudgetExhausted) skippedTranscripts++;
-          const remainingSegments = MAX_SEARCH_SEGMENTS_PER_REQUEST - transcriptSegmentsScanned;
-          if (
-            transcript &&
-            (transcriptBytesScanned + transcript.bytes > MAX_TRANSCRIPT_BYTES_PER_REQUEST || remainingSegments <= 0)
-          ) {
-            transcriptBudgetExhausted = true;
+        let meetingCursor: string | null = null;
+        const resumesThisMeeting =
+          visible.resume?.kind === 'search' &&
+          visible.resume.anchor.id === anchor.id &&
+          visible.resume.anchor.startedAt === anchor.startedAt;
+        const resumePhase = resumesThisMeeting ? visible.resume?.phase : undefined;
+        if (resumesThisMeeting && !resumePhase) throw new OpaqueCursorError();
+        const startPhaseIndex = resumePhase ? SEARCH_PHASES.indexOf(resumePhase) : 0;
+        if (startPhaseIndex < 0) throw new OpaqueCursorError();
+
+        const phaseHasContent = (phase: AggregateCursorPhase): boolean => {
+          if (phase === 'search-minutes') return scope.has('minutes') && m.minutes?.status === 'done';
+          if (phase === 'search-transcript') return scope.has('transcript') && transcriptReady(m);
+          return scope.has('notes') && m.notes.length > 0;
+        };
+        const hasLaterPhase = (phaseIndex: number): boolean =>
+          SEARCH_PHASES.slice(phaseIndex + 1).some(phaseHasContent);
+        const sealMeetingCursor = (phase: AggregateCursorPhase, suboffset: number, version?: string): void => {
+          meetingCursor = sealResultCursor(
+            user,
+            'search',
+            anchor,
+            visible.range,
+            searchContext,
+            suboffset,
+            phase,
+            version,
+          );
+        };
+
+        searchPhases: for (let phaseIndex = startPhaseIndex; phaseIndex < SEARCH_PHASES.length; phaseIndex++) {
+          const phase = SEARCH_PHASES[phaseIndex];
+          const resumesThisPhase = resumesThisMeeting && phase === resumePhase;
+          const phaseOffset = resumesThisPhase ? (visible.resume?.suboffset ?? 0) : 0;
+
+          if (phase === 'search-minutes') {
+            if (!phaseHasContent(phase)) {
+              if (resumesThisPhase) throw new OpaqueCursorError();
+              continue;
+            }
+            const read = readMinutesBounded(m.id, MAX_MINUTES_BYTES);
+            if (read.status !== 'ok') {
+              if (resumesThisPhase) throw new OpaqueCursorError();
+              continue;
+            }
+            const version = positionalContentVersion('search-minutes', read.minutes);
+            if (resumesThisPhase && visible.resume?.version !== version) throw new OpaqueCursorError();
+            const items = minutesSearchItems(read.minutes);
+            if (phaseOffset > items.length) throw new OpaqueCursorError();
+            for (let itemIndex = phaseOffset; itemIndex < items.length; itemIndex++) {
+              const item = items[itemIndex];
+              if (matchIn(item.text, terms, mode) <= 0) continue;
+              hits.push(item.hit);
+              if (hits.length >= MAX_SEARCH_HITS_PER_MEETING) {
+                const nextOffset = itemIndex + 1;
+                if (nextOffset < items.length || hasLaterPhase(phaseIndex)) {
+                  sealMeetingCursor(phase, nextOffset, version);
+                }
+                break searchPhases;
+              }
+            }
+            continue;
           }
-          const segments = transcriptBudgetExhausted
-            ? []
-            : (transcript?.segments.slice(0, Math.min(MAX_SEARCH_SEGMENTS_PER_MEETING, remainingSegments)) ?? []);
-          if (transcript && !transcriptBudgetExhausted) {
-            transcriptBytesScanned += transcript.bytes;
-            transcriptSegmentsScanned += segments.length;
-            if (
-              segments.length < transcript.segments.length &&
-              transcriptSegmentsScanned >= MAX_SEARCH_SEGMENTS_PER_REQUEST
-            )
+
+          if (phase === 'search-transcript') {
+            if (!phaseHasContent(phase)) {
+              if (resumesThisPhase && phaseOffset > 0) throw new OpaqueCursorError();
+              continue;
+            }
+            const remainingSegments = MAX_SEARCH_SEGMENTS_PER_REQUEST - transcriptSegmentsScanned;
+            const remainingBytes = MAX_TRANSCRIPT_BYTES_PER_REQUEST - transcriptBytesScanned;
+            if (remainingSegments <= 0 || remainingBytes <= 0) {
               transcriptBudgetExhausted = true;
-          }
-          for (const s of segments) {
-            if (matchIn(s.text, terms, mode) > 0) {
-              const idx = searchNorm(s.text).indexOf(terms[0]);
+              sealMeetingCursor(phase, phaseOffset, resumesThisPhase ? visible.resume?.version : undefined);
+              break searchPhases;
+            }
+            const transcriptRead = readTranscriptForAggregateSearch(m.id, MAX_TRANSCRIPT_SEARCH_BYTES, remainingBytes);
+            if (transcriptRead.status === 'request_budget_exhausted') {
+              transcriptBudgetExhausted = true;
+              sealMeetingCursor(phase, phaseOffset, resumesThisPhase ? visible.resume?.version : undefined);
+              break searchPhases;
+            }
+            if (transcriptRead.status !== 'ok') {
+              skippedTranscripts++;
+              if (resumesThisPhase && phaseOffset > 0) throw new OpaqueCursorError();
+              continue;
+            }
+            const version = positionalContentVersion('search-transcript', transcriptRead.segments);
+            if (resumesThisPhase && visible.resume?.version !== undefined && visible.resume.version !== version) {
+              throw new OpaqueCursorError();
+            }
+            if (phaseOffset > transcriptRead.segments.length) throw new OpaqueCursorError();
+            transcriptBytesScanned += transcriptRead.bytes;
+            const segmentEnd = Math.min(
+              phaseOffset + MAX_SEARCH_SEGMENTS_PER_MEETING,
+              phaseOffset + remainingSegments,
+              transcriptRead.segments.length,
+            );
+            let processedSegments = 0;
+            for (let segmentIndex = phaseOffset; segmentIndex < segmentEnd; segmentIndex++) {
+              const segment = transcriptRead.segments[segmentIndex];
+              processedSegments++;
+              if (matchIn(segment.text, terms, mode) <= 0) continue;
+              const idx = searchNorm(segment.text).indexOf(terms[0]);
               hits.push({
                 where: 'transcript',
-                speaker: cleanInline(s.speaker),
-                atMs: s.startMs,
-                snippet: neutralizeFences(cleanInline(snippet(s.text, idx < 0 ? 0 : idx, terms[0].length))),
-                deepLink: deepLink(m.id, s.startMs),
+                speaker: cleanInline(segment.speaker),
+                atMs: segment.startMs,
+                snippet: neutralizeFences(cleanInline(snippet(segment.text, idx < 0 ? 0 : idx, terms[0].length))),
+                deepLink: deepLink(m.id, segment.startMs),
               });
-              if (hits.length >= MAX_SEARCH_HITS_PER_MEETING) break;
+              if (hits.length >= MAX_SEARCH_HITS_PER_MEETING) {
+                const nextOffset = segmentIndex + 1;
+                if (nextOffset < transcriptRead.segments.length || hasLaterPhase(phaseIndex)) {
+                  sealMeetingCursor(phase, nextOffset, version);
+                }
+                break;
+              }
+            }
+            transcriptSegmentsScanned += processedSegments;
+            if (hits.length >= MAX_SEARCH_HITS_PER_MEETING) break searchPhases;
+            if (segmentEnd < transcriptRead.segments.length) {
+              transcriptBudgetExhausted = true;
+              sealMeetingCursor(phase, segmentEnd, version);
+              break searchPhases;
+            }
+            continue;
+          }
+
+          if (!phaseHasContent(phase)) {
+            if (resumesThisPhase) throw new OpaqueCursorError();
+            continue;
+          }
+          const items = noteSearchItems(m);
+          const version = positionalContentVersion(
+            'search-notes',
+            items.map((item) => item.text),
+          );
+          if (resumesThisPhase && visible.resume?.version !== version) throw new OpaqueCursorError();
+          if (phaseOffset > items.length) throw new OpaqueCursorError();
+          for (let itemIndex = phaseOffset; itemIndex < items.length; itemIndex++) {
+            const item = items[itemIndex];
+            if (matchIn(item.text, terms, mode) <= 0) continue;
+            hits.push(item.hit);
+            if (hits.length >= MAX_SEARCH_HITS_PER_MEETING) {
+              const nextOffset = itemIndex + 1;
+              if (nextOffset < items.length) sealMeetingCursor(phase, nextOffset, version);
+              break searchPhases;
             }
           }
         }
-        if (scope.has('notes') && hits.length < MAX_SEARCH_HITS_PER_MEETING) {
-          for (const n of m.notes.slice(0, MAX_NOTES_PER_MEETING)) {
-            if (matchIn(n.text, terms, mode) > 0) {
-              hits.push({
-                where: 'note',
-                atMs: n.atMs,
-                snippet: neutralizeFences(cleanInline(n.text)),
-                deepLink: deepLink(m.id, n.atMs),
-              });
-              if (hits.length >= MAX_SEARCH_HITS_PER_MEETING) break;
-            }
+        if (hits.length) {
+          if (results.length >= limit && lastReturnedAnchor) {
+            nextCursor = sealResultCursor(user, 'search', lastReturnedAnchor, visible.range, searchContext);
+            break searchMeetings;
           }
+          results.push({ ...meetingSummary(m), hits });
+          lastReturnedAnchor = anchor;
         }
-        if (hits.length) results.push({ ...meetingSummary(m), hits });
+        if (meetingCursor) {
+          nextCursor = meetingCursor;
+          break searchMeetings;
+        }
       }
-      results.sort((a, b) => (b.hits as unknown[]).length - (a.hits as unknown[]).length);
-      const page = results.slice(offset, offset + limit);
       res.json({
-        resolvedFrom: range.fromISO,
-        resolvedTo: range.toISO,
+        resolvedFrom: visible.range.fromISO,
+        resolvedTo: visible.range.toISO,
         query: q,
         scannedMeetings: metas.length,
-        meetingsTruncated,
+        meetingsTruncated: visible.truncated,
         meetingScanLimit: MAX_AGGREGATE_MEETINGS,
         candidateScanLimit: MAX_CANDIDATE_METAS_PER_REQUEST,
         guildScanLimit: MAX_ACCESS_GUILDS_PER_REQUEST,
@@ -977,9 +1564,10 @@ export function mountMcpApi(app: Express): void {
         transcriptBytesScanned,
         transcriptSegmentsScanned,
         transcriptBudgetExhausted,
-        total: results.length,
-        results: page,
-        nextCursor: offset + page.length < results.length ? String(offset + page.length + 1) : null,
+        returned: results.length,
+        results,
+        nextCursor,
+        nextScanCursor: nextCursor ? null : visible.nextScanCursor,
       });
     }),
   );
@@ -1002,48 +1590,144 @@ export function mountMcpApi(app: Express): void {
       const speaker = qstr(req, 'speaker') ? searchNorm(qstr(req, 'speaker')!) : undefined;
       const ctx = qint(req, 'contextSegments', 1, 5);
       const scopeId = qstr(req, 'meetingId');
-      const range = resolveRange(rangeFromQuery(req), Date.now());
-      const visible = scopeId
-        ? {
-            metas: [await getViewable(user, scopeId)].filter((m): m is RecordingMeta => !!m),
-            truncated: false,
+      const rangeInput = rangeFromQuery(req);
+      const range = resolveRange(rangeInput, Date.now());
+      const guildId = qstr(req, 'guildId');
+      const saidContext = scanContext('said', rangeFingerprint(rangeInput), [
+        guildId ?? null,
+        scopeId ?? null,
+        q,
+        speaker ?? null,
+        ctx,
+      ]);
+      let visible: VisibleWindowResult;
+      if (scopeId) {
+        let meta: RecordingMeta | undefined;
+        if (guildId) {
+          const requestContext = createAccessRequestContext();
+          // O escopo declarado vem antes de cursor e disco. Ausente/Unknown
+          // Member permanece uma busca vazia; falha REST conhecida sobe 503.
+          if (await prevalidateGuildMembershipForMcp(user, guildId, requestContext)) {
+            const candidate = readMeta(scopeId);
+            if (candidate && !candidate.demo && candidate.guildId === guildId) {
+              const access = await checkAccessForMcp(user, candidate, { requestContext });
+              if (access.view) meta = candidate;
+            }
           }
-        : await visibleInWindow(user, range, { guildId: qstr(req, 'guildId') }, MAX_AGGREGATE_MEETINGS);
+        } else {
+          meta = await getViewable(user, scopeId);
+        }
+        if (meta && qstr(req, 'scanCursor')) throw new OpaqueCursorError();
+        const rawResultCursor = qstr(req, 'cursor');
+        // Não abre o cursor antes de confirmar acesso ao meetingId: inexistente e
+        // sem acesso continuam produzindo a mesma resposta vazia.
+        const resume =
+          meta && rawResultCursor ? openResultCursor(user, rawResultCursor, saidContext, 'said') : undefined;
+        if (meta && resume && (resume.anchor.id !== meta.id || resume.anchor.startedAt !== meta.startedAt))
+          throw new OpaqueCursorError();
+        const directRange = resume
+          ? {
+              ...range,
+              fromMs: resume.fromMs,
+              toMs: resume.toMs,
+              fromISO: formatInTz(resume.fromMs),
+              toISO: formatInTz(resume.toMs),
+            }
+          : range;
+        visible = {
+          metas: meta ? [meta] : [],
+          anchors: meta ? [{ id: meta.id, startedAt: meta.startedAt }] : [],
+          truncated: false,
+          nextScanCursor: null,
+          stopReason: null,
+          range: directRange,
+          resume,
+        };
+      } else {
+        visible = await visibleInWindow(
+          user,
+          range,
+          { guildId },
+          {
+            rawCursor: qstr(req, 'scanCursor'),
+            rawResultCursor: qstr(req, 'cursor'),
+            resultKind: 'said',
+            context: saidContext,
+          },
+          MAX_AGGREGATE_MEETINGS,
+        );
+      }
       const metas = visible.metas;
 
       const limit = qint(req, 'limit', 50, 200);
-      const offset = qint(req, 'cursor', 1, 10_000) - 1;
       const out: Record<string, unknown>[] = [];
-      let matched = 0;
-      let hasMore = false;
+      let nextCursor: string | null = null;
       let skippedTranscripts = 0;
       let transcriptBytesScanned = 0;
       let transcriptSegmentsScanned = 0;
       let transcriptBudgetExhausted = false;
-      outer: for (const m of metas) {
-        if (!transcriptReady(m)) continue;
-        const transcript = readTranscriptForSearch(m.id, MAX_TRANSCRIPT_SEARCH_BYTES);
-        if (!transcript) {
+      outer: for (let metaIndex = 0; metaIndex < metas.length; metaIndex++) {
+        const m = metas[metaIndex];
+        const anchor = visible.anchors[metaIndex];
+        const resumesThisMeeting =
+          visible.resume?.kind === 'said' &&
+          visible.resume.anchor.id === anchor.id &&
+          visible.resume.anchor.startedAt === anchor.startedAt;
+        if (!transcriptReady(m)) {
+          if (resumesThisMeeting) throw new OpaqueCursorError();
+          continue;
+        }
+        const resumeAt = resumesThisMeeting ? (visible.resume?.suboffset ?? 0) : 0;
+        const remainingSegments = MAX_SEARCH_SEGMENTS_PER_REQUEST - transcriptSegmentsScanned;
+        const remainingBytes = MAX_TRANSCRIPT_BYTES_PER_REQUEST - transcriptBytesScanned;
+        if (remainingSegments <= 0 || remainingBytes <= 0) {
+          transcriptBudgetExhausted = true;
+          nextCursor = sealResultCursor(user, 'said', anchor, visible.range, saidContext, resumeAt);
+          break;
+        }
+        const transcriptRead = readTranscriptForAggregateSearch(m.id, MAX_TRANSCRIPT_SEARCH_BYTES, remainingBytes);
+        if (transcriptRead.status === 'request_budget_exhausted') {
+          transcriptBudgetExhausted = true;
+          nextCursor = sealResultCursor(user, 'said', anchor, visible.range, saidContext, resumeAt);
+          break;
+        }
+        if (transcriptRead.status !== 'ok') {
+          if (resumesThisMeeting) throw new OpaqueCursorError();
           skippedTranscripts++;
           continue;
         }
-        const remainingSegments = MAX_SEARCH_SEGMENTS_PER_REQUEST - transcriptSegmentsScanned;
-        if (transcriptBytesScanned + transcript.bytes > MAX_TRANSCRIPT_BYTES_PER_REQUEST || remainingSegments <= 0) {
-          transcriptBudgetExhausted = true;
-          break;
-        }
-        const segs = transcript.segments.slice(0, Math.min(MAX_SEARCH_SEGMENTS_PER_MEETING, remainingSegments));
+        const transcript = transcriptRead;
+        const transcriptVersion = positionalContentVersion('said-transcript', transcript.segments);
+        if (
+          resumesThisMeeting &&
+          (resumeAt > 0 || visible.resume?.version !== undefined) &&
+          visible.resume?.version !== transcriptVersion
+        )
+          throw new OpaqueCursorError();
+        const segmentLimit = Math.min(MAX_SEARCH_SEGMENTS_PER_MEETING, remainingSegments);
+        const segs = transcript.segments.slice(resumeAt, resumeAt + segmentLimit);
         transcriptBytesScanned += transcript.bytes;
         transcriptSegmentsScanned += segs.length;
-        if (segs.length < transcript.segments.length && transcriptSegmentsScanned >= MAX_SEARCH_SEGMENTS_PER_REQUEST)
+        if (
+          resumeAt + segs.length < transcript.segments.length &&
+          transcriptSegmentsScanned >= MAX_SEARCH_SEGMENTS_PER_REQUEST
+        )
           transcriptBudgetExhausted = true;
         for (let i = 0; i < segs.length; i++) {
           const s = segs[i];
           if (speaker && !searchNorm(s.speaker).includes(speaker)) continue;
           if (matchIn(s.text, terms, 'all') === 0) continue;
-          if (matched++ < offset) continue;
           if (out.length >= limit) {
-            hasMore = true;
+            nextCursor = sealResultCursor(
+              user,
+              'said',
+              anchor,
+              visible.range,
+              saidContext,
+              resumeAt + i,
+              undefined,
+              transcriptVersion,
+            );
             break outer;
           }
           out.push({
@@ -1059,6 +1743,19 @@ export function mountMcpApi(app: Express): void {
             deepLink: deepLink(m.id, s.startMs),
           });
         }
+        if (resumeAt + segs.length < transcript.segments.length) {
+          nextCursor = sealResultCursor(
+            user,
+            'said',
+            anchor,
+            visible.range,
+            saidContext,
+            resumeAt + segs.length,
+            undefined,
+            transcriptVersion,
+          );
+          break;
+        }
       }
       res.json({
         query: q,
@@ -1072,7 +1769,8 @@ export function mountMcpApi(app: Express): void {
         transcriptSegmentsScanned,
         transcriptBudgetExhausted,
         results: out,
-        nextCursor: hasMore ? String(offset + out.length + 1) : null,
+        nextCursor,
+        nextScanCursor: nextCursor ? null : visible.nextScanCursor,
       });
     }),
   );
@@ -1100,42 +1798,25 @@ function signPair(userId: string, name: string, sid: string, gen: number, refres
   };
 }
 
-function buildTimeline(meta: RecordingMeta): Record<string, unknown>[] {
+function buildTimeline(meta: RecordingMeta): { items: Record<string, unknown>[]; truncated: boolean } {
   const items: { atMs: number; type: string; text: string }[] = [];
+  let truncated = meta.events.length > 500 || meta.notes.length > MAX_NOTES_PER_MEETING;
   for (const e of meta.events.slice(0, 500)) items.push({ atMs: e.atMs, type: 'event', text: cleanInline(e.text) });
   for (const n of meta.notes.slice(0, MAX_NOTES_PER_MEETING))
     items.push({ atMs: n.atMs, type: 'note', text: `${cleanInline(n.author)}: ${cleanInline(n.text)}` });
   if (meta.minutes?.status === 'done') {
-    const min = readMinutes(meta.id);
-    if (min) for (const t of min.topicos) items.push({ atMs: t.inicioMs, type: 'topic', text: cleanInline(t.titulo) });
+    const result = readMinutesBounded(meta.id);
+    if (result.status === 'ok') {
+      truncated ||= result.minutes.topicos.length > MAX_MINUTES_ITEMS_PER_COLLECTION;
+      for (const t of result.minutes.topicos.slice(0, MAX_MINUTES_ITEMS_PER_COLLECTION))
+        items.push({ atMs: t.inicioMs, type: 'topic', text: cleanInline(t.titulo) });
+    } else {
+      truncated = true;
+    }
   }
   items.sort((a, b) => a.atMs - b.atMs);
-  return items.map((it) => ({ ...it, deepLink: deepLink(meta.id, it.atMs) }));
-}
-
-function collectMinutesHits(
-  min: MeetingMinutes,
-  terms: string[],
-  mode: string,
-  hits: SearchHit[],
-  maxHits: number,
-): void {
-  const add = (hit: SearchHit): void => {
-    if (hits.length < maxHits) hits.push(hit);
+  return {
+    items: items.map((it) => ({ ...it, deepLink: deepLink(meta.id, it.atMs) })),
+    truncated,
   };
-  if (matchIn(min.resumo, terms, mode) > 0)
-    add({ where: 'summary', snippet: neutralizeFences(cleanInline(min.resumo)).slice(0, 240) });
-  for (const d of min.decisoes.slice(0, maxHits)) {
-    if (hits.length >= maxHits) return;
-    if (matchIn(d, terms, mode) > 0) add({ where: 'decision', snippet: neutralizeFences(cleanInline(d)) });
-  }
-  for (const a of min.acoes.slice(0, maxHits)) {
-    if (hits.length >= maxHits) return;
-    if (matchIn(a.tarefa, terms, mode) > 0) add({ where: 'action', snippet: neutralizeFences(cleanInline(a.tarefa)) });
-  }
-  for (const t of min.topicos.slice(0, maxHits)) {
-    if (hits.length >= maxHits) return;
-    if (matchIn(t.titulo, terms, mode) > 0)
-      add({ where: 'topic', snippet: neutralizeFences(cleanInline(t.titulo)), atMs: t.inicioMs });
-  }
 }

@@ -5,6 +5,7 @@ import { formatDuration, formatOffset } from '../recorder/RecordingSession';
 import { MAX_NOTES_PER_RECORDING, MAX_PRESENCE_IDENTITIES_PER_RESPONSE } from '../securityLimits';
 import {
   audioExpiryOf,
+  boundMinutesForResponse,
   MeetingMinutes,
   RecordingMeta,
   textExpiryOf,
@@ -460,21 +461,31 @@ export function recordingPage(
     transcript?: TranscriptSegment[];
     transcriptNotice?: string;
     minutes?: MeetingMinutes;
+    minutesNotice?: string;
     demo?: boolean;
   },
 ): string {
   const { live, lang: l } = opts;
+  const participantCount = meta.participants.length;
+  const participantIds = new Set(meta.participants.map((participant) => participant.id));
+  const silentPresence = (meta.presence ?? []).filter((presence) => !participantIds.has(presence.id));
+  const visibleParticipants = meta.participants.slice(0, MAX_PRESENCE_IDENTITIES_PER_RESPONSE);
+  const remainingIdentityNames = Math.max(0, MAX_PRESENCE_IDENTITIES_PER_RESPONSE - visibleParticipants.length);
   const legacyContentTruncated =
     meta.notes.length > MAX_NOTES_PER_RECORDING ||
-    (meta.presence?.length ?? 0) > MAX_PRESENCE_IDENTITIES_PER_RESPONSE ||
+    meta.participants.length > visibleParticipants.length ||
+    silentPresence.length > remainingIdentityNames ||
     meta.events.length > 500;
   meta = {
     ...meta,
     notes: meta.notes.slice(0, MAX_NOTES_PER_RECORDING),
-    presence: meta.presence?.slice(0, MAX_PRESENCE_IDENTITIES_PER_RESPONSE),
+    participants: visibleParticipants,
+    presence: silentPresence.slice(0, remainingIdentityNames),
     events: meta.events.slice(0, 500),
   };
   const demo = opts.demo ?? false;
+  const minutesView = opts.minutes ? boundMinutesForResponse(opts.minutes) : undefined;
+  const visibleMinutes = minutesView?.minutes;
   const seekable = !demo; // no modo demo o áudio é só um trecho, então horários não pulam
   const endedAt = meta.endedAt ?? Date.now();
   const durMs = endedAt - meta.startedAt;
@@ -483,7 +494,7 @@ export function recordingPage(
     : `<span class="badge done">${p(l, 'done')}</span>`;
 
   // Cabeçalho: contexto essencial sem competir com o conteúdo da reunião.
-  const nPeople = meta.participants.length;
+  const nPeople = participantCount;
   const subline = `<p class="subline">${esc(meta.guildName)} <span aria-hidden="true">/</span> ${datetime(meta.startedAt, l)} <span aria-hidden="true">/</span> ${formatDuration(durMs)}${
     live ? p(l, 'counting') : ''
   }${nPeople > 0 ? ` <span aria-hidden="true">/</span> ${nPeople} ${nPeople === 1 ? (l === 'pt' ? 'participante' : 'participant') : l === 'pt' ? 'participantes' : 'participants'}` : ''}</p>`;
@@ -544,6 +555,15 @@ export function recordingPage(
   const transcriptNotice = opts.transcriptNotice
     ? `<div class="note" style="border-left-color:#f0b232">${esc(opts.transcriptNotice)}</div>`
     : '';
+  const minutesNotice = opts.minutesNotice
+    ? `<div class="note" style="border-left-color:#f0b232">${esc(opts.minutesNotice)}</div>`
+    : minutesView?.truncated
+      ? `<div class="note" style="border-left-color:#f0b232">${
+          l === 'pt'
+            ? 'Parte da ata foi limitada nesta visualização para manter a página estável.'
+            : 'Part of the meeting minutes was limited in this view to keep the page stable.'
+        }</div>`
+      : '';
   const legacyContentNotice =
     !demo && legacyContentTruncated
       ? `<div class="note" style="border-left-color:#f0b232">${
@@ -553,7 +573,7 @@ export function recordingPage(
         }</div>`
       : '';
 
-  const minutes = renderMinutes(meta, opts.minutes, l, seekable);
+  const minutes = renderMinutes(meta, visibleMinutes, l, seekable);
   const transcription = renderTranscription(meta, opts.transcript, l, seekable);
 
   const notes =
@@ -567,7 +587,7 @@ export function recordingPage(
       : '';
 
   // Linha do tempo: barra visual clicável e lista dobrável.
-  const events = renderTimeline(meta, opts.minutes, l, durMs, live, seekable);
+  const events = renderTimeline(meta, visibleMinutes, l, durMs, live, seekable);
 
   // Uma única área de arquivos. O backend bloqueia downloads ao vivo, então a
   // interface não promete nem renderiza ações impossíveis durante a captura.
@@ -583,10 +603,10 @@ export function recordingPage(
         <p class="muted">${p(l, 'cooking')}</p></section>`
       : '';
   const textFiles =
-    !demo && ((opts.transcript?.length ?? 0) > 0 || !!opts.minutes)
+    !demo && ((opts.transcript?.length ?? 0) > 0 || !!visibleMinutes)
       ? `<section class="file-group"><div class="file-group-head"><span>${l === 'pt' ? 'Texto' : 'Text'}</span><small>${l === 'pt' ? 'Arquivos leves para compartilhar' : 'Lightweight files to share'}</small></div>
         <div class="downloads">
-          ${opts.minutes ? `<a class="btn secondary" href="/app/rec/${meta.id}/ata.md">${p(l, 'minutesDownload')}</a>` : ''}
+          ${visibleMinutes && !minutesView?.truncated ? `<a class="btn secondary" href="/app/rec/${meta.id}/ata.md">${p(l, 'minutesDownload')}</a>` : ''}
           ${(opts.transcript?.length ?? 0) > 0 ? `<a class="btn secondary" href="/app/rec/${meta.id}/transcricao.md">${p(l, 'transcriptDownload')}</a><a class="btn secondary" href="/app/rec/${meta.id}/transcricao.txt">${p(l, 'transcriptDownloadTxt')}</a>` : ''}
         </div></section>`
       : '';
@@ -771,7 +791,7 @@ export function recordingPage(
         <a class="backlink" href="${demo ? publicSite('home', l, config).canonicalUrl : '/app'}">${demo ? (l === 'pt' ? 'Início' : 'Home') : l === 'pt' ? 'Reuniões' : 'Meetings'}</a>
         <div class="recording-titleline"><h1>${title}</h1>${badge}</div>
         ${subline}
-        <div class="recording-alerts">${demoNote}${liveNote}${incompleteNote}${transcriptNotice}${legacyContentNotice}</div>
+        <div class="recording-alerts">${demoNote}${liveNote}${incompleteNote}${transcriptNotice}${minutesNotice}${legacyContentNotice}</div>
       </header>
       ${workspace}
       ${demoCta}
@@ -1239,7 +1259,7 @@ export function recordingsIndexPage(
     /** Flash pós-ação (?freed=1 / ?deleted=1). */
     flash?: string;
     /** Continuação segura da varredura de candidatas/ACL. */
-    nextCursor?: number;
+    nextCursor?: string;
     hasPreviousPage?: boolean;
   },
 ): string {
@@ -1251,7 +1271,7 @@ export function recordingsIndexPage(
 
   // Busca primeiro; "/" foca o campo de qualquer lugar da página.
   const searchForm = `<form class="isearch" method="get" action="/app">
-      <label class="field-label" for="kq">${pt ? 'Buscar nas suas reuniões' : 'Search your meetings'}</label>
+      <label class="field-label" for="kq">${pt ? 'Buscar nesta parte do arquivo' : 'Search this part of the archive'}</label>
       <input id="kq" name="q" type="search" value="${esc(q)}" placeholder="${pt ? 'Busque uma decisão, tarefa, pessoa ou assunto' : 'Search for a decision, task, person, or topic'}" autocomplete="off">
       <button class="btn" type="submit">${pt ? 'Buscar' : 'Search'}</button>
       ${q ? `<a class="search-clear" href="/app">${pt ? 'Limpar busca' : 'Clear search'}</a>` : ''}
@@ -1266,7 +1286,7 @@ export function recordingsIndexPage(
     hitsHtml =
       hits.length === 0
         ? `<div class="empty-state search-empty" role="status"><strong>${pt ? 'Nada encontrado' : 'Nothing found'}</strong><span class="muted">${pt ? 'Nenhuma ata, transcrição ou nota corresponde a' : 'No meeting notes, transcript, or note matches'} “${esc(q)}”.</span><a class="btn secondary" href="/app">${pt ? 'Voltar às reuniões' : 'Back to meetings'}</a></div>`
-        : `<section class="search-mode" aria-labelledby="search-results"><header class="search-mode-head"><div><span>${pt ? 'BUSCA GLOBAL' : 'GLOBAL SEARCH'}</span><h2 id="search-results">${pt ? 'Resultados para' : 'Results for'} “${esc(q)}”</h2></div><a href="/app">${pt ? 'Limpar busca' : 'Clear search'}</a></header>
+        : `<section class="search-mode" aria-labelledby="search-results"><header class="search-mode-head"><div><span>${pt ? 'BUSCA NESTA PÁGINA' : 'SEARCH THIS PAGE'}</span><h2 id="search-results">${pt ? 'Resultados para' : 'Results for'} “${esc(q)}”</h2></div><a href="/app">${pt ? 'Limpar busca' : 'Clear search'}</a></header>
            <ul class="hits">${hits
              .map((h) => {
                const link =
@@ -1310,7 +1330,7 @@ export function recordingsIndexPage(
       : `<a href="/app?sort=${s}${q ? `&amp;q=${encodeURIComponent(q)}` : ''}">${label}</a>`;
   const sorts =
     items.length > 1
-      ? `<nav class="rsorts" aria-label="${pt ? 'Ordenar gravações' : 'Sort recordings'}"><span>${p(l, 'ixSort')}</span>${sortLink('recent', p(l, 'ixSortRecent'))}${sortLink('oldest', p(l, 'ixSortOldest'))}${opts.owner ? sortLink('largest', p(l, 'ixSortLargest')) : ''}</nav>`
+      ? `<nav class="rsorts" aria-label="${pt ? 'Ordenar esta página' : 'Sort this page'}"><span>${pt ? 'Ordenar esta página' : 'Sort this page'}</span>${sortLink('recent', p(l, 'ixSortRecent'))}${sortLink('oldest', p(l, 'ixSortOldest'))}${opts.owner ? sortLink('largest', p(l, 'ixSortLargest')) : ''}</nav>`
       : '';
 
   const flash = opts.flash ? `<div class="note" role="status">${esc(opts.flash)}</div>` : '';

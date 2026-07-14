@@ -60,6 +60,15 @@ function cookieResponse(): { res: Response; cookies: string[] } {
   return { res, cookies };
 }
 
+function loginState(cookies: string[]): { cookie: string; next: string } {
+  const cookie = cookies.find((value) => value.startsWith('kassinao_state='));
+  if (!cookie) throw new Error('cookie OAuth state ausente');
+  const token = decodeURIComponent(cookie.slice('kassinao_state='.length).split(';', 1)[0]);
+  const body = token.split('.', 1)[0];
+  const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as { next: string };
+  return { cookie, next: payload.next };
+}
+
 describe('cookies e CSRF da superfície web privada', () => {
   it('state fica em /auth e logout apaga sessão nova + legado', () => {
     const login = cookieResponse();
@@ -70,6 +79,35 @@ describe('cookies e CSRF da superfície web privada', () => {
     logoutWeb(fakeRequest('POST'), logout.res);
     expect(logout.cookies.some((c) => c.includes('kassinao_session=') && c.includes('Path=/app;'))).toBe(true);
     expect(logout.cookies.some((c) => c.includes('kassinao_session=') && c.includes('Path=/;'))).toBe(true);
+  });
+
+  it('mantém next local no limite e descarta o primeiro byte excedente sem criar cookie grande', () => {
+    const acceptedNext = `/${'a'.repeat(2_047)}`;
+    const accepted = cookieResponse();
+    beginLogin(accepted.res, acceptedNext);
+    expect(loginState(accepted.cookies)).toMatchObject({ next: acceptedNext });
+    expect(loginState(accepted.cookies).cookie.length).toBeLessThanOrEqual(4_096);
+
+    const oversized = cookieResponse();
+    beginLogin(oversized.res, `/${'a'.repeat(2_048)}`);
+    expect(loginState(oversized.cookies)).toMatchObject({ next: '/' });
+    expect(loginState(oversized.cookies).cookie.length).toBeLessThanOrEqual(4_096);
+  });
+
+  it('descarta next cujo escape JSON faria o cookie ultrapassar o limite do navegador', () => {
+    const login = cookieResponse();
+    beginLogin(login.res, `/${'"'.repeat(2_047)}`);
+
+    expect(loginState(login.cookies)).toMatchObject({ next: '/' });
+    expect(loginState(login.cookies).cookie.length).toBeLessThanOrEqual(4_096);
+  });
+
+  it('descarta next que o navegador poderia interpretar como redirect externo', () => {
+    for (const unsafeNext of ['//evil.example', '/\\evil.example', 'https://evil.example']) {
+      const login = cookieResponse();
+      beginLogin(login.res, unsafeNext);
+      expect(loginState(login.cookies)).toMatchObject({ next: '/' });
+    }
   });
 
   it('logout revoga também uma cópia do cookie no servidor', () => {
@@ -280,7 +318,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     const html = recordingsIndexPage([], { user, lang: 'en' });
     expect(html).toContain('<html lang="en">');
     expect(html).toContain('<h1>My recordings</h1>');
-    expect(html).toContain('Search your meetings');
+    expect(html).toContain('Search this part of the archive');
     expect(html).toContain('data-app-locale="en"');
     expect(html).toContain('new URL(location.href)');
     expect(html).not.toContain('<h1>Minhas gravações</h1>');
@@ -295,9 +333,9 @@ describe('regressões de privacidade e acessibilidade da web', () => {
       exp: Date.now() + 60_000,
       jti: 'sid-page',
     };
-    const html = recordingsIndexPage([], { user, lang: 'pt', q: 'decisão', nextCursor: 1_000 });
+    const html = recordingsIndexPage([], { user, lang: 'pt', q: 'decisão', nextCursor: 'stable-token' });
     expect(html).toContain('Ver mais reuniões');
-    expect(html).toContain('cursor=1000');
+    expect(html).toContain('cursor=stable-token');
     expect(html).toContain('q=decis%C3%A3o');
   });
 
@@ -312,6 +350,62 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     });
     expect(html).toContain('A transcrição excede o limite seguro.');
     expect(html).not.toContain(`/app/rec/${meta.id}/transcricao.md`);
+  });
+
+  it('limita nomes de participantes e silenciosos a um orçamento compartilhado', () => {
+    const base = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), 'docs', 'example', 'meta.json'), 'utf8'),
+    ) as RecordingMeta;
+    const meta: RecordingMeta = {
+      ...base,
+      participants: Array.from({ length: 110 }, (_, index) => ({
+        id: `speaker-${index}`,
+        name: `Falante ${index}`,
+        avatar: null,
+        trackFile: `${index}.flac`,
+        index,
+      })),
+      presence: Array.from({ length: 110 }, (_, index) => ({
+        id: `silent-${index}`,
+        name: `Ouvinte ${index}`,
+        joinedAtMs: index,
+      })),
+    };
+
+    const html = recordingPage(meta, { live: false, canDelete: false, lang: 'pt' });
+
+    expect(html).toContain('110 participantes');
+    expect(html).toContain('Falante 99');
+    expect(html).not.toContain('Falante 100');
+    expect(html).not.toContain('Ouvinte 0');
+    expect(html).toContain('Parte do conteúdo histórico foi limitada');
+  });
+
+  it('limita coleções e pessoas da ata com aviso explícito', () => {
+    const meta = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), 'docs', 'example', 'meta.json'), 'utf8'),
+    ) as RecordingMeta;
+    meta.minutes = { status: 'done' };
+    const minutes = {
+      resumo: 'Resumo',
+      decisoes: Array.from({ length: 201 }, (_, index) => `Decisão ${index}`),
+      acoes: [],
+      topicos: [],
+      porParticipante: Array.from({ length: 101 }, (_, index) => ({
+        nome: `Pessoa da ata ${index}`,
+        pontos: Array.from({ length: index === 0 ? 101 : 1 }, (__, point) => `Ponto ${index}-${point}`),
+      })),
+    };
+
+    const html = recordingPage(meta, { live: false, canDelete: false, lang: 'pt', minutes });
+
+    expect(html).toContain('Decisão 199');
+    expect(html).not.toContain('Decisão 200');
+    expect(html).toContain('Pessoa da ata 99');
+    expect(html).not.toContain('Pessoa da ata 100');
+    expect(html).toContain('Ponto 0-99');
+    expect(html).not.toContain('Ponto 0-100');
+    expect(html).toContain('Parte da ata foi limitada');
   });
 
   it('abas associam controles/painéis e implementam teclado', () => {

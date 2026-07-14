@@ -79,7 +79,7 @@ describe('limites de início manual de gravação', () => {
     expect(commitStart(limiter, 'guild-a', 'carol', false, 86_401_000)).toEqual({ ok: true });
   });
 
-  it('não limita nem contabiliza administradores', () => {
+  it('administrador ignora apenas cooldowns e continua sujeito à cota dura diária', () => {
     const limiter = new ManualRecordingStartLimiter({
       userCooldownMs: 60_000,
       guildCooldownMs: 60_000,
@@ -87,12 +87,12 @@ describe('limites de início manual de gravação', () => {
     });
 
     expect(commitStart(limiter, 'guild-a', 'admin', true, 1_000)).toEqual({ ok: true });
-    expect(commitStart(limiter, 'guild-a', 'alice', false, 2_000)).toEqual({ ok: true });
-    expect(commitStart(limiter, 'guild-a', 'bob', false, 3_000)).toMatchObject({
+    expect(commitStart(limiter, 'guild-a', 'admin', true, 2_000)).toEqual({
       ok: false,
-      reason: 'guild-cooldown',
+      reason: 'guild-daily-limit',
+      retryAfterMs: 86_399_000,
     });
-    expect(commitStart(limiter, 'guild-a', 'admin', true, 3_000)).toEqual({ ok: true });
+    expect(commitStart(limiter, 'guild-b', 'admin', true, 2_000)).toEqual({ ok: true });
   });
 
   it('mantém o estado em memória limitado e remove a identidade mais antiga', () => {

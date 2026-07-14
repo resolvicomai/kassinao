@@ -3,11 +3,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   deleteRecording,
   listGuildMetaIdsInRange,
+  listGuildMetaScanPageInRange,
   listGuildMetasInRange,
   listMetaIdsPage,
   listMetaIdsInRange,
+  listMetaScanPageInRange,
   listMetasInRange,
   minutesPath,
+  readMinutesBounded,
+  readTranscriptForAggregateSearch,
   readTranscriptBounded,
   readTranscriptForSearch,
   recordingDir,
@@ -64,6 +68,19 @@ describe('listGuildMetasInRange', () => {
     for (const file of [`${recordingDir(value.id)}/meta.json`, transcriptPath(value.id), minutesPath(value.id)]) {
       expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     }
+  });
+
+  it('recusa ata acima do teto antes de alocar e parsear o JSON', () => {
+    const value = meta('2026-07-09-minutes-bounded', '2026-07-09T12:00:00Z');
+    saveMinutes(value.id, {
+      resumo: 'x'.repeat(256),
+      decisoes: [],
+      acoes: [],
+      topicos: [],
+      porParticipante: [],
+    });
+
+    expect(readMinutesBounded(value.id, 64)).toMatchObject({ status: 'too_large' });
   });
 
   it('respeita a janela real mesmo quando o dia local cruza dois prefixos UTC', () => {
@@ -166,13 +183,59 @@ describe('listGuildMetasInRange', () => {
     for (let index = 0; index < 5; index++) {
       meta(`2026-07-09-id-page-${index}`, `2099-07-09T1${index}:00:00Z`);
     }
-    const first = listMetaIdsPage(0, 2);
+    const first = listMetaIdsPage(undefined, 2);
     const second = listMetaIdsPage(first.nextCursor, 2);
 
     expect(first.ids).toEqual(['2026-07-09-id-page-4', '2026-07-09-id-page-3']);
-    expect(first.nextCursor).toBe(2);
+    expect(first.nextCursor).toEqual({
+      startedAt: Date.parse('2099-07-09T13:00:00Z'),
+      id: '2026-07-09-id-page-3',
+    });
     expect(second.ids).toEqual(['2026-07-09-id-page-2', '2026-07-09-id-page-1']);
-    expect(second.nextCursor).toBe(4);
+    expect(second.nextCursor).toEqual({
+      startedAt: Date.parse('2099-07-09T11:00:00Z'),
+      id: '2026-07-09-id-page-1',
+    });
+  });
+
+  it('mantém a continuação estável quando a timeline muda entre páginas', () => {
+    for (let index = 0; index < 5; index++) {
+      meta(`2026-07-09-stable-page-${index}`, `2098-07-09T1${index}:00:00Z`);
+    }
+    const first = listMetaIdsPage(undefined, 2);
+
+    meta('2026-07-09-stable-page-new', '2098-07-09T20:00:00Z');
+    deleteRecording('2026-07-09-stable-page-4');
+    const second = listMetaIdsPage(first.nextCursor, 2);
+
+    expect(first.ids).toEqual(['2026-07-09-stable-page-4', '2026-07-09-stable-page-3']);
+    expect(second.ids).toEqual(['2026-07-09-stable-page-2', '2026-07-09-stable-page-1']);
+  });
+
+  it('mantém o cursor da janela estável após inserção e exclusão da própria âncora', () => {
+    const from = Date.parse('2097-07-09T00:00:00Z');
+    const to = Date.parse('2097-07-10T00:00:00Z');
+    for (let index = 0; index < 5; index++) {
+      meta(`2026-07-09-stable-window-${index}`, `2097-07-09T1${index}:00:00Z`);
+    }
+    const first = listMetaScanPageInRange(from, to, undefined, 2);
+    const anchor = first.candidates.at(-1);
+    expect(anchor).toBeDefined();
+
+    meta('2026-07-09-stable-window-new', '2097-07-09T20:00:00Z');
+    deleteRecording(anchor!.id);
+    const second = listMetaScanPageInRange(from, to, anchor, 2);
+    const guildSecond = listGuildMetaScanPageInRange('guild-range-test', from, to, anchor, 2);
+
+    expect(first.candidates.map((item) => item.id)).toEqual([
+      '2026-07-09-stable-window-4',
+      '2026-07-09-stable-window-3',
+    ]);
+    expect(second.candidates.map((item) => item.id)).toEqual([
+      '2026-07-09-stable-window-2',
+      '2026-07-09-stable-window-1',
+    ]);
+    expect(guildSecond.candidates).toEqual(second.candidates);
   });
 
   it('não confunde metas mais novas fora da janela com truncamento interno', () => {
@@ -226,6 +289,15 @@ describe('listGuildMetasInRange', () => {
     expect(readTranscriptBounded(value.id, accepted.bytes - 1)).toEqual({
       status: 'too_large',
       bytes: accepted.bytes,
+    });
+  });
+
+  it('esgota o orçamento agregado pelo tamanho sem ler ou parsear a transcrição', () => {
+    const value = meta('2026-07-09-transcript-aggregate-bound', '2026-07-09T12:00:00Z');
+    fs.writeFileSync(transcriptPath(value.id), `[${'JSON inválido'.repeat(32)}`, 'utf8');
+
+    expect(readTranscriptForAggregateSearch(value.id, 1_024, 64)).toMatchObject({
+      status: 'request_budget_exhausted',
     });
   });
 });

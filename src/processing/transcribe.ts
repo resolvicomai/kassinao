@@ -111,6 +111,38 @@ export function validateTranscriptionConfig(): string | undefined {
 // Uma transcrição por vez: não compete com gravações e cozimentos por CPU/rede.
 let queue: Promise<void> = Promise.resolve();
 const queued = new Set<string>();
+const settlementCallbacks = new Map<string, Set<() => void>>();
+
+function registerSettlement(recordingId: string, onSettled?: () => void): void {
+  if (!onSettled) return;
+  const callbacks = settlementCallbacks.get(recordingId) ?? new Set<() => void>();
+  callbacks.add(onSettled);
+  settlementCallbacks.set(recordingId, callbacks);
+}
+
+function settle(recordingId: string): void {
+  const callbacks = settlementCallbacks.get(recordingId);
+  settlementCallbacks.delete(recordingId);
+  for (const callback of callbacks ?? []) {
+    try {
+      callback();
+    } catch (err) {
+      console.error(`Falha liberando admissão de ${recordingId}:`, err);
+    }
+  }
+}
+
+function notifyDone(
+  recordingId: string,
+  onDone: ((meta: RecordingMeta) => void) | undefined,
+  meta: RecordingMeta,
+): void {
+  try {
+    onDone?.(meta);
+  } catch (err) {
+    console.error(`Callback final da transcrição ${recordingId} falhou:`, err);
+  }
+}
 
 /** Há transcrição na fila/rodando para esta gravação? (guarda de delete/cleanup) */
 export function isTranscribing(recordingId: string): boolean {
@@ -124,10 +156,22 @@ export { MAX_TRANSCRIPTION_ATTEMPTS };
  * Enfileira a transcrição de uma gravação finalizada. `onDone` é chamado
  * com o meta atualizado (status done ou error). Idempotente por gravação.
  */
-export function enqueueTranscription(recordingId: string, onDone?: (meta: RecordingMeta) => void): void {
-  if (!transcriptionEnabled() || queued.has(recordingId)) return;
+export function enqueueTranscription(
+  recordingId: string,
+  onDone?: (meta: RecordingMeta) => void,
+  onSettled?: () => void,
+): void {
+  registerSettlement(recordingId, onSettled);
+  if (!transcriptionEnabled()) {
+    settle(recordingId);
+    return;
+  }
+  if (queued.has(recordingId)) return;
   const meta = readMeta(recordingId);
-  if (!meta || meta.status !== 'done' || meta.transcription?.status === 'done') return;
+  if (!meta || meta.status !== 'done' || meta.transcription?.status === 'done') {
+    settle(recordingId);
+    return;
+  }
 
   const attempts = (meta.transcription?.attempts ?? 0) + 1;
   if (attempts > MAX_TRANSCRIPTION_ATTEMPTS) {
@@ -149,7 +193,10 @@ export function enqueueTranscription(recordingId: string, onDone?: (meta: Record
     saveMeta(meta);
     // entrega o que deu: a ata roda sobre a transcrição parcial (melhor que nada)
     if (partial) enqueueMinutesOnly(recordingId, onDone);
-    else onDone?.(meta); // avisa no Discord em vez de falhar em silêncio
+    else {
+      notifyDone(recordingId, onDone, meta); // avisa no Discord em vez de falhar em silêncio
+      settle(recordingId);
+    }
     return;
   }
   queued.add(recordingId);
@@ -162,7 +209,10 @@ export function enqueueTranscription(recordingId: string, onDone?: (meta: Record
     .then(() => {
       queued.delete(recordingId);
       const fresh = readMeta(recordingId);
-      if (!fresh) return;
+      if (!fresh) {
+        settle(recordingId);
+        return;
+      }
       const st = fresh.transcription?.status;
       const tries = fresh.transcription?.attempts ?? 0;
       // Sobraram faixas (rate limit por hora) ou falhou tudo (ex.: 429 que não
@@ -185,7 +235,8 @@ export function enqueueTranscription(recordingId: string, onDone?: (meta: Record
         enqueueMinutesOnly(recordingId, onDone);
         return;
       }
-      if (onDone) onDone(fresh);
+      notifyDone(recordingId, onDone, fresh);
+      settle(recordingId);
     });
 }
 
@@ -194,13 +245,26 @@ export function enqueueTranscription(recordingId: string, onDone?: (meta: Record
  * após reinício entre a transcrição e a ata, e para gerar a ata do que existe
  * quando faixas ficaram de fora após todas as tentativas. Idempotente.
  */
-export function enqueueMinutesOnly(recordingId: string, onDone?: (meta: RecordingMeta) => void): void {
-  if (!minutesEnabled() || queued.has(recordingId)) return;
+export function enqueueMinutesOnly(
+  recordingId: string,
+  onDone?: (meta: RecordingMeta) => void,
+  onSettled?: () => void,
+): void {
+  registerSettlement(recordingId, onSettled);
+  if (!minutesEnabled()) {
+    settle(recordingId);
+    return;
+  }
+  if (queued.has(recordingId)) return;
   const meta = readMeta(recordingId);
-  if (!meta || !transcriptReady(meta) || meta.minutes?.status === 'done') return;
+  if (!meta || !transcriptReady(meta) || meta.minutes?.status === 'done') {
+    settle(recordingId);
+    return;
+  }
   const segments = readTranscript(recordingId);
   if (!segments || segments.length === 0) {
-    onDone?.(meta);
+    notifyDone(recordingId, onDone, meta);
+    settle(recordingId);
     return;
   }
 
@@ -211,7 +275,8 @@ export function enqueueMinutesOnly(recordingId: string, onDone?: (meta: Recordin
     .then(() => {
       queued.delete(recordingId);
       const fresh = readMeta(recordingId);
-      if (fresh && onDone) onDone(fresh);
+      if (fresh) notifyDone(recordingId, onDone, fresh);
+      settle(recordingId);
     });
 }
 

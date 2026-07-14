@@ -42,8 +42,8 @@ const STRINGS: Strings = {
     en: '⚠️ This server recorder is already busy. I did not create another recording.',
   },
   'err.recording-start-limited': {
-    pt: '⏳ Muitas gravações foram iniciadas recentemente. Tente de novo em {wait}. Um admin pode iniciar sem esse limite.',
-    en: '⏳ Too many recordings were started recently. Try again in {wait}. An admin can start without this limit.',
+    pt: '⏳ Muitas gravações foram iniciadas recentemente. Tente de novo em {wait}.',
+    en: '⏳ Too many recordings were started recently. Try again in {wait}.',
   },
   'err.record-no-access': {
     pt: '🔒 Você não pode iniciar uma gravação em **{channel}** porque não enxerga esse canal.',
@@ -227,6 +227,10 @@ const STRINGS: Strings = {
   'ask.no-evidence': {
     pt: '🔎 Encontrei reuniões nesse período, mas não achei evidência suficiente para responder com segurança.',
     en: '🔎 I found meetings in that period, but not enough evidence to answer safely.',
+  },
+  'ask.scan-truncated': {
+    pt: '-# ⚠️ não consegui verificar a janela inteira de uma vez. Este resultado cobre só a parte mais recente; reduza `dias` ou informe uma data/período na pergunta.',
+    en: '-# ⚠️ I could not check the entire window at once. This result covers only the most recent portion; reduce `days` or include a date/range in the question.',
   },
   'ask.busy': {
     pt: '⏳ Já estou processando o limite de perguntas agora. Tente de novo em instantes.',

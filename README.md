@@ -181,6 +181,9 @@ All options live in [`.env.example`](.env.example). Key ones:
 | `REPO_PUBLIC` | `false` | `true` shows source/install links inside private app pages; the public landing always links to this repository |
 | `RETENTION_DAYS` · `MAX_RECORDING_HOURS` | `7` · `6` | Audio retention and max recording length (`0` retention = unlimited: nothing expires, manual delete only) |
 | `TEXT_RETENTION_DAYS` | `90` | How long transcript/minutes/notes outlive the audio (never below `RETENTION_DAYS`; `0` = forever) |
+| `RECORDING_MAX_CONCURRENT` · `RECORDING_MAX_PENDING_PROCESSING` | `2` · `12` | Global capture and durable post-processing capacity; all session phases count |
+| `RECORDING_GUILD_STARTS_PER_24H` | `12` | Hard per-guild rolling quota shared by manual and auto-record starts (admins included) |
+| `RECORDING_STARTS_GLOBAL_PER_HOUR` · `RECORDING_STARTS_GLOBAL_PER_24H` | `8` · `32` | Hard global rolling start quotas across every guild and origin |
 | `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
 | `ASSEMBLYAI_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` | — | Key for the chosen provider (a Groq key also doubles as the ASR fallback) |
 | `TRANSCRIBE_PROMPT` / `TRANSCRIBE_KEYTERMS` | — | Domain vocabulary for the ASR engine (Whisper prompt / AssemblyAI keyterms); participant names are injected automatically |

@@ -8,6 +8,7 @@
  * Veja <https://www.gnu.org/licenses/> para o texto completo.
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -20,6 +21,7 @@ import {
   Guild,
   GuildBasedChannel,
   GuildMember,
+  Message,
   ModalBuilder,
   ModalSubmitInteraction,
   PermissionFlagsBits,
@@ -35,12 +37,13 @@ import { config } from './config';
 import { answerQuestion, authorizeAskMetas, resolveAskTemporalIntent } from './ask';
 import { AskLimiter, AskRateLimitError } from './askLimiter';
 import { guildConfigStore } from './guildConfig';
+import { DmMessageLimiter } from './dmMessageLimiter';
 import { minutesEnabled } from './processing/minutes';
 import { safeSlice, shortError } from './util';
 import { startCleanupJob } from './cleanup';
 import { freeMB } from './disk';
 import { client } from './discord/client';
-import { markClientReady } from './discord/ready';
+import { observeClientReadiness } from './discord/ready';
 import {
   DISCORD_SURFACE_POLICY_VERSION,
   mergeDiscordSurfaceMigrationCheckpoint,
@@ -54,6 +57,11 @@ import { autoRecordStore, isArmed, setArmed } from './recorder/autorecord';
 import { sessionManager } from './recorder/manager';
 import { ManualRecordingStartLimiter } from './recorder/manualStartLimiter';
 import { reportManualRecordingStartFailure } from './recorder/manualStartFailure';
+import {
+  RecordingAdmissionDenial,
+  RecordingAdmissionGuard,
+  RecordingAdmissionReservation,
+} from './recorder/recordingAdmission';
 import {
   BoundedIdSet,
   canManuallyStartRecording,
@@ -95,7 +103,7 @@ import {
 import {
   audioExpiryOf,
   listGuildMetas,
-  listGuildMetasInRange,
+  listGuildMetaIdsInRange,
   listMetas,
   pageUrl,
   readDiscordSurfaceInventory,
@@ -121,6 +129,10 @@ let recoveredRecordings: RecordingMeta[] = [];
 // Código-fonte oficial. Exibido no /sobre para creditar a autoria e cumprir a
 // obrigação da AGPL §13 (oferecer o fonte a quem interage com o bot pela rede).
 const SOURCE_URL = 'https://github.com/resolvicomai/kassinao';
+
+// Instalado antes do login: reconnects fecham as superfícies privadas em 503
+// até todos os shards voltarem, sem transformar cache transitório em 404.
+observeClientReadiness(client);
 
 // ---------- definição dos comandos (pt-BR nativo + localização em inglês) ----------
 
@@ -385,6 +397,59 @@ class RecordingBusyError extends Error {
   }
 }
 
+class RecordingGlobalCapacityError extends Error {
+  constructor() {
+    super('recording capacity unavailable');
+    this.name = 'RecordingGlobalCapacityError';
+  }
+}
+
+class RecordingAdmissionError extends Error {
+  constructor(
+    readonly reason: RecordingAdmissionDenial,
+    readonly retryAfterMs?: number,
+  ) {
+    super(`recording admission denied: ${reason}`);
+    this.name = 'RecordingAdmissionError';
+  }
+}
+
+function protectedRecordingStartMessage(error: unknown, locale: Locale): string | undefined {
+  if (error instanceof RecordingGlobalCapacityError) {
+    return locale === 'pt'
+      ? '⏳ A capacidade segura de gravação está ocupada. Tente novamente mais tarde.'
+      : '⏳ Safe recording capacity is currently in use. Try again later.';
+  }
+  if (!(error instanceof RecordingAdmissionError)) return undefined;
+  if (error.reason === 'processing-capacity') {
+    return locale === 'pt'
+      ? '⏳ O processamento seguro está cheio. Novas gravações estão pausadas até a fila avançar.'
+      : '⏳ Safe processing capacity is full. New recordings are paused until the queue advances.';
+  }
+  if (error.reason === 'storage-unavailable') {
+    return locale === 'pt'
+      ? '🛑 A proteção de segurança da gravação está indisponível. Não iniciei a captura.'
+      : '🛑 Recording safety protection is unavailable. Capture was not started.';
+  }
+  return locale === 'pt'
+    ? '⏳ O limite seguro de inícios foi atingido. Tente novamente mais tarde.'
+    : '⏳ The safe start limit has been reached. Try again later.';
+}
+
+function protectedAutoRecordAlert(error: unknown): string | undefined {
+  if (error instanceof RecordingGlobalCapacityError) {
+    return 'O auto-record foi pausado porque a capacidade segura de gravação está ocupada.';
+  }
+  if (!(error instanceof RecordingAdmissionError)) return undefined;
+  if (error.reason === 'processing-capacity') {
+    return 'O auto-record foi pausado porque a capacidade segura de processamento está cheia.';
+  }
+  if (error.reason === 'storage-unavailable') {
+    return 'O auto-record foi bloqueado porque a proteção durável de segurança está indisponível.';
+  }
+  return 'O auto-record foi pausado por uma cota de segurança de gravações.';
+}
+
 function currentBusyError(guildId: string): RecordingBusyError {
   if (sessionManager.startingInfo(guildId)) return new RecordingBusyError('starting');
   if (sessionManager.stoppingSession(guildId)) return new RecordingBusyError('stopping');
@@ -403,9 +468,19 @@ async function startSession(opts: {
   }
   // Reserva ANTES do primeiro await. Dois /gravar, manual + automático ou duas
   // regras no mesmo guild nunca atravessam juntos esta fronteira.
-  const reservation = sessionManager.reserveStart(opts.guild.id, opts.voiceChannel.id, opts.voiceChannel.name);
-  if (!reservation) throw currentBusyError(opts.guild.id);
+  const reservation = sessionManager.reserveStart(
+    opts.guild.id,
+    opts.voiceChannel.id,
+    opts.voiceChannel.name,
+    config.recordingMaxConcurrent,
+  );
+  if (!reservation) {
+    if (sessionManager.isBusy(opts.guild.id)) throw currentBusyError(opts.guild.id);
+    throw new RecordingGlobalCapacityError();
+  }
   let session: RecordingSession | undefined;
+  let pipelineReservation: RecordingAdmissionReservation | undefined;
+  let admissionCommitted = false;
   try {
     // Guarda de disco: não começa uma gravação que vai corromper por falta de espaço.
     const free = freeMB();
@@ -417,7 +492,14 @@ async function startSession(opts: {
       );
     }
 
+    const admission = recordingAdmission.reserve(opts.guild.id, opts.auto ? 'auto' : 'manual');
+    if (!admission.ok) throw new RecordingAdmissionError(admission.reason, admission.retryAfterMs);
+    pipelineReservation = admission.reservation;
+
     session = new RecordingSession(opts);
+    if (!pipelineReservation.bindRecording(session.id)) {
+      throw new RecordingAdmissionError('storage-unavailable');
+    }
     if (!sessionManager.attachStarting(reservation, session)) throw new RecordingStartCancelledError();
     session.onAutoStop = (s, reason) => {
       void stopSession(s, reason).catch((err) => console.error(`Erro encerrando ${s.id}:`, err));
@@ -434,6 +516,10 @@ async function startSession(opts: {
     if (session.meta.status !== 'recording' || !sessionManager.commitStart(reservation, session)) {
       throw new RecordingStartCancelledError();
     }
+    if (!pipelineReservation.commit(session.meta.startedAt)) {
+      throw new RecordingAdmissionError('storage-unavailable');
+    }
+    admissionCommitted = true;
 
     // Uma regra automática no mesmo canal fica desarmada mesmo quando o início
     // foi manual. Assim /parar não religa a gravação enquanto a sala segue cheia.
@@ -450,6 +536,8 @@ async function startSession(opts: {
       sessionManager.delete(opts.guild.id, session);
     }
     if (session?.meta.status === 'recording') await session.abortStart().catch(() => {});
+    if (admissionCommitted && session) recordingAdmission.complete(session.id);
+    else pipelineReservation?.rollback();
     throw err;
   } finally {
     sessionManager.releaseStart(reservation);
@@ -459,6 +547,17 @@ async function startSession(opts: {
 /** Sessões já processadas por afterSessionEnd — o hook não é idempotente sozinho
  *  (stopSession e onAutoStop podem correr para a mesma sessão). */
 const endedSessions = new BoundedIdSet(500);
+const processingStages = new Map<string, { cookDone: boolean; aiDone: boolean }>();
+
+function settleProcessingStage(recordingId: string, stage: 'cook' | 'ai'): void {
+  const state = processingStages.get(recordingId);
+  if (!state) return;
+  if (stage === 'cook') state.cookDone = true;
+  else state.aiDone = true;
+  if (!state.cookDone || !state.aiDone) return;
+  processingStages.delete(recordingId);
+  recordingAdmission.complete(recordingId);
+}
 
 /** Pós-fim de gravação: rearma o auto-record quando faz sentido, reavalia os canais e transcreve. */
 function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
@@ -498,10 +597,20 @@ function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
   // Pré-cozinha o mix MP3 em segundo plano: o primeiro clique no player deixa de
   // esperar minutos de ffmpeg (o cook tem semáforo próprio e cacheia o resultado).
   if (session.meta.participants.length > 0) {
-    cook(session.meta, 'mix').catch((err) =>
-      console.warn(`Pré-cook do mix de ${session.id} falhou (fica pro primeiro clique):`, (err as Error).message),
-    );
-    enqueueTranscription(session.id, (meta) => notifyTranscription(meta, session.locale));
+    const aiEnabled = transcriptionEnabled();
+    processingStages.set(session.id, { cookDone: false, aiDone: !aiEnabled });
+    cook(session.meta, 'mix')
+      .catch((err) =>
+        console.warn(`Pré-cook do mix de ${session.id} falhou (fica pro primeiro clique):`, (err as Error).message),
+      )
+      .finally(() => settleProcessingStage(session.id, 'cook'));
+    if (aiEnabled) {
+      enqueueTranscription(
+        session.id,
+        (meta) => notifyTranscription(meta, session.locale),
+        () => settleProcessingStage(session.id, 'ai'),
+      );
+    }
   } else {
     // gravação vazia: marca 'disabled' JÁ (a página não pode prometer "na fila"
     // por minutos enquanto a fila serial chega numa transcrição que nunca haverá)
@@ -510,6 +619,7 @@ function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
       meta.transcription = { status: 'disabled' };
       saveMeta(meta);
     }
+    recordingAdmission.complete(session.id);
   }
 }
 
@@ -1046,6 +1156,82 @@ const MAX_ASK_ATTEMPTS_PER_HOUR_GUILD = 120;
 const MAX_ASKS_PER_HOUR = 10;
 const MAX_ASKS_PER_HOUR_GUILD = 30;
 const MAX_ASKS_PER_HOUR_GLOBAL = 60;
+/** Limita a clonagem de meta.json antes de qualquer leitura de ata/transcrição. */
+const MAX_ASK_ARCHIVE_IDS = 500;
+/** Limita também o conjunto já autorizado que `answerQuestion` pode materializar. */
+const MAX_ASK_AUTHORIZED_METAS = 300;
+
+interface AskArchiveDependencies {
+  listIdsInRange: typeof listGuildMetaIdsInRange;
+  readMeta: typeof readMeta;
+}
+
+export interface AuthorizedAskArchive {
+  authorized: ReturnType<typeof authorizeAskMetas>;
+  /** A janela tinha candidatos além da parte verificada com segurança. */
+  truncated: boolean;
+  scannedIds: number;
+}
+
+/**
+ * Percorre o índice leve por IDs e materializa no máximo uma meta por vez.
+ * Divergência de índice, erro da ACL ou documento incompleto falham fechados.
+ */
+export function collectAuthorizedAskArchive(
+  guildId: string,
+  fromMs: number,
+  toMs: number,
+  canAccess: (meta: RecordingMeta) => boolean,
+  dependencies: AskArchiveDependencies = {
+    listIdsInRange: listGuildMetaIdsInRange,
+    readMeta,
+  },
+): AuthorizedAskArchive {
+  const page = dependencies.listIdsInRange(guildId, fromMs, toMs, MAX_ASK_ARCHIVE_IDS);
+  const approved: RecordingMeta[] = [];
+  let scannedIds = 0;
+  let stoppedBeforePageEnd = false;
+  const canAccessFailClosed = (meta: RecordingMeta): boolean => {
+    try {
+      return canAccess(meta);
+    } catch {
+      return false;
+    }
+  };
+
+  for (let index = 0; index < page.ids.length; index++) {
+    const id = page.ids[index];
+    scannedIds++;
+    const meta = dependencies.readMeta(id);
+    if (
+      !meta ||
+      meta.id !== id ||
+      meta.guildId !== guildId ||
+      meta.startedAt < fromMs ||
+      meta.startedAt >= toMs ||
+      meta.status !== 'done' ||
+      !transcriptReady(meta)
+    ) {
+      continue;
+    }
+
+    if (!canAccessFailClosed(meta)) continue;
+
+    approved.push(meta);
+    if (approved.length >= MAX_ASK_AUTHORIZED_METAS) {
+      stoppedBeforePageEnd = index + 1 < page.ids.length;
+      break;
+    }
+  }
+
+  return {
+    // Revalida ao criar o tipo opaco: até uma falha entre seleção e entrega fecha acesso.
+    authorized: authorizeAskMetas(approved, canAccessFailClosed, MAX_ASK_AUTHORIZED_METAS),
+    truncated: page.truncated || stoppedBeforePageEnd,
+    scannedIds,
+  };
+}
+
 const askLimiter = new AskLimiter({
   maxConcurrent: MAX_CONCURRENT_ASKS,
   maxAttemptsPerUser: MAX_ASK_ATTEMPTS_PER_HOUR,
@@ -1058,10 +1244,16 @@ const askLimiter = new AskLimiter({
 const manualRecordingStartLimiter = new ManualRecordingStartLimiter({
   userCooldownMs: config.manualRecordUserCooldownSec * 1000,
   guildCooldownMs: config.manualRecordGuildCooldownSec * 1000,
-  maxStartsPerGuild24h: config.manualRecordGuildStartsPer24h,
+  maxStartsPerGuild24h: config.recordingGuildStartsPer24h,
+});
+const recordingAdmission = new RecordingAdmissionGuard(path.join(config.recordingsDir, '.recording-admission.json'), {
+  maxStartsPerGuild24h: config.recordingGuildStartsPer24h,
+  maxStartsGlobalPerHour: config.recordingStartsGlobalPerHour,
+  maxStartsGlobal24h: config.recordingStartsGlobal24h,
+  maxPendingProcessing: config.recordingMaxPendingProcessing,
 });
 
-async function handlePerguntar(interaction: ChatInputCommandInteraction): Promise<void> {
+export async function handlePerguntar(interaction: ChatInputCommandInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
   if (!interaction.guild) {
     await interaction.reply({ content: t(l, 'err.guild-only'), ephemeral: true });
@@ -1088,17 +1280,17 @@ async function handlePerguntar(interaction: ChatInputCommandInteraction): Promis
     const range = temporal.range ?? resolveRange({ last: `${days}d` }, nowMs, config.timezone);
     // MESMA regra de acesso da web: só reuniões que essa pessoa pode abrir
     // A data escrita na pergunta vence a opção `dias`; sem data, vale a janela do comando.
-    const candidates = listGuildMetasInRange(interaction.guild.id, range.fromMs, range.toMs)
-      .filter((m) => m.status === 'done')
-      .filter((m) => transcriptReady(m));
-    const authorized = authorizeAskMetas(candidates, (meta) => memberCanAccessRecording(member, meta));
-    if (authorized.metas.length === 0) {
+    const archive = collectAuthorizedAskArchive(interaction.guild.id, range.fromMs, range.toMs, (meta) =>
+      memberCanAccessRecording(member, meta),
+    );
+    const scanNotice = archive.truncated ? `\n\n${t(l, 'ask.scan-truncated')}` : '';
+    if (archive.authorized.metas.length === 0) {
       await interaction.editReply(
-        temporal.label ? t(l, 'ask.no-period', { period: temporal.label }) : t(l, 'ask.no-meetings', { days }),
+        `${temporal.label ? t(l, 'ask.no-period', { period: temporal.label }) : t(l, 'ask.no-meetings', { days })}${scanNotice}`,
       );
       return;
     }
-    const result = await answerQuestion(question, authorized, l, {
+    const result = await answerQuestion(question, archive.authorized, l, {
       nowMs,
       timezone: config.timezone,
       fallbackRange: range,
@@ -1109,13 +1301,15 @@ async function handlePerguntar(interaction: ChatInputCommandInteraction): Promis
       },
     });
     if (!result.answer) {
-      await interaction.editReply(t(l, 'ask.no-evidence'));
+      await interaction.editReply(`${t(l, 'ask.no-evidence')}${scanNotice}`);
       return;
     }
     console.log(
-      `Perguntar concluído: guild=${interaction.guild.id} período=${period} candidatas=${result.candidateMeetings} com-evidência=${result.matchedMeetings} reuniões=${result.meetingsUsed} chunks=${result.chunksUsed} contexto=${result.contextChars}`,
+      `Perguntar concluído: guild=${interaction.guild.id} período=${period} ids-verificados=${archive.scannedIds} arquivo-parcial=${archive.truncated} candidatas=${result.candidateMeetings} com-evidência=${result.matchedMeetings} reuniões=${result.meetingsUsed} chunks=${result.chunksUsed} contexto=${result.contextChars}`,
     );
-    await interaction.editReply(`${result.answer}\n\n${t(l, 'ask.footer', { n: result.meetingsUsed, period })}`);
+    await interaction.editReply(
+      `${result.answer}\n\n${t(l, 'ask.footer', { n: result.meetingsUsed, period })}${scanNotice}`,
+    );
   } catch (err) {
     if (err instanceof AskRateLimitError) {
       await interaction.editReply(t(l, 'ask.rate-limit')).catch(() => {});
@@ -1249,7 +1443,10 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
     );
   } catch (err) {
     reservation.rollback();
-    if (err instanceof RecordingStartCancelledError) {
+    const protectionMessage = protectedRecordingStartMessage(err, l);
+    if (protectionMessage) {
+      await interaction.editReply(protectionMessage);
+    } else if (err instanceof RecordingStartCancelledError) {
       await interaction.editReply(t(l, 'record.start-cancelled'));
     } else if (err instanceof RecordingBusyError) {
       const info = sessionManager.startingInfo(interaction.guild.id);
@@ -1898,10 +2095,14 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
     } catch (err) {
       // rearma para tentar de novo no próximo movimento do canal
       setArmed(guild.id, channelId, true);
-      console.error(`Auto-record falhou em #${channel.name}:`, err);
+      const protectionAlert = protectedAutoRecordAlert(err);
+      if (protectionAlert) console.warn(`Auto-record bloqueado pela proteção (${guild.id}/${channelId}).`);
+      else console.error(`Auto-record falhou em #${channel.name}:`, err);
       void alertOwners(
         `autorecord-start:${guild.id}:${channelId}`,
-        `O auto-record não conseguiu iniciar em **#${safeName(channel.name)}** (${safeName(guild.name)}): ${shortError((err as Error).message, locale)}`,
+        protectionAlert
+          ? `${protectionAlert} Canal: **#${safeName(channel.name)}** (${safeName(guild.name)}).`
+          : `O auto-record não conseguiu iniciar em **#${safeName(channel.name)}** (${safeName(guild.name)}): ${shortError((err as Error).message, locale)}`,
       );
     }
   }
@@ -1946,10 +2147,30 @@ async function repairRecoveredSurfaces(): Promise<void> {
   }
 }
 
+function needsRecoveredProcessing(meta: RecordingMeta, now = Date.now()): boolean {
+  if (meta.status !== 'done' || meta.participants.length === 0 || !transcriptionEnabled()) return false;
+  const transcriptionStatus = meta.transcription?.status;
+  const attempts = meta.transcription?.attempts ?? 0;
+  const recent = (meta.endedAt ?? 0) > now - 24 * 60 * 60 * 1000;
+  if (transcriptionStatus === 'pending' || transcriptionStatus === 'running') return true;
+  if (transcriptionStatus === undefined && recent) return true;
+  if (transcriptionStatus === 'partial' && attempts < MAX_TRANSCRIPTION_ATTEMPTS) return true;
+  if (
+    transcriptionStatus === 'error' &&
+    attempts < MAX_TRANSCRIPTION_ATTEMPTS &&
+    (meta.transcription?.retryScheduled === true || recent)
+  ) {
+    return true;
+  }
+  return (
+    (transcriptionStatus === 'done' || transcriptionStatus === 'partial') &&
+    (meta.minutes?.status === 'pending' || meta.minutes?.status === 'running')
+  );
+}
+
 client.once(Events.ClientReady, async () => {
-  // Marca ANTES de qualquer await: a partir daqui os caches de guild/canal são
-  // confiáveis e o checkAccess (web + API do MCP) pode avaliar acesso de verdade.
-  markClientReady();
+  // O observador de readiness roda antes deste listener; a partir daqui os
+  // caches de guild/canal já podem sustentar ACL web + MCP.
   startMonitor(); // alertas por DM ao dono (disco, etc.)
   console.log(`Kassinão online como ${client.user?.tag} 🎙️`);
   await repairRecoveredSurfaces();
@@ -1988,10 +2209,18 @@ client.once(Events.ClientReady, async () => {
     // idioma da sessão persiste no meta — o recovery não pode chutar 'pt' num guild en
     const loc: Locale = meta.locale === 'en' ? 'en' : meta.locale === 'pt' ? 'pt' : config.defaultLocale;
     if (st === 'pending' || st === 'running' || (st === undefined && recent)) {
-      enqueueTranscription(meta.id, (m) => notifyTranscription(m, loc));
+      enqueueTranscription(
+        meta.id,
+        (m) => notifyTranscription(m, loc),
+        () => recordingAdmission.complete(meta.id),
+      );
     } else if (st === 'partial' && tries < MAX_TRANSCRIPTION_ATTEMPTS) {
       // rodada agendada morreu com o reinício — retoma só as faixas que faltam
-      enqueueTranscription(meta.id, (m) => notifyTranscription(m, loc));
+      enqueueTranscription(
+        meta.id,
+        (m) => notifyTranscription(m, loc),
+        () => recordingAdmission.complete(meta.id),
+      );
     } else if (
       st === 'error' &&
       tries < MAX_TRANSCRIPTION_ATTEMPTS &&
@@ -1999,16 +2228,24 @@ client.once(Events.ClientReady, async () => {
     ) {
       // erro com tentativas sobrando (ex.: 429 em cadeia + deploy no meio):
       // sem isso a gravação ficaria em erro pra sempre, em silêncio
-      enqueueTranscription(meta.id, (m) => notifyTranscription(m, loc));
+      enqueueTranscription(
+        meta.id,
+        (m) => notifyTranscription(m, loc),
+        () => recordingAdmission.complete(meta.id),
+      );
     } else if (st === 'done' || st === 'partial') {
       const ms = meta.minutes?.status;
       if (ms === 'pending' || ms === 'running') {
         // Retoma SÓ a ata que ficou pela metade num reinício. generateMinutesStep
         // grava 'running' como 1º passo, então interrupção real deixa pending/running.
-        enqueueMinutesOnly(meta.id, (m) => {
-          // só avisa se a ata retomada REALMENTE ficou pronta (não re-notifica a transcrição)
-          if (m.minutes?.status === 'done') notifyTranscription(m, loc);
-        });
+        enqueueMinutesOnly(
+          meta.id,
+          (m) => {
+            // só avisa se a ata retomada REALMENTE ficou pronta (não re-notifica a transcrição)
+            if (m.minutes?.status === 'done') notifyTranscription(m, loc);
+          },
+          () => recordingAdmission.complete(meta.id),
+        );
       } else if (shouldRecoverTranscriptionNotification(meta)) {
         // Checkpoints novos retomam sem limite de idade. Só metas legadas, que não
         // distinguem "nunca enviado" de "já enviado", conservam a janela de 30min.
@@ -2139,10 +2376,22 @@ client.on(Events.GuildDelete, (guild) => {
   pendingDiscordGuildSurfaceMigrationIds.delete(guild.id);
 });
 
+const directMessageLimiter = new DmMessageLimiter({
+  maxPerUser: 2,
+  maxGlobal: 60,
+  windowMs: 60_000,
+  maxTrackedUsers: 128,
+});
+
 // DM ao bot → responde o guia (onboarding). Não lê o conteúdo além de detectar
 // a FORMA "/comando" no início — pra explicar na lata por que não rodou.
-client.on(Events.MessageCreate, async (message) => {
+export async function handleDirectMessage(
+  message: Message,
+  limiter: Pick<DmMessageLimiter, 'admit'> = directMessageLimiter,
+): Promise<void> {
   if (message.author.bot || message.guildId) return; // só DMs de pessoas
+  // Antes de ler conteúdo, logar ou responder. Excesso é descartado em silêncio.
+  if (!limiter.admit(message.author.id)) return;
   // DM não expõe o locale do usuário → usa DEFAULT_LOCALE (padrão 'en' no repo;
   // defina DEFAULT_LOCALE=pt pra responder em português). Em servidores cada um vê no seu idioma.
   const l: Locale = config.defaultLocale;
@@ -2154,6 +2403,7 @@ client.on(Events.MessageCreate, async (message) => {
   try {
     // o canal de DM pode chegar PARCIAL (Partials.Channel) — completa antes de enviar
     if (message.channel.partial) await message.channel.fetch();
+    if (!message.channel.isSendable()) return;
     if (cmd) {
       await message.channel.send(t(l, 'help.dm-command', { cmd: `/${cmd[1]}`, url: config.appUrl }));
       return;
@@ -2162,6 +2412,10 @@ client.on(Events.MessageCreate, async (message) => {
   } catch (err) {
     console.error(`Falha ao responder DM de ${message.author.id}:`, err);
   }
+}
+
+client.on(Events.MessageCreate, async (message) => {
+  await handleDirectMessage(message);
 });
 
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
@@ -2260,6 +2514,14 @@ if (transcribeConfigError) {
 }
 
 recoveredRecordings = recoverInterruptedRecordings();
+const recoveredProcessing = new Map(
+  listMetas()
+    .filter((meta) => needsRecoveredProcessing(meta))
+    .map((meta) => [meta.id, { guildId: meta.guildId, startedAt: meta.startedAt }] as const),
+);
+if (!recordingAdmission.reconcile(recoveredProcessing)) {
+  console.error('A proteção durável de gravações não pôde ser reconciliada; novos inícios permanecerão bloqueados.');
+}
 startWebServer();
 startCleanupJob();
 client.login(config.token).catch((err) => {

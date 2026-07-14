@@ -70,6 +70,11 @@ const MAX_EVENTS = 300;
 /** Anti-spam: entra/sai da MESMA pessoa dentro desta janela não gera novo evento. */
 const PRESENCE_EVENT_COOLDOWN_MS = 60_000;
 
+export function identityNameMayBeExposed(presence: RecordingMeta['presence'], userId: string): boolean {
+  const index = presence?.findIndex((entry) => entry.id === userId) ?? -1;
+  return index >= 0 && index < MAX_PRESENCE_IDENTITIES_PER_RESPONSE;
+}
+
 export class RecordingSession {
   readonly id: string;
   /** Token efêmero dos controles Discord; nunca revela o id/URL da gravação. */
@@ -376,7 +381,7 @@ export class RecordingSession {
    */
   snapshotPresence(): boolean {
     if (this.stopping) return false;
-    const names: string[] = [];
+    const addedIdentities: Array<{ id: string; name: string }> = [];
     let limitReached = (this.meta.presence?.length ?? 0) >= MAX_PRESENCE_IDENTITIES;
     for (const [, member] of this.voiceChannel.members) {
       if (member.user.bot) continue;
@@ -384,12 +389,14 @@ export class RecordingSession {
       if (result.limitReached) {
         limitReached = true;
       }
-      if (result.added) names.push(member.displayName);
+      if (result.added) addedIdentities.push({ id: member.id, name: member.displayName });
       if (result.limitReached) break;
     }
-    if (names.length > 0) {
-      const visibleNames = names.slice(0, MAX_PRESENCE_IDENTITIES_PER_RESPONSE);
-      const hiddenCount = names.length - visibleNames.length;
+    if (addedIdentities.length > 0) {
+      const visibleNames = addedIdentities
+        .filter(({ id }) => this.presenceNameMayBeExposed(id))
+        .map(({ name }) => name);
+      const hiddenCount = addedIdentities.length - visibleNames.length;
       // no início vira UMA linha ("Na call: A, B, C"); retardatários da janela ganham linha própria
       if (this.meta.events.length <= 1) {
         const boundedNames = visibleNames.map((n) => safeName(n)).join(', ');
@@ -417,6 +424,20 @@ export class RecordingSession {
     if (Date.now() - last < PRESENCE_EVENT_COOLDOWN_MS) return false;
     this.lastPresenceEventAt.set(userId, Date.now());
     return true;
+  }
+
+  private presenceNameMayBeExposed(userId: string): boolean {
+    return identityNameMayBeExposed(this.meta.presence, userId);
+  }
+
+  private addFirstSpeechEvent(userId: string, name: string): void {
+    this.addEvent(
+      this.presenceNameMayBeExposed(userId)
+        ? t(this.locale, 'event.joined', { name: safeName(name) })
+        : this.locale === 'pt'
+          ? '🎤 Uma pessoa falou pela primeira vez'
+          : '🎤 Someone spoke for the first time',
+    );
   }
 
   /** Alguém entrou no canal gravado (chamado pelo VoiceStateUpdate). */
@@ -449,7 +470,13 @@ export class RecordingSession {
       eventAllowed = this.presenceEventAllowed(userId);
     }
     if (eventAllowed) {
-      this.addEvent(t(this.locale, 'event.voice-joined', { name: safeName(name) }));
+      this.addEvent(
+        this.presenceNameMayBeExposed(userId)
+          ? t(this.locale, 'event.voice-joined', { name: safeName(name) })
+          : this.locale === 'pt'
+            ? '👥 Uma pessoa entrou na call'
+            : '👥 Someone joined the call',
+      );
       this.schedulePanelUpdate();
     }
     this.persistPresenceOrStop(limitReached);
@@ -462,7 +489,13 @@ export class RecordingSession {
     if (!entry) return; // não estava registrado (ex.: bot) — nada a fazer
     if (!this.presenceEventAllowed(`out:${userId}`)) return;
     entry.leftAtMs = Date.now() - this.startedAt;
-    this.addEvent(t(this.locale, 'event.voice-left', { name: safeName(name) }));
+    this.addEvent(
+      this.presenceNameMayBeExposed(userId)
+        ? t(this.locale, 'event.voice-left', { name: safeName(name) })
+        : this.locale === 'pt'
+          ? '🚪 Uma pessoa saiu da call'
+          : '🚪 Someone left the call',
+    );
     this.schedulePanelUpdate();
     this.persistPresenceOrStop(false);
   }
@@ -672,13 +705,13 @@ export class RecordingSession {
         participant.avatar = member.displayAvatarURL({ size: 128, extension: 'png' });
         const pres = this.meta.presence?.find((p) => p.id === userId);
         if (pres && pres.name.startsWith('usuario-')) pres.name = member.displayName;
-        this.addEvent(t(this.locale, 'event.joined', { name: safeName(member.displayName) }));
+        this.addFirstSpeechEvent(userId, member.displayName);
         saveMeta(this.meta);
         this.schedulePanelUpdate();
       })
       .catch(() => {
         if (this.stopping) return;
-        this.addEvent(t(this.locale, 'event.joined', { name: safeName(participant.name) }));
+        this.addFirstSpeechEvent(userId, participant.name);
         saveMeta(this.meta);
         this.schedulePanelUpdate();
       });

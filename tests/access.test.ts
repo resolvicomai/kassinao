@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { client } from '../src/discord/client';
 import {
   checkAccess,
+  checkAccessForMcp,
   createAccessRequestContext,
   FreshMembershipBudget,
+  prevalidateGuildMembershipForMcp,
   recordingIdentityGrant,
   TransientAccessError,
 } from '../src/web/access';
@@ -131,6 +133,27 @@ describe('ACL histórica das gravações', () => {
     await checkAccess(user, meta({ id: 'recording-b' }), { requestContext });
 
     expect(fetchMember).toHaveBeenCalledTimes(1);
+  });
+
+  it('trata guild desconhecida e Unknown Member como negação, mas falha REST conhecida como transitória', async () => {
+    const user = { id: USER_ID, name: 'Alice' };
+    await expect(
+      prevalidateGuildMembershipForMcp(user, 'guild-fora-do-gateway', createAccessRequestContext()),
+    ).resolves.toBe(false);
+
+    const { fetchMember } = installGuild({ missing: true });
+    await expect(prevalidateGuildMembershipForMcp(user, GUILD_ID, createAccessRequestContext())).resolves.toBe(false);
+
+    fetchMember.mockRejectedValueOnce(new Error('Discord timeout'));
+    await expect(prevalidateGuildMembershipForMcp(user, GUILD_ID, createAccessRequestContext())).rejects.toBeInstanceOf(
+      TransientAccessError,
+    );
+  });
+
+  it('trata meta órfã de guild removida como 404/fail-closed, não indisponibilidade global', async () => {
+    await expect(
+      checkAccessForMcp({ id: USER_ID, name: 'Alice' }, meta({ guildId: 'guild-removida-do-bot' })),
+    ).resolves.toEqual({ view: false, delete: false });
   });
 });
 

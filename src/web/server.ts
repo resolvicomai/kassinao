@@ -12,15 +12,19 @@ import { isTranscribing, transcriptToMarkdown } from '../processing/transcribe';
 import { minutesToMarkdown } from '../processing/minutes';
 import { sessionManager } from '../recorder/manager';
 import { cleanInline } from '../sanitize';
+import { MAX_MINUTES_BYTES } from '../securityLimits';
 import { isLoopbackAddress } from '../util';
 import {
   audioBytesOf,
+  boundMinutesForResponse,
   deleteAudioOnly,
   deleteRecording,
   forgetAudioBytes,
   listMetaIdsPage,
+  MetaTimelineCursor,
   readMeta,
   readMinutes,
+  readMinutesBounded,
   readTranscriptBounded,
   RecordingMeta,
   TranscriptSegment,
@@ -54,6 +58,7 @@ import { docsPage } from './docs';
 import { searchRecordings } from './search';
 import { localeCookie, localeFromValue, resolveWebLocale } from './site';
 import { beginDownload, endDownload, hasActiveDownloads } from './tracker';
+import { isOpaqueCursorToken, OpaqueCursorError, openOpaqueCursor, sealOpaqueCursor } from './opaqueCursor';
 
 const SPACE_GROTESK_FONT =
   require.resolve('@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2');
@@ -80,12 +85,55 @@ export const WEB_DIRECT_TRANSCRIPT_MAX_SEGMENTS = 5_000;
 export const MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE = 100;
 const MAX_WEB_LIBRARY_GUILDS_PER_PAGE = 25;
 const MAX_WEB_LIBRARY_ITEMS_PER_PAGE = 100;
+const MAX_MEMBERSHIP_GUILDS_PER_ATTEMPT = 60;
 
 export function webHeavyReadRateLimited(userId: string): boolean {
   return (
     webHeavyReadLimiters.consumeKey(`web-heavy-user:${userId}`, 12, 60_000) ||
     webHeavyReadLimiters.consumeGlobal('web-heavy-global', 30, 60_000)
   );
+}
+
+export function encodeWebLibraryCursor(
+  cursor: MetaTimelineCursor,
+  userId: string,
+  context: string,
+  nowMs = Date.now(),
+): string {
+  return sealOpaqueCursor(cursor, {
+    secret: config.cookieSecret,
+    purpose: 'web-library',
+    subject: userId,
+    context,
+    nowMs,
+  });
+}
+
+export function parseWebLibraryCursor(
+  value: unknown,
+  userId: string,
+  context: string,
+  nowMs = Date.now(),
+): MetaTimelineCursor | undefined {
+  if (value === undefined) return undefined;
+  const parsed = openOpaqueCursor<unknown>(value, {
+    secret: config.cookieSecret,
+    purpose: 'web-library',
+    subject: userId,
+    context,
+    nowMs,
+  });
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    !Number.isSafeInteger((parsed as MetaTimelineCursor).startedAt) ||
+    (parsed as MetaTimelineCursor).startedAt < 0 ||
+    typeof (parsed as MetaTimelineCursor).id !== 'string' ||
+    (parsed as MetaTimelineCursor).id.length > 200 ||
+    !/^[a-zA-Z0-9-]+$/.test((parsed as MetaTimelineCursor).id)
+  )
+    throw new OpaqueCursorError();
+  return parsed as MetaTimelineCursor;
 }
 
 export function mcpConnectionCreationRateLimited(userId: string): boolean {
@@ -165,6 +213,18 @@ const MSG = {
     pt: 'A transcrição está temporariamente indisponível. Recarregue em instantes.',
     en: 'The transcript is temporarily unavailable. Reload shortly.',
   },
+  minutesTooLarge: {
+    pt: 'A ata excede o limite seguro de 1 MiB e não foi aberta. O áudio e a transcrição continuam disponíveis.',
+    en: 'The meeting minutes exceed the safe 1 MiB limit and were not opened. Audio and transcript remain available.',
+  },
+  minutesUnavailable: {
+    pt: 'A ata está temporariamente indisponível. Recarregue em instantes.',
+    en: 'The meeting minutes are temporarily unavailable. Reload shortly.',
+  },
+  minutesResponseLimit: {
+    pt: 'A ata tem coleções acima do limite seguro para exportação completa. Abra a página para consultar a versão limitada com aviso.',
+    en: 'The meeting minutes contain collections above the safe full-export limit. Open the page for an explicitly limited view.',
+  },
   noAudio: { pt: 'Sem áudio disponível.', en: 'No audio available.' },
   recordingInProgress: { pt: 'Gravação em andamento.', en: 'Recording in progress.' },
   audioExpired: { pt: 'O áudio desta gravação expirou.', en: 'This recording audio has expired.' },
@@ -227,9 +287,13 @@ interface MembershipGuild {
 
 export type CurrentGuildMembership = 'member' | 'not-member' | 'unavailable';
 type FreshMembershipRunner = typeof withFreshMembershipBudget;
-const membershipScanCursors = new Map<string, number>();
+interface MembershipScanCursor {
+  index: number;
+  unavailable: boolean;
+}
+const membershipScanCursors = new Map<string, MembershipScanCursor>();
 
-function rememberMembershipScanCursor(userId: string, cursor: number): void {
+function rememberMembershipScanCursor(userId: string, cursor: MembershipScanCursor): void {
   membershipScanCursors.delete(userId);
   membershipScanCursors.set(userId, cursor);
   while (membershipScanCursors.size > 5_000) {
@@ -555,13 +619,27 @@ export async function currentGuildMembership(
   guilds: Iterable<MembershipGuild> = client.guilds.cache.values(),
   runCheck: FreshMembershipRunner = withFreshMembershipBudget,
 ): Promise<CurrentGuildMembership> {
-  const candidates = [...guilds];
-  if (candidates.length === 0) return 'not-member';
-  const start = (membershipScanCursors.get(userId) ?? 0) % candidates.length;
-  let unavailable = false;
-  for (let offset = 0; offset < candidates.length; offset++) {
-    const index = (start + offset) % candidates.length;
-    const guild = candidates[index];
+  const savedCursor = membershipScanCursors.get(userId);
+  const start = savedCursor?.index ?? 0;
+  let unavailable = savedCursor?.unavailable ?? false;
+  const iterator = guilds[Symbol.iterator]();
+  let index = 0;
+  while (index < start) {
+    const skipped = iterator.next();
+    if (skipped.done) {
+      membershipScanCursors.delete(userId);
+      return unavailable ? 'unavailable' : 'not-member';
+    }
+    index++;
+  }
+  while (index < start + MAX_MEMBERSHIP_GUILDS_PER_ATTEMPT) {
+    const candidate = iterator.next();
+    if (candidate.done) {
+      membershipScanCursors.delete(userId);
+      return unavailable ? 'unavailable' : 'not-member';
+    }
+    const guild = candidate.value;
+    index++;
     try {
       await runCheck(userId, () => guild.members.fetch({ user: userId, force: true, cache: false }));
       membershipScanCursors.delete(userId);
@@ -570,16 +648,16 @@ export async function currentGuildMembership(
       // O orçamento acabou antes deste fetch. Retoma exatamente daqui na
       // próxima janela em vez de condenar guilds depois da 60ª à fome eterna.
       if (err instanceof TransientAccessError) {
-        rememberMembershipScanCursor(userId, index);
+        rememberMembershipScanCursor(userId, { index: index - 1, unavailable });
         return 'unavailable';
       }
-      rememberMembershipScanCursor(userId, (index + 1) % candidates.length);
       const code = err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined;
       if (code !== 10007 && code !== 10013) unavailable = true;
+      rememberMembershipScanCursor(userId, { index, unavailable });
     }
   }
-  membershipScanCursors.delete(userId);
-  return unavailable ? 'unavailable' : 'not-member';
+  rememberMembershipScanCursor(userId, { index, unavailable });
+  return 'unavailable';
 }
 
 function configuredOriginForRequest(req: Request, origins = configuredWebOrigins()): string | undefined {
@@ -1138,14 +1216,32 @@ export function startWebServer(): void {
     const q = String(req.query.q ?? '')
       .trim()
       .slice(0, 100);
-    const cursorValue = Number(req.query.cursor ?? 0);
-    const cursor = Number.isSafeInteger(cursorValue) && cursorValue >= 0 ? cursorValue : 0;
+    const rawCursor = req.query.cursor;
+    const requestedSort = String(req.query.sort ?? 'recent');
+    if (rawCursor !== undefined && !isOpaqueCursorToken(rawCursor)) {
+      res
+        .status(400)
+        .type('html')
+        .send(
+          messagePage(
+            MSG.errorTitle[l],
+            l === 'pt'
+              ? 'Esta continuação é inválida ou expirou. Volte ao início do arquivo.'
+              : 'This continuation is invalid or expired. Return to the start of the archive.',
+            undefined,
+            l,
+          ),
+        );
+      return;
+    }
     const user = getWebUser(req);
     if (!user) {
       // next reconstruído de partes VALIDADAS (nunca originalUrl cru).
       const next = new URLSearchParams();
       if (q) next.set('q', q);
-      if (cursor) next.set('cursor', String(cursor));
+      if (['recent', 'oldest', 'largest'].includes(requestedSort) && requestedSort !== 'recent')
+        next.set('sort', requestedSort);
+      if (rawCursor) next.set('cursor', rawCursor);
       beginLogin(res, next.size ? `/app?${next.toString()}` : '/app');
       return;
     }
@@ -1158,24 +1254,51 @@ export function startWebServer(): void {
         .send(messagePage(MSG.errorTitle[l], MSG.tooManyRequests[l], user, l));
       return;
     }
+    // O cursor é cifrado e autenticado com o usuário e a consulta efetiva como
+    // AAD. Reutilização entre contas/filtros e adulteração falham com 400.
+    const owner = config.ownerIds.includes(user.id);
+    const sort: RecordingsSort =
+      requestedSort === 'oldest' ? 'oldest' : requestedSort === 'largest' && owner ? 'largest' : 'recent';
+    const cursorContext = JSON.stringify({ q, sort });
+    let cursor: MetaTimelineCursor | undefined;
+    try {
+      cursor = parseWebLibraryCursor(rawCursor, user.id, cursorContext);
+    } catch (err) {
+      if (!(err instanceof OpaqueCursorError)) throw err;
+      res
+        .status(400)
+        .type('html')
+        .send(
+          messagePage(
+            MSG.errorTitle[l],
+            l === 'pt'
+              ? 'Esta continuação é inválida ou expirou. Volte ao início do arquivo.'
+              : 'This continuation is invalid or expired. Return to the start of the archive.',
+            user,
+            l,
+          ),
+        );
+      return;
+    }
     // mesma regra da página individual (checkAccess) aplicada meta a meta. A
     // confirmação REST é deduplicada só durante este request. O cursor avança
     // pelas candidatas, não só pelas autorizadas, para nenhuma faixa do arquivo
     // ficar permanentemente escondida atrás de ruído recente.
     const candidatePage = listMetaIdsPage(cursor, MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE);
-    const candidatePositions: number[] = [];
-    const candidates = candidatePage.ids.flatMap((id, index) => {
+    const candidates = candidatePage.ids.flatMap((id) => {
       const meta = readMeta(id);
       if (!meta) return [];
-      candidatePositions.push(cursor + index);
       return [meta];
     });
     const library = await collectWebLibraryPage(user, candidates);
-    const nextCursor =
-      library.nextCursor !== undefined ? candidatePositions[library.nextCursor] : candidatePage.nextCursor;
-    // tamanho em disco é infra, não conteúdo: só o dono da VPS (OWNER_IDS) vê —
-    // "quanto custa cada gravação" não é da conta de quem só participou da call
-    const owner = config.ownerIds.includes(user.id);
+    const lastProcessed =
+      library.nextCursor !== undefined && library.nextCursor > 0 ? candidates[library.nextCursor - 1] : undefined;
+    const nextTimelineCursor = lastProcessed
+      ? { startedAt: lastProcessed.startedAt, id: lastProcessed.id }
+      : candidatePage.nextCursor;
+    const nextCursor = nextTimelineCursor
+      ? encodeWebLibraryCursor(nextTimelineCursor, user.id, cursorContext)
+      : undefined;
     const items: RecordingIndexItem[] = library.items.map(({ meta, canDelete }) => ({
       meta,
       canDelete,
@@ -1186,8 +1309,6 @@ export function startWebServer(): void {
     // silenciosamente o universo pesquisado.
     const searchableMetas = items.slice(0, 100).map((item) => item.meta);
     // ordenação server-side; "maiores" precisa dos bytes, então é só pro dono
-    const sortQ = String(req.query.sort ?? 'recent');
-    const sort: RecordingsSort = sortQ === 'oldest' ? 'oldest' : sortQ === 'largest' && owner ? 'largest' : 'recent';
     if (sort === 'oldest') items.sort((a, b) => a.meta.startedAt - b.meta.startedAt);
     else if (sort === 'largest') items.sort((a, b) => (b.audioBytes ?? 0) - (a.audioBytes ?? 0));
     // busca lê transcript.json (síncrono) — limita às 100 mais recentes pra não
@@ -1205,7 +1326,7 @@ export function startWebServer(): void {
         sort,
         flash,
         nextCursor,
-        hasPreviousPage: cursor > 0,
+        hasPreviousPage: !!cursor,
       }),
     );
   });
@@ -1248,12 +1369,25 @@ export function startWebServer(): void {
         transcriptNotice = bounded.status === 'unavailable' ? MSG.transcriptUnavailable[l] : MSG.transcriptTooLarge[l];
       }
     }
-    const minutes = meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
-    res
-      .type('html')
-      .send(
-        recordingPage(meta, { live, canDelete: access.delete, user, lang: l, transcript, transcriptNotice, minutes }),
-      );
+    let minutes: ReturnType<typeof readMinutes>;
+    let minutesNotice: string | undefined;
+    if (meta.minutes?.status === 'done') {
+      const result = readMinutesBounded(meta.id);
+      if (result.status === 'ok') minutes = result.minutes;
+      else minutesNotice = result.status === 'too_large' ? MSG.minutesTooLarge[l] : MSG.minutesUnavailable[l];
+    }
+    res.type('html').send(
+      recordingPage(meta, {
+        live,
+        canDelete: access.delete,
+        user,
+        lang: l,
+        transcript,
+        transcriptNotice,
+        minutes,
+        minutesNotice,
+      }),
+    );
   });
 
   app.get('/app/rec/:id/audio', async (req, res) => {
@@ -1330,18 +1464,31 @@ export function startWebServer(): void {
       sendRecordingUnavailable(res, l, user);
       return;
     }
-    const minutes = meta.minutes?.status === 'done' ? readMinutes(meta.id) : undefined;
-    if (!minutes) {
+    if (meta.minutes?.status !== 'done') {
       res
         .status(404)
         .type('html')
         .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
       return;
     }
+    const result = readMinutesBounded(meta.id);
+    if (result.status === 'too_large') {
+      res.status(413).set('X-Kassinao-Max-Bytes', String(MAX_MINUTES_BYTES)).send(MSG.minutesTooLarge[l]);
+      return;
+    }
+    if (result.status === 'unavailable') {
+      res.status(503).set('Retry-After', '30').send(MSG.minutesUnavailable[l]);
+      return;
+    }
+    const bounded = boundMinutesForResponse(result.minutes);
+    if (bounded.truncated) {
+      res.status(413).send(MSG.minutesResponseLimit[l]);
+      return;
+    }
     res
       .type('text/markdown; charset=utf-8')
       .attachment(`kassinao-${meta.id}-ata.md`)
-      .send(minutesToMarkdown(meta, minutes));
+      .send(minutesToMarkdown(meta, bounded.minutes));
   });
 
   app.get('/app/rec/:id/transcricao.:ext(md|txt)', async (req, res) => {

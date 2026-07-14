@@ -21,6 +21,7 @@ vi.mock('@discordjs/voice', async (importOriginal) => {
 import {
   MAX_NOTES_PER_RECORDING,
   MAX_PRESENCE_IDENTITIES,
+  identityNameMayBeExposed,
   RecordingSession,
   RecordingStartCancelledError,
 } from '../src/recorder/RecordingSession';
@@ -374,6 +375,59 @@ describe('RecordingSession.start — transação real de início', () => {
     expect(initialPresence).toContain(`+${MAX_PRESENCE_IDENTITIES - 1 - MAX_PRESENCE_IDENTITIES_PER_RESPONSE}`);
     expect(initialPresence).not.toContain('Pessoa 998');
     expect(initialPresence.length).toBeLessThan(10_000);
+    fs.rmSync(recordingDir(session), { recursive: true, force: true });
+  });
+
+  it('mantém o orçamento global de nomes entre snapshots sucessivos', () => {
+    const f = fixture();
+    for (let index = 0; index < 150; index++) {
+      const id = `snapshot-global-${index}`;
+      f.channel.members.set(id, { id, displayName: `Pessoa Global ${index}`, user: { bot: false } });
+    }
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: null,
+      locale: 'pt',
+      auto: false,
+    });
+    session.snapshotPresence();
+    f.channel.members.set('snapshot-global-late', {
+      id: 'snapshot-global-late',
+      displayName: 'Nome Tardio Secreto',
+      user: { bot: false },
+    });
+
+    session.snapshotPresence();
+
+    expect(session.meta.events.map((event) => event.text).join(' ')).not.toContain('Nome Tardio Secreto');
+    expect(session.meta.events.at(-1)?.text).toContain('+1');
+    fs.rmSync(recordingDir(session), { recursive: true, force: true });
+  });
+
+  it('anonimiza timeline para identidades além do teto de resposta', () => {
+    const f = fixture();
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: null,
+      locale: 'pt',
+      auto: false,
+    });
+    session.meta.presence = Array.from({ length: MAX_PRESENCE_IDENTITIES_PER_RESPONSE }, (_, index) => ({
+      id: `visible-${index}`,
+      name: `Pessoa ${index}`,
+      joinedAtMs: index,
+    }));
+
+    session.noteVoiceJoin('hidden-person', 'Nome Muito Secreto');
+    session.noteVoiceLeave('hidden-person', 'Nome Muito Secreto');
+
+    const events = session.meta.events.slice(-2).map((event) => event.text);
+    expect(events).toEqual(['👥 Uma pessoa entrou na call', '🚪 Uma pessoa saiu da call']);
+    expect(events.join(' ')).not.toContain('Nome Muito Secreto');
+    expect(identityNameMayBeExposed(session.meta.presence, 'hidden-person')).toBe(false);
+    expect(identityNameMayBeExposed(session.meta.presence, 'visible-99')).toBe(true);
     fs.rmSync(recordingDir(session), { recursive: true, force: true });
   });
 
