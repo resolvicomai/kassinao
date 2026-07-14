@@ -32,7 +32,7 @@ function fakeElement() {
 
 function docsRuntime(writeText: (value: string) => Promise<void>, legacyCopySucceeds = true) {
   const html = docsPage('pt');
-  const scripts = Array.from(html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi), (match) => match[1]);
+  const scripts = Array.from(html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi), (match) => match[1]);
   const script = scripts.at(-1);
   if (!script) throw new Error('Script de interação da documentação não encontrado.');
 

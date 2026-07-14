@@ -536,7 +536,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
       exchangeCode: 'codigo-descartavel',
       label: 'Notebook',
     });
-    const script = Array.from(html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi), (match) => match[1]).find(
+    const script = Array.from(html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi), (match) => match[1]).find(
       (candidate) => candidate.includes("wire('kcopycode','kcode')"),
     );
     if (!script) throw new Error('Script de cópia MCP não encontrado.');
