@@ -12,44 +12,55 @@
 
 **Description, under the current 500-character limit**
 
-> Kassinão is the open-source Discord bot that records one track per speaker, then turns calls into named transcripts, meeting notes, decisions, action items, and sourced answers in Discord or any MCP client. Self-host it, choose your AI provider, and keep access tied to Discord permissions.
+> Kassinão turns Discord calls into searchable team memory. It records one track per speaker, then creates named transcripts, meeting notes, decisions, action items, and answers with source links. Ask inside Discord or from an MCP-capable AI assistant. It is free, AGPL open source, and self-hosted, with access rechecked against Discord membership and meeting permissions.
+
+**Fallback description, under 260 characters**
+
+> Kassinão is an open-source Discord bot that records one track per speaker and turns calls into named transcripts, meeting notes, action items, and sourced answers. Self-host it, choose your AI provider, and keep access tied to Discord permissions.
 
 **Primary URL**
 
-> https://kassinao.cloud/en
+> https://kassinao.cloud/
 
 **Pricing**
 
-> Free, open source, self-hosted. External AI providers may charge for usage.
+> Free, AGPL-licensed, self-hosted software. Users only pay for their own infrastructure and any external transcription or AI providers they enable. Local transcription is supported.
 
 **Suggested launch tags**
 
 - Open Source
 - Productivity
-- Developer Tools
+- Artificial Intelligence
 
 ## Gallery
 
-- `thumbnail-240.png`: square `k/` mark.
-- `gallery-01-1270x760.png`: the complete Discord workflow, from `/record` to a sourced `/ask` answer.
+- `thumbnail-240.png`: square `k/` mark used as the listing thumbnail.
+- `gallery-cover-en-1270x760.png`: English value-proposition cover and first gallery item.
+- `discord-demo-en-ph.gif`: cover-first animated workflow for the Product Hunt gallery.
 - `gallery-02-1270x760.png`: one Discord member, one audio track, one named transcript line.
-- `gallery-03-1270x760.png`: the real public meeting interface with fictional data.
 - `gallery-04-1270x760.png`: sourced answers in Discord and the read-only MCP connector.
-- `discord-demo-en.gif`: animated version for the gallery or launch posts.
+- `gallery-01-1270x760.png`: complete Discord workflow, useful as an optional fifth item.
+- `launch-teaser-en.mp4`: H.264 social teaser; Product Hunt itself requires a YouTube or Loom URL for video.
 
-Recommended order: Discord workflow, speaker identity, finished meeting, answers and MCP.
+Recommended order: cover, animated workflow, speaker identity, answers and MCP. Keep `gallery-03-1270x760.png` out of the launch until its stale zero-duration audio state is recaptured.
 
 ## First maker comment
 
-> Hey Product Hunt, I built Kassinão because Discord calls contain important decisions, but the useful context usually disappears as soon as everyone leaves the channel.
+> Hey Product Hunt 👋
 >
-> Most meeting bots start from one mixed recording and use diarization to infer who spoke. Discord already gives a bot a separate audio stream for each person, so Kassinão preserves that identity from the recording all the way to the transcript.
+> I built Kassinão around a Discord-specific advantage: the platform already exposes a separate voice stream for each participant. Instead of mixing everyone together and trying to infer speakers afterward, Kassinão keeps that identity from capture to transcript.
 >
-> After a call, it delivers a named transcript, meeting notes, decisions, action items, timestamped notes, and sourced answers through `/ask`. The same meeting memory can be queried from Claude, Cursor, or another MCP client without bypassing Discord access rules.
+> Start with /record. When the call ends, you get a named transcript, meeting notes, decisions, action items, timestamped notes, downloads, and /ask answers with links back to their sources. The same authorized meeting memory can be queried through a read-only MCP connector from Claude Desktop, Cursor, and other MCP clients.
 >
-> Kassinão is AGPL open source and self-hosted. You choose local processing or an external AI provider, control retention, and keep the bot on your own infrastructure.
+> Kassinão is free and AGPL open source. You self-host it, control retention, and choose local transcription or supported cloud providers. Recording stays visible inside Discord, and access to each meeting is rechecked against Discord membership and meeting permissions.
 >
-> I would especially value feedback on the Discord workflow, self-hosting setup, and which meeting-memory query should become the next MCP tool.
+> The public demo uses fictional data but the real product interface, so you can explore a finished meeting without signing in.
+>
+> I’d especially value feedback on three things: the Discord workflow, the self-hosting experience, and which meeting-memory query should become the next MCP tool.
+
+## Launch post
+
+> Kassinão is live on Product Hunt. It turns Discord calls into named transcripts, meeting notes, action items, and sourced answers — free, open source, and self-hosted. Try the demo and tell me what you’d query first: [launch URL]
 
 ## 35-second demo script
 
@@ -69,7 +80,7 @@ Use a real local fixture and keep the “fictional demo” label visible. Higgsf
 - [ ] Verify the public demo without authentication in a clean browser.
 - [ ] Confirm the Product Hunt primary URL opens the English landing.
 - [ ] Upload the square thumbnail and at least two 1270×760 gallery images.
-- [ ] Keep every image or GIF under 3 MB and make the first GIF frame useful.
+- [ ] Keep every image or GIF under the live uploader's 2 MB limit and make the first GIF frame useful.
 - [ ] Add up to three relevant tags, pricing, maker profile, and shoutouts.
 - [ ] Publish a public YouTube URL only if using a gallery video.
 - [ ] Paste the first maker comment immediately after launch.
