@@ -21,6 +21,7 @@ const SOURCE = readFileSync(path.join(ROOT, 'scripts', 'remove-legacy-dedicated-
 type RaceMutation =
   | 'artifact'
   | 'artifact-identity'
+  | 'artifact-set'
   | 'container'
   | 'current-manifest'
   | 'etc'
@@ -476,6 +477,8 @@ esac
         const target = installedArtifacts[0] ?? path.join(root, 'missing-artifact');
         return `/bin/cp -p ${shellLiteral(target)} ${shellLiteral(`${target}.raced`)} && /bin/mv -f ${shellLiteral(`${target}.raced`)} ${shellLiteral(target)}`;
       }
+      case 'artifact-set':
+        return `/bin/rm -- ${shellLiteral(installedArtifacts[0] ?? path.join(root, 'missing-artifact'))}`;
       case 'container':
         return `/usr/bin/touch ${shellLiteral(containerRace)}`;
       case 'current-manifest':
@@ -559,8 +562,10 @@ function expectNoMutation(value: ReturnType<typeof fixture>): string {
   return calls;
 }
 
-function expectNoHelperMutation(value: ReturnType<typeof fixture>): void {
-  for (const artifact of value.installedArtifacts) expect(existsSync(artifact), artifact).toBe(true);
+function expectNoHelperMutation(value: ReturnType<typeof fixture>, externallyRemoved: readonly string[] = []): void {
+  for (const artifact of value.installedArtifacts) {
+    if (!externallyRemoved.includes(artifact)) expect(existsSync(artifact), artifact).toBe(true);
+  }
   for (const artifact of value.foreignArtifacts) {
     expect(readFileSync(artifact, 'utf8')).toBe('foreign artifact\n');
   }
@@ -653,6 +658,7 @@ describe('transição dos controles dedicated legados', () => {
     ['health-watch', 'health', 'health-watch'],
     ['bytes de artefato instalado', 'artifact', 'script dedicated instalado divergiu'],
     ['identidade de artefato instalado', 'artifact-identity', 'identidade dos artefatos mudou'],
+    ['conjunto de artefatos instalados', 'artifact-set', 'parcial'],
     ['/etc/kassinao', 'etc', '/etc/kassinao'],
     ['runtime', 'runtime', 'runtime legado'],
     ['config shared', 'shared-env', 'KASSINAO_HOST_SCOPE'],
@@ -670,7 +676,7 @@ describe('transição dos controles dedicated legados', () => {
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain(expectedError);
-      expectNoHelperMutation(value);
+      expectNoHelperMutation(value, raceMutation === 'artifact-set' ? [value.installedArtifacts[0]!] : []);
     },
     20_000,
   );
