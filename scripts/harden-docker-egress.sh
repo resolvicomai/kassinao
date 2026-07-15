@@ -53,7 +53,7 @@ LD_PRELOAD="$_no_dump_preload"
 export LD_PRELOAD
 [ "$(ulimit -Sc)" = 0 ] && [ "$(ulimit -Hc)" = 0 ] || die 'core limit do firewall não ficou selado'
 IFS= read -r _no_dump_filter < "/proc/$$/coredump_filter" || _no_dump_filter=''
-[ "$_no_dump_filter" = 0 ] || die 'coredump_filter do firewall não ficou selado'
+[[ "$_no_dump_filter" =~ ^0+$ ]] || die 'coredump_filter do firewall não ficou selado'
 # KASSINAO_HOST_NO_DUMP_END
 unset _saved_no_dump_marker _saved_no_dump_preload _no_dump_filter _no_dump_arch _no_dump_preload _script_path _script_dir
 
@@ -93,6 +93,7 @@ if [ "$OFFLINE" != true ]; then
 fi
 command -v flock >/dev/null 2>&1 || { echo 'ERRO: flock não encontrado' >&2; exit 1; }
 command -v stat >/dev/null 2>&1 || { echo 'ERRO: stat não encontrado' >&2; exit 1; }
+command -v sed >/dev/null 2>&1 || { echo 'ERRO: sed não encontrado' >&2; exit 1; }
 for command in iptables ip6tables; do
   command -v "$command" >/dev/null 2>&1 || { echo "ERRO: $command não encontrado" >&2; exit 1; }
 done
@@ -203,7 +204,7 @@ else
 fi
 
 if [ "$MODE" != remove ] && [ -n "${core_cid:-}" ]; then
-  networks="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$core_cid" | sort -u)"
+  networks="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{printf "%s\n" $name}}{{end}}' "$core_cid" | sed '/^$/d' | sort -u)"
   [ "$(grep -cve '^$' <<<"$networks")" -eq 1 ] || { echo 'ERRO: core precisa usar exatamente uma rede' >&2; exit 1; }
   network_name="$(grep -ve '^$' <<<"$networks")"
   read -r driver configured_bridge < <(
@@ -224,7 +225,7 @@ if [ "$MODE" != remove ] && [ -n "${core_cid:-}" ]; then
   )"
   tunnel_attached=false
   if [ -n "$tunnel_cid" ] && \
-     docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$tunnel_cid" | grep -Fqx "$network_name"; then
+     docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{printf "%s\n" $name}}{{end}}' "$tunnel_cid" | grep -Fqx "$network_name"; then
     tunnel_attached=true
   fi
   while IFS= read -r member; do

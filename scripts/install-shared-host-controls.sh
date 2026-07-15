@@ -39,7 +39,7 @@ LD_PRELOAD="$_no_dump_preload"
 export LD_PRELOAD
 [ "$(ulimit -Sc)" = 0 ] && [ "$(ulimit -Hc)" = 0 ] || die 'core limit do installer shared não ficou selado'
 IFS= read -r _no_dump_filter < "/proc/$$/coredump_filter" || _no_dump_filter=''
-[ "$_no_dump_filter" = 0 ] || die 'coredump_filter do installer shared não ficou selado'
+[[ "$_no_dump_filter" =~ ^0+$ ]] || die 'coredump_filter do installer shared não ficou selado'
 # KASSINAO_HOST_NO_DUMP_END
 unset _saved_no_dump_marker _saved_no_dump_preload _no_dump_filter _no_dump_arch _no_dump_preload _script_path _script_dir
 
@@ -259,20 +259,23 @@ for path in \
   /run/systemd/system/docker.service.d/kassinao-egress.conf \
   /usr/lib/systemd/system/docker.service.d/kassinao-egress.conf \
   /lib/systemd/system/docker.service.d/kassinao-egress.conf; do
-  [ ! -e "$path" ] && [ ! -L "$path" ] || die "controle dedicado antigo ainda existe: $path"
+  [ ! -e "$path" ] && [ ! -L "$path" ] ||
+    die "controle dedicado antigo ainda existe; use remove-legacy-dedicated-host-controls.sh na migração v1.4.9 ou o uninstall dedicated moderno: $path"
 done
 for path in \
   /usr/local/sbin/kassinao-verify-storage-encryption \
   /etc/kassinao/storage-paths; do
   [ ! -e "$path" ] && [ ! -L "$path" ] ||
-    die "artefato do adapter dedicated ainda existe; execute o uninstall dedicado auditado: $path"
+    die "artefato do adapter dedicated ainda existe; use remove-legacy-dedicated-host-controls.sh na migração v1.4.9 ou o uninstall dedicated moderno: $path"
 done
 docker_dropins="$(systemctl show docker.service -p DropInPaths --value 2>/dev/null || true)"
-case "$docker_dropins" in *kassinao-egress.conf*) die 'docker.service ainda carrega o drop-in dedicado do Kassinão' ;; esac
+case "$docker_dropins" in
+  *kassinao-egress.conf*) die 'docker.service ainda carrega o drop-in dedicado do Kassinão; conclua remove-legacy-dedicated-host-controls.sh ou o uninstall dedicated moderno' ;;
+esac
 docker_pre="$(systemctl show docker.service -p ExecStartPre --value 2>/dev/null || true)"
 case "$docker_pre" in
   *kassinao-harden-docker-egress* | *kassinao-verify-storage-encryption* | *kassinao-verify-shared-luks-storage*)
-    die 'docker.service ainda carrega pre-hook do Kassinão; faça remoção auditada antes do host shared'
+    die 'docker.service ainda carrega pre-hook do Kassinão; conclua remove-legacy-dedicated-host-controls.sh ou o uninstall dedicated moderno'
     ;;
 esac
 
@@ -367,7 +370,7 @@ if [ -e "$ETC_KASSINAO/host-controls.env" ]; then
     [ "$(stat -c '%a:%u:%g' "$ETC_KASSINAO/host-controls.env" 2>/dev/null || true)" = 600:0:0 ] ||
     die 'marker de controles instalado está inseguro'
   [ "$(env_value KASSINAO_HOST_SCOPE "$ETC_KASSINAO/host-controls.env")" = shared ] ||
-    die 'controles dedicados antigos ainda estão instalados'
+    die 'controles dedicados antigos ainda estão instalados; use remove-legacy-dedicated-host-controls.sh para o legado v1.4.9'
   installed_deploy_dir="$(env_value KASSINAO_DEPLOY_DIR "$ETC_KASSINAO/host-controls.env")"
   installed_data_root="$(env_value KASSINAO_DATA_ROOT "$ETC_KASSINAO/host-controls.env")"
   installed_rollback_retention_hours="$(env_value KASSINAO_ROLLBACK_RETENTION_HOURS "$ETC_KASSINAO/host-controls.env")"

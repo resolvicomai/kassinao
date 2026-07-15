@@ -152,6 +152,7 @@ describe('installer de controles para host Docker compartilhado', () => {
     expect(source).toContain('systemctl show docker.service -p ExecStartPre');
     expect(source).toContain('docker.service ainda carrega o drop-in dedicado');
     expect(source).toContain('controles dedicados antigos ainda estão instalados');
+    expect(source).toContain('remove-legacy-dedicated-host-controls.sh');
     expect(source).toContain('docker_main_pid_after');
     expect(source).toContain('[ "$docker_main_pid_after" = "$docker_main_pid_before" ]');
   });

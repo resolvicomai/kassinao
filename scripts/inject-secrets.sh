@@ -82,7 +82,7 @@ export LD_PRELOAD
   exit 1
 }
 IFS= read -r _no_dump_filter < "/proc/$$/coredump_filter" || _no_dump_filter=''
-[ "$_no_dump_filter" = 0 ] || {
+[[ "$_no_dump_filter" =~ ^0+$ ]] || {
   printf 'ERRO: coredump_filter do injector não permaneceu selado.\n' >&2
   exit 1
 }

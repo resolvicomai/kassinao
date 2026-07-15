@@ -48,7 +48,7 @@ LD_PRELOAD="$_no_dump_preload"
 export LD_PRELOAD
 [ "$(ulimit -Sc)" = 0 ] && [ "$(ulimit -Hc)" = 0 ] || { printf 'ERRO: core limit do deploy não ficou selado.\n' >&2; exit 1; }
 IFS= read -r _no_dump_filter < "/proc/$$/coredump_filter" || _no_dump_filter=''
-[ "$_no_dump_filter" = 0 ] || { printf 'ERRO: coredump_filter do deploy não ficou selado.\n' >&2; exit 1; }
+[[ "$_no_dump_filter" =~ ^0+$ ]] || { printf 'ERRO: coredump_filter do deploy não ficou selado.\n' >&2; exit 1; }
 # KASSINAO_HOST_NO_DUMP_END
 unset _saved_no_dump_marker _saved_no_dump_preload _no_dump_filter _no_dump_arch _no_dump_preload _script_path _script_dir
 

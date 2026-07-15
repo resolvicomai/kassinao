@@ -50,7 +50,7 @@ LD_PRELOAD="$_no_dump_preload"
 export LD_PRELOAD
 [ "$(ulimit -Sc)" = 0 ] && [ "$(ulimit -Hc)" = 0 ] || fatal 'core limit do audit dedicado não ficou selado'
 IFS= read -r _no_dump_filter < "/proc/$$/coredump_filter" || _no_dump_filter=''
-[ "$_no_dump_filter" = 0 ] || fatal 'coredump_filter do audit dedicado não ficou selado'
+[[ "$_no_dump_filter" =~ ^0+$ ]] || fatal 'coredump_filter do audit dedicado não ficou selado'
 # KASSINAO_HOST_NO_DUMP_END
 unset _saved_no_dump_marker _saved_no_dump_preload _no_dump_filter _no_dump_arch _no_dump_preload _script_path _script_dir
 [ "$EUID" -eq 0 ] || fatal 'execute o audit como root'
@@ -162,7 +162,7 @@ env_value() {
 }
 container_env_value() {
   local container="$1" key="$2"
-  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null |
+  docker inspect -f '{{range .Config.Env}}{{printf "%s\n" .}}{{end}}' "$container" 2>/dev/null |
     awk -v key="$key" 'index($0, key "=") == 1 { print substr($0, length(key) + 2); exit }'
 }
 profile_enabled() {
@@ -1209,7 +1209,7 @@ if effective.get("NODE_ENV") != "production":
   BAD_PORTS="$(docker port "$CORE_CONTAINER" 2>/dev/null | awk '$3 !~ /^127\.0\.0\.1:/ && $3 !~ /^\[::1\]:/ {count++} END {print count+0}')"
   [ "$BAD_PORTS" -eq 0 ] && pass 'portas do core estão presas a loopback' || fail 'core publica porta fora de loopback'
 
-  MOUNTS="$(docker inspect -f '{{range .Mounts}}{{println .Type "|" .Source "|" .Destination}}{{end}}' "$CORE_CONTAINER" 2>/dev/null || true)"
+  MOUNTS="$(docker inspect -f '{{range .Mounts}}{{printf "%s|%s|%s\n" .Type .Source .Destination}}{{end}}' "$CORE_CONTAINER" 2>/dev/null || true)"
   rec_count=0 state_count=0 auth_count=0 cache_count=0
   while IFS='|' read -r mount_type source destination; do
     mount_type="$(xargs <<<"$mount_type")"
@@ -1239,13 +1239,13 @@ if effective.get("NODE_ENV") != "production":
   [ "$rec_count" -eq 1 ] && [ "$state_count" -eq 1 ] && [ "$auth_count" -eq 1 ] && [ "$cache_count" -eq 1 ] \
     && pass 'core usa exatamente os quatro mounts esperados' \
     || fail 'core precisa de um único mount para recordings, state, auth e cache'
-  CORE_NETWORKS="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$CORE_CONTAINER" 2>/dev/null | sort -u)"
+  CORE_NETWORKS="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{printf "%s\n" $name}}{{end}}' "$CORE_CONTAINER" 2>/dev/null | sed '/^$/d' | sort -u)"
   [ "$(grep -cve '^$' <<<"$CORE_NETWORKS")" -eq 1 ] \
     && pass 'core usa exatamente uma rede privada' \
     || fail 'core possui rede adicional ou rede privada ausente'
   if [ "$(grep -cve '^$' <<<"$CORE_NETWORKS")" -eq 1 ]; then
     CORE_NETWORK_NAME="$(grep -ve '^$' <<<"$CORE_NETWORKS")"
-    PRIVATE_MEMBERS="$(docker network inspect -f '{{range .Containers}}{{println .Name}}{{end}}' "$CORE_NETWORK_NAME" 2>/dev/null | grep -ve '^$' | sort -u)"
+    PRIVATE_MEMBERS="$(docker network inspect -f '{{range .Containers}}{{printf "%s\n" .Name}}{{end}}' "$CORE_NETWORK_NAME" 2>/dev/null | grep -ve '^$' | sort -u)"
     EXPECTED_PRIVATE_MEMBERS="$CORE_CONTAINER"
     if profile_enabled tunnel; then
       EXPECTED_PRIVATE_MEMBERS="$(printf '%s\n%s\n' "$CORE_CONTAINER" "$TUNNEL_CONTAINER" | sort -u)"
@@ -1375,13 +1375,13 @@ if profile_enabled split-public; then
     [ "$PUBLIC_RELEASE" = "$EXPECTED_RELEASE" ] && [ "$PUBLIC_DEPLOYMENT" = "$EXPECTED_DEPLOYMENT" ] \
       && pass 'processo público recebeu os fingerprints exatos' \
       || fail 'processo público recebeu fingerprint divergente'
-    PUBLIC_NETWORKS="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$PUBLIC_CONTAINER" 2>/dev/null | sort -u)"
+    PUBLIC_NETWORKS="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{printf "%s\n" $name}}{{end}}' "$PUBLIC_CONTAINER" 2>/dev/null | sed '/^$/d' | sort -u)"
     SHARED_NETWORKS="$(comm -12 <(printf '%s\n' "$CORE_NETWORKS") <(printf '%s\n' "$PUBLIC_NETWORKS"))"
     [ -z "$SHARED_NETWORKS" ] && pass 'core e público não compartilham rede' || fail 'core e público compartilham rede'
     PUBLIC_NETWORK_COUNT="$(grep -cve '^$' <<<"$PUBLIC_NETWORKS")"
     if [ "$PUBLIC_NETWORK_COUNT" -eq 1 ]; then
       PUBLIC_NETWORK_NAME="$(grep -ve '^$' <<<"$PUBLIC_NETWORKS")"
-      PUBLIC_MEMBERS="$(docker network inspect -f '{{range .Containers}}{{println .Name}}{{end}}' "$PUBLIC_NETWORK_NAME" 2>/dev/null | grep -ve '^$' | sort -u)"
+      PUBLIC_MEMBERS="$(docker network inspect -f '{{range .Containers}}{{printf "%s\n" .Name}}{{end}}' "$PUBLIC_NETWORK_NAME" 2>/dev/null | grep -ve '^$' | sort -u)"
       EXPECTED_PUBLIC_MEMBERS="$PUBLIC_CONTAINER"
       if profile_enabled tunnel; then
         EXPECTED_PUBLIC_MEMBERS="$(printf '%s\n%s\n' "$PUBLIC_CONTAINER" "$TUNNEL_CONTAINER" | sort -u)"
@@ -1409,7 +1409,7 @@ if profile_enabled split-public; then
         *" $name "*) ;;
         *) bad_public_env="${bad_public_env}${bad_public_env:+,}$name" ;;
       esac
-    done < <(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$PUBLIC_CONTAINER" 2>/dev/null)
+    done < <(docker inspect -f '{{range .Config.Env}}{{printf "%s\n" .}}{{end}}' "$PUBLIC_CONTAINER" 2>/dev/null)
     [ -z "$bad_public_env" ] && pass 'env público obedece à allowlist positiva' || fail "env público fora da allowlist: $bad_public_env"
   fi
 elif [ "$public_exists" = true ] && [ "$(docker inspect -f '{{.State.Running}}' "$PUBLIC_CONTAINER" 2>/dev/null || true)" = true ]; then
@@ -1526,7 +1526,7 @@ if any(labels.get(key) != value for key, value in expected.items()):
     else
       fail 'labels do cloudflared divergem do projeto, serviço ou Compose operacional'
     fi
-    TUNNEL_NETWORKS="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$TUNNEL_CONTAINER" 2>/dev/null | sort -u)"
+    TUNNEL_NETWORKS="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{printf "%s\n" $name}}{{end}}' "$TUNNEL_CONTAINER" 2>/dev/null | sed '/^$/d' | sort -u)"
     EXPECTED_TUNNEL_NETWORKS="$CORE_NETWORKS"
     if profile_enabled split-public; then
       EXPECTED_TUNNEL_NETWORKS="$(printf '%s\n%s\n' "$CORE_NETWORKS" "$PUBLIC_NETWORKS" | grep -ve '^$' | sort -u)"

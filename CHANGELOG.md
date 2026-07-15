@@ -10,6 +10,14 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.11] — 2026-07-15
+
+### Fixed
+
+- Legacy v1.4.9 plaintext-to-shared migration now removes the complete proven dedicated host-control set after the old containers are gone. The new fail-closed helper treats a completely absent set as a no-op, rejects partial or drifted installations before mutation, preserves Docker and neighboring workloads, and is included in the sealed operations bundle and bilingual runbook.
+- Linux no-dump gates now accept the kernel's hexadecimal all-zero `coredump_filter` representation, including `00000000`, while continuing to reject empty or non-zero values.
+- Docker topology checks now render ranged Go-template values with explicit `printf` newlines, avoiding Docker 29's leading blank line from `println` in exact set comparisons.
+
 ## [1.4.10] — 2026-07-15
 
 ### Added
@@ -271,7 +279,8 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
-[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.10...HEAD
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.11...HEAD
+[1.4.11]: https://github.com/resolvicomai/kassinao/compare/v1.4.10...v1.4.11
 [1.4.10]: https://github.com/resolvicomai/kassinao/compare/v1.4.9...v1.4.10
 [1.4.9]: https://github.com/resolvicomai/kassinao/compare/v1.4.8...v1.4.9
 [1.4.8]: https://github.com/resolvicomai/kassinao/compare/v1.4.7...v1.4.8

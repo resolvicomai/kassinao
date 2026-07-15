@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -9,6 +9,27 @@ const HOST_HELPER = path.join(ROOT, 'scripts', 'no-dump-exec.py');
 const ccAvailable = spawnSync('cc', ['--version'], { stdio: 'ignore' }).status === 0;
 
 describe('isolamento process-scoped de core dumps', () => {
+  it('aceita toda representação hexadecimal-zero do Linux e rejeita qualquer outro valor nos gates shell', () => {
+    for (const value of ['0', '00', '00000000']) {
+      const accepted = spawnSync('bash', ['-c', '[[ "$1" =~ ^0+$ ]]', 'gate', value]);
+      expect(accepted.status, value).toBe(0);
+    }
+    for (const value of ['', '1', '00000001', 'a', '0x0']) {
+      const rejected = spawnSync('bash', ['-c', '[[ "$1" =~ ^0+$ ]]', 'gate', value]);
+      expect(rejected.status, value).not.toBe(0);
+    }
+
+    const guardedScripts = readdirSync(path.join(ROOT, 'scripts'))
+      .filter((name) => name.endsWith('.sh'))
+      .map((name) => [name, readFileSync(path.join(ROOT, 'scripts', name), 'utf8')] as const)
+      .filter(([, source]) => source.includes('_no_dump_filter'));
+    expect(guardedScripts.length).toBeGreaterThan(20);
+    for (const [name, source] of guardedScripts) {
+      expect(source, name).toContain('[[ "$_no_dump_filter" =~ ^0+$ ]]');
+      expect(source, name).not.toContain('[ "$_no_dump_filter" = 0 ]');
+    }
+  });
+
   it('compila um launcher estático em cada plataforma e o põe antes do tini/Node', () => {
     const dockerfile = readFileSync(path.join(ROOT, 'Dockerfile'), 'utf8');
     const dockerignore = readFileSync(path.join(ROOT, '.dockerignore'), 'utf8');
