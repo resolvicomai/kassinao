@@ -54,6 +54,10 @@ describe('isolamento process-scoped de core dumps', () => {
     for (const name of ['LD_PRELOAD', 'LD_AUDIT', 'LD_LIBRARY_PATH', 'LD_DEBUG', 'LD_PROFILE']) {
       expect(launcher).toContain(`"${name}"`);
     }
+    for (const source of [launcher, preload]) {
+      expect(source).toContain('#include <sys/prctl.h>');
+      expect(source).not.toContain('#include <linux/prctl.h>');
+    }
     expect(preload).toContain('prctl(PR_SET_DUMPABLE');
     expect(preload).toContain('saw_zero');
   });

@@ -1,7 +1,6 @@
 #define _GNU_SOURCE
 
 #include <fcntl.h>
-#include <linux/prctl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
