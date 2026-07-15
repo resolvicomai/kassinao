@@ -812,6 +812,10 @@ describe('artefatos de distribuição', () => {
     expect(workflow).not.toContain('docker pull --platform linux/arm64 "$image"');
     expect(workflow).toContain('docker run --rm --platform linux/amd64 --network none --read-only --user 1000:1000');
     expect(workflow).toContain('--entrypoint node "$amd64_image"');
+    expect(workflow).toContain('"/usr/local/lib/node_modules/npm"');
+    expect(workflow).toContain('"/usr/local/lib/node_modules/corepack"');
+    expect(workflow).toContain('fs.lstatSync(path); process.exit(12);');
+    expect(workflow).toContain('entry.startsWith("yarn-")');
     expect(workflow.indexOf('docker run --rm --platform linux/amd64')).toBeLessThan(
       workflow.indexOf('docker pull --platform linux/arm64'),
     );
@@ -1001,6 +1005,9 @@ describe('artefatos de distribuição', () => {
       expect(runtime).not.toContain(operationalScript);
     }
     expect(runtime).toContain('scripts/transcribe-local.py');
+    expect(runtime).toContain('/usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-*');
+    expect(runtime).toContain('/usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack');
+    expect(runtime).toContain('/usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/pnpm /usr/local/bin/pnpx');
   });
 
   it('executa somente o build nativo do Opus durante a instalação da imagem', () => {
