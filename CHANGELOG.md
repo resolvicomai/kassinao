@@ -12,6 +12,10 @@ latest README, documentation, configuration template, and tests.
 
 ## [1.4.11] — 2026-07-15
 
+### Changed
+
+- `kassinao-mcp@1.0.9` carries the unchanged 1.0.8 connector runtime under a fresh immutable package and tag, allowing both MCP and app release provenance to bind to the exact reviewed 1.4.11 commit.
+
 ### Fixed
 
 - Legacy v1.4.9 plaintext-to-shared migration now removes the complete proven dedicated host-control set after the old containers are gone. The new fail-closed helper treats a completely absent set as a no-op, rejects partial or drifted installations before mutation, preserves Docker and neighboring workloads, and is included in the sealed operations bundle and bilingual runbook.
