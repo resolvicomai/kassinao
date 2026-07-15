@@ -37,4 +37,13 @@ describe('isolamento de segredos entre containers', () => {
       api.indexOf("api.use(express.json({ limit: '32kb' }))"),
     );
   });
+
+  it('isola o estado privado por arquivo de teste sem ignorar o storage root do CI', () => {
+    const setup = fs.readFileSync(path.join(process.cwd(), 'tests/setup.ts'), 'utf8');
+    expect(setup).toContain('process.env.KASSINAO_TEST_STORAGE_ROOT?.trim()');
+    expect(setup).toContain("mkdtempSync(join(storageRoot, 'kassinao-vitest-'))");
+    expect(setup).toContain("process.env.STATE_DIR = join(testStorageRoot, 'state')");
+    expect(setup).toContain("process.env.AUTH_STATE_DIR = join(testStorageRoot, 'auth')");
+    expect(setup).not.toMatch(/process\.env\.(?:RECORDINGS_DIR|STATE_DIR|AUTH_STATE_DIR)\s*\|\|=/);
+  });
 });
