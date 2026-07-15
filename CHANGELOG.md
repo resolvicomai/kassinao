@@ -14,7 +14,7 @@ latest README, documentation, configuration template, and tests.
 
 ### Security
 
-- The production image now removes npm, npx, and npm's global dependency tree after the build stage. Kassinão executes only `node` at runtime, so these unused tools no longer expand the image attack surface.
+- The production image now removes bundled package managers and their global dependency trees after the build stage. Kassinão executes only `node` at runtime, so npm, npx, Corepack, Yarn, and related unused shims no longer expand the image attack surface.
 - The v1.4.8 workflow passed source audit, multi-architecture build, OCI provenance, anonymous pulls, and hardened runtime execution, then stopped on fixable high-severity vulnerabilities inside the base image's unused npm installation. It produced no version or rolling image tags, operations bundle, checksum, or GitHub Release.
 
 ## [1.4.8] — 2026-07-15

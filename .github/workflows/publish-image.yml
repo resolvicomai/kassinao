@@ -265,6 +265,21 @@ jobs:
               const fs = require("node:fs");
               if (process.getuid?.() === 0) process.exit(10);
               fs.accessSync("/app/dist/index.js", fs.constants.R_OK);
+              for (const path of [
+                "/usr/local/lib/node_modules/npm",
+                "/usr/local/lib/node_modules/corepack",
+                "/usr/local/bin/npm",
+                "/usr/local/bin/npx",
+                "/usr/local/bin/corepack",
+                "/usr/local/bin/yarn",
+                "/usr/local/bin/yarnpkg",
+                "/usr/local/bin/pnpm",
+                "/usr/local/bin/pnpx",
+              ]) {
+                try { fs.lstatSync(path); process.exit(12); }
+                catch (error) { if (error?.code !== "ENOENT") throw error; }
+              }
+              if (fs.existsSync("/opt") && fs.readdirSync("/opt").some((entry) => entry.startsWith("yarn-"))) process.exit(13);
               try { fs.writeFileSync("/app/runtime-write", "blocked"); process.exit(11); }
               catch (error) { if (error?.code !== "EROFS") throw error; }
               fs.writeFileSync("/tmp/runtime-write", "ok");
