@@ -39,6 +39,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg tini \
     && rm -rf /var/lib/apt/lists/*
 
+# A aplicação em produção executa somente `node`. npm/npx pertencem ao estágio
+# de build; removê-los do runtime reduz a superfície e evita carregar a árvore
+# global de dependências do npm, que não participa da execução do Kassinão.
+RUN rm -rf /usr/local/lib/node_modules/npm \
+    && rm -f /usr/local/bin/npm /usr/local/bin/npx
+
 RUN mkdir -p /app/recordings /app/state /app/auth /app/data /home/node/.cache \
     && chown -R node:node /app /home/node/.cache
 

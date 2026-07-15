@@ -1001,6 +1001,8 @@ describe('artefatos de distribuição', () => {
       expect(runtime).not.toContain(operationalScript);
     }
     expect(runtime).toContain('scripts/transcribe-local.py');
+    expect(runtime).toContain('rm -rf /usr/local/lib/node_modules/npm');
+    expect(runtime).toContain('rm -f /usr/local/bin/npm /usr/local/bin/npx');
   });
 
   it('executa somente o build nativo do Opus durante a instalação da imagem', () => {
