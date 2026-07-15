@@ -84,12 +84,14 @@ jobs:
 
       - name: Gate the release on the audited source tree
         run: |
+          # /tmp é deliberadamente recusado pelos controles com PrivateTmp=true.
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" /srv/kassinao-ci
           npm ci
           npm audit --audit-level=high
           npm audit signatures
           npm run lint
           npm run format:check
-          npm test
+          KASSINAO_TEST_STORAGE_ROOT=/srv/kassinao-ci npm test
           npm run build
           npm run typecheck:preview
 

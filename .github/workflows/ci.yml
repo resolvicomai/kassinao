@@ -45,9 +45,14 @@ jobs:
         run: npm audit --audit-level=high
       - name: Verify root dependency signatures
         run: npm audit signatures
+      # /tmp é deliberadamente recusado pelos controles com PrivateTmp=true.
+      - name: Prepare persistent-path storage fixtures
+        run: sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" /srv/kassinao-ci
       - run: npm run lint
       - run: npm run format:check
       - run: npm test
+        env:
+          KASSINAO_TEST_STORAGE_ROOT: /srv/kassinao-ci
       - run: npm run build
       - run: npm run typecheck:preview
       # o conector MCP é um pacote separado — sem este step, mcp/ quebrado passaria verde

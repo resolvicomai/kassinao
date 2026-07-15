@@ -576,14 +576,58 @@ function pathsOverlap(left: string, right: string): boolean {
 
 function regularFileValue(file: string, label: string): string | undefined {
   try {
-    const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('não é arquivo regular');
-    return fs.readFileSync(file, 'utf8').trim();
+    const flags =
+      fs.constants.O_RDONLY | (process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const descriptor = fs.openSync(file, flags);
+    try {
+      if (!fs.fstatSync(descriptor).isFile()) throw new Error('não é arquivo regular');
+      return fs.readFileSync(descriptor, 'utf8').trim();
+    } finally {
+      fs.closeSync(descriptor);
+    }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     console.error(`Não foi possível ler ${label}: ${(err as Error).message}`);
     process.exit(1);
   }
+}
+
+function stateLayoutIsCurrent(marker: string): boolean {
+  const version = regularFileValue(marker, 'o marcador de layout privado');
+  if (version === undefined) return false;
+  if (version !== '2') {
+    console.error('Layout privado inválido: .layout-v2 precisa conter exatamente a versão 2');
+    process.exit(1);
+  }
+  return true;
+}
+
+function persistStateLayoutMarker(marker: string): void {
+  const temporaryMarker = `${marker}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  let failure: unknown;
+  try {
+    const descriptor = fs.openSync(temporaryMarker, 'wx', 0o600);
+    try {
+      fs.writeFileSync(descriptor, '2\n');
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+    try {
+      // link(2) publica o arquivo completo sem substituir um vencedor concorrente.
+      fs.linkSync(temporaryMarker, marker);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST' || !stateLayoutIsCurrent(marker)) throw err;
+    }
+  } catch (err) {
+    failure = err;
+  }
+  try {
+    fs.unlinkSync(temporaryMarker);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && failure === undefined) failure = err;
+  }
+  if (failure !== undefined) throw failure;
 }
 
 /** Lê ou gera em memória; persistência só acontece depois de toda validação. */
@@ -704,6 +748,7 @@ function assertMigrationPair(source: string, destination: string): void {
 
 /** Único ponto interno de mutação do bootstrap. */
 function persistPrivateStateLayout(cookieSecret: string, instanceId: string): void {
+  const stateMarker = path.join(stateDir, '.layout-v2');
   try {
     for (const dir of [recordingsDir, stateDir, authStateDir]) assertDedicatedDataPath(dir);
     const overlaps =
@@ -717,7 +762,7 @@ function persistPrivateStateLayout(cookieSecret: string, instanceId: string): vo
     if (overlaps && !intentionalLegacyAlias) {
       throw new Error('RECORDINGS_DIR, STATE_DIR e AUTH_STATE_DIR não podem coincidir nem ficar aninhados');
     }
-    if (!fs.existsSync(path.join(stateDir, '.layout-v2'))) {
+    if (!stateLayoutIsCurrent(stateMarker)) {
       for (const [legacyName, destination] of [
         ['guildconfig.json', path.join(stateDir, 'guildconfig.json')],
         ['autorecord.json', path.join(stateDir, 'autorecord.json')],
@@ -778,8 +823,7 @@ function persistPrivateStateLayout(cookieSecret: string, instanceId: string): vo
     process.exit(1);
   }
 
-  const stateMarker = path.join(stateDir, '.layout-v2');
-  if (!fs.existsSync(stateMarker)) {
+  if (!stateLayoutIsCurrent(stateMarker)) {
     for (const [legacyName, destination] of [
       ['guildconfig.json', path.join(stateDir, 'guildconfig.json')],
       ['autorecord.json', path.join(stateDir, 'autorecord.json')],
@@ -788,7 +832,7 @@ function persistPrivateStateLayout(cookieSecret: string, instanceId: string): vo
     ] as const) {
       migratePrivateStateFile(path.join(recordingsDir, legacyName), destination, false);
     }
-    fs.writeFileSync(stateMarker, '2\n', { mode: 0o600, flag: 'wx' });
+    persistStateLayoutMarker(stateMarker);
   }
 
   const cookieFile = path.join(authStateDir, '.cookie-secret');

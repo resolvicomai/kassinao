@@ -1,11 +1,27 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const temporaryDirectories: string[] = [];
+const CONFIG_ARGS = [
+  '--import',
+  'tsx',
+  '--input-type=module',
+  '-e',
+  "const m=await import('./src/runtimeBootstrap.ts');const b=m.default??m;const e=b.validateAndCommitRuntimeConfiguration();if(e){console.error(e);process.exit(1)}",
+] as const;
 
 function temporaryLayout(): { root: string; recordings: string; state: string; auth: string } {
   const root = mkdtempSync(path.join(tmpdir(), 'kassinao-state-layout-'));
@@ -23,70 +39,88 @@ function privateFile(file: string, contents: string): void {
   chmodSync(file, 0o600);
 }
 
+function configEnvironment(
+  layout: ReturnType<typeof temporaryLayout>,
+  overrides: NodeJS.ProcessEnv = {},
+): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+    HOME: layout.root,
+    NODE_ENV: 'production',
+    DISCORD_TOKEN: 'discord-token-test-only',
+    APPLICATION_ID: '123456789012345678',
+    DISCORD_CLIENT_SECRET: 'discord-client-secret-test-only',
+    APP_URL: 'https://app.example.com',
+    PUBLIC_URL: 'https://www.example.com',
+    DOCS_URL: 'https://docs.example.com',
+    MCP_URL: 'https://mcp.example.com',
+    OPERATOR_NAME: 'Example Operator',
+    OPERATOR_CONTACT_URL: 'https://privacy.example.com/contact',
+    PRIVACY_POLICY_URL: 'https://app.example.com/privacy',
+    DATA_DELETION_URL: 'https://app.example.com/privacy#data-rights',
+    PRIVACY_EFFECTIVE_DATE: '2020-01-01',
+    PRIVACY_POLICY_VERSION: 'test-1',
+    PRIVACY_AUDIENCE: 'Members of the test Discord server.',
+    PRIVACY_PURPOSES: 'Test recording and retrieval of authorized meetings.',
+    PRIVACY_LAWFUL_BASIS: 'Test operator authorization and applicable agreements.',
+    INFRASTRUCTURE_PROVIDER: 'Example Cloud',
+    INFRASTRUCTURE_REGION: 'Example Region',
+    EDGE_PROVIDER: 'none',
+    EDGE_REGION: 'none',
+    OPERATIONAL_LOG_RETENTION: 'Test logs are removed after 7 days.',
+    BACKUP_STATUS: 'disabled',
+    BACKUP_PROVIDER: 'none',
+    BACKUP_REGION: 'none',
+    BACKUP_RETENTION_DAYS: '0',
+    DATA_REQUEST_PROCESS: 'Use the test contact page.',
+    DATA_REQUEST_RESPONSE_DAYS: '30',
+    INCIDENT_CONTACT_URL: 'https://privacy.example.com/contact',
+    INCIDENT_PROCESS: 'Use the test incident contact page.',
+    SOURCE_URL: 'https://github.com/example/kassinao',
+    ALLOWED_GUILD_IDS: '987654321098765432',
+    ALLOW_ALL_GUILDS: 'false',
+    RECORDINGS_DIR: layout.recordings,
+    STATE_DIR: layout.state,
+    AUTH_STATE_DIR: layout.auth,
+    PUBLIC_SURFACES_ENABLED: 'false',
+    TRANSCRIBE_PROVIDER: 'none',
+    TRANSCRIBE_FALLBACK_PROVIDER: 'none',
+    MINUTES_ENABLED: 'false',
+    TZ: 'UTC',
+    ...overrides,
+  };
+}
+
 function runConfig(
   layout: ReturnType<typeof temporaryLayout>,
   overrides: NodeJS.ProcessEnv = {},
 ): ReturnType<typeof spawnSync> {
-  return spawnSync(
-    process.execPath,
-    [
-      '--import',
-      'tsx',
-      '--input-type=module',
-      '-e',
-      "const m=await import('./src/runtimeBootstrap.ts');const b=m.default??m;const e=b.validateAndCommitRuntimeConfiguration();if(e){console.error(e);process.exit(1)}",
-    ],
-    {
+  return spawnSync(process.execPath, CONFIG_ARGS, {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: configEnvironment(layout, overrides),
+  });
+}
+
+function runConfigAsync(
+  layout: ReturnType<typeof temporaryLayout>,
+  overrides: NodeJS.ProcessEnv = {},
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, CONFIG_ARGS, {
       cwd: ROOT,
-      encoding: 'utf8',
-      env: {
-        PATH: process.env.PATH,
-        HOME: layout.root,
-        NODE_ENV: 'production',
-        DISCORD_TOKEN: 'discord-token-test-only',
-        APPLICATION_ID: '123456789012345678',
-        DISCORD_CLIENT_SECRET: 'discord-client-secret-test-only',
-        APP_URL: 'https://app.example.com',
-        PUBLIC_URL: 'https://www.example.com',
-        DOCS_URL: 'https://docs.example.com',
-        MCP_URL: 'https://mcp.example.com',
-        OPERATOR_NAME: 'Example Operator',
-        OPERATOR_CONTACT_URL: 'https://privacy.example.com/contact',
-        PRIVACY_POLICY_URL: 'https://app.example.com/privacy',
-        DATA_DELETION_URL: 'https://app.example.com/privacy#data-rights',
-        PRIVACY_EFFECTIVE_DATE: '2020-01-01',
-        PRIVACY_POLICY_VERSION: 'test-1',
-        PRIVACY_AUDIENCE: 'Members of the test Discord server.',
-        PRIVACY_PURPOSES: 'Test recording and retrieval of authorized meetings.',
-        PRIVACY_LAWFUL_BASIS: 'Test operator authorization and applicable agreements.',
-        INFRASTRUCTURE_PROVIDER: 'Example Cloud',
-        INFRASTRUCTURE_REGION: 'Example Region',
-        EDGE_PROVIDER: 'none',
-        EDGE_REGION: 'none',
-        OPERATIONAL_LOG_RETENTION: 'Test logs are removed after 7 days.',
-        BACKUP_STATUS: 'disabled',
-        BACKUP_PROVIDER: 'none',
-        BACKUP_REGION: 'none',
-        BACKUP_RETENTION_DAYS: '0',
-        DATA_REQUEST_PROCESS: 'Use the test contact page.',
-        DATA_REQUEST_RESPONSE_DAYS: '30',
-        INCIDENT_CONTACT_URL: 'https://privacy.example.com/contact',
-        INCIDENT_PROCESS: 'Use the test incident contact page.',
-        SOURCE_URL: 'https://github.com/example/kassinao',
-        ALLOWED_GUILD_IDS: '987654321098765432',
-        ALLOW_ALL_GUILDS: 'false',
-        RECORDINGS_DIR: layout.recordings,
-        STATE_DIR: layout.state,
-        AUTH_STATE_DIR: layout.auth,
-        PUBLIC_SURFACES_ENABLED: 'false',
-        TRANSCRIBE_PROVIDER: 'none',
-        TRANSCRIBE_FALLBACK_PROVIDER: 'none',
-        MINUTES_ENABLED: 'false',
-        TZ: 'UTC',
-        ...overrides,
-      },
-    },
-  );
+      env: configEnvironment(layout, overrides),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => (stdout += chunk));
+    child.stderr.on('data', (chunk: string) => (stderr += chunk));
+    child.once('error', reject);
+    child.once('close', (status) => resolve({ status, stdout, stderr }));
+  });
 }
 
 afterEach(() => {
@@ -216,4 +250,55 @@ describe('layout privado da instância', () => {
     expect(readFileSync(path.join(layout.auth, '.cookie-secret'), 'utf8')).toBe('f'.repeat(64));
     expect(existsSync(path.join(layout.auth, '.instance-id'))).toBe(false);
   });
+
+  it('não segue symlink ao carregar segredo privado', () => {
+    const layout = temporaryLayout();
+    const target = path.join(layout.root, 'segredo-fora-do-volume');
+    privateFile(target, 'g'.repeat(64));
+    symlinkSync(target, path.join(layout.auth, '.cookie-secret'));
+
+    const result = runConfig(layout);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Não foi possível ler o segredo de sessão');
+    expect(readFileSync(target, 'utf8')).toBe('g'.repeat(64));
+    expect(existsSync(path.join(layout.auth, '.instance-id'))).toBe(false);
+    expect(existsSync(path.join(layout.state, '.layout-v2'))).toBe(false);
+  });
+
+  it('falha fechado diante de marcador de layout incompleto', () => {
+    const layout = temporaryLayout();
+    privateFile(path.join(layout.state, '.layout-v2'), 'migrating\n');
+
+    const result = runConfig(layout);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Layout privado inválido: .layout-v2 precisa conter exatamente a versão 2');
+    expect(readFileSync(path.join(layout.state, '.layout-v2'), 'utf8')).toBe('migrating\n');
+    expect(existsSync(path.join(layout.auth, '.instance-id'))).toBe(false);
+  });
+
+  it('retoma migração idempotente e só então confirma o marcador', () => {
+    const layout = temporaryLayout();
+    const recovered = '{"guild":"recovered"}\n';
+    privateFile(path.join(layout.recordings, 'guildconfig.json'), recovered);
+    privateFile(path.join(layout.state, 'guildconfig.json'), recovered);
+
+    const result = runConfig(layout, { COOKIE_SECRET: 'h'.repeat(64) });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(path.join(layout.state, 'guildconfig.json'), 'utf8')).toBe(recovered);
+    expect(readFileSync(path.join(layout.state, '.layout-v2'), 'utf8')).toBe('2\n');
+  });
+
+  it('aceita o marcador válido criado por outro boot na mesma corrida', async () => {
+    const layout = temporaryLayout();
+    privateFile(path.join(layout.auth, '.cookie-secret'), 'i'.repeat(64));
+    privateFile(path.join(layout.auth, '.instance-id'), '00000000-0000-4000-8000-000000000000');
+
+    const results = await Promise.all([runConfigAsync(layout), runConfigAsync(layout)]);
+
+    for (const result of results) expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(path.join(layout.state, '.layout-v2'), 'utf8')).toBe('2\n');
+  }, 15_000);
 });

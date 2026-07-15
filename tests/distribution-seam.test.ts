@@ -54,6 +54,16 @@ function makeTempDir(): string {
   return directory;
 }
 
+function makeStorageTempDir(): string {
+  // Linux usa /tmp por padrão, mas esse caminho precisa continuar inválido para
+  // os serviços de produção protegidos por PrivateTmp.
+  const configuredRoot = process.env.KASSINAO_TEST_STORAGE_ROOT?.trim();
+  const root = realpathSync(configuredRoot || tmpdir());
+  const directory = realpathSync(mkdtempSync(path.join(root, 'kassinao-storage-')));
+  temporaryDirectories.push(directory);
+  return directory;
+}
+
 function writePrivateFile(file: string, contents: string): void {
   writeFileSync(file, contents, { mode: 0o600 });
   chmodSync(file, 0o600);
@@ -85,7 +95,7 @@ function storagePreparationFixture(
     badBundleOwnership?: boolean;
   } = {},
 ): StoragePreparationFixture {
-  const directory = realpathSync(makeTempDir());
+  const directory = makeStorageTempDir();
   chmodSync(directory, 0o700);
   const scripts = path.join(directory, 'scripts');
   mkdirSync(scripts, { mode: 0o700 });
@@ -421,7 +431,7 @@ function deploymentFixture(
   runtimeDirectory: string;
   runtime: ReturnType<typeof fakeRuntime>;
 } {
-  const directory = realpathSync(makeTempDir());
+  const directory = makeStorageTempDir();
   chmodSync(directory, 0o700);
   const digest = image.includes('@') ? image.slice(image.indexOf('@') + 1) : `sha256:${'a'.repeat(64)}`;
   const deploymentFingerprint = 'e'.repeat(32);
