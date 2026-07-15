@@ -4,10 +4,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY package*.json .npmrc.security ./
-# @discordjs/opus inclui o código C/C++ no tarball assinado do npm. Compilar
-# localmente impede o postinstall de baixar um prebuild executável sem checksum.
-RUN npm_config_userconfig=/app/.npmrc.security npm ci
+COPY package*.json ./
+# Instala o lockfile sem executar hooks de dependências. Depois recompila somente
+# @discordjs/opus: seu C/C++ vem no tarball assinado do npm, sem baixar prebuild.
+RUN npm ci --omit=peer --ignore-scripts \
+    && npm_config_build_from_source=true npm rebuild @discordjs/opus \
+    && node -e "require('@discordjs/opus')"
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev --omit=peer --ignore-scripts \

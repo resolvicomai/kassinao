@@ -995,6 +995,18 @@ describe('artefatos de distribuição', () => {
     expect(runtime).toContain('scripts/transcribe-local.py');
   });
 
+  it('executa somente o build nativo do Opus durante a instalação da imagem', () => {
+    const dockerfile = repositoryFile('Dockerfile');
+    const build = dockerfile.slice(0, dockerfile.indexOf('\n# --- runtime ---'));
+
+    expect(build).toMatch(/npm ci --omit=peer --ignore-scripts/);
+    expect(build).toContain('npm_config_build_from_source=true npm rebuild @discordjs/opus');
+    expect(build).toContain(`node -e "require('@discordjs/opus')"`);
+    expect(build).not.toContain('.npmrc.security');
+    expect(build).not.toContain('npm rebuild sharp');
+    expect(build).not.toContain('npm_config_userconfig=');
+  });
+
   it('deixa origens privadas sem default ou domínio oficial na configuração de exemplo', () => {
     const example = repositoryFile('.env.example');
     const env = activeEnvironment(example);
