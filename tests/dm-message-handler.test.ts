@@ -20,6 +20,14 @@ vi.mock('../src/store', async (importOriginal) => ({
 
 import { DmMessageLimiter } from '../src/dmMessageLimiter';
 import { handleDirectMessage } from '../src/index';
+import type { DiscordCapabilities } from '../src/i18n';
+
+const allCapabilities: DiscordCapabilities = {
+  transcription: true,
+  minutes: true,
+  ask: true,
+  mcp: true,
+};
 
 function directMessage(overrides: Record<string, unknown> = {}) {
   return {
@@ -96,6 +104,33 @@ describe('handler de DM', () => {
 
     expect(message.channel.send).toHaveBeenCalledWith(expect.stringContaining('is not enabled on this instance'));
     expect(message.channel.send).not.toHaveBeenCalledWith(expect.stringContaining('/app/conectar-ia'));
+    log.mockRestore();
+  });
+
+  it('não revela a origem privada numa tentativa de comando por DM', async () => {
+    const message = directMessage({ content: '/gravar' });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await handleDirectMessage(message as never, { admit: () => true }, async () => true, allCapabilities);
+
+    expect(message.channel.send).toHaveBeenCalledWith(expect.stringContaining('inside the server'));
+    expect(message.channel.send).not.toHaveBeenCalledWith(expect.stringContaining('/app/conectar-ia'));
+    expect(JSON.stringify(message.channel.send.mock.calls)).not.toContain('app.kassinao.cloud');
+    log.mockRestore();
+  });
+
+  it('remove o conector e qualquer URL privada do guia genérico em DM', async () => {
+    const message = directMessage();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await handleDirectMessage(message as never, { admit: () => true }, async () => true, allCapabilities);
+
+    const payload = message.channel.send.mock.calls[0]?.[0];
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain('/app/conectar-ia');
+    expect(serialized).not.toContain('app.kassinao.cloud');
+    expect(serialized).not.toContain('Connect an MCP client');
+    expect(payload).not.toHaveProperty('components');
     log.mockRestore();
   });
 });

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # Materializa somente os quatro diretórios privados depois que o operador já
 # montou e selou um volume dm-crypt/LUKS. Este script nunca cria, altera ou
 # assume ownership de KASSINAO_DATA_ROOT.
@@ -7,6 +7,35 @@ umask 077
 
 die() { printf 'ERRO: %s\n' "$*" >&2; exit 1; }
 
+[ "$#" -eq 0 ] || die 'uso: prepare-storage.sh'
+_saved_no_dump_marker="${KASSINAO_NO_DUMP_ACTIVE-}"
+_saved_no_dump_preload="${LD_PRELOAD-}"
+[ -r "/proc/$$/environ" ] || die '/proc é obrigatório para limpar o ambiente do preparo de storage'
+while IFS='=' read -r -d '' _name _value; do unset "$_name" 2>/dev/null || true; done < "/proc/$$/environ"
+unset _name _value
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C
+
+_script_path="${BASH_SOURCE[0]}"
+case "$_script_path" in /*) ;; ./*) _script_path="$PWD/${_script_path#./}" ;; *) _script_path="$PWD/$_script_path" ;; esac
+case "$_script_path" in *//* | */./* | */../* | */. | */.. | */) die 'caminho do preparo de storage não é canônico' ;; esac
+_script_dir="${_script_path%/*}"
+case "$_script_dir" in */scripts) PROJECT_DIR="${_script_dir%/scripts}" ;; *) die 'preparo de storage precisa executar do kit selado' ;; esac
+case "${MACHTYPE%%-*}" in x86_64) _no_dump_arch=amd64 ;; aarch64 | arm64) _no_dump_arch=arm64 ;; *) die 'arquitetura sem runtime no-dump' ;; esac
+_no_dump_preload="$PROJECT_DIR/runtime/linux-$_no_dump_arch/libkassinao-no-dump.so"
+# KASSINAO_HOST_NO_DUMP_BEGIN
+if [ "$_saved_no_dump_marker" != "prctl-v1:$$" ] || [ "$_saved_no_dump_preload" != "$_no_dump_preload" ]; then
+  exec /usr/bin/python3 "$PROJECT_DIR/scripts/no-dump-exec.py" \
+    --bundle-root "$PROJECT_DIR" --script-relative scripts/prepare-storage.sh --arch "$_no_dump_arch" -- \
+    "$_script_path" "$@"
+fi
+LD_PRELOAD="$_no_dump_preload"
+export LD_PRELOAD
+[ "$(ulimit -Sc)" = 0 ] && [ "$(ulimit -Hc)" = 0 ] || die 'core limit do preparo de storage não ficou selado'
+IFS= read -r _no_dump_filter < "/proc/$$/coredump_filter" || _no_dump_filter=''
+[ "$_no_dump_filter" = 0 ] || die 'coredump_filter do preparo de storage não ficou selado'
+# KASSINAO_HOST_NO_DUMP_END
+unset _saved_no_dump_marker _saved_no_dump_preload _no_dump_filter _no_dump_arch _no_dump_preload _script_path _script_dir
+
 [ "$(id -u)" -eq 0 ] || die 'execute como root'
 for command in awk chmod chown mkdir pwd stat; do
   command -v "$command" >/dev/null 2>&1 || die "$command é obrigatório"
@@ -14,6 +43,7 @@ done
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+[ "$ROOT" = "$PROJECT_DIR" ] || die 'raiz canônica divergiu do kit selado'
 
 # Controles privilegiados só podem sair do kit operacional selado. O .env é
 # privado e mutável, portanto fica fora do manifesto e é validado separadamente.

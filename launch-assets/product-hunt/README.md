@@ -93,7 +93,7 @@ Product interaction must remain the proof. Motion may frame the sequence but mus
 
 - [ ] Final public release exists, is immutable, and exposes verified operations-bundle assets.
 - [ ] Exact public GHCR digest, checksums, release integrity, and GitHub attestations verify.
-- [ ] Clean source-free split deployment from the public bundle passes on the production VPS.
+- [ ] Clean split deployment without a Git checkout or application source code passes from the public operations bundle on the production VPS.
 - [ ] Active VPS data/auth/snapshots are verified encrypted at rest and recorded in the private runbook.
 - [ ] Operator policy is public at the private instance's `APP_URL/privacy`; Discord's Privacy Policy URL points there.
 - [ ] A real external-account request for data access/deletion reaches the operator's documented process.

@@ -117,6 +117,37 @@ function defaultProcessAlive(pid: number): boolean {
   }
 }
 
+interface ProcessStartRunner {
+  (
+    file: string,
+    args: string[],
+    options: {
+      encoding: 'utf8';
+      timeout: number;
+      stdio: ['ignore', 'pipe', 'ignore'];
+      env: NodeJS.ProcessEnv;
+    },
+  ): string;
+}
+
+/** Consulta o nascimento de um PID no macOS sem entregar segredos ao `ps`. */
+export function macOsProcessIdentity(
+  pid: number,
+  run: ProcessStartRunner = execFileSync as ProcessStartRunner,
+): string | undefined {
+  try {
+    const started = run('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf8',
+      timeout: 1_000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { LC_ALL: 'C' },
+    }).trim();
+    return started ? `darwin:${started}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Identidade estável da encarnação do PID; undefined mantém o comportamento fail-closed. */
 function defaultProcessIdentity(pid: number): string | undefined {
   try {
@@ -132,13 +163,7 @@ function defaultProcessIdentity(pid: number): string | undefined {
       return /^\d+$/.test(startTicks ?? '') ? `linux:${startTicks}` : undefined;
     }
     if (process.platform === 'darwin') {
-      const started = execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], {
-        encoding: 'utf8',
-        timeout: 1_000,
-        stdio: ['ignore', 'pipe', 'ignore'],
-        env: { ...process.env, LC_ALL: 'C' },
-      }).trim();
-      return started ? `darwin:${started}` : undefined;
+      return macOsProcessIdentity(pid);
     }
   } catch {
     // Não adivinhe: sem identidade confiável, um PID vivo preserva o lock.

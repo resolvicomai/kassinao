@@ -26,6 +26,7 @@ import {
   TranscriptSegment,
 } from '../store';
 import { runFfmpeg } from './ffmpeg';
+import { buildSafeChildEnvironment } from './childEnvironment';
 import {
   abortableDelay,
   assertGuildWorkActive,
@@ -69,8 +70,6 @@ const ASR_MAX_WAIT_MS = 10 * 60 * 1000;
 
 /** PIDs (grupos) de comandos locais em voo — mortos no shutdown para não virarem órfãos. */
 const commandPids = new Set<number>();
-
-const SAFE_COMMAND_ENV = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'XDG_CACHE_HOME'] as const;
 
 export interface TranscribeCommandTemplate {
   executable: string;
@@ -137,11 +136,7 @@ export function buildTranscribeCommandEnvironment(
   source: NodeJS.ProcessEnv,
   extraNames: readonly string[],
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const name of [...SAFE_COMMAND_ENV, ...extraNames]) {
-    if (source[name] !== undefined) env[name] = source[name];
-  }
-  return env;
+  return buildSafeChildEnvironment(source, extraNames);
 }
 
 let guildProcessingAllowed: (guildId: string) => boolean = () => false;

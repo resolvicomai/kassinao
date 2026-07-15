@@ -1,27 +1,62 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # Gate de segurança da instância. O relatório fica em DEPLOY_DIR/audit com
 # modo 0600 e registra somente invariantes/pass-fail: não enumera outros apps,
 # containers, arquivos, regras completas, IPs ou valores de ambiente do host.
 set -uo pipefail
-export LC_ALL=C
 umask 077
 
 fatal() { printf 'ERRO: %s\n' "$*" >&2; exit 2; }
-[ "$(id -u)" -eq 0 ] || fatal 'execute o audit como root'
-seal_local_docker() {
-  local name
-  for name in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION; do
-    if declare -p "$name" >/dev/null 2>&1; then
-      fatal "$name não pode vir do ambiente; o audit exige o daemon local da VPS"
-    fi
-  done
-  export DOCKER_HOST=unix:///var/run/docker.sock
-  unset DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION
-}
-seal_local_docker
+
+_saved_deploy_dir="${KASSINAO_DEPLOY_DIR-}"
+_saved_report_name="${KASSINAO_AUDIT_REPORT_NAME-}"
+_saved_allowed_tcp="${KASSINAO_ALLOWED_PUBLIC_TCP_PORTS-}"
+_saved_allowed_udp="${KASSINAO_ALLOWED_PUBLIC_UDP_PORTS-}"
+_saved_no_dump_marker="${KASSINAO_NO_DUMP_ACTIVE-}"
+_saved_no_dump_preload="${LD_PRELOAD-}"
+_inherited_docker_environment_name=''
+for _inherited_name in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION; do
+  if declare -p "$_inherited_name" >/dev/null 2>&1; then
+    _inherited_docker_environment_name="$_inherited_name"
+    break
+  fi
+done
+[ -r "/proc/$$/environ" ] || fatal '/proc é obrigatório para limpar o ambiente do audit dedicado'
+while IFS='=' read -r -d '' _inherited_name _inherited_value; do
+  unset "$_inherited_name" 2>/dev/null || true
+done < "/proc/$$/environ"
+unset _inherited_name _inherited_value
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C
+[ -z "$_inherited_docker_environment_name" ] || \
+  fatal "$_inherited_docker_environment_name não pode vir do ambiente; o audit exige o daemon local da VPS"
+if [ -n "$_saved_deploy_dir" ]; then KASSINAO_DEPLOY_DIR="$_saved_deploy_dir"; export KASSINAO_DEPLOY_DIR; fi
+if [ -n "$_saved_report_name" ]; then KASSINAO_AUDIT_REPORT_NAME="$_saved_report_name"; export KASSINAO_AUDIT_REPORT_NAME; fi
+if [ -n "$_saved_allowed_tcp" ]; then KASSINAO_ALLOWED_PUBLIC_TCP_PORTS="$_saved_allowed_tcp"; export KASSINAO_ALLOWED_PUBLIC_TCP_PORTS; fi
+if [ -n "$_saved_allowed_udp" ]; then KASSINAO_ALLOWED_PUBLIC_UDP_PORTS="$_saved_allowed_udp"; export KASSINAO_ALLOWED_PUBLIC_UDP_PORTS; fi
+
+_script_path="${BASH_SOURCE[0]}"
+case "$_script_path" in /*) ;; ./*) _script_path="$PWD/${_script_path#./}" ;; *) _script_path="$PWD/$_script_path" ;; esac
+case "$_script_path" in *//* | */./* | */../* | */. | */.. | */) fatal 'caminho do audit dedicado não é canônico' ;; esac
+_script_dir="${_script_path%/*}"
+case "$_script_dir" in */scripts) PROJECT_DIR="${_script_dir%/scripts}" ;; *) fatal 'audit dedicado precisa executar do kit selado' ;; esac
+case "${MACHTYPE%%-*}" in x86_64) _no_dump_arch=amd64 ;; aarch64 | arm64) _no_dump_arch=arm64 ;; *) fatal 'arquitetura sem runtime no-dump' ;; esac
+_no_dump_preload="$PROJECT_DIR/runtime/linux-$_no_dump_arch/libkassinao-no-dump.so"
+# KASSINAO_HOST_NO_DUMP_BEGIN
+if [ "$_saved_no_dump_marker" != "prctl-v1:$$" ] || [ "$_saved_no_dump_preload" != "$_no_dump_preload" ]; then
+  exec /usr/bin/python3 "$PROJECT_DIR/scripts/no-dump-exec.py" \
+    --bundle-root "$PROJECT_DIR" --script-relative scripts/audit-vps-security.sh --arch "$_no_dump_arch" -- \
+    "$_script_path" "$@"
+fi
+LD_PRELOAD="$_no_dump_preload"
+export LD_PRELOAD
+[ "$(ulimit -Sc)" = 0 ] && [ "$(ulimit -Hc)" = 0 ] || fatal 'core limit do audit dedicado não ficou selado'
+IFS= read -r _no_dump_filter < "/proc/$$/coredump_filter" || _no_dump_filter=''
+[ "$_no_dump_filter" = 0 ] || fatal 'coredump_filter do audit dedicado não ficou selado'
+# KASSINAO_HOST_NO_DUMP_END
+unset _saved_no_dump_marker _saved_no_dump_preload _no_dump_filter _no_dump_arch _no_dump_preload _script_path _script_dir
+[ "$EUID" -eq 0 ] || fatal 'execute o audit como root'
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-DEPLOY_DIR="${KASSINAO_DEPLOY_DIR:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
+DEPLOY_DIR="${_saved_deploy_dir:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
 case "$DEPLOY_DIR" in
   /*) ;;
   *) printf 'ERRO: KASSINAO_DEPLOY_DIR precisa ser absoluto\n' >&2; exit 2 ;;
@@ -35,6 +70,17 @@ if [ "$DEPLOY_REAL" != "$DEPLOY_DIR" ]; then
   printf 'ERRO: KASSINAO_DEPLOY_DIR precisa ser o caminho canônico\n' >&2
   exit 2
 fi
+[ "$DEPLOY_REAL" = "$PROJECT_DIR" ] || fatal 'KASSINAO_DEPLOY_DIR precisa apontar exatamente para o kit selado'
+export DOCKER_HOST=unix:///var/run/docker.sock
+unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION
+DOCKER_CONFIG="$DEPLOY_REAL/deploy/docker-client"
+DOCKER_CONFIG_FILE="$DOCKER_CONFIG/config.json"
+[ -d "$DOCKER_CONFIG" ] && [ ! -L "$DOCKER_CONFIG" ] && \
+  [ -f "$DOCKER_CONFIG_FILE" ] && [ ! -L "$DOCKER_CONFIG_FILE" ] || \
+  fatal 'configuração isolada do cliente Docker está ausente ou irregular'
+[ "$(sha256sum -- "$DOCKER_CONFIG_FILE" | awk '{print $1}')" = ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356 ] || \
+  fatal 'configuração isolada do cliente Docker diverge do objeto vazio selado'
+export DOCKER_CONFIG
 cursor="$DEPLOY_REAL"
 while :; do
   if [ -e "$cursor/.git" ]; then
@@ -57,7 +103,7 @@ chmod 0700 "$REPORT_DIR"
   printf 'ERRO: o diretório de relatório precisa pertencer ao usuário atual\n' >&2
   exit 2
 }
-REPORT_NAME="${KASSINAO_AUDIT_REPORT_NAME:-security-$(date -u +%Y%m%d-%H%M%S)-$$.log}"
+REPORT_NAME="${_saved_report_name:-security-$(date -u +%Y%m%d-%H%M%S)-$$.log}"
 case "$REPORT_NAME" in
   '' | *[!A-Za-z0-9._-]*) printf 'ERRO: nome de relatório inválido\n' >&2; exit 2 ;;
 esac
@@ -80,12 +126,12 @@ trap publish_report EXIT
 
 FAILURES=0
 WARNINGS=0
-ALLOWED_PUBLIC_TCP_PORTS="${KASSINAO_ALLOWED_PUBLIC_TCP_PORTS:-22}"
-ALLOWED_PUBLIC_UDP_PORTS="${KASSINAO_ALLOWED_PUBLIC_UDP_PORTS:-}"
-ENV_FILE="${KASSINAO_ENV_FILE:-$DEPLOY_REAL/.env}"
-CORE_CONTAINER="${KASSINAO_CONTAINER:-kassinao}"
-PUBLIC_CONTAINER="${KASSINAO_PUBLIC_CONTAINER:-kassinao-public}"
-TUNNEL_CONTAINER="${KASSINAO_TUNNEL_CONTAINER:-kassinao-tunnel}"
+ALLOWED_PUBLIC_TCP_PORTS="${_saved_allowed_tcp:-22}"
+ALLOWED_PUBLIC_UDP_PORTS="${_saved_allowed_udp:-}"
+ENV_FILE="$DEPLOY_REAL/.env"
+CORE_CONTAINER=kassinao
+PUBLIC_CONTAINER=kassinao-public
+TUNNEL_CONTAINER=kassinao-tunnel
 CORE_NETWORKS=''
 PUBLIC_NETWORKS=''
 
@@ -200,6 +246,7 @@ fi
 EXPECTED_IMAGE="$(env_value KASSINAO_IMAGE "$ENV_FILE")"
 EXPECTED_RELEASE="$(env_value KASSINAO_RELEASE_DIGEST "$ENV_FILE")"
 EXPECTED_DEPLOYMENT="$(env_value KASSINAO_DEPLOYMENT_FINGERPRINT "$ENV_FILE")"
+HOST_SCOPE="$(env_value KASSINAO_HOST_SCOPE "$ENV_FILE")"
 DEDICATED_HOST_ACK="$(env_value KASSINAO_DEDICATED_DOCKER_HOST_ACK "$ENV_FILE")"
 ROLLBACK_RETENTION_HOURS="$(env_value KASSINAO_ROLLBACK_RETENTION_HOURS "$ENV_FILE")"
 if [[ "$EXPECTED_IMAGE" =~ ^ghcr\.io/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$ ]] && \
@@ -209,6 +256,11 @@ if [[ "$EXPECTED_IMAGE" =~ ^ghcr\.io/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$ 
   pass 'imagem, release e fingerprint do deploy estão selados no ambiente privado'
 else
   fail 'imagem, release ou fingerprint do deploy são inválidos/divergentes'
+fi
+if [ "$HOST_SCOPE" = dedicated ]; then
+  pass 'auditoria dedicada recebeu KASSINAO_HOST_SCOPE=dedicated'
+else
+  fail 'audit-vps-security.sh pertence somente ao adapter dedicated'
 fi
 if [ "$DEDICATED_HOST_ACK" = I_UNDERSTAND_THIS_VPS_MUST_RUN_ONLY_KASSINAO ]; then
   pass 'operador reconheceu que os pre-hooks controlam o Docker inteiro em VPS dedicada'
@@ -369,6 +421,19 @@ else
 fi
 
 section HOST_GATE
+CORE_PATTERN_FILE=/proc/sys/kernel/core_pattern
+if [ ! -r "$CORE_PATTERN_FILE" ]; then
+  fail 'kernel.core_pattern não pôde ser lido'
+else
+  IFS= read -r core_pattern < "$CORE_PATTERN_FILE" || core_pattern=''
+  if [ -z "$core_pattern" ]; then
+    fail 'kernel.core_pattern está vazio ou inválido'
+  elif [[ "$core_pattern" = '|'* ]]; then
+    fail 'kernel.core_pattern em pipe é incompatível com o isolamento process-scoped do host'
+  else
+    pass 'kernel.core_pattern grava somente em arquivo e não delega dumps a handler global'
+  fi
+fi
 SSHD_CONTEXT_USERS=()
 while IFS=: read -r context_user _ _ _ _ _ login_shell; do
   [ -n "$context_user" ] || continue
@@ -576,11 +641,11 @@ else
   fail 'allowlist de storage ausente, insegura ou divergente dos mounts'
 fi
 host_controls_file=/etc/kassinao/host-controls.env
-expected_host_controls="$(printf 'KASSINAO_DATA_ROOT=%s\nKASSINAO_ROLLBACK_RETENTION_HOURS=%s' "$DATA_ROOT" "$ROLLBACK_RETENTION_HOURS")"
+expected_host_controls="$(printf 'KASSINAO_DEPLOY_DIR=%s\nKASSINAO_DATA_ROOT=%s\nKASSINAO_ROLLBACK_RETENTION_HOURS=%s' "$DEPLOY_REAL" "$DATA_ROOT" "$ROLLBACK_RETENTION_HOURS")"
 if [ -f "$host_controls_file" ] && [ ! -L "$host_controls_file" ] && \
    [ "$(stat -c '%a:%u:%g' "$host_controls_file" 2>/dev/null || true)" = '600:0:0' ] && \
    [ "$(cat "$host_controls_file" 2>/dev/null)" = "$expected_host_controls" ]; then
-  pass 'registro root-owned dos controles de host coincide com DATA_ROOT e retenção'
+  pass 'registro root-owned dos controles de host coincide com release, DATA_ROOT e retenção'
 else
   fail 'registro dos controles de host está ausente, inseguro ou divergente'
 fi
@@ -653,7 +718,8 @@ fi
 locks_converge=true
 for script in scripts/health-watch.sh scripts/backup.sh scripts/deploy-release.sh; do
   source_file="$DEPLOY_REAL/$script"
-  grep -Fq 'KASSINAO_RUNTIME_DIR:-/run/lock/kassinao' "$source_file" 2>/dev/null || locks_converge=false
+  [ "$(grep -Fxc 'RUNTIME_DIR=/run/lock/kassinao' "$source_file" 2>/dev/null || true)" -eq 1 ] || locks_converge=false
+  ! grep -Eq 'KASSINAO_RUNTIME_DIR:-|RUNTIME_DIR=.*KASSINAO_RUNTIME_DIR' "$source_file" 2>/dev/null || locks_converge=false
   grep -Fq '$RUNTIME_DIR/maintenance.lock' "$source_file" 2>/dev/null || locks_converge=false
 done
 [ "$locks_converge" = true ] \
@@ -953,36 +1019,51 @@ fi
 SWARM_STATE="$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || true)"
 [ "$SWARM_STATE" = inactive ] && pass 'Docker Swarm está inativo' || fail 'Docker Swarm precisa ficar inativo nesta VPS'
 
-ALL_CONTAINER_IDS="$(docker ps -aq 2>/dev/null)" || { fail 'não foi possível enumerar todos os containers'; ALL_CONTAINER_IDS=''; }
-if [ -z "$ALL_CONTAINER_IDS" ]; then
+ALL_CONTAINER_IDS_RAW="$(docker ps -aq --no-trunc 2>/dev/null)" || { fail 'não foi possível enumerar todos os containers'; ALL_CONTAINER_IDS_RAW=''; }
+if [ -z "$ALL_CONTAINER_IDS_RAW" ]; then
   fail 'nenhum container foi encontrado para auditoria do host dedicado'
 else
-  ALL_CONTAINER_JSON="$(docker inspect $ALL_CONTAINER_IDS 2>/dev/null)" || { fail 'não foi possível inspecionar todos os containers'; ALL_CONTAINER_JSON=''; }
-  if [ -n "$ALL_CONTAINER_JSON" ]; then
+  mapfile -t ALL_CONTAINER_ID_LIST <<<"$ALL_CONTAINER_IDS_RAW"
+  valid_container_ids=true
+  for container_id in "${ALL_CONTAINER_ID_LIST[@]}"; do
+    [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] || valid_container_ids=false
+  done
+  if [ "$valid_container_ids" != true ]; then
+    fail 'inventário de IDs Docker contém valor inválido'
+    ATTACHED_NETWORKS=''
+  else
     EXPECTED_CONTAINER_NAMES=("$CORE_CONTAINER")
     profile_enabled split-public && EXPECTED_CONTAINER_NAMES+=("$PUBLIC_CONTAINER")
     profile_enabled tunnel && EXPECTED_CONTAINER_NAMES+=("$TUNNEL_CONTAINER")
-    if python3 -c '
+    dedicated_projection='{"Id":{{json .Id}},"Name":{{json .Name}},"HostConfig":{"Privileged":{{json .HostConfig.Privileged}},"CapAdd":{{json .HostConfig.CapAdd}},"HasDevices":{{if .HostConfig.Devices}}true{{else}}false{{end}},"HasDeviceCgroupRules":{{if .HostConfig.DeviceCgroupRules}}true{{else}}false{{end}},"HasDeviceRequests":{{if .HostConfig.DeviceRequests}}true{{else}}false{{end}},"NetworkMode":{{json .HostConfig.NetworkMode}},"PortBindings":{{json .HostConfig.PortBindings}}},"Mounts":[{{range $index, $mount := .Mounts}}{{if $index}},{{end}}{"Type":{{json $mount.Type}},"Source":{{json $mount.Source}},"Destination":{{json $mount.Destination}},"RW":{{json $mount.RW}}}{{end}}],"NetworkNames":[{{$first := true}}{{range $name, $_ := .NetworkSettings.Networks}}{{if not $first}},{{end}}{{$first = false}}{{json $name}}{{end}}]}'
+    if ATTACHED_NETWORKS="$({
+      docker inspect --format "$dedicated_projection" "${ALL_CONTAINER_ID_LIST[@]}"
+    } | python3 /dev/fd/3 "$RECORDINGS_DIR" "$STATE_DIR" "$AUTH_DIR" "$CACHE_DIR" -- "${EXPECTED_CONTAINER_NAMES[@]}" 3<<'PY'
 import json
 import os
+import re
 import sys
 
-items = json.load(sys.stdin)
 separator = sys.argv.index("--")
 allowed_data = {os.path.realpath(value) for value in sys.argv[1:separator]}
 expected = set(sys.argv[separator + 1:])
-actual = {(item.get("Name") or "").lstrip("/") for item in items}
-if actual != expected:
-    raise SystemExit(1)
-
 sensitive_roots = (
     "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64",
     "/proc", "/root", "/run", "/sbin", "/sys", "/usr", "/var",
 )
-for item in items:
+actual = set()
+network_names = set()
+for line in sys.stdin:
+    try:
+        item = json.loads(line)
+    except Exception:
+        raise SystemExit(1)
+    if not isinstance(item, dict):
+        raise SystemExit(1)
+    actual.add(str(item.get("Name") or "").lstrip("/"))
     host = item.get("HostConfig") or {}
-    if host.get("Privileged") or host.get("CapAdd") or host.get("Devices") or \
-            host.get("DeviceCgroupRules") or host.get("DeviceRequests"):
+    if host.get("Privileged") or host.get("CapAdd") or host.get("HasDevices") or \
+            host.get("HasDeviceCgroupRules") or host.get("HasDeviceRequests"):
         raise SystemExit(1)
     if host.get("NetworkMode") == "host":
         raise SystemExit(1)
@@ -1001,18 +1082,20 @@ for item in items:
             continue
         if any(source == root or source.startswith(root + "/") for root in sensitive_roots):
             raise SystemExit(1)
-' "$RECORDINGS_DIR" "$STATE_DIR" "$AUTH_DIR" "$CACHE_DIR" -- "${EXPECTED_CONTAINER_NAMES[@]}" <<<"$ALL_CONTAINER_JSON" >/dev/null 2>&1; then
+    for network_name in item.get("NetworkNames") or []:
+        if not isinstance(network_name, str) or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', network_name) is None:
+            raise SystemExit(1)
+        network_names.add(network_name)
+if actual != expected:
+    raise SystemExit(1)
+print("\n".join(sorted(network_names)))
+PY
+)"; then
       pass 'host dedicado contém somente containers esperados, sem privilégios ou binds sensíveis'
     else
       fail 'container alheio, privilégio global, device, docker.sock ou bind sensível detectado'
+      ATTACHED_NETWORKS=''
     fi
-    ATTACHED_NETWORKS="$(python3 -c '
-import json, sys
-names=set()
-for item in json.load(sys.stdin):
-    names.update(((item.get("NetworkSettings") or {}).get("Networks") or {}).keys())
-print("\n".join(sorted(names)))
-' <<<"$ALL_CONTAINER_JSON" 2>/dev/null)" || { fail 'redes anexadas não puderam ser enumeradas'; ATTACHED_NETWORKS=''; }
     bad_network_driver=0
     while IFS= read -r network_name; do
       [ -n "$network_name" ] || continue
@@ -1022,13 +1105,13 @@ print("\n".join(sorted(names)))
     [ "$bad_network_driver" -eq 0 ] \
       && pass 'todas as redes anexadas usam o driver bridge permitido' \
       || fail 'existe rede anexada com driver não permitido'
-    unset ALL_CONTAINER_JSON
   fi
 fi
+unset ALL_CONTAINER_IDS_RAW ALL_CONTAINER_ID_LIST
 
 section CORE_CONTAINER
 CONFIGURED_IMAGE=''
-if ! docker inspect "$CORE_CONTAINER" >/dev/null 2>&1; then
+if ! docker inspect --format '{{.Id}}' "$CORE_CONTAINER" >/dev/null 2>&1; then
   fail 'container core não encontrado'
 else
   CONTAINER_USER="$(docker inspect -f '{{.Config.User}}' "$CORE_CONTAINER" 2>/dev/null || true)"
@@ -1080,7 +1163,7 @@ else
   [ -z "$(container_env_value "$CORE_CONTAINER" TUNNEL_TOKEN)" ] \
     && pass 'core não recebeu credencial do túnel' || fail 'core recebeu credencial do túnel'
   if [ -n "$APP_ENV_FILE" ] && [ -f "$APP_ENV_FILE" ] && \
-     docker inspect "$CORE_CONTAINER" 2>/dev/null | python3 -c '
+     docker inspect -f '{{json .Config.Env}}' "$CORE_CONTAINER" 2>/dev/null | python3 -c '
 import json
 import re
 import sys
@@ -1098,11 +1181,11 @@ def read_env(path):
             values[key] = value
     return values
 
-items = json.load(sys.stdin)
-if len(items) != 1:
+entries = json.load(sys.stdin)
+if not isinstance(entries, list):
     raise SystemExit(1)
 effective = {}
-for entry in (items[0].get("Config") or {}).get("Env") or []:
+for entry in entries:
     key, separator, value = entry.partition("=")
     if not separator or key in effective:
         raise SystemExit(1)
@@ -1241,7 +1324,7 @@ fi
 
 section PUBLIC_CONTAINER
 public_exists=false
-docker inspect "$PUBLIC_CONTAINER" >/dev/null 2>&1 && public_exists=true
+docker inspect --format '{{.Id}}' "$PUBLIC_CONTAINER" >/dev/null 2>&1 && public_exists=true
 if profile_enabled split-public; then
   if [ "$public_exists" != true ]; then
     fail 'profile split-public ativo sem container público'
@@ -1337,13 +1420,14 @@ fi
 
 section TUNNEL_CONTAINER
 tunnel_exists=false
-docker inspect "$TUNNEL_CONTAINER" >/dev/null 2>&1 && tunnel_exists=true
+docker inspect --format '{{.Id}}' "$TUNNEL_CONTAINER" >/dev/null 2>&1 && tunnel_exists=true
 if profile_enabled tunnel; then
   COMPOSE_FILE="$DEPLOY_REAL/docker-compose.yml"
   EXPECTED_TUNNEL_IMAGE=''
   if [ -f "$COMPOSE_FILE" ] && [ ! -L "$COMPOSE_FILE" ]; then
     COMPOSE_IMAGES="$(
-      env -i "PATH=$PATH" "HOME=${HOME:-/root}" "DOCKER_HOST=$DOCKER_HOST" docker compose \
+      env -i "PATH=$PATH" "HOME=${HOME:-/root}" "LC_ALL=$LC_ALL" "LD_PRELOAD=${LD_PRELOAD-}" \
+        "DOCKER_HOST=$DOCKER_HOST" "DOCKER_CONFIG=$DOCKER_CONFIG" docker compose \
         --project-name kassinao \
         --project-directory "$DEPLOY_REAL" \
         --env-file "$ENV_FILE" \
@@ -1421,14 +1505,13 @@ if profile_enabled tunnel; then
       && pass 'credencial efetiva do túnel corresponde silenciosamente ao .env privado' \
       || fail 'credencial efetiva do túnel está ausente ou diverge do .env privado'
     unset EXPECTED_TUNNEL_TOKEN RUNTIME_TUNNEL_TOKEN
-    if docker inspect "$TUNNEL_CONTAINER" 2>/dev/null | python3 -c '
+    if docker inspect -f '{{json .Config.Labels}}' "$TUNNEL_CONTAINER" 2>/dev/null | python3 -c '
 import json
 import sys
 
-items = json.load(sys.stdin)
-if len(items) != 1:
+labels = json.load(sys.stdin)
+if not isinstance(labels, dict):
     raise SystemExit(1)
-labels = (items[0].get("Config") or {}).get("Labels") or {}
 expected = {
     "com.docker.compose.project": "kassinao",
     "com.docker.compose.service": "cloudflared",

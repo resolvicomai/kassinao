@@ -1,4 +1,5 @@
 import { ChildProcess, spawn } from 'node:child_process';
+import { buildSafeChildEnvironment } from './childEnvironment';
 
 export function ffmpegPath(): string {
   return process.env.FFMPEG_PATH?.trim() || 'ffmpeg';
@@ -27,6 +28,7 @@ export function runFfmpeg(
   return new Promise((resolve, reject) => {
     const proc = spawn(cmd as string, spawnArgs as string[], {
       stdio: ['ignore', 'ignore', 'pipe'],
+      env: buildSafeChildEnvironment(process.env),
     });
     let stderr = '';
     proc.stderr.on('data', (d) => (stderr = (stderr + d).slice(-cap)));
@@ -50,5 +52,6 @@ export function runFfmpeg(
 export function spawnFfmpegStdin(args: string[]): ChildProcess {
   return spawn(ffmpegPath(), ['-hide_banner', '-loglevel', 'error', ...args], {
     stdio: ['pipe', 'ignore', 'pipe'],
+    env: buildSafeChildEnvironment(process.env),
   });
 }

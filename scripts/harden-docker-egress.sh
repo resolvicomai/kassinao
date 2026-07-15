@@ -1,9 +1,67 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # Instala uma política mínima de contenção lateral para a rede privada do
 # Kassinão. A atualização usa policies A/B: a policy ativa nunca é esvaziada
 # enquanto a substituta está sendo construída.
 set -Eeuo pipefail
 umask 077
+
+die() {
+  printf 'ERRO: %s\n' "$*" >&2
+  exit 1
+}
+
+# KASSINAO_HOST_ENV_SCRUB_BEGIN
+_saved_no_dump_marker="${KASSINAO_NO_DUMP_ACTIVE-}"
+_saved_no_dump_preload="${LD_PRELOAD-}"
+_forbidden_override=''
+for _name in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION \
+  KASSINAO_CONTAINER KASSINAO_TUNNEL_CONTAINER KASSINAO_PUBLIC_CONTAINER KASSINAO_RUNTIME_DIR; do
+  if declare -p "$_name" >/dev/null 2>&1; then _forbidden_override="$_name"; break; fi
+done
+[ -r "/proc/$$/environ" ] || die '/proc é obrigatório para limpar o ambiente do firewall'
+while IFS='=' read -r -d '' _name _value; do unset "$_name" 2>/dev/null || true; done < "/proc/$$/environ"
+unset _name _value
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C
+[ -z "$_forbidden_override" ] || die "$_forbidden_override não pode vir do ambiente do firewall"
+# KASSINAO_HOST_ENV_SCRUB_END
+
+_script_path="${BASH_SOURCE[0]}"
+case "$_script_path" in /*) ;; ./*) _script_path="$PWD/${_script_path#./}" ;; *) _script_path="$PWD/$_script_path" ;; esac
+case "$_script_path" in *//* | */./* | */../* | */. | */.. | */) die 'caminho do firewall não é canônico' ;; esac
+_script_dir="${_script_path%/*}"
+case "$_script_dir" in
+  */scripts) PROJECT_DIR="${_script_dir%/scripts}" ;;
+  /usr/local/sbin)
+    marker=/etc/kassinao/host-controls.env
+    [ -f "$marker" ] && [ ! -L "$marker" ] && [ "$(stat -c '%a:%u:%g:%h' "$marker" 2>/dev/null || true)" = 600:0:0:1 ] ||
+      die 'marker do kit operacional está ausente ou irregular'
+    PROJECT_DIR="$(awk -F= '$1 == "KASSINAO_DEPLOY_DIR" { if (seen++) exit 2; print substr($0, index($0,"=")+1) } END { if (seen != 1) exit 2 }' "$marker")" ||
+      die 'marker do kit não contém deploy dir único'
+    _script_path="$PROJECT_DIR/scripts/harden-docker-egress.sh"
+    ;;
+  *) die 'firewall precisa executar do kit ou do entrypoint instalado' ;;
+esac
+case "${MACHTYPE%%-*}" in x86_64) _no_dump_arch=amd64 ;; aarch64 | arm64) _no_dump_arch=arm64 ;; *) die 'arquitetura sem runtime no-dump' ;; esac
+_no_dump_preload="$PROJECT_DIR/runtime/linux-$_no_dump_arch/libkassinao-no-dump.so"
+# KASSINAO_HOST_NO_DUMP_BEGIN
+if [ "$_saved_no_dump_marker" != "prctl-v1:$$" ] || [ "$_saved_no_dump_preload" != "$_no_dump_preload" ]; then
+  exec /usr/bin/python3 "$PROJECT_DIR/scripts/no-dump-exec.py" \
+    --bundle-root "$PROJECT_DIR" --script-relative scripts/harden-docker-egress.sh --arch "$_no_dump_arch" -- \
+    "$_script_path" "$@"
+fi
+LD_PRELOAD="$_no_dump_preload"
+export LD_PRELOAD
+[ "$(ulimit -Sc)" = 0 ] && [ "$(ulimit -Hc)" = 0 ] || die 'core limit do firewall não ficou selado'
+IFS= read -r _no_dump_filter < "/proc/$$/coredump_filter" || _no_dump_filter=''
+[ "$_no_dump_filter" = 0 ] || die 'coredump_filter do firewall não ficou selado'
+# KASSINAO_HOST_NO_DUMP_END
+unset _saved_no_dump_marker _saved_no_dump_preload _no_dump_filter _no_dump_arch _no_dump_preload _script_path _script_dir
+
+HOST_SCOPE=dedicated
+if [ "${1:-}" = --shared-host ]; then
+  HOST_SCOPE=shared
+  shift
+fi
 
 MODE=apply
 OFFLINE=false
@@ -13,18 +71,23 @@ case "${1:-}" in
   --check) [ "$#" -eq 1 ] || { echo 'ERRO: argumentos inválidos' >&2; exit 1; }; MODE=check ;;
   --offline-preload) [ "$#" -eq 1 ] || { echo 'ERRO: argumentos inválidos' >&2; exit 1; }; OFFLINE=true ;;
   --remove) [ "$#" -eq 1 ] || { echo 'ERRO: argumentos inválidos' >&2; exit 1; }; MODE=remove ;;
-  *) echo 'ERRO: uso: harden-docker-egress.sh [--preload|--check|--offline-preload|--remove]' >&2; exit 1 ;;
+  *) echo 'ERRO: uso: harden-docker-egress.sh [--shared-host] [--preload|--check|--offline-preload|--remove]' >&2; exit 1 ;;
 esac
+[ "$HOST_SCOPE" != shared ] || [ "$OFFLINE" != true ] || {
+  echo 'ERRO: --offline-preload pertence somente ao adapter dedicated' >&2
+  exit 1
+}
 
 [ "$(id -u)" -eq 0 ] || { echo 'ERRO: execute como root' >&2; exit 1; }
-for name in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION; do
-  if declare -p "$name" >/dev/null 2>&1; then
-    echo "ERRO: $name não pode vir do ambiente; o firewall exige o daemon local da VPS" >&2
-    exit 1
-  fi
-done
 export DOCKER_HOST=unix:///var/run/docker.sock
-unset DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION
+unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION
+DOCKER_CONFIG="$PROJECT_DIR/deploy/docker-client"
+DOCKER_CONFIG_FILE="$DOCKER_CONFIG/config.json"
+[ -d "$DOCKER_CONFIG" ] && [ ! -L "$DOCKER_CONFIG" ] && [ -f "$DOCKER_CONFIG_FILE" ] && [ ! -L "$DOCKER_CONFIG_FILE" ] ||
+  die 'configuração isolada do cliente Docker está ausente ou irregular'
+[ "$(sha256sum -- "$DOCKER_CONFIG_FILE" | awk '{print $1}')" = ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356 ] ||
+  die 'configuração isolada do cliente Docker diverge do objeto vazio selado'
+export DOCKER_CONFIG
 if [ "$OFFLINE" != true ]; then
   command -v docker >/dev/null 2>&1 || { echo 'ERRO: docker não encontrado' >&2; exit 1; }
 fi
@@ -38,20 +101,71 @@ done
 # processos poderiam escolher e esvaziar a mesma policy inativa entre comandos.
 LOCK_DIR=/run/lock/kassinao
 [ -d "$LOCK_DIR" ] && [ ! -L "$LOCK_DIR" ] && \
+  [ "$(readlink -f -- "$LOCK_DIR" 2>/dev/null || true)" = "$LOCK_DIR" ] && \
   [ "$(stat -c '%a:%u:%g' "$LOCK_DIR" 2>/dev/null || true)" = '700:0:0' ] || {
-  echo 'ERRO: /run/lock/kassinao precisa ser diretório 0700 root:root criado por tmpfiles' >&2
+  echo 'ERRO: runtime do firewall precisa ser diretório 0700 root:root criado por tmpfiles' >&2
   exit 1
 }
-exec 9>"$LOCK_DIR/docker-egress.lock"
+LOCK_FILE="$LOCK_DIR/docker-egress.lock"
+[ -f "$LOCK_FILE" ] && [ ! -L "$LOCK_FILE" ] && \
+  [ "$(readlink -f -- "$LOCK_FILE" 2>/dev/null || true)" = "$LOCK_FILE" ] && \
+  [ "$(stat -c '%a:%u:%g:%h' "$LOCK_FILE" 2>/dev/null || true)" = '600:0:0:1' ] || {
+  echo 'ERRO: docker-egress.lock precisa preexistir como regular 0600 root:root sem hardlink' >&2
+  exit 1
+}
+exec 9<>"$LOCK_FILE"
+# KASSINAO_LOCK_FD_PROOF_BEGIN
+[ "$(stat -Lc '%a:%u:%g:%h' "/proc/$$/fd/9" 2>/dev/null || true)" = '600:0:0:1' ] && \
+  [ "$(readlink -f -- "/proc/$$/fd/9" 2>/dev/null || true)" = "$LOCK_FILE" ] && \
+  [ "$(stat -c '%d:%i' "$LOCK_FILE" 2>/dev/null || true)" = "$(stat -Lc '%d:%i' "/proc/$$/fd/9" 2>/dev/null || true)" ] || {
+  echo 'ERRO: docker-egress.lock mudou durante a abertura' >&2
+  exit 1
+}
+# KASSINAO_LOCK_FD_PROOF_END
 flock -w 30 9 || { echo 'ERRO: outra atualização do firewall está em andamento' >&2; exit 1; }
 
-CORE_CONTAINER="${KASSINAO_CONTAINER:-kassinao}"
-TUNNEL_CONTAINER="${KASSINAO_TUNNEL_CONTAINER:-kassinao-tunnel}"
-PUBLIC_CONTAINER="${KASSINAO_PUBLIC_CONTAINER:-kassinao-public}"
+CORE_CONTAINER=kassinao
+TUNNEL_CONTAINER=kassinao-tunnel
+PUBLIC_CONTAINER=kassinao-public
 BRIDGE_NAME=kas-private0
 case "$CORE_CONTAINER" in '' | *[!A-Za-z0-9_.-]*) echo 'ERRO: nome de container inválido' >&2; exit 1 ;; esac
 case "$TUNNEL_CONTAINER" in '' | *[!A-Za-z0-9_.-]*) echo 'ERRO: nome do túnel inválido' >&2; exit 1 ;; esac
 case "$PUBLIC_CONTAINER" in '' | *[!A-Za-z0-9_.-]*) echo 'ERRO: nome público inválido' >&2; exit 1 ;; esac
+
+# Nomes são apenas pontos de descoberta. Um container só participa da prova de
+# topologia (ou da remoção das regras) depois que seu ID completo, nome e labels
+# Compose são revalidados. Status 1 significa ausente; status 2, identidade
+# divergente. Em nenhum dos dois casos há mutação do container.
+managed_container_id() {
+  local reference="$1" container="$2" expected_service="$3" candidate identity
+  local actual_id actual_name actual_project actual_service extra
+  candidate="$(docker inspect --format '{{.Id}}' "$reference" 2>/dev/null)" || return 1
+  [[ "$candidate" =~ ^[0-9a-f]{64}$ ]] || return 2
+  identity="$(
+    docker inspect \
+      --format '{{.Id}}|{{.Name}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}' \
+      "$candidate" 2>/dev/null
+  )" || return 2
+  IFS='|' read -r actual_id actual_name actual_project actual_service extra <<<"$identity"
+  [ -z "$extra" ] && [ "$actual_id" = "$candidate" ] && [ "$actual_name" = "/$container" ] && \
+    [ "$actual_project" = kassinao ] && [ "$actual_service" = "$expected_service" ] || return 2
+  printf '%s\n' "$candidate"
+}
+
+resolve_optional_container() {
+  local variable="$1" container="$2" expected_service="$3" candidate status
+  if candidate="$(managed_container_id "$container" "$container" "$expected_service")"; then
+    printf -v "$variable" '%s' "$candidate"
+    return 0
+  else
+    status=$?
+  fi
+  [ "$status" -eq 1 ] || {
+    echo "ERRO: $container ocupa nome reservado sem identidade Compose aprovada" >&2
+    return 2
+  }
+  printf -v "$variable" '%s' ''
+}
 
 # A bridge tem nome fixo no Compose. Assim as regras podem existir antes da
 # primeira criação do container, eliminando a janela de primeiro boot.
@@ -59,13 +173,20 @@ if [ "$MODE" = remove ]; then
   # A remoção das regras só é segura quando nenhum componente desta instância
   # pode voltar pelo restart policy. O uninstall faz a mesma prova antes de
   # desabilitar units; repetir aqui mantém este entrypoint fail-closed.
-  for container in "$CORE_CONTAINER" "$TUNNEL_CONTAINER" "$PUBLIC_CONTAINER"; do
-    docker inspect "$container" >/dev/null 2>&1 || continue
-    [ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)" = false ] || {
+  for identity in \
+    "$CORE_CONTAINER:kassinao" \
+    "$TUNNEL_CONTAINER:cloudflared" \
+    "$PUBLIC_CONTAINER:kassinao-public"; do
+    container="${identity%%:*}"
+    expected_service="${identity#*:}"
+    cid=''
+    resolve_optional_container cid "$container" "$expected_service" || exit 1
+    [ -n "$cid" ] || continue
+    [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || true)" = false ] || {
       echo "ERRO: $container precisa estar parado antes de remover o firewall" >&2
       exit 1
     }
-    restart_policy="$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$container" 2>/dev/null || true)"
+    restart_policy="$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$cid" 2>/dev/null || true)"
     [ -z "$restart_policy" ] || [ "$restart_policy" = no ] || {
       echo "ERRO: desative o restart policy de $container antes de remover o firewall" >&2
       exit 1
@@ -74,8 +195,15 @@ if [ "$MODE" = remove ]; then
   PRELOAD=true
 elif [ "$OFFLINE" = true ]; then
   PRELOAD=true
-elif docker inspect "$CORE_CONTAINER" >/dev/null 2>&1; then
-  networks="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$CORE_CONTAINER" | sort -u)"
+else
+  core_cid=''
+  resolve_optional_container core_cid "$CORE_CONTAINER" kassinao || exit 1
+  tunnel_cid=''
+  resolve_optional_container tunnel_cid "$TUNNEL_CONTAINER" cloudflared || exit 1
+fi
+
+if [ "$MODE" != remove ] && [ -n "${core_cid:-}" ]; then
+  networks="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$core_cid" | sort -u)"
   [ "$(grep -cve '^$' <<<"$networks")" -eq 1 ] || { echo 'ERRO: core precisa usar exatamente uma rede' >&2; exit 1; }
   network_name="$(grep -ve '^$' <<<"$networks")"
   read -r driver configured_bridge < <(
@@ -89,15 +217,20 @@ elif docker inspect "$CORE_CONTAINER" >/dev/null 2>&1; then
 
   # O retorno intra-bridge existe apenas para core <-> cloudflared. Um terceiro
   # endpoint transformaria essa exceção em movimento lateral.
-  actual_members="$(docker network inspect -f '{{range .Containers}}{{println .Name}}{{end}}' "$network_name" | awk 'NF' | sort -u)"
+  actual_members="$(
+    docker network inspect \
+      -f '{{range $id, $member := .Containers}}{{printf "%s|%s\n" $id $member.Name}}{{end}}' \
+      "$network_name" | awk 'NF' | sort -u
+  )"
   tunnel_attached=false
-  if docker inspect "$TUNNEL_CONTAINER" >/dev/null 2>&1 && \
-     docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$TUNNEL_CONTAINER" | grep -Fqx "$network_name"; then
+  if [ -n "$tunnel_cid" ] && \
+     docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$tunnel_cid" | grep -Fqx "$network_name"; then
     tunnel_attached=true
   fi
   while IFS= read -r member; do
     [ -z "$member" ] && continue
-    [ "$member" = "$CORE_CONTAINER" ] || { [ "$tunnel_attached" = true ] && [ "$member" = "$TUNNEL_CONTAINER" ]; } || {
+    [ "$member" = "$core_cid|$CORE_CONTAINER" ] || \
+      { [ "$tunnel_attached" = true ] && [ "$member" = "$tunnel_cid|$TUNNEL_CONTAINER" ]; } || {
       echo 'ERRO: a rede privada contém endpoint inesperado' >&2
       exit 1
     }
@@ -105,23 +238,23 @@ elif docker inspect "$CORE_CONTAINER" >/dev/null 2>&1; then
   # Docker pode remover o endpoint da network inspect quando um container é
   # parado pelo fail-closed. Exija presença apenas dos componentes running;
   # assim a policy pode ser restaurada antes de o watchdog religá-los.
-  if [ "$(docker inspect -f '{{.State.Running}}' "$CORE_CONTAINER")" = true ]; then
-    grep -Fqx "$CORE_CONTAINER" <<<"$actual_members" || {
+  if [ "$(docker inspect -f '{{.State.Running}}' "$core_cid")" = true ]; then
+    grep -Fqx "$core_cid|$CORE_CONTAINER" <<<"$actual_members" || {
       echo 'ERRO: endpoint running do core está ausente da rede privada' >&2
       exit 1
     }
   fi
   if [ "$tunnel_attached" = true ] && \
-     [ "$(docker inspect -f '{{.State.Running}}' "$TUNNEL_CONTAINER")" = true ]; then
-    grep -Fqx "$TUNNEL_CONTAINER" <<<"$actual_members" || {
+     [ "$(docker inspect -f '{{.State.Running}}' "$tunnel_cid")" = true ]; then
+    grep -Fqx "$tunnel_cid|$TUNNEL_CONTAINER" <<<"$actual_members" || {
       echo 'ERRO: endpoint running do túnel está ausente da rede privada' >&2
       exit 1
     }
   fi
-elif docker inspect "$TUNNEL_CONTAINER" >/dev/null 2>&1; then
+elif [ "$MODE" != remove ] && [ -n "${tunnel_cid:-}" ]; then
   echo 'ERRO: túnel existe sem o core; recusando preload ambíguo' >&2
   exit 1
-else
+elif [ "$MODE" != remove ]; then
   PRELOAD=true
 fi
 
@@ -142,8 +275,8 @@ chain_is_referenced() {
   local tool="$1" target="$2"
   "$tool" -S | awk -v target="$target" '
     $1 == "-A" {
-      for (index = 1; index < NF; index++) {
-        if ($index == "-j" && $(index + 1) == target) found = 1
+      for (i = 1; i < NF; i++) {
+        if ($i == "-j" && $(i + 1) == target) found = 1
       }
     }
     END { exit found ? 0 : 1 }
@@ -164,12 +297,37 @@ chain_reference_count() {
   local tool="$1" target="$2"
   "$tool" -S 2>/dev/null | awk -v target="$target" '
     $1 == "-A" {
-      for (index = 1; index < NF; index++) {
-        if ($index == "-j" && $(index + 1) == target) count++
+      for (i = 1; i < NF; i++) {
+        if ($i == "-j" && $(i + 1) == target) count++
       }
     }
     END { print count + 0 }
   '
+}
+
+check_anchor_reference_scope() {
+  local tool="$1" target="$2" expected
+  shift 2
+  expected="$*"
+  "$tool" -S 2>/dev/null | awk -v target="$target" -v expected="$expected" '
+    $1 == "-A" {
+      for (i = 1; i < NF; i++) {
+        if ($i == "-j" && $(i + 1) == target) {
+          count++
+          if ($0 != expected) invalid = 1
+        }
+      }
+    }
+    END { exit (!invalid && count <= 1) ? 0 : 1 }
+  '
+}
+
+check_anchor_reference_scopes() {
+  local tool="$1"
+  check_anchor_reference_scope "$tool" KASSINAO-EGRESS \
+    -A DOCKER-USER -i "$BRIDGE_NAME" -j KASSINAO-EGRESS &&
+    check_anchor_reference_scope "$tool" KASSINAO-HOST \
+      -A INPUT -i "$BRIDGE_NAME" -j KASSINAO-HOST
 }
 
 check_unique_first_rule() {
@@ -184,6 +342,14 @@ check_unique_first_rule() {
   [ "$exact_count" -eq 1 ]
 }
 
+check_shared_global_hooks() {
+  # O adapter shared não é dono de FORWARD nem do jump criado pelo Docker.
+  # Ele só pode anexar sua policy escopada quando o hook global já está exato,
+  # único e na primeira posição. Divergência falha antes de qualquer mutação.
+  check_unique_first_rule ipt FORWARD -j DOCKER-USER &&
+    check_unique_first_rule ip6t FORWARD -j DOCKER-USER
+}
+
 check_policy_family() {
   local tool="$1" destination index egress_chain egress_inactive host_chain host_inactive references
   shift
@@ -192,6 +358,8 @@ check_policy_family() {
   check_unique_first_rule "$tool" FORWARD -j DOCKER-USER || return 1
   check_unique_first_rule "$tool" DOCKER-USER -i "$BRIDGE_NAME" -j KASSINAO-EGRESS || return 1
   check_unique_first_rule "$tool" INPUT -i "$BRIDGE_NAME" -j KASSINAO-HOST || return 1
+  [ "$(chain_reference_count "$tool" KASSINAO-EGRESS)" -eq 1 ] || return 1
+  [ "$(chain_reference_count "$tool" KASSINAO-HOST)" -eq 1 ] || return 1
 
   mapfile -t anchor_rules < <("$tool" -S KASSINAO-EGRESS 2>/dev/null | awk '$1 == "-A" {print}')
   [ "${#anchor_rules[@]}" -eq 1 ] || return 1
@@ -378,6 +546,21 @@ if [ "$MODE" = remove ]; then
   exit 0
 fi
 
+if [ "$HOST_SCOPE" = shared ] && ! check_shared_global_hooks; then
+  echo 'ERRO: host shared exige FORWARD -> DOCKER-USER exato e já provisionado pelo Docker; nenhuma regra foi alterada' >&2
+  exit 1
+fi
+
+# Antes da primeira criação/flush de chain, prove que nenhum workload vizinho
+# usa os anchors reservados. Zero referências é o bootstrap; uma referência é
+# aceita somente no hook e bridge exatos da instância.
+for tool in ipt ip6t; do
+  check_anchor_reference_scopes "$tool" || {
+    echo "ERRO: referência externa/duplicada aos anchors KASSINAO em $tool; nenhuma regra foi alterada" >&2
+    exit 1
+  }
+done
+
 for tool in ipt ip6t; do
   ensure_chain "$tool" KASSINAO-EGRESS
   ensure_chain "$tool" KASSINAO-EGRESS-A
@@ -404,13 +587,25 @@ activate_policy ip6t KASSINAO-EGRESS "$v6_egress"
 activate_policy ip6t KASSINAO-HOST "$v6_host"
 
 # Os anchors são estáveis; somente os seus jumps internos alternam entre A/B.
-# Insira o hook novo primeiro e só então remova cópias inferiores.
-canonicalize_first_rule ipt FORWARD -j DOCKER-USER
+# O adapter dedicated pode reparar o hook global durante o bootstrap exclusivo.
+# Em shared, a prova anterior é apenas read-only: não reposicione nem recrie
+# FORWARD -> DOCKER-USER, pois a ordem pertence ao daemon e aos workloads do host.
+if [ "$HOST_SCOPE" = dedicated ]; then
+  canonicalize_first_rule ipt FORWARD -j DOCKER-USER
+  canonicalize_first_rule ip6t FORWARD -j DOCKER-USER
+fi
 canonicalize_first_rule ipt DOCKER-USER -i "$BRIDGE_NAME" -j KASSINAO-EGRESS
 canonicalize_first_rule ipt INPUT -i "$BRIDGE_NAME" -j KASSINAO-HOST
-canonicalize_first_rule ip6t FORWARD -j DOCKER-USER
 canonicalize_first_rule ip6t DOCKER-USER -i "$BRIDGE_NAME" -j KASSINAO-EGRESS
 canonicalize_first_rule ip6t INPUT -i "$BRIDGE_NAME" -j KASSINAO-HOST
+
+# A aplicação só é concluída depois de provar novamente anchors, policies e
+# referências em ambas as famílias contra o contrato completo.
+check_policy_family ipt 127.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 &&
+  check_policy_family ip6t ::1/128 fc00::/7 fe80::/10 || {
+  echo 'ERRO: policy aplicada não passou na revalidação final' >&2
+  exit 1
+}
 
 if [ "$OFFLINE" = true ]; then
   echo "Política de egress/host pré-carregada antes do daemon Docker em $BRIDGE_NAME."

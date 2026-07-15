@@ -4,7 +4,7 @@
 
 **Escopo do snapshot:** estado observado no início da refatoração, repositório público, Discord, OAuth, gravação de voz, self-hosting, MCP, Docker/GHCR e supply chain.
 
-**Status:** snapshot histórico de pré-implementação. Os bloqueadores de privacidade, storage e comunicação descritos abaixo foram tratados no worktree; a publicação da release e a prova em uma VPS Linux real continuam sendo gates externos. Para instalar ou operar, use o [README atual](../../README.pt-BR.md), a [documentação atual](../../src/web/docs.ts) e o [guia de segurança](../../SECURITY.md), não este snapshot.
+**Status:** snapshot histórico de pré-implementação. Toda afirmação sobre versão pública, disponibilidade de artefatos ou estado da VPS vale apenas para a data acima. Para conhecer e operar o estado atual, use o [README](../../README.pt-BR.md), a [documentação](../../src/web/docs.ts), o [guia de segurança](../../SECURITY.md) e a página de [releases](https://github.com/resolvicomai/kassinao/releases), não este snapshot.
 
 **Natureza:** relatório técnico público, sem credenciais, IDs de produção, domínios internos ou dados de reuniões. Não é parecer jurídico.
 
@@ -19,12 +19,12 @@ No snapshot inicial, ainda não era defensável comunicar o projeto como “pron
 3. **Distribuição pública:** em 14/07/2026, o repositório público ainda mostra `v1.4.4`, mutável e sem assets; o workflow público de imagem não existe em `main`; e não há pacote GHCR público resolvível em `ghcr.io/resolvicomai/kassinao`. A imagem `1.4.5`, o kit operacional e suas attestations existem apenas no worktree local até serem publicados. ([release pública v1.4.4](https://github.com/resolvicomai/kassinao/releases/tag/v1.4.4), [Actions públicas](https://github.com/resolvicomai/kassinao/actions), [workflow local ainda não publicado](../../.github/workflows/publish-image.yml))
 4. **Copy que excedia o comportamento:** o texto prometia “consentimento”, “atribuição perfeita”, apelido sempre alterado, transcrição/ata automática e prazo de cerca de um minuto. O código garantia apenas aviso no chat antes da captura; a alteração do apelido era best effort; ASR/ata eram opt-in; e não existia SLA de processamento. ([i18n](../../src/i18n.ts), [início fail-closed](../../src/recorder/RecordingSession.ts), [transcrição](../../src/processing/transcribe.ts), [ata](../../src/processing/minutes.ts))
 
-### Estado após a implementação local
+### Estado registrado no fim desta auditoria (histórico)
 
 - **Privacidade:** o projeto agora separa a política genérica do distribuidor da política preenchida por cada operador; `OPERATOR_NAME`, `OPERATOR_CONTACT_URL`, `PRIVACY_POLICY_URL` e `DATA_DELETION_URL` integram o contrato de produção e a aplicação oferece a rota privada `/privacy`.
 - **Storage:** o kit operacional exige storage LUKS comprovado antes de criar ou normalizar os diretórios de dados; `scripts/prepare-storage.sh` falha fechado quando origem, ownership, modo, symlink ou cobertura criptográfica não correspondem ao contrato.
 - **Comunicação:** README, docs, comandos, landing e assets foram reescritos para falar em aviso, atribuição por conta/stream e recursos de IA opcionais, sem promessa de consentimento, perfeição ou SLA.
-- **Distribuição:** workflow, imagem por digest, kit sem source e cadeia de verificação estão implementados no worktree. Isso ainda não equivale a uma release pública: o item 3 continua aberto até o workflow protegido publicar os artefatos e a instalação ser aprovada em uma VPS Linux real.
+- **Distribuição:** à época, workflow, imagem por digest, kit sem checkout Git nem código-fonte da aplicação e cadeia de verificação existiam somente no worktree. O kit ainda continha controles operacionais públicos, templates e runtimes nativos; o item 3 dependia de publicação e prova numa VPS Linux. Consulte as fontes atuais indicadas no topo para saber o estado posterior.
 
 O checklist da seção 15 continua sendo a fronteira entre “implementado localmente” e “comprovado em produção”.
 
@@ -237,7 +237,7 @@ O workflow local de release:
 
 Fonte: [publish-image.yml local](../../.github/workflows/publish-image.yml).
 
-O kit operacional é montado sem source, `.git` ou credenciais e sela no template uma imagem `ghcr.io/...@sha256:...`, manifesto e checksum. O script de deploy rejeita kit alterado, deploy dentro de Git, imagem sem digest e vários estados operacionais inseguros. Isso sustenta o modelo “a VPS de produção puxa um artefato pré-construído e não precisa clonar/buildar o GitHub” **depois que o artefato for publicado**. ([package-ops-bundle](../../scripts/package-ops-bundle.sh), [deploy-release](../../scripts/deploy-release.sh))
+O kit operacional é montado sem checkout Git, código-fonte da aplicação ou credenciais. Ele contém controles operacionais públicos selados em Shell/Python, templates sem segredos e runtimes nativos, e sela no template uma imagem `ghcr.io/...@sha256:...`, manifesto e checksum. O script de deploy rejeita kit alterado, deploy dentro de Git, imagem sem digest e vários estados operacionais inseguros. Isso sustenta o modelo “a VPS de produção puxa um artefato pré-construído e não precisa clonar/buildar o GitHub” **depois que o artefato for publicado**. ([package-ops-bundle](../../scripts/package-ops-bundle.sh), [deploy-release](../../scripts/deploy-release.sh))
 
 Docker Compose aceita imagens endereçadas por tag ou digest; o digest fixa o conteúdo selecionado. Uma attestation adiciona proveniência verificável ligando artefato, workflow e commit, mas o próprio GitHub alerta que attestation não garante que o artefato é seguro. Ela precisa ser verificada e avaliada contra uma política. ([Compose `image`](https://docs.docker.com/reference/compose-file/services/#image), [GitHub artifact attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations), [integridade de release](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/verify-release-integrity))
 

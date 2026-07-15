@@ -3,6 +3,8 @@ Description=Recover unhealthy Kassinão components without exposing the Docker s
 After=docker.service kassinao-docker-egress.service
 Requires=docker.service kassinao-docker-egress.service
 ConditionPathExists=/var/run/docker.sock
+OnFailure=kassinao-egress-fail-closed.service
+OnFailureJobMode=replace-irreversibly
 
 [Service]
 Type=oneshot
