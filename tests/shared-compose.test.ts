@@ -65,28 +65,45 @@ describe('shared-host Compose adapter', () => {
   });
 
   it.skipIf(!dockerComposeAvailable)('produz configuração mesclada válida e sem escalada', () => {
-    const result = spawnSync('docker', ['compose', '-f', BASE_FILE, '-f', SHARED_FILE, 'config', '--format', 'json'], {
-      cwd: ROOT,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        KASSINAO_DATA_ROOT: '/var/lib/kassinao',
-        KASSINAO_SHARED_APP_ENV_FILE: '/var/lib/kassinao/config/app.env',
-        KASSINAO_SHARED_TUNNEL_TOKEN_FILE: '/var/lib/kassinao/config/cloudflared-token',
-        KASSINAO_IMAGE: `ghcr.io/resolvicomai/kassinao@sha256:${'1'.repeat(64)}`,
-        KASSINAO_UID: '61050',
-        KASSINAO_GID: '61050',
-        KASSINAO_RELEASE_DIGEST: `sha256:${'1'.repeat(64)}`,
-        KASSINAO_DEPLOYMENT_FINGERPRINT: '2'.repeat(32),
-        KASSINAO_CORE_MEMORY_LIMIT: '2g',
-        KASSINAO_CORE_CPUS: '1.0',
-        KASSINAO_PUBLIC_MEMORY_LIMIT: '384m',
-        KASSINAO_PUBLIC_CPUS: '0.2',
-        KASSINAO_TUNNEL_MEMORY_LIMIT: '192m',
-        KASSINAO_TUNNEL_CPUS: '0.2',
-        TUNNEL_TOKEN: 'compose-test-token',
+    const result = spawnSync(
+      'docker',
+      [
+        'compose',
+        '-f',
+        BASE_FILE,
+        '-f',
+        SHARED_FILE,
+        '--profile',
+        'split-public',
+        '--profile',
+        'tunnel',
+        'config',
+        '--format',
+        'json',
+      ],
+      {
+        cwd: ROOT,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          KASSINAO_DATA_ROOT: '/var/lib/kassinao',
+          KASSINAO_SHARED_APP_ENV_FILE: '/var/lib/kassinao/config/app.env',
+          KASSINAO_SHARED_TUNNEL_TOKEN_FILE: '/var/lib/kassinao/config/cloudflared-token',
+          KASSINAO_IMAGE: `ghcr.io/resolvicomai/kassinao@sha256:${'1'.repeat(64)}`,
+          KASSINAO_UID: '61050',
+          KASSINAO_GID: '61050',
+          KASSINAO_RELEASE_DIGEST: `sha256:${'1'.repeat(64)}`,
+          KASSINAO_DEPLOYMENT_FINGERPRINT: '2'.repeat(32),
+          KASSINAO_CORE_MEMORY_LIMIT: '2g',
+          KASSINAO_CORE_CPUS: '1.0',
+          KASSINAO_PUBLIC_MEMORY_LIMIT: '384m',
+          KASSINAO_PUBLIC_CPUS: '0.2',
+          KASSINAO_TUNNEL_MEMORY_LIMIT: '192m',
+          KASSINAO_TUNNEL_CPUS: '0.2',
+          TUNNEL_TOKEN: 'compose-test-token',
+        },
       },
-    });
+    );
 
     expect(result.status, result.stderr).toBe(0);
     const config = JSON.parse(result.stdout) as {
