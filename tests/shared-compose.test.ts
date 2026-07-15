@@ -28,7 +28,7 @@ describe('shared-host Compose adapter', () => {
     expect(shared).toContain('source: ${KASSINAO_DATA_ROOT}/.kassinao-mounted');
     expect(shared).toContain('target: /run/kassinao/storage-mounted');
     expect(shared).toContain('read_only: true');
-    expect(shared).toContain('create_host_path: false');
+    expect(shared.match(/create_host_path: false/g)).toHaveLength(4);
     expect(shared.match(/memswap_limit:/g)).toHaveLength(3);
     expect(shared.match(/mem_swappiness: 0/g)).toHaveLength(3);
     expect(shared.match(/^    cpus:/gm)).toHaveLength(3);
@@ -150,7 +150,6 @@ describe('shared-host Compose adapter', () => {
         source: '/var/lib/kassinao/.kassinao-mounted',
         target: '/run/kassinao/storage-mounted',
         read_only: true,
-        bind: expect.objectContaining({ create_host_path: false }),
       }),
     );
     expect(volumes).toContainEqual(
@@ -159,9 +158,12 @@ describe('shared-host Compose adapter', () => {
         source: '/var/lib/kassinao/config/app.env',
         target: '/run/secrets/kassinao-app.env',
         read_only: true,
-        bind: expect.objectContaining({ create_host_path: false }),
       }),
     );
+    for (const target of ['/run/kassinao/storage-mounted', '/run/secrets/kassinao-app.env']) {
+      const volume = volumes.find((entry) => entry.target === target);
+      expect(volume?.bind?.create_host_path ?? false, target).toBe(false);
+    }
 
     const tunnel = config.services.cloudflared;
     expect(tunnel.user).toBe('65532:65532');
