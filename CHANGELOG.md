@@ -10,6 +10,14 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.8] — 2026-07-15
+
+### Fixed
+
+- Every Vitest file now receives separate recording, operational-state, and authentication directories under `KASSINAO_TEST_STORAGE_ROOT`, eliminating cross-file instance-identity races while preserving the production-valid CI storage path.
+- The v1.4.7 workflow stopped in the audited-source gate before image construction. It produced no application image, version or rolling tag, operations bundle, attestation, or GitHub Release.
+- Includes the v1.4.7 multiarch gate correction that pulls exact amd64 and arm64 child manifests instead of the OCI index digest.
+
 ## [1.4.7] — 2026-07-15
 
 ### Fixed
@@ -226,7 +234,8 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
-[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.7...HEAD
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.8...HEAD
+[1.4.8]: https://github.com/resolvicomai/kassinao/compare/v1.4.7...v1.4.8
 [1.4.7]: https://github.com/resolvicomai/kassinao/compare/v1.4.6...v1.4.7
 [1.4.6]: https://github.com/resolvicomai/kassinao/compare/v1.4.5...v1.4.6
 [1.4.5]: https://github.com/resolvicomai/kassinao/compare/v1.4.4...v1.4.5
