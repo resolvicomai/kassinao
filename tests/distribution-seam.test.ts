@@ -770,6 +770,7 @@ describe('artefatos de distribuição', () => {
 
   it('publica no GHCR com actions pinadas, SBOM, provenance e attestation do digest', () => {
     const workflow = repositoryFile('.github/workflows/publish-image.yml');
+    const runtimeTemplate = repositoryFile('deploy/runtime/compose.env.example');
     const actions = [...workflow.matchAll(/^\s*-?\s*uses:\s*([^\s#]+)/gm)].map((match) => match[1]);
 
     expect(workflow).toMatch(/^\s*REGISTRY:\s*ghcr\.io\s*$/m);
@@ -803,9 +804,14 @@ describe('artefatos de distribuição', () => {
     expect(workflow).toContain('test "$release_commit" = "$main_commit"');
     expect(workflow).toContain('git ls-remote --refs origin "$GITHUB_REF"');
     expect(workflow).toContain('gh release edit "$tag" --draft');
-    expect(workflow).toContain('DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/amd64');
-    expect(workflow).toContain('DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/arm64');
+    expect(workflow).toContain('amd64_image="$repository@$(platform_digest amd64)"');
+    expect(workflow).toContain('arm64_image="$repository@$(platform_digest arm64)"');
+    expect(workflow).toContain('DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/amd64 "$amd64_image"');
+    expect(workflow).toContain('DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/arm64 "$arm64_image"');
+    expect(workflow).not.toContain('docker pull --platform linux/amd64 "$image"');
+    expect(workflow).not.toContain('docker pull --platform linux/arm64 "$image"');
     expect(workflow).toContain('docker run --rm --platform linux/amd64 --network none --read-only --user 1000:1000');
+    expect(workflow).toContain('--entrypoint node "$amd64_image"');
     expect(workflow.indexOf('docker run --rm --platform linux/amd64')).toBeLessThan(
       workflow.indexOf('docker pull --platform linux/arm64'),
     );
@@ -818,6 +824,8 @@ describe('artefatos de distribuição', () => {
     expect(workflow.indexOf('Promote rolling tags only after')).toBeGreaterThan(
       workflow.indexOf('Published release $tag is not verifiably immutable'),
     );
+    expect(runtimeTemplate).toContain('KASSINAO_IMAGE=REPLACED_BY_VERIFIED_RELEASE_BUNDLE');
+    expect(runtimeTemplate).not.toMatch(/^KASSINAO_IMAGE=ghcr\.io\/[^\s:]+\/[^\s:]+:\d/m);
   });
 
   it('troca o firewall por policy A/B pronta, suporta preload e falha fechado no systemd', () => {

@@ -237,16 +237,31 @@ jobs:
         run: |
           set -euo pipefail
           image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
+          repository="${image%@*}"
           anonymous_config="$(mktemp -d)"
           trap 'rm -rf -- "$anonymous_config"' EXIT
 
-          DOCKER_CONFIG="$anonymous_config" docker buildx imagetools inspect "$image" >/dev/null
-          DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/amd64 "$image" >/dev/null
+          manifest="$(DOCKER_CONFIG="$anonymous_config" docker buildx imagetools inspect "$image" --format '{{json .Manifest}}')"
+          platform_digest() {
+            local architecture="$1"
+            jq -er --arg architecture "$architecture" '
+              [.manifests[]?
+                | select(.platform.os == "linux" and .platform.architecture == $architecture)
+                | .digest]
+              | unique
+              | if length == 1 then .[0] else error("expected exactly one Linux manifest") end
+              | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))
+            ' <<< "$manifest"
+          }
+          amd64_image="$repository@$(platform_digest amd64)"
+          arm64_image="$repository@$(platform_digest arm64)"
+
+          DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/amd64 "$amd64_image" >/dev/null
 
           docker run --rm --platform linux/amd64 --network none --read-only --user 1000:1000 \
             --cap-drop ALL --security-opt no-new-privileges \
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
-            --entrypoint node "$image" -e '
+            --entrypoint node "$amd64_image" -e '
               const fs = require("node:fs");
               if (process.getuid?.() === 0) process.exit(10);
               fs.accessSync("/app/dist/index.js", fs.constants.R_OK);
@@ -254,7 +269,7 @@ jobs:
               catch (error) { if (error?.code !== "EROFS") throw error; }
               fs.writeFileSync("/tmp/runtime-write", "ok");
             '
-          DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/arm64 "$image" >/dev/null
+          DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/arm64 "$arm64_image" >/dev/null
 
       - name: Prepare image-security reports
         run: mkdir -p dist/release
