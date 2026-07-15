@@ -10,6 +10,15 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.6] — 2026-07-15
+
+### Fixed
+
+- Republishes the reviewed v1.4.5 application changes under a new immutable tag. The v1.4.5 workflow was rejected by the repository's GitHub Actions policy before any job started, so it produced no container image, operations bundle, or GitHub Release.
+- The repository Actions allowlist now explicitly permits only the Docker and Trivy action repositories required by the release workflow while keeping selected-actions mode and immutable-SHA pinning enabled.
+- Linux CI uses a production-valid storage root outside `/tmp`, preserves the runtime's `PrivateTmp` fail-closed check, and safely opens layout markers without following symlinks.
+- The release image installs dependencies without running unrelated install scripts, then explicitly rebuilds and smoke-tests the native Discord Opus dependency from source.
+
 ## [1.4.5] — 2026-07-14
 
 ### Added
@@ -209,7 +218,8 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
-[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.5...HEAD
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.6...HEAD
+[1.4.6]: https://github.com/resolvicomai/kassinao/compare/v1.4.5...v1.4.6
 [1.4.5]: https://github.com/resolvicomai/kassinao/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.4
 [1.4.3]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.3
