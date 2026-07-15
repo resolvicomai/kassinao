@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { cleanInline, cleanText, fenceUntrusted, neutralizeFences } from '../src/sanitize';
 import { formatInTz, RangeError, resolveRange } from '../src/web/range';
 import { getMcpUser, signMcpAccess, signMcpRefresh, verifyMcpRefresh } from '../src/web/auth';
+import { config } from '../src/config';
 import {
   consumeExchangeCode,
   createExchangeCode,
@@ -17,6 +18,11 @@ import {
 
 const TZ = 'America/Sao_Paulo';
 const bearer = (token: string): Request => ({ headers: { authorization: `Bearer ${token}` } }) as unknown as Request;
+const signed = (payload: object, secret: string): string => {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const mac = crypto.createHmac('sha256', secret).update(body).digest('base64url');
+  return `${body}.${mac}`;
+};
 
 describe('sanitize (anti prompt-injection)', () => {
   it('cleanText remove controle/ANSI e preserva \\n \\t', () => {
@@ -101,6 +107,16 @@ describe('tokens MCP (confusão de tipo — crítico histórico)', () => {
   });
   it('token adulterado é rejeitado', () => {
     expect(getMcpUser(bearer(access.slice(0, -3) + 'zzz'))).toBeUndefined();
+  });
+  it('token com HMAC válido de outra identidade/origem é rejeitado', () => {
+    const claims = { typ: 'mcp', id: 'u1', name: 'Alice', exp: now + 60_000, jti: 'sidA' };
+    const foreignInstance = signed({ ...claims, iss: crypto.randomUUID(), aud: config.mcpUrl }, config.mcpAccessSecret);
+    const foreignOrigin = signed(
+      { ...claims, iss: config.instanceId, aud: 'https://other.example' },
+      config.mcpAccessSecret,
+    );
+    expect(getMcpUser(bearer(foreignInstance))).toBeUndefined();
+    expect(getMcpUser(bearer(foreignOrigin))).toBeUndefined();
   });
   it('sem/ lixo é rejeitado', () => {
     expect(getMcpUser({ headers: {} } as unknown as Request)).toBeUndefined();

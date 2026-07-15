@@ -1,0 +1,6 @@
+name: Kassinao CodeQL configuration
+
+# Tests exercise intentionally adversarial file-to-HTTP flows and are not
+# included in the application, MCP package, container image or release bundle.
+paths-ignore:
+  - tests/**

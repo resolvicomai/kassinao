@@ -7,11 +7,11 @@ import { config } from '../config';
 import { freeMB } from '../disk';
 import { isClientReady } from '../discord/ready';
 import { Locale } from '../i18n';
+import { operationalError, operationalPii } from '../operationalLog';
 import { cook, CookBusyError, CookFormat, COOK_FORMATS } from '../processing/cook';
 import { isTranscribing, transcriptToMarkdown } from '../processing/transcribe';
 import { minutesToMarkdown } from '../processing/minutes';
 import { sessionManager } from '../recorder/manager';
-import { cleanInline } from '../sanitize';
 import { MAX_MINUTES_BYTES } from '../securityLimits';
 import { isLoopbackAddress } from '../util';
 import {
@@ -69,6 +69,7 @@ import {
 } from './page';
 import { landingPage } from './landing';
 import { docsPage } from './docs';
+import { privacyPage } from './privacy';
 import { searchRecordings } from './search';
 import { localeCookie, localeFromValue, resolveWebLocale } from './site';
 import { acquireDownload, hasActiveDownloads } from './tracker';
@@ -84,12 +85,12 @@ const BRAND_MARK = path.join(BRAND_DIR, 'kassinao-mark-64.png');
 const FAVICON = path.join(BRAND_DIR, 'favicon-32.png');
 const APPLE_TOUCH_ICON = path.join(BRAND_DIR, 'apple-touch-icon-180.png');
 const PUBLIC_VISUALS = [
-  ['discord-demo-pt.webm', 'video/webm'],
-  ['discord-demo-en.webm', 'video/webm'],
-  ['discord-demo-pt.png', 'image/png'],
-  ['discord-demo-en.png', 'image/png'],
-  ['discord-demo-pt.gif', 'image/gif'],
-  ['discord-demo-en.gif', 'image/gif'],
+  ['discord-demo-pt-v2.webm', 'video/webm'],
+  ['discord-demo-en-v2.webm', 'video/webm'],
+  ['discord-demo-pt-v2.png', 'image/png'],
+  ['discord-demo-en-v2.png', 'image/png'],
+  ['discord-demo-pt-v2.gif', 'image/gif'],
+  ['discord-demo-en-v2.gif', 'image/gif'],
   ['meeting-demo-pt.png', 'image/png'],
   ['meeting-demo-en.png', 'image/png'],
 ] as const;
@@ -672,6 +673,21 @@ export function webHostRoutingDecision(req: Request, origins = configuredWebOrig
   }
 
   const routeKey = canonicalRouteKey(pathname);
+  const privacyLocale = routeKey === '/privacy' ? 'pt' : routeKey === '/en/privacy' ? 'en' : undefined;
+  if (privacyLocale) {
+    const canonicalPath = privacyLocale === 'en' ? '/en/privacy' : '/privacy';
+    if (has('app')) {
+      return pathname === canonicalPath
+        ? { action: 'pass', roles }
+        : redirect(absoluteTarget(origins.app, req, canonicalPath));
+    }
+    // A política precisa refletir retenção/providers do processo privado. Hosts
+    // públicos nunca mantêm uma cópia que possa divergir; apenas encaminham a
+    // navegação para a rota pública, sem login, da origem do app.
+    if (has('public') || has('docs')) return redirect(`${origins.app}${canonicalPath}`);
+    return { action: 'reject', roles, status: 404 };
+  }
+
   const docsPt = routeKey === '/docs';
   const docsEn = routeKey === '/en/docs';
   if (docsPt || docsEn) {
@@ -801,6 +817,8 @@ export function sitemapForRoles(roles: WebHostRole[], origins = configuredWebOri
 export function shouldNoIndexWebResponse(req: Request, origins = configuredWebOrigins()): boolean {
   const pathname = req.path || '/';
   if (
+    canonicalRouteKey(pathname) === '/privacy' ||
+    canonicalRouteKey(pathname) === '/en/privacy' ||
     isPathPrefixFolded(pathname, '/app') ||
     isPathPrefixFolded(pathname, '/auth') ||
     isPathPrefixFolded(pathname, '/api') ||
@@ -881,6 +899,10 @@ export function createWebApp(): Express {
       return;
     }
     if (decision.action === 'rewrite') req.url = decision.path;
+    if (!config.publicSurfacesEnabled && decision.roles.some((role) => role === 'public' || role === 'docs')) {
+      res.status(404).set('X-Robots-Tag', 'noindex, nofollow, noarchive').type('text/plain').send('Not found.');
+      return;
+    }
     res.locals.webHostRoles = decision.roles;
     next();
   });
@@ -939,7 +961,17 @@ export function createWebApp(): Express {
   // Health check público: só disponibilidade. Contagem de calls ativas e disco
   // são metadados operacionais privados (e não são necessários ao healthcheck).
   app.get('/health', (_req, res) => {
-    res.set('Cache-Control', 'no-store').json({ ok: true, ready: isClientReady() });
+    const ready = isClientReady();
+    res
+      .status(ready ? 200 : 503)
+      .set('Cache-Control', 'no-store')
+      .json({
+        ok: ready,
+        ready,
+        surface: 'private',
+        ...(config.releaseDigest ? { release: config.releaseDigest } : {}),
+        ...(config.deploymentFingerprint ? { deployment: config.deploymentFingerprint } : {}),
+      });
   });
 
   app.get('/robots.txt', (_req, res) => {
@@ -987,6 +1019,18 @@ export function createWebApp(): Express {
     const q = localeFromValue(req.query.lang);
     if (q) res.append('Set-Cookie', localeCookie(q, config.baseUrl.startsWith('https')));
     next();
+  });
+
+  // Política específica do operador: pública para cumprir transparência e o
+  // Discord Developer Portal, mas servida pelo processo privado para sempre
+  // refletir a configuração real de retenção, egress e MCP. Não exige login.
+  app.get(['/privacy', '/en/privacy'], (req, res) => {
+    const locale: Locale = req.path === '/en/privacy' ? 'en' : 'pt';
+    res
+      .set('Cache-Control', 'public, max-age=300')
+      .set('Content-Language', locale === 'pt' ? 'pt-BR' : 'en')
+      .type('html')
+      .send(privacyPage(locale));
   });
 
   // A superfície privada nunca deve ficar no cache do navegador/proxy. Isso
@@ -1138,7 +1182,7 @@ export function createWebApp(): Express {
               .send(messagePage(MSG.mcpMembershipTitle[l], MSG.mcpMembership[l], user, l, connectMessageOptions(l)));
             return;
           }
-          // apelido opcional ("Claude do notebook") — só exibição na lista de gestão
+          // apelido opcional ("notebook de trabalho") — só exibição na lista de gestão
           const label = String((req.body as Record<string, unknown>)?.label ?? '')
             .trim()
             .slice(0, 40);
@@ -1157,7 +1201,7 @@ export function createWebApp(): Express {
             return;
           }
           console.log(
-            `MCP: código de conexão criado para ${cleanInline(user.name)} (${cleanInline(user.id)}) via web${label ? ` — "${cleanInline(label)}"` : ''}.`,
+            `MCP: código de conexão criado user_name=${operationalPii(user.name)} user=${operationalPii(user.id)} via web${label ? ` label=${operationalPii(label)}` : ''}.`,
           );
           stageExchangeCodeForDisplay(user.id, exchangeCode, label);
           res.redirect(303, '/app/conectar-ia/codigo');
@@ -1199,11 +1243,10 @@ export function createWebApp(): Express {
         return;
       }
       const ok = revokeUserSession(user.id, req.params.sid);
-      // cleanInline também no sid: vem da URL (controlado pelo cliente) — mesmo
-      // sendo logado só quando pertence ao usuário, não entra cru no log
+      // O sid vem da URL e só entra no log pela política central de PII.
       if (ok)
         console.log(
-          `MCP: sessão ${cleanInline(req.params.sid)} revogada por ${cleanInline(user.name)} (${cleanInline(user.id)}) via web.`,
+          `MCP: sessão session=${operationalPii(req.params.sid)} revogada por user_name=${operationalPii(user.name)} user=${operationalPii(user.id)} via web.`,
         );
       res.redirect(303, ok ? '/app/conectar-ia?revoked=one' : '/app/conectar-ia');
     });
@@ -1215,7 +1258,9 @@ export function createWebApp(): Express {
         return;
       }
       const n = revokeUser(user.id);
-      console.log(`MCP: ${n} sessão(ões) revogada(s) por ${cleanInline(user.name)} (${cleanInline(user.id)}) via web.`);
+      console.log(
+        `MCP: ${n} sessão(ões) revogada(s) por user_name=${operationalPii(user.name)} user=${operationalPii(user.id)} via web.`,
+      );
       res.redirect(303, '/app/conectar-ia?revoked=1');
     });
 
@@ -1226,130 +1271,132 @@ export function createWebApp(): Express {
     });
   }
 
-  const sendPublicPage = (res: Response, locale: Locale, html: string): void => {
-    res
-      .append('Set-Cookie', localeCookie(locale, config.baseUrl.startsWith('https')))
-      .set('Content-Language', locale === 'pt' ? 'pt-BR' : 'en')
-      .type('html')
-      .send(html);
-  };
-
-  app.get('/', (req, res) => {
-    if (localeFromValue(req.query.lang) === 'en') {
-      res.redirect(302, '/en');
-      return;
-    }
-    sendPublicPage(res, 'pt', landingPage('pt'));
-  });
-
-  app.get('/en', (_req, res) => {
-    sendPublicPage(res, 'en', landingPage('en'));
-  });
-
-  app.get('/docs', (req, res) => {
-    if (localeFromValue(req.query.lang) === 'en') {
-      res.redirect(302, '/en/docs');
-      return;
-    }
-    sendPublicPage(res, 'pt', docsPage('pt'));
-  });
-
-  app.get('/en/docs', (_req, res) => {
-    sendPublicPage(res, 'en', docsPage('en'));
-  });
-
-  // A demo pública usa somente o fixture fictício versionado em docs/example.
-  // Gravações reais continuam exclusivamente sob /app/*, com login e checkAccess.
-  const demoDir = path.join(process.cwd(), 'docs', 'example');
-  const readDemo = (
-    locale: Locale,
-  ): {
-    meta: RecordingMeta;
-    transcript: TranscriptSegment[];
-    minutes: ReturnType<typeof readMinutes>;
-  } | null => {
-    try {
-      return {
-        meta: JSON.parse(fs.readFileSync(path.join(demoDir, 'meta.json'), 'utf8')) as RecordingMeta,
-        transcript: JSON.parse(
-          fs.readFileSync(path.join(demoDir, locale === 'pt' ? 'transcript.pt.json' : 'transcript.json'), 'utf8'),
-        ),
-        minutes: JSON.parse(
-          fs.readFileSync(path.join(demoDir, locale === 'pt' ? 'minutes.pt.json' : 'minutes.json'), 'utf8'),
-        ),
-      };
-    } catch {
-      return null;
-    }
-  };
-
-  const sendDemo = (res: Response, locale: Locale): void => {
-    const demo = readDemo(locale);
-    if (!demo) {
+  if (config.publicSurfacesEnabled) {
+    const sendPublicPage = (res: Response, locale: Locale, html: string): void => {
       res
-        .status(404)
+        .append('Set-Cookie', localeCookie(locale, config.baseUrl.startsWith('https')))
+        .set('Content-Language', locale === 'pt' ? 'pt-BR' : 'en')
         .type('html')
-        .send(messagePage(MSG.notFoundTitle[locale], MSG.notFound[locale], undefined, locale));
-      return;
-    }
-    sendPublicPage(
-      res,
-      locale,
-      recordingPage(demo.meta, {
-        live: false,
-        canDelete: false,
-        lang: locale,
-        transcript: demo.transcript,
-        minutes: demo.minutes,
-        demo: true,
-      }),
-    );
-  };
+        .send(html);
+    };
 
-  app.get('/demo', (req, res) => {
-    if (localeFromValue(req.query.lang) === 'en') {
-      res.redirect(302, '/en/demo');
-      return;
-    }
-    sendDemo(res, 'pt');
-  });
+    app.get('/', (req, res) => {
+      if (localeFromValue(req.query.lang) === 'en') {
+        res.redirect(302, '/en');
+        return;
+      }
+      sendPublicPage(res, 'pt', landingPage('pt'));
+    });
 
-  app.get('/en/demo', (_req, res) => {
-    sendDemo(res, 'en');
-  });
+    app.get('/en', (_req, res) => {
+      sendPublicPage(res, 'en', landingPage('en'));
+    });
 
-  app.get('/demo/audio', (_req, res) => {
-    const sample = path.join(demoDir, 'sample-audio.mp3');
-    if (!fs.existsSync(sample)) {
-      res.status(404).send('sem áudio de amostra');
-      return;
-    }
-    res.type('audio/mpeg').set('Cache-Control', 'public, max-age=86400').sendFile(sample);
-  });
+    app.get('/docs', (req, res) => {
+      if (localeFromValue(req.query.lang) === 'en') {
+        res.redirect(302, '/en/docs');
+        return;
+      }
+      sendPublicPage(res, 'pt', docsPage('pt'));
+    });
 
-  // Cartão de social share (Open Graph / Twitter) da landing.
-  app.get('/og.png', (_req, res) => {
-    const f = path.join(process.cwd(), 'docs', 'og.png');
-    if (!fs.existsSync(f)) {
-      res.status(404).send('sem og');
-      return;
-    }
-    res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(f);
-  });
-  const sendLocalizedOpenGraph = (res: Response, locale: Locale): void => {
-    const f = path.join(process.cwd(), 'docs', locale === 'pt' ? 'og-pt.png' : 'og-en.png');
-    if (!fs.existsSync(f)) {
-      res.status(404).send(locale === 'pt' ? 'imagem social indisponível' : 'social image unavailable');
-      return;
-    }
-    res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(f);
-  };
-  app.get('/og-pt.png', (_req, res) => {
-    sendLocalizedOpenGraph(res, 'pt');
-  });
-  app.get('/og-en.png', (_req, res) => {
-    sendLocalizedOpenGraph(res, 'en');
-  });
+    app.get('/en/docs', (_req, res) => {
+      sendPublicPage(res, 'en', docsPage('en'));
+    });
+
+    // A demo pública usa somente o fixture fictício versionado em docs/example.
+    // Gravações reais continuam exclusivamente sob /app/*, com login e checkAccess.
+    const demoDir = path.join(process.cwd(), 'docs', 'example');
+    const readDemo = (
+      locale: Locale,
+    ): {
+      meta: RecordingMeta;
+      transcript: TranscriptSegment[];
+      minutes: ReturnType<typeof readMinutes>;
+    } | null => {
+      try {
+        return {
+          meta: JSON.parse(fs.readFileSync(path.join(demoDir, 'meta.json'), 'utf8')) as RecordingMeta,
+          transcript: JSON.parse(
+            fs.readFileSync(path.join(demoDir, locale === 'pt' ? 'transcript.pt.json' : 'transcript.json'), 'utf8'),
+          ),
+          minutes: JSON.parse(
+            fs.readFileSync(path.join(demoDir, locale === 'pt' ? 'minutes.pt.json' : 'minutes.json'), 'utf8'),
+          ),
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    const sendDemo = (res: Response, locale: Locale): void => {
+      const demo = readDemo(locale);
+      if (!demo) {
+        res
+          .status(404)
+          .type('html')
+          .send(messagePage(MSG.notFoundTitle[locale], MSG.notFound[locale], undefined, locale));
+        return;
+      }
+      sendPublicPage(
+        res,
+        locale,
+        recordingPage(demo.meta, {
+          live: false,
+          canDelete: false,
+          lang: locale,
+          transcript: demo.transcript,
+          minutes: demo.minutes,
+          demo: true,
+        }),
+      );
+    };
+
+    app.get('/demo', (req, res) => {
+      if (localeFromValue(req.query.lang) === 'en') {
+        res.redirect(302, '/en/demo');
+        return;
+      }
+      sendDemo(res, 'pt');
+    });
+
+    app.get('/en/demo', (_req, res) => {
+      sendDemo(res, 'en');
+    });
+
+    app.get('/demo/audio', (_req, res) => {
+      const sample = path.join(demoDir, 'sample-audio.mp3');
+      if (!fs.existsSync(sample)) {
+        res.status(404).send('sem áudio de amostra');
+        return;
+      }
+      res.type('audio/mpeg').set('Cache-Control', 'public, max-age=86400').sendFile(sample);
+    });
+
+    // Cartão de social share (Open Graph / Twitter) da landing.
+    app.get('/og.png', (_req, res) => {
+      const f = path.join(process.cwd(), 'docs', 'og.png');
+      if (!fs.existsSync(f)) {
+        res.status(404).send('sem og');
+        return;
+      }
+      res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(f);
+    });
+    const sendLocalizedOpenGraph = (res: Response, locale: Locale): void => {
+      const f = path.join(process.cwd(), 'docs', locale === 'pt' ? 'og-pt.png' : 'og-en.png');
+      if (!fs.existsSync(f)) {
+        res.status(404).send(locale === 'pt' ? 'imagem social indisponível' : 'social image unavailable');
+        return;
+      }
+      res.type('png').set('Cache-Control', 'public, max-age=86400').sendFile(f);
+    };
+    app.get('/og-pt.png', (_req, res) => {
+      sendLocalizedOpenGraph(res, 'pt');
+    });
+    app.get('/og-en.png', (_req, res) => {
+      sendLocalizedOpenGraph(res, 'en');
+    });
+  }
 
   app.get('/auth/login', (req, res) => {
     beginLogin(res, String(req.query.next ?? '/app'));
@@ -1397,7 +1444,7 @@ export function createWebApp(): Express {
       }
       res.redirect(result.user.scope === 'revoke-only' ? '/app/conectar-ia' : result.next);
     } catch (err) {
-      console.error(`Callback OAuth indisponível: ${(err as Error).name || 'Error'}`);
+      console.error(`Callback OAuth indisponível: ${operationalError(err)}`);
       res
         .status(503)
         .set('Retry-After', '5')
@@ -1704,7 +1751,7 @@ export function createWebApp(): Express {
           .send(messagePage(MSG.audioUnavailableTitle[l], MSG.processingBusy[l], user, l, messageOpts));
         return;
       }
-      console.error(`Erro servindo áudio ${meta.id}:`, err);
+      console.error(`Erro servindo áudio recording=${operationalPii(meta.id)}: ${operationalError(err)}`);
       res
         .status(500)
         .type('html')
@@ -1926,7 +1973,9 @@ export function createWebApp(): Express {
           .send(messagePage(MSG.cookErrorTitle[l], MSG.cookError[l], user, l, messageOpts));
         return;
       }
-      console.error(`Erro processando download ${meta.id}/${format}:`, err);
+      console.error(
+        `Erro processando download recording=${operationalPii(meta.id)} format=${format}: ${operationalError(err)}`,
+      );
       res
         .status(500)
         .type('html')
@@ -1994,10 +2043,8 @@ export function createWebApp(): Express {
           return;
         }
         deleteAudioOnly(current);
-        // cleanInline: nome vem do Discord (controlado pelo usuário) — sem quebra de
-        // linha/ANSI forjando entradas de log (log injection)
         console.log(
-          `Áudio da gravação ${current.id} liberado por ${cleanInline(user.name)} (${cleanInline(user.id)}).`,
+          `Áudio da gravação recording=${operationalPii(current.id)} liberado por user_name=${operationalPii(user.name)} user=${operationalPii(user.id)}.`,
         );
         res.redirect(303, req.query.back === 'index' ? '/app?freed=1' : `/app/rec/${current.id}?freed=1#exportar`);
       });
@@ -2057,7 +2104,9 @@ export function createWebApp(): Express {
         }
         deleteRecording(current.id);
         forgetAudioBytes(current.id);
-        console.log(`Gravação ${current.id} apagada por ${cleanInline(user.name)} (${cleanInline(user.id)}).`);
+        console.log(
+          `Gravação recording=${operationalPii(current.id)} apagada por user_name=${operationalPii(user.name)} user=${operationalPii(user.id)}.`,
+        );
         // Post/Redirect/Get: atualizar a página nunca reenvia uma exclusão.
         res.redirect(303, '/app?deleted=1');
       });
@@ -2112,7 +2161,9 @@ export function createWebApp(): Express {
 
 export function startWebServer(): void {
   const server = createWebApp().listen(config.port, config.webBindAddress, () => {
-    console.log(`Servidor web em ${config.baseUrl} (listener ${config.webBindAddress}:${config.port}).`);
+    console.log(
+      `Servidor web origin=${operationalPii(config.baseUrl)} (listener ${config.webBindAddress}:${config.port}).`,
+    );
   });
   hardenHttpServer(server);
 }

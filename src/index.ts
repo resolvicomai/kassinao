@@ -34,6 +34,7 @@ import {
   VoiceBasedChannel,
 } from 'discord.js';
 import { config } from './config';
+import { operationalError, operationalPii } from './operationalLog';
 import { answerQuestion, authorizeAskMetas, resolveAskTemporalIntent } from './ask';
 import { AskLimiter, AskRateLimitError } from './askLimiter';
 import { guildConfigStore } from './guildConfig';
@@ -54,7 +55,7 @@ import {
 import { createDiscordSurfaceClient } from './discordSurfaceMigrationDiscord';
 import { alertOwners, startMonitor } from './monitor';
 import { enqueueMinutesWebhook, pauseMinutesWebhooksForGuild, resumeMinutesWebhooksForGuild } from './minutesWebhook';
-import { Locale, localeOf, t } from './i18n';
+import { DiscordCapabilities, Locale, localeOf, t, tCapability } from './i18n';
 import { autoRecordStore, isArmed, setArmed } from './recorder/autorecord';
 import { sessionManager } from './recorder/manager';
 import { ManualRecordingStartLimiter } from './recorder/manualStartLimiter';
@@ -98,8 +99,8 @@ import {
   MAX_TRANSCRIPTION_ATTEMPTS,
   setProcessingGuildGuard,
   transcriptionEnabled,
-  validateTranscriptionConfig,
 } from './processing/transcribe';
+import { validateAndCommitRuntimeConfiguration } from './runtimeBootstrap';
 import { safeName } from './sanitize';
 import {
   buildPublicTranscriptionNotice,
@@ -148,6 +149,17 @@ observeClientReadiness(client);
 const guildRuntime = new GuildRuntimeBoundary(config.guildPolicy, (guildId) => client.guilds.cache.has(guildId));
 setProcessingGuildGuard((guildId) => guildRuntime.isOperational(guildId));
 
+export function currentDiscordCapabilities(): DiscordCapabilities {
+  const transcription = transcriptionEnabled();
+  const minutes = minutesEnabled();
+  return {
+    transcription,
+    minutes,
+    ask: minutes,
+    mcp: config.mcpEnabled,
+  };
+}
+
 // ---------- definição dos comandos (pt-BR nativo + localização em inglês) ----------
 
 function localized<T extends { setNameLocalizations: any; setDescriptionLocalizations: any }>(
@@ -160,10 +172,20 @@ function localized<T extends { setNameLocalizations: any; setDescriptionLocaliza
   return builder;
 }
 
-function buildCommands() {
+export function buildCommands(capabilities: DiscordCapabilities = currentDiscordCapabilities()) {
+  const recordDescription = capabilities.transcription
+    ? capabilities.minutes
+      ? '🔴 Grava a call com faixas, notas, transcrição e ata'
+      : '🔴 Grava a call com faixas, notas e transcrição'
+    : '🔴 Grava a call com faixas separadas e notas';
+  const recordDescriptionEn = capabilities.transcription
+    ? capabilities.minutes
+      ? '🔴 Record the call with tracks, notes, transcript, and minutes'
+      : '🔴 Record the call with tracks, notes, and transcript'
+    : '🔴 Record the call with separate tracks and notes';
   const gravar = new SlashCommandBuilder()
     .setName('gravar')
-    .setDescription('🔴 Grava a call — uma faixa por pessoa + transcrição e ata automáticas')
+    .setDescription(recordDescription)
     .addChannelOption((o) => {
       o.setName('canal')
         .setDescription('Canal de voz a gravar (padrão: o canal onde você está)')
@@ -176,10 +198,12 @@ function buildCommands() {
       });
       return o;
     });
-  localized(gravar, 'record', '🔴 Record the call — per-person tracks + auto transcript & minutes');
+  localized(gravar, 'record', recordDescriptionEn);
 
-  const parar = new SlashCommandBuilder().setName('parar').setDescription('⏹️ Para a gravação em andamento');
-  localized(parar, 'stop', '⏹️ Stop the current recording');
+  const parar = new SlashCommandBuilder()
+    .setName('parar')
+    .setDescription('⏹️ Encerra a gravação e disponibiliza os arquivos no app');
+  localized(parar, 'stop', '⏹️ Stop recording and make the files available in the app');
 
   const nota = new SlashCommandBuilder()
     .setName('nota')
@@ -207,7 +231,7 @@ function buildCommands() {
 
   const autorecord = new SlashCommandBuilder()
     .setName('autorecord')
-    .setDescription('🤖 Gravação automática quando pessoas entram num canal de voz')
+    .setDescription('🤖 Grava um canal por regra de presença configurada')
     .addSubcommand((sc) => {
       sc.setName('ligar')
         .setDescription('Liga o auto-record em um canal de voz')
@@ -269,16 +293,21 @@ function buildCommands() {
       return sc;
     })
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
-  localized(autorecord, 'autorecord', '🤖 Automatic recording when people join a voice channel');
+  localized(autorecord, 'autorecord', '🤖 Record a channel using a configured presence rule');
 
   const sobre = new SlashCommandBuilder()
     .setName('sobre')
-    .setDescription('ℹ️ Sobre o Kassinão: autor, licença e código-fonte');
-  localized(sobre, 'about', 'ℹ️ About Kassinão: author, license and source code');
+    .setDescription('ℹ️ Operador, privacidade, autoria, licença e código-fonte');
+  localized(sobre, 'about', 'ℹ️ Operator, privacy, authorship, license, and source code');
+
+  const privacidade = new SlashCommandBuilder()
+    .setName('privacidade')
+    .setDescription('🔒 Mostra a política e o contato desta instância');
+  localized(privacidade, 'privacy', "🔒 Show this instance's policy and contact");
 
   const perguntar = new SlashCommandBuilder()
     .setName('perguntar')
-    .setDescription('🤖 Pergunte às suas reuniões — a IA responde com base nas transcrições que você pode ver')
+    .setDescription('🔎 Encontra evidências nas reuniões que você pode abrir')
     .addStringOption((o) => {
       o.setName('pergunta')
         .setDescription('Pergunte por tema, pessoa ou data (ex.: ações da Ana ontem)')
@@ -304,7 +333,7 @@ function buildCommands() {
       });
       return o;
     });
-  localized(perguntar, 'ask', '🤖 Ask your meetings — AI answers from the transcripts you can access');
+  localized(perguntar, 'ask', '🔎 Find evidence in meetings you can access');
 
   const configCmd = new SlashCommandBuilder()
     .setName('config')
@@ -343,32 +372,36 @@ function buildCommands() {
     });
   localized(configCmd, 'config', '⚙️ Kassinão settings for this server (admin)');
 
-  const cmds = [gravar, parar, nota, status, ajuda, gravacoes, autorecord, perguntar, configCmd, sobre];
+  const cmds = [gravar, parar, nota, status, ajuda, gravacoes, autorecord, configCmd, privacidade, sobre];
+
+  // /perguntar só existe quando o provider que responde às consultas está ativo.
+  if (capabilities.ask) cmds.push(perguntar);
 
   // /mcp só existe quando o conector de IA está habilitado (MCP_SECRET definido).
-  if (config.mcpEnabled) {
+  if (capabilities.mcp) {
     const mcp = new SlashCommandBuilder()
       .setName('mcp')
-      .setDescription('🔌 Conecta seu assistente de IA (Claude/Cursor) às gravações')
+      .setDescription('🔌 Operador: gerencia conexões de clientes MCP compatíveis')
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
       .addSubcommand((sc) => {
-        sc.setName('novo').setDescription('Gera um código para conectar seu assistente de IA');
+        sc.setName('novo').setDescription('Gera um código de conexão MCP para o operador');
         sc.setNameLocalizations({ 'en-US': 'new', 'en-GB': 'new' });
         sc.setDescriptionLocalizations({
-          'en-US': 'Generate a code to connect your AI assistant',
-          'en-GB': 'Generate a code to connect your AI assistant',
+          'en-US': 'Generate an MCP connection code for the operator',
+          'en-GB': 'Generate an MCP connection code for the operator',
         });
         return sc;
       })
       .addSubcommand((sc) => {
-        sc.setName('revogar-tudo').setDescription('Revoga todos os seus conectores de IA');
+        sc.setName('revogar-tudo').setDescription('Revoga todas as conexões MCP deste operador');
         sc.setNameLocalizations({ 'en-US': 'revoke-all', 'en-GB': 'revoke-all' });
         sc.setDescriptionLocalizations({
-          'en-US': 'Revoke all your AI connectors',
-          'en-GB': 'Revoke all your AI connectors',
+          'en-US': 'Revoke all MCP connections for this operator',
+          'en-GB': 'Revoke all MCP connections for this operator',
         });
         return sc;
       });
-    localized(mcp, 'mcp', '🔌 Connect your AI assistant (Claude/Cursor) to the recordings');
+    localized(mcp, 'mcp', '🔌 Operator: manage compatible MCP client connections');
     cmds.push(mcp);
   }
 
@@ -506,13 +539,15 @@ async function startSession(opts: {
     if (!admission.ok) throw new RecordingAdmissionError(admission.reason, admission.retryAfterMs);
     pipelineReservation = admission.reservation;
 
-    session = new RecordingSession(opts);
+    session = new RecordingSession({ ...opts, capabilities: currentDiscordCapabilities() });
     if (!pipelineReservation.bindRecording(session.id)) {
       throw new RecordingAdmissionError('storage-unavailable');
     }
     if (!sessionManager.attachStarting(reservation, session)) throw new RecordingStartCancelledError();
     session.onAutoStop = (s, reason) => {
-      void stopSession(s, reason).catch((err) => console.error(`Erro encerrando ${s.id}:`, err));
+      void stopSession(s, reason).catch((err) =>
+        console.error(`Erro encerrando recording=${operationalPii(s.id)}: ${operationalError(err)}`),
+      );
     };
     await session.start(reservation.signal);
     if (shuttingDown || reservation.signal.aborted) throw new RecordingStartCancelledError();
@@ -619,7 +654,9 @@ function afterSessionEnd(session: RecordingSession, reason: StopReason): void {
     processingStages.set(session.id, { cookDone: false, aiDone: !aiEnabled });
     cook(session.meta, 'mix')
       .catch((err) =>
-        console.warn(`Pré-cook do mix de ${session.id} falhou (fica pro primeiro clique):`, (err as Error).message),
+        console.warn(
+          `Pré-cook do mix recording=${operationalPii(session.id)} falhou (fica pro primeiro clique): ${operationalError(err)}`,
+        ),
       )
       .finally(() => settleProcessingStage(session.id, 'cook'));
     if (aiEnabled) {
@@ -1227,7 +1264,7 @@ const manualRecordingStartLimiter = new ManualRecordingStartLimiter({
   guildCooldownMs: config.manualRecordGuildCooldownSec * 1000,
   maxStartsPerGuild24h: config.recordingGuildStartsPer24h,
 });
-const recordingAdmission = new RecordingAdmissionGuard(path.join(config.recordingsDir, '.recording-admission.json'), {
+const recordingAdmission = new RecordingAdmissionGuard(path.join(config.stateDir, 'recording-admission.json'), {
   maxStartsPerGuild24h: config.recordingGuildStartsPer24h,
   maxStartsGlobalPerHour: config.recordingStartsGlobalPerHour,
   maxStartsGlobal24h: config.recordingStartsGlobal24h,
@@ -1292,7 +1329,7 @@ export async function handlePerguntar(interaction: ChatInputCommandInteraction):
       return;
     }
     console.log(
-      `Perguntar concluído: guild=${interaction.guild.id} período=${period} ids-verificados=${archive.scannedIds} arquivo-parcial=${archive.truncated} candidatas=${result.candidateMeetings} com-evidência=${result.matchedMeetings} reuniões=${result.meetingsUsed} chunks=${result.chunksUsed} contexto=${result.contextChars}`,
+      `Perguntar concluído: guild=${operationalPii(interaction.guild.id)} período=${period} ids-verificados=${archive.scannedIds} arquivo-parcial=${archive.truncated} candidatas=${result.candidateMeetings} com-evidência=${result.matchedMeetings} reuniões=${result.meetingsUsed} chunks=${result.chunksUsed} contexto=${result.contextChars}`,
     );
     await interaction.editReply(
       `${result.answer}\n\n${t(l, 'ask.footer', { n: result.meetingsUsed, period })}${scanNotice}`,
@@ -1303,7 +1340,7 @@ export async function handlePerguntar(interaction: ChatInputCommandInteraction):
       await interaction.editReply(t(l, 'ask.rate-limit')).catch(() => {});
       return;
     }
-    console.error('Erro no /perguntar:', err);
+    console.error(`Erro no /perguntar: ${operationalError(err)}`);
     await interaction.editReply(t(l, 'ask.error', { error: shortError((err as Error).message, l) })).catch(() => {});
   } finally {
     askLimiter.release(interaction.user.id);
@@ -1424,11 +1461,11 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
     });
     reservation.commit();
     const panel = session.panelJumpUrl;
-    await interaction.editReply(
-      panel
-        ? t(l, 'record.started', { channel: `#${voiceChannel.name}`, panel })
-        : t(l, 'record.started-no-panel', { channel: `#${voiceChannel.name}`, url: session.pageUrl }),
-    );
+    if (!panel) {
+      await stopSession(session, 'manual');
+      throw new Error('invariante violada: captura iniciada sem painel público');
+    }
+    await interaction.editReply(t(l, 'record.started', { channel: `#${voiceChannel.name}`, panel }));
   } catch (err) {
     reservation.rollback();
     const protectionMessage = protectedRecordingStartMessage(err, l);
@@ -1544,14 +1581,15 @@ async function handleParar(interaction: ChatInputCommandInteraction | ButtonInte
   await interaction.deferReply({ ephemeral: true });
   try {
     await stopping;
-    const key = session.meta.audioIncomplete
-      ? 'record.stopped-incomplete'
-      : empty
-        ? 'record.stopped-empty'
-        : 'record.stopped';
-    await interaction.editReply(t(l, key, { url: session.pageUrl }));
+    if (session.meta.audioIncomplete) {
+      await interaction.editReply(t(l, 'record.stopped-incomplete', { url: session.pageUrl }));
+    } else if (empty) {
+      await interaction.editReply(t(l, 'record.stopped-empty'));
+    } else {
+      await interaction.editReply(tCapability(l, 'record.stopped', session.capabilities, { url: session.pageUrl }));
+    }
   } catch (err) {
-    console.error(`Erro encerrando ${session.id}:`, err);
+    console.error(`Erro encerrando recording=${operationalPii(session.id)}: ${operationalError(err)}`);
     await interaction.editReply(t(l, 'record.stop-failed', { url: session.pageUrl }));
   }
 }
@@ -1723,34 +1761,72 @@ const HELP_TOPICS: Record<string, { btn: string; topic: string }> = {
   auto: { btn: 'help.btn-auto', topic: 'help.topic-auto' },
 };
 
-function buildHelpEmbed(l: Locale): EmbedBuilder {
+function availableHelpTopics(capabilities: DiscordCapabilities) {
+  return Object.entries(HELP_TOPICS).filter(([key]) => key !== 'ask' || capabilities.ask);
+}
+
+function helpRetention(l: Locale, privacy: boolean): string {
+  if (config.audioRetentionUnlimited) {
+    return t(l, privacy ? 'help.retention-privacy-unlimited' : 'help.retention-unlimited');
+  }
+  if (config.textRetentionUnlimited) {
+    return t(l, privacy ? 'help.retention-privacy-text-unlimited' : 'help.retention-text-unlimited', {
+      audioDays: config.retentionDays,
+    });
+  }
+  return t(l, privacy ? 'help.retention-privacy-limited' : 'help.retention-limited', {
+    audioDays: config.retentionDays,
+    textDays: config.textRetentionDays,
+  });
+}
+
+export function buildHelpEmbed(
+  l: Locale,
+  capabilities: DiscordCapabilities = currentDiscordCapabilities(),
+): EmbedBuilder {
+  const askCommand = capabilities.ask ? t(l, 'help.cmd-ask') : '';
+  const askPermission = capabilities.ask ? t(l, 'help.perms-ask') : '';
   const embed = new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle(t(l, 'help.title'))
-    .setDescription(t(l, 'help.intro'))
+    .setDescription(tCapability(l, 'help.intro', capabilities))
     .addFields(
-      { name: t(l, 'help.commands'), value: t(l, 'help.cmd-list') },
-      { name: t(l, 'help.flow'), value: t(l, 'help.flow-body') },
-      { name: t(l, 'help.perms'), value: t(l, 'help.perms-body') },
+      { name: t(l, 'help.commands'), value: t(l, 'help.cmd-list', { ask: askCommand }) },
+      {
+        name: t(l, 'help.flow'),
+        value: t(l, 'help.flow-body', { after: tCapability(l, 'help.flow-after', capabilities) }),
+      },
+      { name: t(l, 'help.perms'), value: t(l, 'help.perms-body', { ask: askPermission }) },
     );
   // só mostra o conector de IA quando ele está ligado neste servidor
-  if (config.mcpEnabled) {
+  if (capabilities.mcp) {
     embed.addFields({ name: t(l, 'help.mcp-title'), value: t(l, 'help.mcp-body', { url: config.appUrl }) });
   }
   return embed.setFooter({ text: t(l, 'help.footer') });
 }
 
 /** Payload do /ajuda com botões pra explorar cada tópico (onboarding interativo). */
-function buildHelpPayload(l: Locale) {
+export function buildHelpPayload(l: Locale, capabilities: DiscordCapabilities = currentDiscordCapabilities()) {
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    ...Object.entries(HELP_TOPICS).map(([key, v]) =>
+    ...availableHelpTopics(capabilities).map(([key, v]) =>
       new ButtonBuilder()
         .setCustomId(`${HELP_BUTTON_PREFIX}:${key}`)
         .setLabel(t(l, v.btn))
         .setStyle(ButtonStyle.Secondary),
     ),
   );
-  return { embeds: [buildHelpEmbed(l)], components: [row] };
+  return { embeds: [buildHelpEmbed(l, capabilities)], components: [row] };
+}
+
+export function buildWelcomeEmbed(
+  l: Locale,
+  capabilities: DiscordCapabilities = currentDiscordCapabilities(),
+): EmbedBuilder {
+  return new EmbedBuilder()
+    .setColor(0x5865f2)
+    .setTitle(t(l, 'welcome.title'))
+    .setDescription(tCapability(l, 'welcome.body', capabilities))
+    .setFooter({ text: t(l, 'help.footer') });
 }
 
 async function handleAjuda(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -1758,40 +1834,74 @@ async function handleAjuda(interaction: ChatInputCommandInteraction): Promise<vo
   await interaction.reply({ ...buildHelpPayload(l), ephemeral: true });
 }
 
+export function buildHelpTopicContent(
+  l: Locale,
+  key: string | undefined,
+  capabilities: DiscordCapabilities = currentDiscordCapabilities(),
+): string {
+  const topic = !key || (key === 'ask' && !capabilities.ask) ? undefined : HELP_TOPICS[key]?.topic;
+  // passa os valores REAIS de config pros tópicos (limite de horas, retenção, url).
+  // A frase de retenção muda inteira quando RETENTION_DAYS=0 (nada expira sozinho).
+  const vars = {
+    hours: config.maxRecordingHours,
+    url: config.appUrl,
+    processing: tCapability(l, 'help.record-processing', capabilities),
+    aiFiles: tCapability(l, 'help.downloads-ai', capabilities),
+    mcp: capabilities.mcp ? t(l, 'help.topic-ask-mcp', { url: config.appUrl }) : '',
+    retention: helpRetention(l, false),
+    retentionPrivacy: helpRetention(l, true),
+    operator: safeName(config.operatorName),
+    privacyUrl: config.privacyPolicyUrl,
+    contactUrl: config.operatorContactUrl,
+    deletionUrl: config.dataDeletionUrl,
+  };
+  return topic ? t(l, topic, vars) : tCapability(l, 'help.intro', capabilities);
+}
+
 async function handleHelpButton(interaction: ButtonInteraction): Promise<void> {
   const l = localeOf(interaction.locale);
   const key = interaction.customId.split(':')[1];
-  const topic = HELP_TOPICS[key]?.topic;
-  // passa os valores REAIS de config pros tópicos (limite de horas, retenção, url).
-  // A frase de retenção muda inteira quando RETENTION_DAYS=0 (nada expira sozinho).
-  const days = config.retentionDays;
-  const vars = {
-    hours: config.maxRecordingHours,
-    days,
-    url: config.appUrl,
-    retention: t(l, config.audioRetentionUnlimited ? 'help.retention-unlimited' : 'help.retention-limited', { days }),
-    retentionPrivacy: t(
-      l,
-      config.audioRetentionUnlimited ? 'help.retention-privacy-unlimited' : 'help.retention-privacy-limited',
-      { days },
-    ),
-  };
-  await interaction.reply({ content: topic ? t(l, topic, vars) : t(l, 'help.intro'), ephemeral: true });
+  await interaction.reply({ content: buildHelpTopicContent(l, key), ephemeral: true });
 }
 
-async function handleSobre(interaction: ChatInputCommandInteraction): Promise<void> {
-  const l = localeOf(interaction.locale);
-  const embed = new EmbedBuilder()
+export function buildAboutEmbed(l: Locale): EmbedBuilder {
+  return new EmbedBuilder()
     .setColor(0x5865f2)
     .setTitle('🎙️ Kassinão')
     .setDescription(t(l, 'about.desc'))
     .addFields(
       { name: t(l, 'about.author'), value: 'Mauro Marques' },
+      { name: t(l, 'about.operator'), value: safeName(config.operatorName) },
       { name: t(l, 'about.license'), value: 'GNU AGPL-3.0-or-later' },
       { name: t(l, 'about.source'), value: SOURCE_URL },
+      { name: t(l, 'about.privacy'), value: config.privacyPolicyUrl },
+      { name: t(l, 'about.contact'), value: config.operatorContactUrl },
+      { name: t(l, 'about.data-deletion'), value: config.dataDeletionUrl },
     )
     .setFooter({ text: t(l, 'about.footer') });
+}
+
+async function handleSobre(interaction: ChatInputCommandInteraction): Promise<void> {
+  const l = localeOf(interaction.locale);
+  const embed = buildAboutEmbed(l);
   await interaction.reply({ embeds: [embed], ephemeral: true });
+}
+
+export function buildPrivacyCommandContent(l: Locale): string {
+  return t(l, 'privacy.command', {
+    operator: safeName(config.operatorName),
+    privacyUrl: config.privacyPolicyUrl,
+    contactUrl: config.operatorContactUrl,
+    deletionUrl: config.dataDeletionUrl,
+  });
+}
+
+export function buildPrivacyCommandPayload(l: Locale) {
+  return { content: buildPrivacyCommandContent(l), ephemeral: true as const };
+}
+
+async function handlePrivacidade(interaction: ChatInputCommandInteraction): Promise<void> {
+  await interaction.reply(buildPrivacyCommandPayload(localeOf(interaction.locale)));
 }
 
 async function handleStatus(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -2048,7 +2158,7 @@ function scheduleAutoRecordCheck(guild: Guild, channelId: string): void {
     key,
     setTimeout(() => {
       pendingChecks.delete(key);
-      evaluateChannel(guild, channelId).catch((err) => console.error('Erro no auto-record:', err));
+      evaluateChannel(guild, channelId).catch((err) => console.error(`Erro no auto-record: ${operationalError(err)}`));
     }, AUTO_DEBOUNCE_MS),
   );
 }
@@ -2084,8 +2194,13 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
       // rearma para tentar de novo no próximo movimento do canal
       setArmed(guild.id, channelId, true);
       const protectionAlert = protectedAutoRecordAlert(err);
-      if (protectionAlert) console.warn(`Auto-record bloqueado pela proteção (${guild.id}/${channelId}).`);
-      else console.error(`Auto-record falhou em #${channel.name}:`, err);
+      if (protectionAlert) {
+        console.warn(
+          `Auto-record bloqueado pela proteção guild=${operationalPii(guild.id)} channel=${operationalPii(channelId)}.`,
+        );
+      } else {
+        console.error(`Auto-record falhou channel=${operationalPii(channel.name)}: ${operationalError(err)}`);
+      }
       void alertOwners(
         `autorecord-start:${guild.id}:${channelId}`,
         protectionAlert
@@ -2159,12 +2274,18 @@ async function stopGuildActivity(guild: Guild): Promise<void> {
   if (starting?.session) {
     await starting.session
       .abortStart()
-      .catch((err) => console.error(`Falha ao abortar início após saída da guild ${guild.id}:`, err));
+      .catch((err) =>
+        console.error(
+          `Falha ao abortar início após saída da guild=${operationalPii(guild.id)}: ${operationalError(err)}`,
+        ),
+      );
   }
   const active = sessionManager.get(guild.id);
   if (active) {
     await stopSession(active, 'desconectado').catch((err) =>
-      console.error(`Falha ao encerrar gravação após saída da guild ${guild.id}:`, err),
+      console.error(
+        `Falha ao encerrar gravação após saída da guild=${operationalPii(guild.id)}: ${operationalError(err)}`,
+      ),
     );
   }
 }
@@ -2178,13 +2299,17 @@ async function clearGuildCommands(guildId: string): Promise<void> {
 async function evictUnauthorizedGuild(guild: Guild): Promise<void> {
   pauseGuildWork(guild.id);
   await clearGuildCommands(guild.id).catch(() =>
-    console.warn(`Não foi possível limpar comandos da guild não autorizada ${guild.id}; tentando sair mesmo assim.`),
+    console.warn(
+      `Não foi possível limpar comandos da guild não autorizada guild=${operationalPii(guild.id)}; tentando sair mesmo assim.`,
+    ),
   );
   await guild
     .leave()
-    .then(() => console.warn(`Guild não autorizada removida do perímetro (${guild.id}).`))
+    .then(() => console.warn(`Guild não autorizada removida do perímetro guild=${operationalPii(guild.id)}.`))
     .catch(() =>
-      console.error(`Não foi possível sair da guild não autorizada ${guild.id}; eventos seguem bloqueados.`),
+      console.error(
+        `Não foi possível sair da guild não autorizada guild=${operationalPii(guild.id)}; eventos seguem bloqueados.`,
+      ),
     );
 }
 
@@ -2233,7 +2358,9 @@ async function repairRecoveredSurfaces(): Promise<void> {
         components: [],
       });
     } catch (err) {
-      console.warn(`Não consegui neutralizar painel recuperado de ${meta.id}:`, (err as Error).message);
+      console.warn(
+        `Não consegui neutralizar painel recuperado recording=${operationalPii(meta.id)}: ${operationalError(err)}`,
+      );
     }
   }
 }
@@ -2313,7 +2440,7 @@ client.once(Events.ClientReady, async () => {
   // caches de guild/canal já podem sustentar ACL web + MCP.
   await enforceConnectedGuildBoundary();
   reconcileOperationalProcessingAdmission();
-  console.log(`Kassinão online como ${client.user?.tag} 🎙️`);
+  console.log(`Kassinão online bot=${operationalPii(client.user?.tag)} 🎙️`);
   const guildScope =
     config.guildPolicy.mode === 'private'
       ? `privado (${config.guildPolicy.allowedGuildIds.length} guild(s))`
@@ -2323,7 +2450,7 @@ client.once(Events.ClientReady, async () => {
   );
   startMonitor(); // alertas por DM ao dono (disco, etc.)
   await repairRecoveredSurfaces();
-  await registerCommands().catch((err) => console.error('Falha ao registrar comandos:', err));
+  await registerCommands().catch((err) => console.error(`Falha ao registrar comandos: ${operationalError(err)}`));
   // canais que já estavam cheios quando o bot subiu disparam o auto-record
   for (const guild of client.guilds.cache.values()) {
     if (!guildRuntime.isOperational(guild.id)) continue;
@@ -2406,6 +2533,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
         case 'sobre':
           await handleSobre(interaction);
           break;
+        case 'privacidade':
+          await handlePrivacidade(interaction);
+          break;
       }
     } else if (
       interaction.isButton() &&
@@ -2428,7 +2558,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await handleNoteModal(interaction);
     }
   } catch (err) {
-    console.error('Erro tratando interação:', err);
+    console.error(`Erro tratando interação: ${operationalError(err)}`);
     if (interaction.isRepliable()) {
       const l = localeOf(interaction.locale);
       const message = { content: t(l, 'err.generic'), ephemeral: true };
@@ -2455,16 +2585,16 @@ client.on(Events.GuildCreate, async (guild) => {
       await new REST()
         .setToken(config.token)
         .put(Routes.applicationGuildCommands(config.applicationId, guild.id), { body: buildCommands() });
-      console.log(`Comandos registrados no novo servidor autorizado ${guild.name} (${guild.id}).`);
+      console.log(
+        `Comandos registrados no novo servidor autorizado guild_name=${operationalPii(guild.name)} guild=${operationalPii(guild.id)}.`,
+      );
     } catch (err) {
-      console.error(`Falha ao registrar comandos no servidor ${guild.id}:`, err);
+      console.error(
+        `Falha ao registrar comandos no servidor guild=${operationalPii(guild.id)}: ${operationalError(err)}`,
+      );
     }
   }
-  const embed = new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setTitle(t(l, 'welcome.title'))
-    .setDescription(t(l, 'welcome.body'))
-    .setFooter({ text: t(l, 'help.footer') });
+  const embed = buildWelcomeEmbed(l);
   // Enviar embed exige Ver Canal + Enviar Mensagens + Inserir Links. E só canais de
   // TEXTO de verdade (não voz/palco/thread). Tenta o canal de sistema; senão, o 1º válido.
   const me = guild.members.me;
@@ -2554,18 +2684,31 @@ export async function handleDirectMessage(
   // registrados por servidor, onde dá pra checar o que a pessoa pode ver).
   // Responder o guia genérico confundia — explica o motivo + o caminho de fora.
   const cmd = /^\s*\/([\p{L}\w-]{1,32})/u.exec(message.content ?? '');
-  console.log(`DM recebida de ${message.author.id} — respondendo ${cmd ? `dica do /${cmd[1]}` : 'o guia'}.`);
+  const capabilities = currentDiscordCapabilities();
+  console.log(
+    `DM recebida user=${operationalPii(message.author.id)} — respondendo ${cmd ? 'dica de comando' : 'o guia'}.`,
+  );
   try {
     // o canal de DM pode chegar PARCIAL (Partials.Channel) — completa antes de enviar
     if (message.channel.partial) await message.channel.fetch();
     if (!message.channel.isSendable()) return;
     if (cmd) {
-      await message.channel.send(t(l, 'help.dm-command', { cmd: `/${cmd[1]}`, url: config.appUrl }));
+      const requestedCommand = cmd[1].toLowerCase();
+      if (!capabilities.ask && (requestedCommand === 'perguntar' || requestedCommand === 'ask')) {
+        await message.channel.send(t(l, 'help.dm-ask-disabled'));
+        return;
+      }
+      await message.channel.send(
+        t(l, 'help.dm-command', {
+          cmd: `/${cmd[1]}`,
+          connector: capabilities.mcp ? t(l, 'help.dm-connector', { url: config.appUrl }) : '',
+        }),
+      );
       return;
     }
-    await message.channel.send({ content: t(l, 'help.dm-hint'), ...buildHelpPayload(l) });
+    await message.channel.send({ content: t(l, 'help.dm-hint'), ...buildHelpPayload(l, capabilities) });
   } catch (err) {
-    console.error(`Falha ao responder DM de ${message.author.id}:`, err);
+    console.error(`Falha ao responder DM user=${operationalPii(message.author.id)}: ${operationalError(err)}`);
   }
 }
 
@@ -2591,7 +2734,9 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     newState.channelId !== session.voiceChannel.id
   ) {
     void stopSession(session, 'canal-alterado').catch((err) =>
-      console.error(`Erro encerrando ${session.id} após mudança de canal:`, err),
+      console.error(
+        `Erro encerrando recording=${operationalPii(session.id)} após mudança de canal: ${operationalError(err)}`,
+      ),
     );
   }
   if (session && newState.member && !newState.member.user.bot) {
@@ -2628,13 +2773,19 @@ async function gracefulShutdown(signal: string): Promise<void> {
   for (const timeout of pendingChecks.values()) clearTimeout(timeout);
   pendingChecks.clear();
   const starts = sessionManager.cancelAllStarts();
-  await Promise.all(starts.map((s) => s.abortStart().catch((err) => console.error(`Erro abortando ${s.id}:`, err))));
+  await Promise.all(
+    starts.map((s) =>
+      s
+        .abortStart()
+        .catch((err) => console.error(`Erro abortando recording=${operationalPii(s.id)}: ${operationalError(err)}`)),
+    ),
+  );
   const actives = sessionManager.all();
   const alreadyStopping = sessionManager.allStopping();
   await Promise.all(
     // 'reinicio' e não 'desconectado': a timeline conta a história certa pro usuário
     [...actives.map((s) => stopSession(s, 'reinicio')), ...alreadyStopping.map((s) => s.stop('reinicio'))].map((p) =>
-      p.catch((err) => console.error('Erro ao encerrar sessão no shutdown:', err)),
+      p.catch((err) => console.error(`Erro ao encerrar sessão no shutdown: ${operationalError(err)}`)),
     ),
   );
   try {
@@ -2652,9 +2803,9 @@ process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
 
 fs.mkdirSync(config.recordingsDir, { recursive: true });
 
-const transcribeConfigError = validateTranscriptionConfig();
+const transcribeConfigError = validateAndCommitRuntimeConfiguration();
 if (transcribeConfigError) {
-  console.error(`Configuração de transcrição inválida: ${transcribeConfigError}`);
+  console.error(`Configuração de transcrição inválida: ${operationalError(new Error(transcribeConfigError))}`);
   process.exit(1);
 }
 
@@ -2670,6 +2821,6 @@ if (!recordingAdmission.reconcile(recoveredProcessing)) {
 startWebServer();
 startCleanupJob();
 client.login(config.token).catch((err) => {
-  console.error('Falha ao autenticar no Discord (token inválido?):', err.message);
+  console.error(`Falha ao autenticar no Discord (token inválido?): ${operationalError(err)}`);
   process.exit(1);
 });

@@ -143,21 +143,22 @@ describe('documentation page', () => {
     const html = docsPage();
 
     expect(html).toContain('<html lang="pt-BR">');
-    expect(html).toContain('<h1>Coloque o Kassinão no seu Discord.</h1>');
+    expect(html).toContain('<h1>Seu bot. Sua instância. Suas calls.</h1>');
     expect(html).toContain('id="docs-search"');
     expect(html).toContain('id="mobile-menu"');
     expect(html).toContain('prefers-reduced-motion: reduce');
 
     for (const id of [
-      'inicio',
-      'requisitos',
-      'docker',
-      'configuracao',
-      'comandos',
+      'visao',
       'fluxo',
-      'transcricao',
-      'privacidade',
+      'limites',
+      'local',
+      'producao',
+      'discord',
+      'comandos',
+      'acesso',
       'mcp',
+      'operacao',
       'problemas',
       'links',
     ]) {
@@ -166,68 +167,87 @@ describe('documentation page', () => {
 
     expect(html).toContain('/gravar [canal]');
     expect(html).toContain('/perguntar &lt;pergunta&gt; [dias]');
+    expect(html).toContain('/privacidade');
     expect(html).toContain('MCP_SECRET');
     expect(html).toContain('ALLOWED_GUILD_IDS');
     expect(html).toContain('ALLOW_ALL_GUILDS');
+    expect(html).toContain('OPERATOR_NAME');
+    expect(html).toContain('OPERATOR_CONTACT_URL');
+    expect(html).toContain('PRIVACY_POLICY_URL');
+    expect(html).toContain('DATA_DELETION_URL');
+    expect(html).toContain('TERMS_OF_SERVICE_URL');
     expect(html).toContain('TRUST_PROXY_HOPS');
-    expect(html).toContain('Não existe workspace hospedado nem cadastro público.');
-    expect(html).toContain('A URL não é segredo.');
-    expect(html).toContain('Falha para o lado seguro');
+    expect(html).toContain('data/{recordings,state,auth,cache}');
+    expect(html).toContain('chmod 700 data data/*');
+    expect(html).toContain('docker build -t kassinao-local:dev .');
+    expect(html).toContain('docker compose up -d --no-build');
+    expect(html).not.toContain('docker compose pull');
+    expect(html).toContain('bitfield 68242432');
+    expect(html).toContain('APP_URL/privacy');
+    expect(html).toContain('abre sem login');
+    expect(html).toContain('dm-crypt/LUKS');
+    expect(html).toContain('topologia split');
+    expect(html).toContain('A URL não é segredo');
+    expect(html).toContain('Falha fechada');
+    expect(html).toContain('Aviso técnico não é consentimento jurídico.');
+    expect(html).toContain('uma faixa por conta do Discord que fala');
+    expect(html).toContain('apenas um indicador adicional e pode falhar');
+    expect(html).not.toMatch(/workspace/iu);
+    expect(html).not.toContain('v1.4.5');
+    expect(html).not.toContain('ghcr.io/resolvicomai/kassinao');
     expect(html).not.toContain('/auth/login');
     expect(html).toContain('href="http://localhost:8080/demo"');
-    expect(html).not.toContain('Abrir central');
-    expect(html).not.toContain('app.kassinao.cloud');
-    expect(html).not.toContain('mcp.kassinao.cloud');
+    expect(html).not.toContain('app.example.com');
+    expect(html).not.toContain('mcp.example.com');
   });
 
   it('renders the entire navigation and content in English', () => {
     const html = docsPage('en');
 
     expect(html).toContain('<html lang="en">');
-    expect(html).toContain('<h1>Bring Kassinão into your Discord.</h1>');
+    expect(html).toContain('<h1>Your bot. Your instance. Your calls.</h1>');
     expect(html).toContain('Search documentation');
-    expect(html).toContain('Docker installation');
+    expect(html).toContain('Test from source');
+    expect(html).toContain('Hardened production');
     expect(html).toContain('/record [channel]');
     expect(html).toContain('/ask &lt;question&gt; [days]');
-    expect(html).toContain('Recording history');
-    expect(html).toContain('There is no hosted workspace or public signup.');
-    expect(html).toContain('The URL is not a secret.');
+    expect(html).toContain('/privacy');
+    expect(html).toContain('Historical meeting ACL');
+    expect(html).toContain('The URL is not a secret');
     expect(html).toContain('TRANSCRIBE_FALLBACK_PROVIDER');
+    expect(html).toContain('data/{recordings,state,auth,cache}');
+    expect(html).toContain('chmod 700 data data/*');
     expect(html).toContain('TRANSCRIBE_SEND_MEETING_CONTEXT');
     expect(html).toContain('MINUTES_WEBHOOK_SECRET');
-    expect(html).toContain('RECORDING_MAX_CONCURRENT');
-    expect(html).toContain('RECORDING_GUILD_STARTS_PER_24H');
-    expect(html).toContain('RECORDING_STARTS_GLOBAL_PER_HOUR');
-    expect(html).toContain('RECORDING_STARTS_GLOBAL_PER_24H');
-    expect(html).toContain('RECORDING_MAX_PENDING_PROCESSING');
-    expect(html).not.toContain('MANUAL_RECORD_GUILD_STARTS_PER_24H');
-    expect(html).toContain('kassinao-mcp@1.0.6');
-    expect(html).toContain('X-Kassinao-Delivery-Id');
-    expect(html).toContain('X-Kassinao-Signature');
-    expect(html).toContain('HMAC-SHA256');
-    expect(html).toContain('compare in constant time');
-    expect(html).toContain('five minutes in the past or future');
+    expect(html).toContain('OPERATOR_NAME');
+    expect(html).toContain('DATA_DELETION_URL');
+    expect(html).toContain('TERMS_OF_SERVICE_URL');
+    expect(html).toContain('APP_URL/privacy#data-rights');
+    expect(html).toContain('opens without login');
+    expect(html).toContain('kassinao-mcp@1.0.7');
+    expect(html).toContain('one track per Discord account that speaks');
+    expect(html).toContain('nickname change is only an extra indicator and may fail');
+    expect(html).toContain('The current five tools are read-only.');
+    expect(html).toContain('does not mount or directly read server files');
+    expect(html).toContain('source-free bundle');
+    expect(html).toContain('does not run git clone, npm install, or docker build');
+    expect(html).toContain('dm-crypt/LUKS');
     expect(html).toContain('href="http://localhost:8080/en/demo"');
     expect(html).not.toContain('>Copiar</button>');
     expect(html).toContain('>Copy</button>');
     expect(html).toContain('Default: required');
-    expect(html).toContain('Default: provider default');
-    expect(html).toContain('Default: generated and persisted');
-    expect(html).toContain('Default: openrouter or groq');
     expect(html).toContain('Default: disabled');
     expect(html).toContain('Default: false');
     expect(html).toContain('YOUR_APP_ID');
-    expect(html).toContain('https://YOUR-KASSINAO');
-    expect(html).toContain('PROFILE_PRINTED_BY_THE_COMMAND');
+    expect(html).toContain('https://YOUR-INSTANCE-MCP');
     expect(html).not.toContain('KASSINAO_REFRESH_TOKEN');
     expect(html).not.toContain('SEU_APP_ID');
-    expect(html).not.toContain('https://SEU-KASSINAO');
-    expect(html).not.toContain('PERFIL_IMPRESSO_PELO_COMANDO');
     expect(html).not.toMatch(/Default: (?:obrigat.ria|vazio|desligado|gerado e persistido)/iu);
-    expect(html).not.toContain('Default: padrão do provider');
-    expect(html).not.toContain('Default: openrouter ou groq');
-    expect(html).not.toContain('app.kassinao.cloud');
-    expect(html).not.toContain('mcp.kassinao.cloud');
+    expect(html).not.toMatch(/workspace/iu);
+    expect(html).not.toContain('v1.4.5');
+    expect(html).not.toContain('ghcr.io/resolvicomai/kassinao');
+    expect(html).not.toContain('app.example.com');
+    expect(html).not.toContain('mcp.example.com');
   });
 
   it('keeps the page self-contained and free of banned typography', () => {
@@ -239,6 +259,30 @@ describe('documentation page', () => {
       expect(html).toContain("url('/assets/space-grotesk.woff2')");
       expect(html).toContain('aria-live="polite"');
     }
+  });
+
+  it('pins the production deploy to the extracted release instead of the shell cwd', () => {
+    for (const html of [docsPage('pt'), docsPage('en')]) {
+      expect(html).toContain('RELEASE_ROOT=/opt/kassinao/releases/kassinao-ops-vX.Y.Z');
+      expect(html).toContain('sudo test ! -e &quot;$RELEASE_ROOT&quot;');
+      expect(html).toContain('KASSINAO_DEPLOY_DIR=&quot;$RELEASE_ROOT&quot;');
+      expect(html).toContain('&quot;$RELEASE_ROOT/scripts/prepare-storage.sh&quot;');
+      expect(html).toContain('&quot;$RELEASE_ROOT/scripts/deploy-release.sh&quot;');
+      expect(html).not.toContain('sudo &quot;$RELEASE_ROOT/scripts/deploy-release.sh&quot;');
+      expect(html).toContain('isDraft,isImmutable');
+      expect(html).toContain('gh release verify &quot;$TAG&quot;');
+      expect(html).toContain('gh release verify-asset');
+      expect(html).toContain('--signer-workflow');
+      expect(html).toContain('--source-ref');
+      expect(html).toContain('--source-digest');
+      expect(html).toContain('--deny-self-hosted-runners');
+      expect(html).toContain('http://kassinao:8080');
+      expect(html).toContain('http://kassinao-public:8081');
+      expect(html).toContain('KASSINAO_HOST_PORT');
+      expect(html).toContain('KASSINAO_PUBLIC_HOST_PORT');
+    }
+    expect(docsPage('pt')).toContain('Audite antes do lançamento');
+    expect(docsPage('en')).toContain('Audit before launch');
   });
 
   it('shows accessible progress and failure feedback when copying code fails', async () => {

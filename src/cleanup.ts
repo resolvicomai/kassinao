@@ -9,6 +9,8 @@ import {
   listMetas,
   deleteRecording,
   saveMeta,
+  syncRetentionDeadlines,
+  textExpiryOf,
   transcriptionNeedsAudio,
 } from './store';
 import { hasActiveDownloads } from './web/tracker';
@@ -36,38 +38,20 @@ export function startCleanupJob(): void {
     let trimmed = 0;
 
     for (const meta of listMetas()) {
+      if (meta.status === 'done' && syncRetentionDeadlines(meta)) saveMeta(meta);
       if (meta.status !== 'done' || hasActiveDownloads(meta.id) || isTranscribing(meta.id)) {
         continue;
       }
       // Retenção em camadas: o texto (transcrição/ata/meta) vive mais que o áudio.
-      // Gravações antigas sem textExpiresAt ganham CARÊNCIA de 7 dias a partir de
-      // agora (persistida) — um upgrade não pode apagar histórico na primeira hora.
-      // Modo ILIMITADO: expurgo desligado por completo (delete é 100% manual);
-      // a data de morte gravada no meta é ignorada de propósito — a config atual manda.
+      // A política ativa vale para todo o acervo. Alterar o prazo recalcula os
+      // deadlines a partir do encerramento; não existe uma retenção antiga oculta.
       if (!config.textRetentionUnlimited) {
-        let textExpiresAt = meta.textExpiresAt;
-        if (!textExpiresAt) {
-          const computed = meta.endedAt ? meta.endedAt + config.textRetentionDays * 24 * 60 * 60 * 1000 : undefined;
-          textExpiresAt = computed !== undefined ? Math.max(computed, now + 7 * 24 * 60 * 60 * 1000) : undefined;
-          if (textExpiresAt) {
-            meta.textExpiresAt = textExpiresAt;
-            saveMeta(meta);
-          }
-        }
-
+        const textExpiresAt = textExpiryOf(meta);
         if (textExpiresAt && textExpiresAt < now) {
-          if (transcriptionBlocksAudioTrim(meta)) {
-            // O bot pode ter ficado desligado além da retenção. Não apaga tudo
-            // antes de o recovery reler o áudio; concede a mesma carência de 7
-            // dias usada na migração de metas antigas.
-            meta.textExpiresAt = now + 7 * 24 * 60 * 60 * 1000;
-            saveMeta(meta);
-          } else {
-            deleteRecording(meta.id);
-            forgetAudioBytes(meta.id);
-            removed++;
-            continue;
-          }
+          deleteRecording(meta.id);
+          forgetAudioBytes(meta.id);
+          removed++;
+          continue;
         }
       }
       // Não trimar o áudio enquanto a transcrição ainda vai reler as faixas (ver a função).

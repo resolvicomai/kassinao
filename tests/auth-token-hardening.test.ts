@@ -60,6 +60,8 @@ describe('tokens assinados hostis falham fechados', () => {
     const exp = Date.now() + 60_000;
     webPayload = {
       typ: 'session',
+      iss: config.instanceId,
+      aud: config.appUrl,
       id: `unicode-web-${crypto.randomUUID()}`,
       name: 'Pessoa',
       avatar: null,

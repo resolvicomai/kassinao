@@ -5,11 +5,17 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const originalRecordingsDir = process.env.RECORDINGS_DIR;
+const originalStateDir = process.env.STATE_DIR;
+const originalAuthStateDir = process.env.AUTH_STATE_DIR;
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
   if (originalRecordingsDir === undefined) delete process.env.RECORDINGS_DIR;
   else process.env.RECORDINGS_DIR = originalRecordingsDir;
+  if (originalStateDir === undefined) delete process.env.STATE_DIR;
+  else process.env.STATE_DIR = originalStateDir;
+  if (originalAuthStateDir === undefined) delete process.env.AUTH_STATE_DIR;
+  else process.env.AUTH_STATE_DIR = originalAuthStateDir;
   vi.resetModules();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -19,8 +25,14 @@ afterEach(() => {
 describe('persistência do retry idempotente MCP', () => {
   it('reemite a mesma geração depois de reiniciar o módulo do servidor', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kassinao-mcp-server-restart-'));
+    const recordingsRoot = path.join(root, 'recordings');
+    const stateRoot = path.join(root, 'state');
+    const authRoot = path.join(root, 'auth');
+    for (const directory of [recordingsRoot, stateRoot, authRoot]) fs.mkdirSync(directory, { mode: 0o700 });
     temporaryDirectories.push(root);
-    process.env.RECORDINGS_DIR = root;
+    process.env.RECORDINGS_DIR = recordingsRoot;
+    process.env.STATE_DIR = stateRoot;
+    process.env.AUTH_STATE_DIR = authRoot;
     vi.resetModules();
 
     const beforeRestart = await import('../src/web/mcpTokens');
@@ -30,7 +42,7 @@ describe('persistência do retry idempotente MCP', () => {
     const first = beforeRestart.rotateSession(session.sid, 0, attemptId);
     expect(first).toMatchObject({ ok: true, gen: 1, replayed: false });
 
-    const sessionFile = path.join(root, '.mcp-sessions.json');
+    const sessionFile = path.join(authRoot, 'mcp-sessions.json');
     const persisted = JSON.parse(fs.readFileSync(sessionFile, 'utf8')) as Array<{
       lastRefreshAttempt?: { id: string; fromGen: number; replayUntil?: number };
     }>;

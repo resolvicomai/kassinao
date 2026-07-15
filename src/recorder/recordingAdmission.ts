@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { operationalError, operationalFailure } from '../operationalLog';
 
 export type RecordingOrigin = 'manual' | 'auto';
 
@@ -123,7 +124,7 @@ export class RecordingAdmissionGuard {
       this.state = this.load();
     } catch (err) {
       this.storageHealthy = false;
-      console.error(`Proteção de admissão de gravações indisponível: ${(err as Error).message}`);
+      operationalFailure(`Proteção de admissão de gravações indisponível error=${operationalError(err)}.`);
     }
   }
 
@@ -289,7 +290,7 @@ export class RecordingAdmissionGuard {
       return true;
     } catch (err) {
       this.storageHealthy = false;
-      console.error(`Falha persistindo proteção de admissão: ${(err as Error).message}`);
+      operationalFailure(`Falha persistindo proteção de admissão error=${operationalError(err)}.`);
       return false;
     }
   }

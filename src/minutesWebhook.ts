@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { config } from './config';
 import { client } from './discord/client';
+import { operationalInfo, operationalPii, operationalWarn } from './operationalLog';
 import { listMetas, pageUrl, readMeta, readMinutes, saveMeta } from './store';
 
 const RETRY_DELAYS_MS = [
@@ -100,7 +101,7 @@ async function deliver(recordingId: string): Promise<void> {
     delete fresh.webhookRetryAttempt;
     delete fresh.webhookNextRetryAt;
     saveMeta(fresh);
-    console.log(`Webhook da ata (${recordingId}) entregue.`);
+    operationalInfo(`Webhook da ata entregue recording=${operationalPii(recordingId)}.`);
   } catch {
     const fresh = readMeta(recordingId);
     if (!fresh || fresh.webhookSentAt || !guildOperational(fresh.guildId)) return;
@@ -108,7 +109,7 @@ async function deliver(recordingId: string): Promise<void> {
     fresh.webhookRetryAttempt = attempt;
     fresh.webhookNextRetryAt = Date.now() + retryDelay(attempt);
     saveMeta(fresh);
-    console.warn(`Webhook da ata (${recordingId}) falhou; nova tentativa agendada.`);
+    operationalWarn(`Webhook da ata falhou recording=${operationalPii(recordingId)}; nova tentativa agendada.`);
     schedule(recordingId, fresh.webhookNextRetryAt);
   } finally {
     inFlight.delete(recordingId);

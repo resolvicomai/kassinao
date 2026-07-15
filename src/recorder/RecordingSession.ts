@@ -23,8 +23,9 @@ import prism from 'prism-media';
 import { config } from '../config';
 import { freeMB } from '../disk';
 import { DISCORD_SURFACE_POLICY_VERSION } from '../discordSurfaceMigration';
-import { Locale, t } from '../i18n';
+import { DiscordCapabilities, Locale, t, tCapability } from '../i18n';
 import { alertOwners } from '../monitor';
+import { operationalError, operationalFailure, operationalPii } from '../operationalLog';
 import { safeName } from '../sanitize';
 import {
   MAX_NOTES_PER_RECORDING,
@@ -86,6 +87,8 @@ export class RecordingSession {
   readonly locale: Locale;
   /** true quando iniciada pelo auto-record (afeta a regra de parada por população). */
   readonly auto: boolean;
+  /** Snapshot das capacidades anunciado no início desta gravação. */
+  readonly capabilities: Pick<DiscordCapabilities, 'transcription' | 'minutes'>;
 
   /** Chamado quando a gravação termina sem interação direta (limite, canal vazio, queda). */
   onAutoStop?: (session: RecordingSession, reason: StopReason) => void;
@@ -115,6 +118,7 @@ export class RecordingSession {
     startedBy: { id: string; name: string } | null;
     locale: Locale;
     auto: boolean;
+    capabilities?: Pick<DiscordCapabilities, 'transcription' | 'minutes'>;
   }) {
     this.id = `${new Date().toISOString().slice(0, 10)}-${crypto.randomBytes(5).toString('hex')}`;
     this.controlToken = crypto.randomBytes(12).toString('hex');
@@ -122,6 +126,7 @@ export class RecordingSession {
     this.voiceChannel = opts.voiceChannel;
     this.locale = opts.locale;
     this.auto = opts.auto;
+    this.capabilities = opts.capabilities ?? { transcription: false, minutes: false };
     this.startedAt = Date.now();
     this.lastAudioAt = this.startedAt;
 
@@ -210,7 +215,11 @@ export class RecordingSession {
         );
       }
 
-      connection.on('error', (err) => console.error(`Erro na conexão de voz (${this.id}):`, err.message));
+      connection.on('error', (err) =>
+        operationalFailure(
+          `Erro na conexão de voz recording=${operationalPii(this.id)} error=${operationalError(err)}.`,
+        ),
+      );
 
       // Se o bot for desconectado (kick, canal apagado...), tenta se recuperar;
       // se não conseguir em 5 s, finaliza a gravação para não perder o áudio.
@@ -356,7 +365,12 @@ export class RecordingSession {
     const reason: StopReason = 'limite-presenca';
     const stopping = this.stop(reason);
     if (this.onAutoStop) this.onAutoStop(this, reason);
-    else void stopping.catch((err) => console.error(`Erro encerrando ${this.id}:`, err));
+    else
+      void stopping.catch((err) =>
+        operationalFailure(
+          `Erro encerrando gravação recording=${operationalPii(this.id)} error=${operationalError(err)}.`,
+        ),
+      );
   }
 
   /** Falha de persistência torna inseguro continuar captando: para em `finally`. */
@@ -367,7 +381,7 @@ export class RecordingSession {
       persisted = true;
       return true;
     } catch {
-      console.error(`Falha ao persistir presença da gravação ${this.id}; encerrando a captura.`);
+      operationalFailure(`Falha ao persistir presença recording=${operationalPii(this.id)}; encerrando a captura.`);
       return false;
     } finally {
       if (!persisted || limitReached) this.stopAtPresenceLimit();
@@ -500,7 +514,7 @@ export class RecordingSession {
     this.persistPresenceOrStop(false);
   }
 
-  /** Consentimento visível: o bot vira "[GRAVANDO] ..." enquanto grava. */
+  /** Indicador visual extra: tenta usar "[GRAVANDO] ..." enquanto grava. */
   private async setRecordingNickname(): Promise<void> {
     try {
       const me = this.guild.members.me;
@@ -559,6 +573,7 @@ export class RecordingSession {
               url: this.pageUrl,
               hours: config.maxRecordingHours,
               expiresDays: config.retentionDays,
+              processing: tCapability(l, 'dm.processing-start', this.capabilities),
             }),
           )
           .setFooter({ text: t(l, 'panel.footer') }),
@@ -581,6 +596,7 @@ export class RecordingSession {
             duration: formatDuration(endedAt - this.startedAt),
             url: this.pageUrl,
             expires: `<t:${Math.floor((this.meta.expiresAt ?? endedAt) / 1000)}:D>`,
+            processing: tCapability(l, 'dm.processing-stop', this.capabilities),
           });
     void this.sendStarterDM({
       embeds: [
@@ -662,8 +678,12 @@ export class RecordingSession {
       this.silenceWarned = false;
       track.write(chunk);
     });
-    decoder.on('error', (err) => console.error(`Erro no decoder (${userId}):`, err.message));
-    opusStream.on('error', (err) => console.error(`Erro no stream de voz (${userId}):`, err.message));
+    decoder.on('error', (err) =>
+      operationalFailure(`Erro no decoder user=${operationalPii(userId)} error=${operationalError(err)}.`),
+    );
+    opusStream.on('error', (err) =>
+      operationalFailure(`Erro no stream de voz user=${operationalPii(userId)} error=${operationalError(err)}.`),
+    );
 
     const cleanup = () => {
       this.activeStreams.delete(userId);
@@ -743,7 +763,12 @@ export class RecordingSession {
   private requestAutoStop(reason: StopReason): void {
     if (this.stopping) return;
     if (this.onAutoStop) this.onAutoStop(this, reason);
-    else void this.stop(reason).catch((err) => console.error(`Erro encerrando ${this.id}:`, err));
+    else
+      void this.stop(reason).catch((err) =>
+        operationalFailure(
+          `Erro encerrando gravação recording=${operationalPii(this.id)} error=${operationalError(err)}.`,
+        ),
+      );
   }
 
   // ---------- eventos e painel ----------
@@ -791,7 +816,7 @@ export class RecordingSession {
     const l = this.locale;
     const isDone = this.meta.status === 'done';
 
-    // O canal serve para consentimento visível e controles durante a captura.
+    // O canal serve para o aviso visível obrigatório e controles durante a captura.
     // Identidade, notas, eventos, id e URL ficam exclusivamente em superfícies
     // autenticadas/DMs revalidadas, inclusive depois que a gravação termina.
     if (isDone) {
@@ -827,7 +852,13 @@ export class RecordingSession {
         .setStyle(ButtonStyle.Secondary),
     );
 
-    return { content: t(l, 'panel.greeting-recording'), embeds: [embed], components: [row] };
+    return {
+      content: t(l, 'panel.greeting-recording', {
+        processing: tCapability(l, 'panel.processing', this.capabilities),
+      }),
+      embeds: [embed],
+      components: [row],
+    };
   }
 
   /** Edita o painel com throttle para não estourar o rate limit do Discord. */
@@ -974,7 +1005,7 @@ async function startStep<T>(
 function StopTrack(endedAt: number) {
   return (track: UserTrack) =>
     track.finalize(endedAt).catch((err) => {
-      console.error(`Erro finalizando faixa ${track.userId}:`, err);
+      operationalFailure(`Erro finalizando faixa user=${operationalPii(track.userId)} error=${operationalError(err)}.`);
       return false;
     });
 }

@@ -80,8 +80,8 @@ function guildFetch(result: 'member' | 'missing' | 'transient') {
 const splitOrigins: WebOrigins = {
   public: 'https://kassinao.cloud',
   docs: 'https://docs.kassinao.cloud',
-  app: 'https://app.kassinao.cloud',
-  mcp: 'https://mcp.kassinao.cloud',
+  app: 'https://app.example.com',
+  mcp: 'https://mcp.example.com',
 };
 
 function webRequest(host: string, originalUrl: string, method = 'GET'): Request {
@@ -265,7 +265,7 @@ describe('paginação ACL da biblioteca web', () => {
 
 describe('políticas HTTP da superfície web', () => {
   it('preserva Origin nos formulários servidos pela raiz dedicada do app', () => {
-    expect(referrerPolicyForWebRequest(webRequest('app.kassinao.cloud', '/'), splitOrigins)).toBe('same-origin');
+    expect(referrerPolicyForWebRequest(webRequest('app.example.com', '/'), splitOrigins)).toBe('same-origin');
     expect(referrerPolicyForWebRequest(webRequest('kassinao.cloud', '/'), splitOrigins)).toBe('no-referrer');
     expect(referrerPolicyForWebRequest(webRequest('docs.kassinao.cloud', '/'), splitOrigins)).toBe('no-referrer');
   });
@@ -289,23 +289,35 @@ describe('políticas HTTP da superfície web', () => {
       action: 'rewrite',
       path: '/en/docs',
     });
-    expect(webHostRoutingDecision(webRequest('app.kassinao.cloud', '/app/rec/abc'), splitOrigins)).toMatchObject({
+    expect(webHostRoutingDecision(webRequest('app.example.com', '/app/rec/abc'), splitOrigins)).toMatchObject({
       action: 'pass',
     });
-    expect(webHostRoutingDecision(webRequest('app.kassinao.cloud', '/?lang=pt'), splitOrigins)).toEqual({
+    expect(webHostRoutingDecision(webRequest('app.example.com', '/?lang=pt'), splitOrigins)).toEqual({
       action: 'rewrite',
       roles: ['app'],
       path: '/app?lang=pt',
     });
-    expect(
-      webHostRoutingDecision(webRequest('mcp.kassinao.cloud', '/api/meetings', 'POST'), splitOrigins),
-    ).toMatchObject({ action: 'pass' });
-    expect(webHostRoutingDecision(webRequest('mcp.kassinao.cloud', '/'), splitOrigins)).toMatchObject({
+    expect(webHostRoutingDecision(webRequest('app.example.com', '/privacy'), splitOrigins)).toMatchObject({
+      action: 'pass',
+      roles: ['app'],
+    });
+    expect(webHostRoutingDecision(webRequest('kassinao.cloud', '/privacy'), splitOrigins)).toMatchObject({
+      action: 'redirect',
+      target: 'https://app.example.com/privacy',
+    });
+    expect(webHostRoutingDecision(webRequest('docs.kassinao.cloud', '/en/privacy'), splitOrigins)).toMatchObject({
+      action: 'redirect',
+      target: 'https://app.example.com/en/privacy',
+    });
+    expect(webHostRoutingDecision(webRequest('mcp.example.com', '/api/meetings', 'POST'), splitOrigins)).toMatchObject({
+      action: 'pass',
+    });
+    expect(webHostRoutingDecision(webRequest('mcp.example.com', '/'), splitOrigins)).toMatchObject({
       action: 'redirect',
       status: 308,
       target: 'https://docs.kassinao.cloud/#mcp',
     });
-    expect(webHostRoutingDecision(webRequest('mcp.kassinao.cloud', '/en'), splitOrigins)).toMatchObject({
+    expect(webHostRoutingDecision(webRequest('mcp.example.com', '/en'), splitOrigins)).toMatchObject({
       action: 'redirect',
       status: 308,
       target: 'https://docs.kassinao.cloud/en#mcp',
@@ -349,7 +361,7 @@ describe('políticas HTTP da superfície web', () => {
       roles: ['public'],
       status: 404,
     });
-    expect(webHostRoutingDecision(webRequest('app.kassinao.cloud', '/api/meetings'), splitOrigins)).toEqual({
+    expect(webHostRoutingDecision(webRequest('app.example.com', '/api/meetings'), splitOrigins)).toEqual({
       action: 'reject',
       roles: ['app'],
       status: 404,
@@ -362,6 +374,10 @@ describe('políticas HTTP da superfície web', () => {
     expect(webHostRoutingDecision(webRequest('kassinao.cloud', '/demo/'), splitOrigins)).toMatchObject({
       action: 'redirect',
       target: 'https://kassinao.cloud/demo',
+    });
+    expect(webHostRoutingDecision(webRequest('app.example.com', '/PRIVACY/'), splitOrigins)).toMatchObject({
+      action: 'redirect',
+      target: 'https://app.example.com/privacy',
     });
     expect(webHostRoutingDecision(webRequest('docs.kassinao.cloud', '/EN/'), splitOrigins)).toMatchObject({
       action: 'redirect',
@@ -414,11 +430,13 @@ describe('políticas HTTP da superfície web', () => {
   });
 
   it('marca toda superfície privada e health como não indexável', () => {
-    expect(shouldNoIndexWebResponse(webRequest('app.kassinao.cloud', '/assets/kassinao-mark.png'), splitOrigins)).toBe(
+    expect(shouldNoIndexWebResponse(webRequest('app.example.com', '/assets/kassinao-mark.png'), splitOrigins)).toBe(
       true,
     );
-    expect(shouldNoIndexWebResponse(webRequest('mcp.kassinao.cloud', '/'), splitOrigins)).toBe(true);
+    expect(shouldNoIndexWebResponse(webRequest('mcp.example.com', '/'), splitOrigins)).toBe(true);
     expect(shouldNoIndexWebResponse(webRequest('kassinao.cloud', '/health'), splitOrigins)).toBe(true);
+    expect(shouldNoIndexWebResponse(webRequest('app.example.com', '/privacy'), splitOrigins)).toBe(true);
+    expect(shouldNoIndexWebResponse(webRequest('kassinao.cloud', '/privacy'), splitOrigins)).toBe(true);
     expect(shouldNoIndexWebResponse(webRequest('kassinao.cloud', '/demo'), splitOrigins)).toBe(false);
   });
 

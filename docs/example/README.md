@@ -1,15 +1,15 @@
-# 📄 Example: what Kassinão produces
+# Example: optional text artifacts
 
-This is a **fictional** 1-hour meeting with **6 participants**, showing exactly what Kassinão generates automatically after a call: a **speaker-attributed transcript** and **AI meeting minutes**. Nothing here was recorded from real people — it's a sample so you can see the output format.
+This is a **fictional** one-hour fixture with six speaking Discord-account labels. It shows the transcript and AI-minutes formats **only for an instance whose operator explicitly enabled those optional providers**. A fresh installation records audio, separate tracks, a mix, and timestamped notes; it does not generate these text artifacts by default.
 
-> The names below are deliberately varied (Rafael, Priya, Mei, James, Sofia, Tobias) to show the killer feature: because every person is on their **own audio track**, attribution is **exact** — no AI guessing "who said what", which is where diarization-based tools stumble.
+> The labels below (Rafael, Priya, Mei, James, Sofia, Tobias) are fictional Discord-account labels attached to separate captured streams. They preserve the platform source used by the fixture; they do not prove which human was behind an account, and a partial or failed track can still make the transcript incomplete.
 
 - **Meeting:** Northwind — Weekly Product & Growth Sync
 - **Channel:** 🔊 product-sync · **Duration:** 58min 12s · **Participants:** 6
 
 ---
 
-## 📋 Meeting minutes (AI-generated)
+## Meeting minutes (optional AI-generated artifact)
 
 ### Summary
 The team reviewed launch readiness for the v3 dashboard, investigated a churn spike traced to the new onboarding flow, and green-lit the annual pricing experiment after positive results. A production incident from Tuesday was postmortem'd (a Redis eviction issue), and the group agreed to hire a second infra engineer given rising cloud costs. Launch is confirmed for next Thursday, gated on the onboarding fix and a load test.
@@ -48,9 +48,9 @@ The team reviewed launch readiness for the v3 dashboard, investigated a churn sp
 
 ---
 
-## 📝 Transcript (excerpt)
+## Transcript (optional ASR excerpt)
 
-> The full transcript spans the whole hour, speaker-attributed with clickable timestamps in the app. A representative excerpt:
+> In this fictional fixture, the transcript spans the whole hour and uses the captured account labels with clickable timestamps. A real result depends on the configured ASR provider and may be partial. A representative excerpt:
 
 ```
 [00:00:12] Priya: Alright, everyone's here — let's keep this to an hour. Three big things: launch readiness, the churn number, and Tobias's pricing results.
@@ -77,4 +77,4 @@ The team reviewed launch readiness for the v3 dashboard, investigated a churn sp
 
 ---
 
-**Want this live?** In the real app this page has an audio player with clickable timestamps and downloads (MP3/FLAC/mix/Audacity), all behind Discord login. See the [main README](../../README.md) to run your own instance.
+In a real instance, retained audio, tracks, the mix, notes, and any enabled text artifacts stay behind Discord login, current allowlisted-guild membership, and the meeting ACL. See the [main README](../../README.md) to run your own instance.

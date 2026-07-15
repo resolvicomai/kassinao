@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { safeSlice } from '../src/util';
-import { localeOf, localizeEvent, t } from '../src/i18n';
+import { localeOf, localizeEvent, recordingOutputMode, t, tCapability } from '../src/i18n';
 import { formatDuration, formatOffset, joinNames, sanitizeFilename } from '../src/recorder/RecordingSession';
 import {
   buildLlmRequestBody,
@@ -38,6 +38,30 @@ describe('i18n', () => {
     expect(localizeEvent('▶️ Recording started by Priya', 'pt')).toBe('▶️ Gravação iniciada por Priya');
     expect(localizeEvent('🔊 Tobias entrou na call', 'en')).toBe('🔊 Tobias joined the call');
     expect(localizeEvent('📌 observação escrita por uma pessoa', 'en')).toBe('📌 observação escrita por uma pessoa');
+  });
+
+  it('seleciona copy pelos artefatos realmente habilitados sem prometer prazo ou download ao vivo', () => {
+    const recording = { transcription: false, minutes: false };
+    const transcript = { transcription: true, minutes: false };
+    const minutes = { transcription: true, minutes: true };
+
+    expect(recordingOutputMode(recording)).toBe('recording');
+    expect(recordingOutputMode(transcript)).toBe('transcript');
+    expect(recordingOutputMode(minutes)).toBe('minutes');
+    expect(recordingOutputMode({ transcription: false, minutes: true })).toBe('recording');
+
+    const ptRecording = tCapability('pt', 'record.stopped', recording, { url: 'https://app.test/r' });
+    const enTranscript = tCapability('en', 'record.stopped', transcript, { url: 'https://app.test/r' });
+    const ptMinutes = tCapability('pt', 'record.stopped', minutes, { url: 'https://app.test/r' });
+
+    expect(ptRecording).not.toContain('transcrição');
+    expect(ptRecording).not.toContain('ata');
+    expect(enTranscript).toContain('transcript is queued');
+    expect(enTranscript).not.toContain('minutes');
+    expect(ptMinutes).toContain('ata vem depois');
+    for (const copy of [ptRecording, enTranscript, ptMinutes]) {
+      expect(copy).not.toMatch(/~1|minuto|minute|durante a call|during the call/i);
+    }
   });
 });
 

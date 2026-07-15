@@ -14,6 +14,7 @@ import {
   RecordingMeta,
   saveMeta,
   saveTranscript,
+  syncRetentionDeadlines,
   textExpiryOf,
 } from '../src/store';
 
@@ -54,14 +55,20 @@ function setUnlimited(on: boolean): void {
   (config as { textRetentionUnlimited: boolean }).textRetentionUnlimited = on;
 }
 
-describe('retenção ilimitada (helpers respondem pela config ATUAL)', () => {
-  beforeEach(() => setUnlimited(false));
+describe('retenção ativa vale para todo o acervo', () => {
+  const originalAudioDays = config.retentionDays;
+  const originalTextDays = config.textRetentionDays;
 
-  it('modo limitado: usa a data gravada no meta', () => {
-    const exp = Date.now() + 3 * DAY;
-    const m = makeMeta('ret-1', { expiresAt: exp, textExpiresAt: exp + 10 * DAY });
-    expect(audioExpiryOf(m)).toBe(exp);
-    expect(textExpiryOf(m)).toBe(exp + 10 * DAY);
+  beforeEach(() => {
+    setUnlimited(false);
+    (config as { retentionDays: number }).retentionDays = originalAudioDays;
+    (config as { textRetentionDays: number }).textRetentionDays = originalTextDays;
+  });
+
+  it('ignora deadlines antigos e usa os dias configurados agora', () => {
+    const m = makeMeta('ret-1', { expiresAt: 1, textExpiresAt: 2 });
+    expect(audioExpiryOf(m)).toBe(m.endedAt! + config.retentionDays * DAY);
+    expect(textExpiryOf(m)).toBe(m.endedAt! + config.textRetentionDays * DAY);
   });
 
   it('modo limitado: meta antigo SEM data gravada ganha uma computada do endedAt', () => {
@@ -76,6 +83,39 @@ describe('retenção ilimitada (helpers respondem pela config ATUAL)', () => {
     const m = makeMeta('ret-3', { expiresAt: Date.now() - DAY, textExpiresAt: Date.now() - DAY });
     expect(audioExpiryOf(m)).toBeUndefined();
     expect(textExpiryOf(m)).toBeUndefined();
+  });
+
+  it('30→7 e 7→30 recalculam e persistem os dois deadlines', () => {
+    const m = makeMeta('ret-transition', { expiresAt: 1, textExpiresAt: 2 });
+    (config as { retentionDays: number }).retentionDays = 7;
+    (config as { textRetentionDays: number }).textRetentionDays = 7;
+    expect(syncRetentionDeadlines(m)).toBe(true);
+    expect(m.expiresAt).toBe(m.endedAt! + 7 * DAY);
+    expect(m.textExpiresAt).toBe(m.endedAt! + 7 * DAY);
+
+    (config as { retentionDays: number }).retentionDays = 30;
+    (config as { textRetentionDays: number }).textRetentionDays = 45;
+    expect(syncRetentionDeadlines(m)).toBe(true);
+    expect(m.expiresAt).toBe(m.endedAt! + 30 * DAY);
+    expect(m.textExpiresAt).toBe(m.endedAt! + 45 * DAY);
+  });
+
+  it('finito→ilimitado remove deadlines e ilimitado→finito os recria', () => {
+    const m = makeMeta('ret-toggle', {
+      expiresAt: Date.now() + DAY,
+      textExpiresAt: Date.now() + 2 * DAY,
+    });
+    setUnlimited(true);
+    expect(syncRetentionDeadlines(m)).toBe(true);
+    expect(m.expiresAt).toBeUndefined();
+    expect(m.textExpiresAt).toBeUndefined();
+
+    setUnlimited(false);
+    (config as { retentionDays: number }).retentionDays = 2;
+    (config as { textRetentionDays: number }).textRetentionDays = 4;
+    expect(syncRetentionDeadlines(m)).toBe(true);
+    expect(m.expiresAt).toBe(m.endedAt! + 2 * DAY);
+    expect(m.textExpiresAt).toBe(m.endedAt! + 4 * DAY);
   });
 
   it('gravação ao vivo (sem endedAt) não tem expiração em nenhum modo', () => {

@@ -676,6 +676,16 @@ video {
   font-weight: 500;
 }
 
+.chat-meta .ephemeral {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgb(88 101 242 / .16);
+  color: var(--accent-soft);
+  font-weight: 750;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+
 .chat-copy {
   margin: 5px 0 0;
   color: var(--text-soft);
@@ -1098,18 +1108,17 @@ export function landingPage(lang: Locale = 'pt'): string {
   const enHome = publicSite('home', 'en', config).canonicalUrl;
   const pt = lang === 'pt';
   const T = (portuguese: string, english: string): string => (pt ? portuguese : english);
-  const visualVersion = '20260713-cloud';
-  const discordVideo = `/assets/discord-demo-${lang}.webm?v=${visualVersion}`;
-  const discordPoster = `/assets/discord-demo-${lang}.png?v=${visualVersion}`;
+  const discordVideo = `/assets/discord-demo-${lang}-v2.webm`;
+  const discordPoster = `/assets/discord-demo-${lang}-v2.png`;
   const meetingImage = `/assets/meeting-demo-${lang}.png`;
   const ogImage = `${config.publicUrl}/og-${lang}.png`;
   const title = T(
-    'Kassinão: decisões do Discord com nome, contexto e fonte',
-    'Kassinão: Discord decisions with names, context, and sources',
+    'Kassinão: grave calls do Discord em faixas separadas',
+    'Kassinão: record Discord calls in separate tracks',
   );
   const description = T(
-    'Bot open source e self-hosted que grava uma faixa por pessoa e transforma calls do Discord em transcrição, ata, tarefas e respostas com timestamp.',
-    'An open-source, self-hosted bot that records one track per speaker and turns Discord calls into transcripts, meeting notes, tasks, and timestamped answers.',
+    'Bot open source e self-hosted que grava uma faixa por conta que fala e guarda notas com timestamp. O operador decide se ativa transcrição, ata, perguntas e MCP.',
+    'An open-source, self-hosted bot that records one track per speaking account and saves timestamped notes. The operator decides whether to enable transcripts, meeting notes, questions, and MCP.',
   );
   const language = `<div class="language" aria-label="${esc(T('Idioma', 'Language'))}">
     <a href="${ptHome}"${pt ? ' aria-current="page"' : ''} lang="pt-BR">PT</a>
@@ -1118,10 +1127,10 @@ export function landingPage(lang: Locale = 'pt'): string {
   const commands = [
     {
       cmd: T('/gravar', '/record'),
-      title: T('O bot entra na call e avisa todo mundo.', 'The bot joins the call and notifies everyone.'),
+      title: T('O bot publica o painel antes de capturar.', 'The bot posts the recording panel before capture.'),
       body: T(
-        'Cada participante recebe uma faixa própria ligada à identidade do Discord.',
-        'Each participant gets a separate track tied to their Discord identity.',
+        'Cada conta que falar recebe uma faixa própria ligada ao áudio enviado pelo Discord.',
+        'Each account that speaks gets a separate track tied to the audio Discord sends.',
       ),
     },
     {
@@ -1136,16 +1145,16 @@ export function landingPage(lang: Locale = 'pt'): string {
       cmd: T('/parar', '/stop'),
       title: T('A reunião vira um artefato navegável.', 'The meeting becomes a navigable artifact.'),
       body: T(
-        'Áudio, transcrição, ata, decisões, tarefas, notas e linha do tempo ficam juntos.',
-        'Audio, transcript, meeting notes, decisions, tasks, notes, and timeline stay together.',
+        'Depois de encerrar, faixas, mix, notas e linha do tempo ficam no app privado.',
+        'After it ends, tracks, mix, notes, and timeline events stay in the private app.',
       ),
     },
     {
       cmd: T('/perguntar', '/ask'),
-      title: T('A memória volta com a fonte.', 'The memory comes back with the source.'),
+      title: T('Com IA habilitada, a memória volta com a fonte.', 'With AI enabled, memory comes back with a source.'),
       body: T(
-        'A resposta respeita o acesso da pessoa e abre a reunião usada como evidência.',
-        'The answer respects each person\u2019s access and opens the meeting used as evidence.',
+        'A resposta é privada, respeita o acesso da pessoa e abre a reunião usada como evidência.',
+        'The private reply respects each person\u2019s access and opens the meeting used as evidence.',
       ),
     },
   ];
@@ -1197,12 +1206,12 @@ export function landingPage(lang: Locale = 'pt'): string {
     <div class="hero-copy">
       <p class="eyebrow">${esc(T('Para equipes que trabalham no Discord', 'For teams that work on Discord'))}</p>
       <h1 id="hero-title">${esc(T('Sua call termina. As decisões não somem.', "Your call ends. The decisions don't disappear."))}</h1>
-      <p class="hero-sub">${esc(T('O Kassinão grava uma faixa por pessoa e entrega transcrição com nomes, ata, tarefas e respostas que abrem o segundo exato, no seu próprio servidor.', 'Kassinão records one track per speaker and delivers named transcripts, meeting notes, tasks, and answers that open the exact moment, on your own server.'))}</p>
+      <p class="hero-sub">${esc(T('O Kassinão grava cada conta que fala em uma faixa separada, guarda notas no momento da conversa e roda na infraestrutura que você controla. O operador ativa separadamente transcrição, ata, perguntas e MCP.', 'Kassinão records each speaking account in a separate track, saves notes at the moment they happen, and runs on infrastructure you control. The operator enables transcripts, meeting notes, questions, and MCP separately.'))}</p>
       <div class="hero-actions">
         <a class="button button-primary" href="${site.links.demo}">${esc(T('Ver uma reunião pronta', 'See a finished meeting'))}</a>
-        <a class="button button-secondary" href="${site.links.docs}">${esc(T('Instalar no meu servidor', 'Install on my server'))}</a>
+        <a class="button button-secondary" href="${site.links.docs}">${esc(T('Fazer self-host do Kassinão', 'Self-host Kassinão'))}</a>
       </div>
-      <p class="hero-note">${esc(T('Demo pública com dados fictícios, sem login. A instalação requer Docker, HTTPS e um app do Discord.', 'Public demo with fictional data and no login. Installation requires Docker, HTTPS, and a Discord app.'))}</p>
+      <p class="hero-note">${esc(T('Demo pública com dados fictícios e IA habilitada, sem login. Para avaliar localmente, basta Docker e um app Discord de teste; produção pública exige HTTPS, domínio e app próprios.', 'Public demo with fictional data and AI enabled, with no login. Local evaluation needs Docker and a test Discord app; public production requires HTTPS, a domain, and its own app.'))}</p>
     </div>
     <div class="hero-proof">
       <div class="media-frame">
@@ -1211,15 +1220,15 @@ export function landingPage(lang: Locale = 'pt'): string {
         </video>
         <img class="motion-poster" src="${discordPoster}" width="1270" height="760" alt="${esc(T('Fluxo do Kassinão dentro do Discord', 'Kassinão workflow inside Discord'))}">
       </div>
-      <p class="media-caption">${esc(T('Exemplo fictício. Comandos e respostas refletem o produto real.', 'Fictional example. Commands and responses reflect the real product.'))}</p>
+      <p class="media-caption">${esc(T('Exemplo fictício de uma instância com os recursos opcionais de IA ativados.', 'Fictional example of an instance with optional AI features enabled.'))}</p>
     </div>
   </section>
 
   <div class="proof-line">
     <div class="wrap proof-items" aria-label="${esc(T('Resumo do produto', 'Product summary'))}">
       <div class="proof-item"><strong>${esc(T('Feito para Discord', 'Built for Discord'))}</strong><span>${esc(T('onde a call já acontece', 'where the call already happens'))}</span></div>
-      <div class="proof-item"><strong>${esc(T('1 pessoa = 1 faixa', '1 person = 1 track'))}</strong><span>${esc(T('sem diarização para identificar', 'no diarization for identity'))}</span></div>
-      <div class="proof-item"><strong>${esc(T('Resposta com fonte', 'Answers with sources'))}</strong><span>${esc(T('abre o segundo usado como evidência', 'opens the exact moment used as evidence'))}</span></div>
+      <div class="proof-item"><strong>${esc(T('1 conta falando = 1 faixa', '1 speaking account = 1 track'))}</strong><span>${esc(T('origem da voz preservada', 'voice origin preserved'))}</span></div>
+      <div class="proof-item"><strong>${esc(T('IA e MCP opcionais', 'Optional AI and MCP'))}</strong><span>${esc(T('você escolhe se e como ativar', 'you choose whether and how to enable them'))}</span></div>
       <div class="proof-item"><strong>Self-hosted</strong><span>${esc(T('dados sob seu controle', 'data under your control'))}</span></div>
     </div>
   </div>
@@ -1227,26 +1236,26 @@ export function landingPage(lang: Locale = 'pt'): string {
   <section class="section" aria-labelledby="identity-title">
     <div class="wrap">
       <div class="section-head" data-reveal>
-        <h2 id="identity-title">${esc(T('A identidade não vem de um palpite.', 'Speaker identity is not a guess.'))}</h2>
-        <p>${esc(T('O Discord entrega cada pessoa separadamente. O Kassinão preserva essa origem da voz até a transcrição.', 'Discord delivers each person separately. Kassinão preserves that voice identity all the way to the transcript.'))}</p>
+        <h2 id="identity-title">${esc(T('A voz já chega ligada a uma conta.', 'The voice stream already has an account.'))}</h2>
+        <p>${esc(T('Quando alguém fala, o Discord envia o fluxo daquela conta separadamente. O Kassinão grava esse vínculo na faixa e, se a transcrição estiver habilitada, leva o mesmo vínculo para o texto.', 'When someone speaks, Discord sends that account\u2019s stream separately. Kassinão preserves that link in the track and, if transcription is enabled, carries it into the text.'))}</p>
       </div>
       <div class="identity-stage" data-reveal>
-        <div class="identity-axis" aria-hidden="true"><span>${esc(T('Pessoa no Discord', 'Discord member'))}</span><span>${esc(T('Faixa recebida', 'Incoming track'))}</span><span>${esc(T('Linha da transcrição', 'Transcript line'))}</span></div>
+        <div class="identity-axis" aria-hidden="true"><span>${esc(T('Conta que falou', 'Speaking account'))}</span><span>${esc(T('Faixa recebida', 'Incoming track'))}</span><span>${esc(T('Linha opcional da transcrição', 'Optional transcript line'))}</span></div>
         ${[
           [
-            'Bea',
+            'Luna',
             T('produto', 'product'),
-            T('Vou enviar a proposta até sexta.', 'I will send the proposal by Friday.'),
+            T('A beta abre para a comunidade na terça.', 'The beta opens to the community on Tuesday.'),
           ],
           [
-            'Mauro',
-            T('operações', 'operations'),
-            T('O plano de R$ 49 fica como opção inicial.', 'The $49 plan stays as the entry option.'),
+            T('Íris', 'Iris'),
+            T('comunidade', 'community'),
+            T('Vou publicar a lista de convites até sexta.', 'I will publish the invite list by Friday.'),
           ],
           [
-            'Rafa',
+            'Noah',
             T('engenharia', 'engineering'),
-            T('O rollout começa com 20% da base.', 'The rollout starts with 20% of users.'),
+            T('O acesso antecipado começa com 20 pessoas.', 'Early access starts with 20 people.'),
           ],
         ]
           .map(
@@ -1265,7 +1274,7 @@ export function landingPage(lang: Locale = 'pt'): string {
     <div class="wrap discord-story">
       <div class="story-copy" data-reveal>
         <h2 id="discord-title">${esc(T('Tudo acontece onde a call já está.', 'Everything happens where the call already lives.'))}</h2>
-        <p>${esc(T('Comece, marque, encerre e consulte sem arrastar o time para outra ferramenta.', 'Start, mark, stop, and search without dragging the team into another tool.'))}</p>
+        <p>${esc(T('Comece, marque e encerre sem arrastar o time para outra ferramenta. Se a IA estiver habilitada, consulte o conteúdo depois pelo mesmo Discord.', 'Start, mark, and stop without dragging the team into another tool. If AI is enabled, query the content later from the same Discord server.'))}</p>
       </div>
       <div class="command-journey" data-reveal>
         ${commands.map((step) => `<article class="command-step"><code>${esc(step.cmd)}</code><div><strong>${esc(step.title)}</strong><span>${esc(step.body)}</span></div></article>`).join('')}
@@ -1278,7 +1287,7 @@ export function landingPage(lang: Locale = 'pt'): string {
       <div class="section-head" data-reveal>
         <p class="eyebrow">${esc(T('Demo pública', 'Public demo'))}</p>
         <h2 id="meeting-title">${esc(T('Abra uma reunião pronta.', 'Open a finished meeting.'))}</h2>
-        <p>${esc(T('Dados fictícios, interface real: áudio de amostra, transcrição, ata, decisões, tarefas, notas e linha do tempo.', 'Fictional data, real interface: sample audio, transcript, meeting notes, decisions, tasks, notes, and timeline.'))}</p>
+        <p>${esc(T('Dados fictícios, interface real e IA habilitada: áudio de amostra, transcrição, ata, decisões, tarefas, notas e linha do tempo.', 'Fictional data, real interface, and AI enabled: sample audio, transcript, meeting notes, decisions, tasks, notes, and timeline.'))}</p>
       </div>
       <div class="meeting-frame" data-reveal>
         <img src="${meetingImage}" width="1255" height="751" loading="lazy" alt="${esc(T('Página pública de uma reunião fictícia processada pelo Kassinão', 'Public page for a fictional meeting processed by Kassinão'))}">
@@ -1294,18 +1303,18 @@ export function landingPage(lang: Locale = 'pt'): string {
     <div class="wrap">
       <div class="section-head" data-reveal>
         <h2 id="answers-title">${esc(T('Pergunte depois. Receba a fonte.', 'Ask later. Get the source.'))}</h2>
-        <p>${esc(T('No Discord ou em qualquer cliente MCP, cada resposta continua presa às reuniões que a pessoa pode abrir.', 'In Discord or any MCP client, each answer stays tied to meetings that person is allowed to open.'))}</p>
+        <p>${esc(T('Quando o operador habilita transcrição, perguntas e MCP, o Discord responde só para quem perguntou e o cliente MCP recebe apenas dados das reuniões que essa pessoa pode abrir.', 'When the operator enables transcription, questions, and MCP, Discord replies only to the person who asked, and the MCP client receives data only from meetings that person can open.'))}</p>
       </div>
       <div class="answer-stage" data-reveal>
         <div class="discord-answer">
-          <div class="chat-line"><span class="chat-avatar">M</span><div><div class="chat-meta">Mauro <span>11:08</span></div><p class="chat-copy"><span class="slash-command">${esc(T('/perguntar', '/ask'))}</span> ${esc(T('o que ficou do plano de R$ 49?', 'what happened with the $49 plan?'))}</p></div></div>
-          <div class="chat-line"><span class="chat-avatar bot">k/</span><div><div class="chat-meta">Kassinão <span>APP</span></div><div class="source-answer">${esc(T('Bea vai enviar a proposta do plano de R$ 49 até sexta.', 'Bea will send the $49 plan proposal by Friday.'))} <a href="${site.links.demo}">${esc(T('Fonte: 00:14', 'Source: 00:14'))}</a></div></div></div>
+          <div class="chat-line"><span class="chat-avatar">L</span><div><div class="chat-meta">Luna <span>11:08</span><span class="ephemeral">${esc(T('só você', 'only you'))}</span></div><p class="chat-copy"><span class="slash-command">${esc(T('/perguntar', '/ask'))}</span> ${esc(T('quem publica a lista da beta?', 'who publishes the beta invite list?'))}</p></div></div>
+          <div class="chat-line"><span class="chat-avatar bot">k/</span><div><div class="chat-meta">Kassinão <span>APP</span><span class="ephemeral">${esc(T('resposta efêmera', 'ephemeral reply'))}</span></div><div class="source-answer">${esc(T('Íris vai publicar a lista de convites até sexta.', 'Iris will publish the invite list by Friday.'))} <a href="${site.links.demo}">${esc(T('Fonte: 00:14', 'Source: 00:14'))}</a></div></div></div>
         </div>
         <div class="mcp-window">
           <div class="window-head"><span>MCP · kassinao</span></div>
           <div class="mcp-body">
             <div class="mcp-query">${esc(T('Quais ações ficaram pendentes esta semana?', 'What action items are still pending this week?'))}</div>
-            <div class="mcp-response">${esc(T('4 ações em 2 reuniões. Bea e Rafa têm prazos até sexta.', '4 action items across 2 meetings. Bea and Rafa have deadlines by Friday.'))}</div>
+            <div class="mcp-response">${esc(T('4 ações em 2 reuniões. Íris e Noah têm prazos até sexta.', '4 action items across 2 meetings. Iris and Noah have deadlines by Friday.'))}</div>
             <p class="mcp-note">${esc(T('Somente leitura, individual e revogável.', 'Read-only, individual, and revocable.'))}</p>
             <a class="button button-secondary" href="${site.links.mcp}">${esc(T('Entender o MCP', 'Understand MCP'))}</a>
           </div>
@@ -1318,22 +1327,22 @@ export function landingPage(lang: Locale = 'pt'): string {
     <div class="wrap trust-layout">
       <div class="trust-intro" data-reveal>
         <p class="eyebrow">${esc(T('Controle', 'Control'))}</p>
-        <h2 id="trust-title">${esc(T('Seu servidor. Seu histórico. Suas regras.', 'Your server. Your history. Your rules.'))}</h2>
+        <h2 id="trust-title">${esc(T('Sua instância. Seu histórico. Suas regras.', 'Your instance. Your history. Your rules.'))}</h2>
         <p>${esc(T('A infraestrutura é sua e a política de acesso continua ancorada no Discord.', 'You own the infrastructure, and access policy stays anchored to Discord.'))}</p>
       </div>
       <div class="trust-list" data-reveal>
-        <article class="trust-row"><strong>${esc(T('Self-hosted', 'Self-hosted'))}</strong><p>${esc(T('Não existe workspace hospedado ou cadastro público. Você roda seu próprio bot e app na sua VPS.', 'There is no hosted workspace or public signup. You run your own bot and app on your VPS.'))}</p></article>
-        <article class="trust-row"><strong>${esc(T('Acesso revalidado', 'Revalidated access'))}</strong><p>${esc(T('Login, busca, perguntas e MCP respeitam a participação e as permissões da reunião.', 'Login, search, questions, and MCP respect meeting participation and permissions.'))}</p></article>
-        <article class="trust-row"><strong>${esc(T('Retenção configurável', 'Configurable retention'))}</strong><p>${esc(T('Áudio e texto podem ter ciclos diferentes. Apague o peso sem perder a memória pesquisável.', 'Audio and text can have different lifecycles. Remove the heavy files without losing searchable memory.'))}</p></article>
-        <article class="trust-row"><strong>${esc(T('IA escolhida por você', 'Your choice of AI'))}</strong><p>${esc(T('Use processamento local ou configure um provider. Quando há provider externo, o áudio ou texto necessário é enviado conforme essa configuração.', 'Use local processing or configure a provider. When an external provider is enabled, the required audio or text is sent according to that configuration.'))}</p></article>
+        <article class="trust-row"><strong>${esc(T('Self-hosted', 'Self-hosted'))}</strong><p>${esc(T('Não existe serviço hospedado nem cadastro público. Você executa seu próprio bot e app privado na sua VPS.', 'There is no hosted service or public signup. You run your own bot and private app on your VPS.'))}</p></article>
+        <article class="trust-row"><strong>${esc(T('Acesso revalidado', 'Revalidated access'))}</strong><p>${esc(T('O app revalida o vínculo com o Discord e aplica a permissão de cada reunião. Perguntas e MCP seguem a mesma fronteira quando habilitados.', 'The app revalidates Discord membership and applies each meeting\u2019s permissions. Questions and MCP follow the same boundary when enabled.'))}</p></article>
+        <article class="trust-row"><strong>${esc(T('Retenção configurável', 'Configurable retention'))}</strong><p>${esc(T('Áudio e texto podem ter ciclos diferentes. Você pode liberar as faixas pesadas e manter notas e conteúdo já gerado.', 'Audio and text can have different lifecycles. You can release heavy tracks while keeping notes and content already generated.'))}</p></article>
+        <article class="trust-row"><strong>${esc(T('IA é opt-in', 'AI is opt-in'))}</strong><p>${esc(T('Gravação, faixas, mix e notas funcionam sem provider. Para IA local, crie uma imagem customizada com o transcritor; com provider externo, o áudio ou texto necessário sai da VPS conforme a configuração.', 'Recording, tracks, mix, and notes work without a provider. For local AI, build a custom image with the transcriber; with an external provider, the required audio or text leaves the VPS according to your configuration.'))}</p></article>
       </div>
     </div>
   </section>
 
   <section class="wrap final-section">
     <div class="final-cta" data-reveal>
-      <h2>${esc(T('Instale no seu servidor. Mantenha o controle.', 'Install it on your server. Keep control.'))}</h2>
-      <p>${esc(T('O Kassinão é open source. Crie seu app do Discord, use seu próprio domínio e transforme a próxima call em memória do time.', 'Kassinão is open source. Create your Discord app, use your own domain, and turn the next call into team memory.'))}</p>
+      <h2>${esc(T('Rode na sua infraestrutura. Mantenha o controle.', 'Run it on your infrastructure. Keep control.'))}</h2>
+      <p>${esc(T('O Kassinão é open source. Crie seu app do Discord, use seu próprio domínio e comece pela gravação. Depois, ative somente as integrações de IA e MCP que fizerem sentido para a sua operação.', 'Kassinão is open source. Create your Discord app, use your own domain, and start with recording. Then enable only the AI and MCP integrations that fit your operation.'))}</p>
       <div class="section-actions">
         <a class="button button-primary" href="${site.links.docs}">${esc(T('Abrir guia de instalação', 'Open installation guide'))}</a>
         <a class="button button-secondary" href="${site.links.github}" target="_blank" rel="noopener noreferrer">${esc(T('Auditar o código', 'Audit the code'))}</a>

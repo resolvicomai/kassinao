@@ -106,6 +106,7 @@ describe('URL do conector MCP', () => {
   it('normaliza HTTPS/localhost e nunca envia token por HTTP remoto', () => {
     expect(normalizeKassinaoUrl('https://kassinao.example.com/')).toBe('https://kassinao.example.com');
     expect(normalizeKassinaoUrl('http://localhost:8080')).toBe('http://localhost:8080');
+    expect(normalizeKassinaoUrl('http://[::1]:8080')).toBe('http://[::1]:8080');
     expect(() => normalizeKassinaoUrl('http://kassinao.example.com')).toThrow(/HTTPS/);
     expect(() => normalizeKassinaoUrl('https://user:pass@example.com')).toThrow(/credentials/);
     expect(() => normalizeKassinaoUrl('https://example.com/sub')).toThrow(/path/);

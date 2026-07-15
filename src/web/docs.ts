@@ -50,621 +50,6 @@ function codeBlock(label: string, value: string, copyLabel: string): string {
   </div>`;
 }
 
-const COMMANDS: CommandDoc[] = [
-  {
-    pt: '/gravar [canal]',
-    en: '/record [channel]',
-    description: {
-      pt: 'Entra no seu canal de voz e começa uma gravação com uma faixa separada por pessoa. Admins podem indicar outro canal visível.',
-      en: 'Joins your voice channel and starts a recording with one separate track per person. Admins can target another visible channel.',
-    },
-    access: { pt: 'Qualquer membro no próprio canal', en: 'Any member in their own channel' },
-  },
-  {
-    pt: '/parar',
-    en: '/stop',
-    description: {
-      pt: 'Encerra a gravação, libera o link privado e inicia a fila de transcrição e ata.',
-      en: 'Ends the recording, provides the private link, and starts the transcript and minutes queue.',
-    },
-    access: {
-      pt: 'Iniciador, quem esteve na call ou admin atual',
-      en: 'Starter, call participants, or current admins',
-    },
-  },
-  {
-    pt: '/nota <texto>',
-    en: '/note <text>',
-    description: {
-      pt: 'Salva uma nota no segundo atual. O painel também oferece ações para marcar um momento ou escrever uma nota.',
-      en: 'Saves a note at the current second. The panel also includes actions to mark a moment or write a note.',
-    },
-    access: {
-      pt: 'Iniciador, quem esteve na call ou admin atual',
-      en: 'Starter, call participants, or current admins',
-    },
-  },
-  {
-    pt: '/status',
-    en: '/status',
-    description: {
-      pt: 'Mostra o estado da gravação em andamento que você tem permissão para acompanhar.',
-      en: 'Shows the current recording state when you have permission to follow it.',
-    },
-    access: { pt: 'Membro do servidor com acesso', en: 'Server member with access' },
-  },
-  {
-    pt: '/gravacoes',
-    en: '/recordings',
-    description: {
-      pt: 'Lista gravações acessíveis e abre a central privada com busca em transcrições, atas e notas.',
-      en: 'Lists accessible recordings and opens the private workspace with search across transcripts, minutes, and notes.',
-    },
-    access: { pt: 'Resultados filtrados por acesso', en: 'Results filtered by access' },
-  },
-  {
-    pt: '/perguntar <pergunta> [dias]',
-    en: '/ask <question> [days]',
-    description: {
-      pt: 'Busca por tema, pessoa, data da call ou prazo e responde só para você com evidências e links para o segundo exato.',
-      en: 'Searches by topic, person, call date, or deadline and replies only to you with evidence and links to the exact second.',
-    },
-    access: { pt: 'Somente reuniões que você pode abrir', en: 'Only meetings you are allowed to open' },
-  },
-  {
-    pt: '/autorecord ligar|desligar|ver',
-    en: '/autorecord on|off|view',
-    description: {
-      pt: 'Configura a gravação automática por canal e o mínimo de pessoas para iniciar.',
-      en: 'Configures automatic recording per channel and the minimum number of people required to start.',
-    },
-    access: { pt: 'Gerenciar Servidor', en: 'Manage Server' },
-  },
-  {
-    pt: '/config ata-canal|ver',
-    en: '/config minutes-channel|view',
-    description: {
-      pt: 'Escolhe o canal do aviso genérico de processamento ou consulta a configuração atual. Detalhes e links ficam nas DMs autorizadas.',
-      en: 'Chooses the channel for the generic processing notice or displays the current configuration. Details and links stay in authorized DMs.',
-    },
-    access: { pt: 'Gerenciar Servidor', en: 'Manage Server' },
-  },
-  {
-    pt: '/mcp novo|revogar-tudo',
-    en: '/mcp new|revoke-all',
-    description: {
-      pt: 'Gera um código de conexão ou revoga conectores. Só aparece quando o MCP está habilitado. Membros comuns usam a página de conexão.',
-      en: 'Generates a connection code or revokes connectors. It only appears when MCP is enabled. Regular members use the connection page.',
-    },
-    access: { pt: 'Somente IDs em OWNER_IDS', en: 'Only IDs listed in OWNER_IDS' },
-  },
-  {
-    pt: '/ajuda',
-    en: '/help',
-    description: {
-      pt: 'Abre o guia interativo do bot com gravação, downloads, perguntas, privacidade e auto-record.',
-      en: 'Opens the interactive bot guide for recording, downloads, questions, privacy, and auto-record.',
-    },
-    access: { pt: 'Qualquer membro', en: 'Any member' },
-  },
-  {
-    pt: '/sobre',
-    en: '/about',
-    description: {
-      pt: 'Mostra autor, licença AGPL-3.0 e código-fonte.',
-      en: 'Shows the author, AGPL-3.0 license, and source code.',
-    },
-    access: { pt: 'Qualquer membro', en: 'Any member' },
-  },
-];
-
-const ENV_GROUPS: EnvGroup[] = [
-  {
-    title: { pt: 'Discord e acesso web', en: 'Discord and web access' },
-    summary: {
-      pt: 'Identidade do bot, OAuth, URL pública e idioma.',
-      en: 'Bot identity, OAuth, public URL, and language.',
-    },
-    items: [
-      {
-        name: 'DISCORD_TOKEN',
-        fallback: { pt: 'obrigatória', en: 'required' },
-        description: {
-          pt: 'Token do bot criado no Discord Developer Portal.',
-          en: 'Bot token created in the Discord Developer Portal.',
-        },
-      },
-      {
-        name: 'APPLICATION_ID',
-        fallback: { pt: 'obrigatória', en: 'required' },
-        description: {
-          pt: 'ID da aplicação usado para registrar os comandos.',
-          en: 'Application ID used to register commands.',
-        },
-      },
-      {
-        name: 'DISCORD_CLIENT_SECRET',
-        fallback: { pt: 'obrigatória', en: 'required' },
-        description: {
-          pt: 'Client Secret do OAuth usado no login das páginas privadas.',
-          en: 'OAuth Client Secret used for private-page login.',
-        },
-      },
-      {
-        name: 'APP_URL',
-        fallback: 'http://localhost:8080',
-        description: {
-          pt: 'Origem privada do app, OAuth, gravações e downloads. Cadastre APP_URL/auth/callback como redirect do Discord.',
-          en: 'Private origin for the app, OAuth, recordings, and downloads. Register APP_URL/auth/callback as a Discord redirect.',
-        },
-      },
-      {
-        name: 'BASE_URL',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: {
-          pt: 'Alias retrocompatível de APP_URL. Instalações novas devem preferir APP_URL.',
-          en: 'Backward-compatible alias for APP_URL. New installations should prefer APP_URL.',
-        },
-      },
-      {
-        name: 'PUBLIC_URL',
-        fallback: 'APP_URL',
-        description: {
-          pt: 'Origem da landing e da demo pública. Deixe igual ao app quando usar um único domínio.',
-          en: 'Origin for the landing page and public demo. Keep it equal to the app when using one domain.',
-        },
-      },
-      {
-        name: 'DOCS_URL',
-        fallback: 'PUBLIC_URL',
-        description: {
-          pt: 'Origem da documentação. Quando separada, português fica em / e inglês em /en.',
-          en: 'Documentation origin. When separate, Portuguese lives at / and English at /en.',
-        },
-      },
-      {
-        name: 'MCP_URL',
-        fallback: 'APP_URL',
-        description: {
-          pt: 'Origem privada da API MCP da sua instância. O conector usa este valor em KASSINAO_URL.',
-          en: 'Private MCP API origin for your instance. The connector uses this value as KASSINAO_URL.',
-        },
-      },
-      {
-        name: 'ALLOWED_GUILD_IDS',
-        fallback: { pt: 'obrigatória no modo privado', en: 'required in private mode' },
-        description: {
-          pt: 'IDs dos servidores Discord aceitos pela instância, separados por vírgula.',
-          en: 'Comma-separated Discord server IDs accepted by this instance.',
-        },
-      },
-      {
-        name: 'ALLOW_ALL_GUILDS',
-        fallback: 'false',
-        description: {
-          pt: 'Opt-in para operador público multi-guild. Não combine com a allowlist.',
-          en: 'Opt-in for a public multi-guild operator. Do not combine with the allowlist.',
-        },
-      },
-      {
-        name: 'GUILD_ID',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: {
-          pt: 'Filtro opcional de registro de comandos. Não concede acesso e precisa estar na allowlist.',
-          en: 'Optional command-registration filter. It grants no access and must be in the allowlist.',
-        },
-      },
-      {
-        name: 'TRUST_PROXY_HOPS',
-        fallback: '0',
-        description: {
-          pt: 'Número exato de proxies confiáveis. Use 1 na topologia do túnel incluído.',
-          en: 'Exact trusted proxy count. Use 1 for the bundled tunnel topology.',
-        },
-      },
-      {
-        name: 'SOURCE_URL',
-        fallback: 'https://github.com/resolvicomai/kassinao',
-        description: {
-          pt: 'Repositório exibido por /sobre e pela interface. Forks devem apontar para o próprio código.',
-          en: 'Repository shown by /about and the interface. Forks should point to their own source.',
-        },
-      },
-      {
-        name: 'PORT',
-        fallback: '8080',
-        description: {
-          pt: 'Porta do modo bare-node. No Docker, a porta interna permanece 8080.',
-          en: 'Bare-node port. In Docker, the internal port remains fixed at 8080.',
-        },
-      },
-      {
-        name: 'WEB_BIND_ADDRESS',
-        fallback: '127.0.0.1',
-        description: {
-          pt: 'Interface bare-node, segura em loopback. Wildcard só dentro de container isolado.',
-          en: 'Bare-node interface, safely loopback-only. Use wildcard only inside an isolated container.',
-        },
-      },
-      {
-        name: 'KASSINAO_HOST_PORT',
-        fallback: '8080',
-        description: {
-          pt: 'Porta opcional do Docker no host; o Compose sempre publica em 127.0.0.1.',
-          en: 'Optional Docker host port; Compose always publishes it on 127.0.0.1.',
-        },
-      },
-      {
-        name: 'TUNNEL_TOKEN',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: {
-          pt: 'Token do Cloudflare Tunnel. Ative também o profile tunnel.',
-          en: 'Cloudflare Tunnel token. Also enable the tunnel profile.',
-        },
-      },
-      {
-        name: 'COMPOSE_PROFILES',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: {
-          pt: 'Use tunnel para subir o Cloudflare Tunnel junto com o bot.',
-          en: 'Use tunnel to start Cloudflare Tunnel alongside the bot.',
-        },
-      },
-      {
-        name: 'COOKIE_SECRET',
-        fallback: { pt: 'gerado e persistido', en: 'generated and persisted' },
-        description: {
-          pt: 'Segredo de sessão com no mínimo 32 bytes. Se vazio, o bot cria um no volume.',
-          en: 'Session secret with at least 32 bytes. When empty, the bot creates one in the volume.',
-        },
-      },
-      {
-        name: 'REPO_PUBLIC',
-        fallback: 'false',
-        description: {
-          pt: 'Exibe o SOURCE_URL configurado dentro das páginas privadas.',
-          en: 'Shows the configured SOURCE_URL inside private app pages.',
-        },
-      },
-      {
-        name: 'DEFAULT_LOCALE',
-        fallback: 'en',
-        description: {
-          pt: 'Idioma de fallback quando o Discord não fornece o locale.',
-          en: 'Fallback language when Discord does not provide a locale.',
-        },
-      },
-      {
-        name: 'TZ',
-        fallback: 'America/Sao_Paulo',
-        description: {
-          pt: 'Fuso de fallback para datas. Na web, o navegador tem prioridade.',
-          en: 'Fallback timezone for dates. On the web, the browser takes priority.',
-        },
-      },
-    ],
-  },
-  {
-    title: { pt: 'Gravação, retenção e disco', en: 'Recording, retention, and disk' },
-    summary: {
-      pt: 'Arquivos, duração, qualidade, expiração e guardas operacionais.',
-      en: 'Files, duration, quality, expiration, and operational guards.',
-    },
-    items: [
-      {
-        name: 'RECORDINGS_DIR',
-        fallback: './recordings',
-        description: {
-          pt: 'Diretório persistente das gravações. No Docker, usa /app/recordings.',
-          en: 'Persistent recordings directory. Docker uses /app/recordings.',
-        },
-      },
-      {
-        name: 'RETENTION_DAYS',
-        fallback: '7',
-        description: {
-          pt: 'Dias até o áudio expirar. Zero desliga toda expiração automática.',
-          en: 'Days until audio expires. Zero disables all automatic expiration.',
-        },
-      },
-      {
-        name: 'TEXT_RETENTION_DAYS',
-        fallback: '90',
-        description: {
-          pt: 'Retenção de transcrição, ata e notas. Nunca fica menor que a retenção do áudio.',
-          en: 'Retention for transcript, minutes, and notes. Never lower than audio retention.',
-        },
-      },
-      {
-        name: 'MAX_RECORDING_HOURS',
-        fallback: '6',
-        description: { pt: 'Duração máxima de cada gravação.', en: 'Maximum duration of each recording.' },
-      },
-      {
-        name: 'RECORDING_MAX_CONCURRENT',
-        fallback: '2',
-        description: {
-          pt: 'Teto global de sessões consumindo recursos, inclusive durante início e encerramento.',
-          en: 'Global cap for sessions consuming resources, including startup and shutdown.',
-        },
-      },
-      {
-        name: 'RECORDING_GUILD_STARTS_PER_24H',
-        fallback: '12',
-        description: {
-          pt: 'Cota dura móvel por servidor, somando inícios manuais e automáticos. Admins também consomem.',
-          en: 'Hard rolling quota per server across manual and automatic starts. Admins also consume it.',
-        },
-      },
-      {
-        name: 'RECORDING_STARTS_GLOBAL_PER_HOUR',
-        fallback: '8',
-        description: {
-          pt: 'Cota dura global de inícios em uma hora, para limitar churn e custo externo.',
-          en: 'Hard global start quota per hour, limiting churn and external cost.',
-        },
-      },
-      {
-        name: 'RECORDING_STARTS_GLOBAL_PER_24H',
-        fallback: '32',
-        description: {
-          pt: 'Cota dura global de inícios em uma janela móvel de 24 horas.',
-          en: 'Hard global start quota in a rolling 24-hour window.',
-        },
-      },
-      {
-        name: 'RECORDING_MAX_PENDING_PROCESSING',
-        fallback: '12',
-        description: {
-          pt: 'Capacidade reservada da captura até terminar preparo, transcrição e ata.',
-          en: 'Capacity reserved from capture until cooking, transcription, and minutes finish.',
-        },
-      },
-      {
-        name: 'MANUAL_RECORD_USER_COOLDOWN_SEC',
-        fallback: '60',
-        description: {
-          pt: 'Cooldown global por membro comum entre inícios manuais. Admins ignoram.',
-          en: 'Global cooldown per regular member between manual starts. Admins bypass it.',
-        },
-      },
-      {
-        name: 'MANUAL_RECORD_GUILD_COOLDOWN_SEC',
-        fallback: '15',
-        description: {
-          pt: 'Cooldown do servidor entre inícios manuais de membros comuns.',
-          en: 'Server cooldown between manual starts by regular members.',
-        },
-      },
-      {
-        name: 'MP3_BITRATE',
-        fallback: '192k',
-        description: {
-          pt: 'Bitrate dos MP3 individuais e do mix.',
-          en: 'Bitrate for individual MP3 files and the mix.',
-        },
-      },
-      {
-        name: 'MIN_FREE_MB_START',
-        fallback: '500',
-        description: {
-          pt: 'Espaço livre mínimo para iniciar uma gravação.',
-          en: 'Minimum free space required to start a recording.',
-        },
-      },
-      {
-        name: 'MIN_FREE_MB_ABORT',
-        fallback: '150',
-        description: {
-          pt: 'Espaço livre que força uma parada segura durante a gravação.',
-          en: 'Free-space threshold that triggers a safe stop during recording.',
-        },
-      },
-      {
-        name: 'DISK_ALERT_PCT',
-        fallback: '85',
-        description: {
-          pt: 'Percentual de uso que envia alerta por DM aos OWNER_IDS.',
-          en: 'Usage percentage that sends a DM alert to OWNER_IDS.',
-        },
-      },
-    ],
-  },
-  {
-    title: { pt: 'Transcrição e ata', en: 'Transcription and minutes' },
-    summary: {
-      pt: 'Provider de voz, vocabulário, modelo local e geração da ata.',
-      en: 'Speech provider, vocabulary, local model, and minutes generation.',
-    },
-    items: [
-      {
-        name: 'TRANSCRIBE_PROVIDER',
-        fallback: 'none',
-        description: {
-          pt: 'none, assemblyai, openai, groq, gemini ou command.',
-          en: 'none, assemblyai, openai, groq, gemini, or command.',
-        },
-      },
-      {
-        name: 'TRANSCRIBE_MODEL',
-        fallback: { pt: 'padrão do provider', en: 'provider default' },
-        description: {
-          pt: 'Sobrescreve o modelo do provider escolhido.',
-          en: 'Overrides the selected provider model.',
-        },
-      },
-      {
-        name: 'TRANSCRIBE_FALLBACK_PROVIDER',
-        fallback: 'none',
-        description: {
-          pt: 'Fallback externo explícito: none ou groq. Uma chave isolada não liga o fallback.',
-          en: 'Explicit external fallback: none or groq. A key alone never enables fallback.',
-        },
-      },
-      {
-        name: 'TRANSCRIBE_SEND_MEETING_CONTEXT',
-        fallback: 'false',
-        description: {
-          pt: 'Autoriza enviar nomes de participantes, servidor e canal ao provider ASR.',
-          en: 'Allows participant names, server, and channel context to be sent to the ASR provider.',
-        },
-      },
-      {
-        name: 'TRANSCRIBE_LANGUAGE',
-        fallback: 'pt',
-        description: { pt: 'Idioma falado nas calls.', en: 'Language spoken in calls.' },
-      },
-      {
-        name: 'TRANSCRIBE_PROMPT',
-        fallback: { pt: 'contexto neutro pt-BR', en: 'neutral pt-BR context' },
-        description: {
-          pt: 'Contexto de nomes, vocabulário e estilo para o ASR.',
-          en: 'Names, vocabulary, and style context for ASR.',
-        },
-      },
-      {
-        name: 'TRANSCRIBE_KEYTERMS',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: {
-          pt: 'Vocabulário fixo separado por vírgulas para AssemblyAI Universal-3.5-Pro.',
-          en: 'Comma-separated fixed vocabulary for AssemblyAI Universal-3.5-Pro.',
-        },
-      },
-      {
-        name: 'ASSEMBLYAI_API_KEY / OPENAI_API_KEY / GROQ_API_KEY / GEMINI_API_KEY',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: {
-          pt: 'Defina apenas as chaves dos providers usados.',
-          en: 'Set only the keys for providers you use.',
-        },
-      },
-      {
-        name: 'TRANSCRIBE_COMMAND',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: {
-          pt: 'Executável local + argumentos, com {input} e {output} separados. Não usa shell.',
-          en: 'Local executable plus argv, with separate {input} and {output} arguments. No shell.',
-        },
-      },
-      {
-        name: 'TRANSCRIBE_COMMAND_ENV_ALLOWLIST',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: {
-          pt: 'Variáveis extras entregues deliberadamente ao comando local. Segredos do bot não são herdados.',
-          en: 'Extra variables deliberately passed to the local command. Bot secrets are not inherited.',
-        },
-      },
-      {
-        name: 'TRANSCRIBE_TIMEOUT_FACTOR',
-        fallback: '5',
-        description: {
-          pt: 'Multiplicador de timeout do transcritor local.',
-          en: 'Timeout multiplier for the local transcriber.',
-        },
-      },
-      {
-        name: 'WHISPER_MODEL',
-        fallback: 'small',
-        description: {
-          pt: 'Modelo usado pelo wrapper local faster-whisper.',
-          en: 'Model used by the local faster-whisper wrapper.',
-        },
-      },
-      {
-        name: 'MINUTES_ENABLED',
-        fallback: 'false',
-        description: {
-          pt: 'Ata com IA é opt-in. Use true com provider e chave explícitos; auto fica só para compatibilidade.',
-          en: 'AI minutes are opt-in. Use true with an explicit provider and key; auto is legacy compatibility.',
-        },
-      },
-      {
-        name: 'MINUTES_PROVIDER / MINUTES_MODEL',
-        fallback: { pt: 'openrouter ou groq', en: 'openrouter or groq' },
-        description: {
-          pt: 'Provider e modelo usados para resumo, decisões e tarefas.',
-          en: 'Provider and model used for summaries, decisions, and tasks.',
-        },
-      },
-      {
-        name: 'OPENROUTER_API_KEY',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: { pt: 'Chave para a ata via OpenRouter.', en: 'Key for minutes through OpenRouter.' },
-      },
-      {
-        name: 'OPENROUTER_SITE_URL',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: {
-          pt: 'Atribuição opcional enviada ao OpenRouter. Vazio omite o header HTTP-Referer.',
-          en: 'Optional attribution sent to OpenRouter. Empty omits the HTTP-Referer header.',
-        },
-      },
-      {
-        name: 'MINUTES_MAX_TOKENS',
-        fallback: '8192',
-        description: { pt: 'Teto de tokens de saída da ata.', en: 'Maximum output tokens for minutes.' },
-      },
-      {
-        name: 'MINUTES_WEBHOOK_URL',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: {
-          pt: 'Webhook definido só por env. Recebe minutes.ready quando a ata fica pronta.',
-          en: 'Env-only webhook. Receives minutes.ready when minutes are ready.',
-        },
-      },
-      {
-        name: 'MINUTES_WEBHOOK_SECRET',
-        fallback: { pt: 'obrigatório com webhook', en: 'required with webhook' },
-        description: {
-          pt: 'Segredo dedicado de 32 bytes ou mais usado para assinar cada entrega.',
-          en: 'Dedicated secret of at least 32 bytes used to sign every delivery.',
-        },
-      },
-    ],
-  },
-  {
-    title: { pt: 'Conector MCP', en: 'MCP connector' },
-    summary: {
-      pt: 'Ativação deliberada, allowlist e validade dos tokens.',
-      en: 'Deliberate activation, allowlist, and token lifetimes.',
-    },
-    items: [
-      {
-        name: 'MCP_SECRET',
-        fallback: { pt: 'desligado', en: 'disabled' },
-        description: {
-          pt: 'Segredo dedicado com no mínimo 32 bytes. Ativa a API e o conector.',
-          en: 'Dedicated secret with at least 32 bytes. Enables the API and connector.',
-        },
-      },
-      {
-        name: 'OWNER_IDS',
-        fallback: { pt: 'vazio', en: 'empty' },
-        description: {
-          pt: 'IDs do Discord autorizados a usar /mcp e receber alertas de disco.',
-          en: 'Discord IDs allowed to use /mcp and receive disk alerts.',
-        },
-      },
-      {
-        name: 'MCP_ACCESS_TTL_MIN',
-        fallback: '15',
-        description: {
-          pt: 'Validade do token curto de acesso, em minutos.',
-          en: 'Short-lived access token duration in minutes.',
-        },
-      },
-      {
-        name: 'MCP_REFRESH_TTL_DAYS',
-        fallback: '30',
-        description: {
-          pt: 'Validade do refresh token rotativo, em dias.',
-          en: 'Rotating refresh-token duration in days.',
-        },
-      },
-    ],
-  },
-];
-
 const DOCS_CSS = `
 @font-face {
   font-family: 'Space Grotesk';
@@ -1481,11 +866,13 @@ code {
 }
 
 .provider-list {
+  min-width: 0;
   display: grid;
   gap: 10px;
 }
 
 .provider {
+  min-width: 0;
   display: grid;
   grid-template-columns: 132px minmax(0, 1fr);
   gap: 16px;
@@ -1496,9 +883,15 @@ code {
 
 .provider strong { color: var(--text); }
 
-.provider span { color: var(--muted); font-size: 14px; }
+.provider span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
 
 .pipeline-note {
+  min-width: 0;
   position: sticky;
   top: calc(var(--topbar) + 24px);
   border: 1px solid var(--accent);
@@ -1509,7 +902,11 @@ code {
 
 .pipeline-note h3 { margin-top: 0; }
 
-.pipeline-note p { color: var(--muted); }
+.pipeline-note p {
+  min-width: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
 
 .privacy-layout {
   display: grid;
@@ -1691,10 +1088,11 @@ code {
 
   .quick-layout,
   .requirement-grid,
-  .provider-layout,
   .privacy-layout {
     grid-template-columns: 1fr;
   }
+
+  .provider-layout { grid-template-columns: minmax(0, 1fr); }
 
   .install-step { grid-template-columns: 1fr; gap: 8px; }
 
@@ -1703,7 +1101,7 @@ code {
   .mcp-tools,
   .link-grid { grid-template-columns: 1fr; }
 
-  .provider { grid-template-columns: 1fr; gap: 4px; }
+  .provider { grid-template-columns: minmax(0, 1fr); gap: 4px; }
 
   .pipeline-note { position: static; }
 
@@ -1734,39 +1132,6 @@ code {
   .env-group > * { display: block; }
 }
 `;
-
-function renderCommands(lang: DocsLang): string {
-  return COMMANDS.map(
-    (command) => `<article class="command-card">
-      <code>${esc(command[lang])}</code>
-      <p>${esc(text(lang, command.description))}</p>
-      <div class="command-meta">${esc(lang === 'pt' ? 'Acesso: ' : 'Access: ')}${esc(text(lang, command.access))}</div>
-    </article>`,
-  ).join('');
-}
-
-function renderEnvGroups(lang: DocsLang): string {
-  return ENV_GROUPS.map(
-    (group, index) => `<details class="env-group"${index === 0 ? ' open' : ''}>
-      <summary>
-        <span class="env-title"><strong>${esc(text(lang, group.title))}</strong><span>${esc(text(lang, group.summary))}</span></span>
-      </summary>
-      <dl class="env-list">
-        ${group.items
-          .map(
-            (item) => `<div class="env-item">
-              <dt>${esc(item.name)}</dt>
-              <dd>
-                <span class="env-default">${esc(lang === 'pt' ? 'Padrão: ' : 'Default: ')}${esc(localValue(lang, item.fallback))}</span>
-                <span class="env-description">${esc(text(lang, item.description))}</span>
-              </dd>
-            </div>`,
-          )
-          .join('')}
-      </dl>
-    </details>`,
-  ).join('');
-}
 
 function docsScript(lang: DocsLang): string {
   const messages =
@@ -1970,73 +1335,546 @@ export function docsPage(lang: DocsLang = 'pt'): string {
   const enDocs = publicSite('docs', 'en', config).canonicalUrl;
   const altDocs = site.links.alternate;
   const title = T('Documentação do Kassinão', 'Kassinão documentation');
-  const copyLabel = T('Copiar', 'Copy');
   const description = T(
-    'Instale e opere o bot de Discord que grava calls, transcreve cada pessoa e gera atas, decisões e tarefas.',
-    'Install and operate the Discord bot that records calls, transcribes each person, and creates minutes, decisions, and tasks.',
+    'Instale e opere seu próprio bot de Discord para gravar calls e organizar o áudio. Transcrição, ata, perguntas e MCP são recursos opcionais.',
+    'Install and operate your own Discord bot to record calls and organize audio. Transcription, minutes, questions, and MCP are optional features.',
   );
-  const canonical = site.canonicalUrl;
+  const copyLabel = T('Copiar', 'Copy');
 
-  const clone = codeBlock(
-    l === 'pt' ? 'Terminal' : 'Terminal',
+  const localBuild = codeBlock(
+    'Terminal',
     `git clone ${repoUrl}
 cd kassinao
 cp .env.example .env && chmod 600 .env
-mkdir -p recordings && chmod 700 recordings`,
+mkdir -p data/{recordings,state,auth,cache} && chmod 700 data data/*
+docker build -t kassinao-local:dev .`,
     copyLabel,
   );
-  const start = codeBlock(
-    l === 'pt' ? 'Terminal' : 'Terminal',
-    `docker compose up -d --build
-docker compose logs -f`,
+  const localStart = codeBlock(
+    'Terminal',
+    `# ${T('Edite .env antes de iniciar.', 'Edit .env before starting.')}
+docker compose up -d --no-build
+docker compose logs -f kassinao`,
     copyLabel,
   );
-  const requiredEnv = codeBlock(
+  const localEnv = codeBlock(
     '.env',
-    `DISCORD_TOKEN=${T('cole_o_token_do_bot', 'paste_the_bot_token')}
-APPLICATION_ID=${T('cole_o_id_da_aplicacao', 'paste_the_application_id')}
-DISCORD_CLIENT_SECRET=${T('cole_o_client_secret', 'paste_the_client_secret')}
-APP_URL=${T('https://kassinao.seu-dominio.com', 'https://kassinao.your-domain.com')}
-ALLOWED_GUILD_IDS=${T('cole_o_id_do_seu_servidor', 'paste_your_server_id')}
-ALLOW_ALL_GUILDS=false`,
+    `NODE_ENV=development
+KASSINAO_IMAGE=kassinao-local:dev
+KASSINAO_PULL_POLICY=never
+DISCORD_TOKEN=${T('seu_token', 'your_token')}
+APPLICATION_ID=${T('seu_application_id', 'your_application_id')}
+DISCORD_CLIENT_SECRET=${T('seu_client_secret', 'your_client_secret')}
+APP_URL=http://localhost:8080
+ALLOW_LOCAL_APP_URL=true
+OPERATOR_NAME=${T('Operador local do Kassinão', 'Local Kassinão operator')}
+OPERATOR_CONTACT_URL=http://localhost:8080/privacy#contact
+PRIVACY_POLICY_URL=http://localhost:8080/privacy
+DATA_DELETION_URL=http://localhost:8080/privacy#data-rights
+PRIVACY_EFFECTIVE_DATE=2026-07-14
+PRIVACY_POLICY_VERSION=local-1
+PRIVACY_AUDIENCE=${T('Operador usando dados fictícios no localhost', 'Operator using fictional data on localhost')}
+PRIVACY_PURPOSES=${T('Avaliação local sem dados reais de reunião', 'Local evaluation without real meeting data')}
+PRIVACY_LAWFUL_BASIS=${T('Avaliação local somente com dados fictícios', 'Local evaluation with fictional data only')}
+INFRASTRUCTURE_PROVIDER=${T('Máquina local', 'Local machine')}
+INFRASTRUCTURE_REGION=${T('Dispositivo local', 'Local device')}
+EDGE_PROVIDER=none
+EDGE_REGION=none
+OPERATIONAL_LOG_RETENTION=${T('Até a remoção deste teste local', 'Until this local test is removed')}
+BACKUP_STATUS=disabled
+BACKUP_PROVIDER=none
+BACKUP_REGION=none
+BACKUP_RETENTION_DAYS=0
+DATA_REQUEST_PROCESS=${T('Remover os dados fictícios desta máquina local', 'Remove fictional test data from this local machine')}
+DATA_REQUEST_RESPONSE_DAYS=30
+INCIDENT_CONTACT_URL=http://localhost:8080/privacy#contact
+INCIDENT_PROCESS=${T('Parar a instância e remover credenciais e dados de teste', 'Stop the instance and remove test credentials and data')}
+SOURCE_URL=${repoUrl}
+ALLOWED_GUILD_IDS=${T('id_do_servidor_de_teste', 'test_server_id')}
+ALLOW_ALL_GUILDS=false
+TRANSCRIBE_PROVIDER=none
+TRANSCRIBE_FALLBACK_PROVIDER=none
+MINUTES_ENABLED=false`,
     copyLabel,
   );
-  const localTranscription = codeBlock(
-    '.env',
-    `TRANSCRIBE_PROVIDER=command
-TRANSCRIBE_COMMAND=python3 ./scripts/transcribe-local.py {input} {output}
-WHISPER_MODEL=small`,
+  const inviteUrl = codeBlock(
+    T('URL de instalação', 'Install URL'),
+    'https://discord.com/oauth2/authorize?client_id=YOUR_APP_ID&permissions=68242432&integration_type=0&scope=bot+applications.commands',
     copyLabel,
   );
-  const mcpConfig = codeBlock(
-    'JSON',
-    `{
-  "mcpServers": {
-    "kassinao": {
-      "command": "npx",
-      "args": ["-y", "kassinao-mcp@1.0.6"],
-      "env": {
-        "KASSINAO_URL": "${T('https://SEU-KASSINAO', 'https://YOUR-KASSINAO')}",
-        "KASSINAO_PROFILE": "${T('PERFIL_IMPRESSO_PELO_COMANDO', 'PROFILE_PRINTED_BY_THE_COMMAND')}"
-      }
-    }
-  }
-}`,
+  const productionVerify = codeBlock(
+    T('Máquina confiável', 'Trusted workstation'),
+    `# ${T('Substitua a tag somente por uma release pública e imutável.', 'Replace the tag only with a public immutable release.')}
+TAG=vX.Y.Z
+REPO=resolvicomai/kassinao
+ARCHIVE="kassinao-ops-$TAG.tar.gz"
+CHECKSUM="$ARCHIVE.sha256"
+test "$(gh release view "$TAG" --repo "$REPO" --json isDraft,isImmutable --jq '.isDraft == false and .isImmutable == true')" = true
+gh release verify "$TAG" --repo "$REPO"
+gh release download "$TAG" --repo "$REPO" --pattern "$ARCHIVE" --pattern "$CHECKSUM"
+gh release verify-asset "$TAG" "$ARCHIVE" --repo "$REPO"
+gh release verify-asset "$TAG" "$CHECKSUM" --repo "$REPO"
+if command -v sha256sum >/dev/null; then sha256sum -c "$CHECKSUM"; else shasum -a 256 -c "$CHECKSUM"; fi
+SOURCE_SHA="$(gh api "repos/$REPO/commits/$TAG" --jq .sha)"
+gh attestation verify "$ARCHIVE" --repo "$REPO" --signer-workflow "github.com/$REPO/.github/workflows/publish-image.yml" --source-ref "refs/tags/$TAG" --source-digest "$SOURCE_SHA" --deny-self-hosted-runners`,
+    copyLabel,
+  );
+  const productionDeploy = codeBlock(
+    'VPS',
+    `# ${T('Transfira antes o tarball verificado para /tmp por scp ou equivalente.', 'First transfer the verified tarball to /tmp with scp or equivalent.')}
+RELEASE_ROOT=/opt/kassinao/releases/kassinao-ops-vX.Y.Z
+ARCHIVE=/tmp/kassinao-ops-vX.Y.Z.tar.gz
+sudo test ! -e "$RELEASE_ROOT"
+sudo install -d -o root -g root -m 0700 /opt/kassinao /opt/kassinao/releases
+sudo install -d -o root -g root -m 0700 "$RELEASE_ROOT"
+sudo tar -xzf "$ARCHIVE" -C "$RELEASE_ROOT" --strip-components=1 --no-same-owner
+sudo chown -R root:root "$RELEASE_ROOT"
+sudo chmod -R go-w "$RELEASE_ROOT"
+sudo chmod 0700 "$RELEASE_ROOT"
+sudo test "$(sudo stat -c '%a:%u:%g' "$RELEASE_ROOT")" = '700:0:0'
+sudo install -o root -g root -m 600 "$RELEASE_ROOT/compose.env.example" "$RELEASE_ROOT/.env"
+sudo install -o root -g root -m 600 "$RELEASE_ROOT/app.env.example" "$RELEASE_ROOT/app.env"
+sudo "$RELEASE_ROOT/scripts/inject-secrets.sh"
+sudoedit "$RELEASE_ROOT/.env"
+# KASSINAO_DEDICATED_DOCKER_HOST_ACK=I_UNDERSTAND_THIS_VPS_MUST_RUN_ONLY_KASSINAO
+sudo "$RELEASE_ROOT/scripts/prepare-storage.sh"
+sudo "$RELEASE_ROOT/scripts/install-host-controls.sh"
+sudo env KASSINAO_DEPLOY_DIR="$RELEASE_ROOT" "$RELEASE_ROOT/scripts/deploy-release.sh"
+sudo "$RELEASE_ROOT/scripts/audit-vps-security.sh"`,
+    copyLabel,
+  );
+  const uninstallHostControls = codeBlock(
+    'VPS',
+    `# ${T('Primeiro remova os containers com Compose; os dados continuam no DATA_ROOT.', 'First remove the containers with Compose; data remains in DATA_ROOT.')}
+sudo docker compose down
+sudo ./scripts/uninstall-host-controls.sh --confirm-remove-kassinao-host-controls`,
+    copyLabel,
+  );
+  const mcpSetup = codeBlock(
+    'Terminal',
+    T(
+      'npx -y kassinao-mcp@1.0.7 exchange --stdin --url https://MCP-DA-SUA-INSTANCIA',
+      'npx -y kassinao-mcp@1.0.7 exchange --stdin --url https://YOUR-INSTANCE-MCP',
+    ),
     copyLabel,
   );
 
+  const commands: CommandDoc[] = [
+    {
+      pt: '/gravar [canal]',
+      en: '/record [channel]',
+      description: {
+        pt: 'Inicia no seu canal de voz. Quem tem Gerenciar Servidor pode indicar outro canal visível.',
+        en: 'Starts in your voice channel. Members with Manage Server may target another visible channel.',
+      },
+      access: { pt: 'Membro no próprio canal', en: 'Member in their own channel' },
+    },
+    {
+      pt: '/parar',
+      en: '/stop',
+      description: {
+        pt: 'Encerra uma gravação que você pode controlar. O áudio passa a ficar disponível depois da parada.',
+        en: 'Ends a recording you are allowed to control. Audio becomes available after recording stops.',
+      },
+      access: { pt: 'Iniciador, participante ou admin atual', en: 'Starter, participant, or current admin' },
+    },
+    {
+      pt: '/nota <texto>',
+      en: '/note <text>',
+      description: {
+        pt: 'Marca o segundo atual. A nota entra nos artefatos de texto somente quando eles forem gerados.',
+        en: 'Marks the current second. The note appears in text artifacts only when those artifacts are generated.',
+      },
+      access: { pt: 'Iniciador, participante ou admin atual', en: 'Starter, participant, or current admin' },
+    },
+    {
+      pt: '/status',
+      en: '/status',
+      description: {
+        pt: 'Mostra o estado da gravação em andamento depois de validar o seu acesso.',
+        en: 'Shows the active recording state after validating your access.',
+      },
+      access: { pt: 'Acesso validado', en: 'Validated access' },
+    },
+    {
+      pt: '/gravacoes',
+      en: '/recordings',
+      description: {
+        pt: 'Mostra até cinco reuniões acessíveis e o link do app privado.',
+        en: 'Shows up to five accessible meetings and the private app link.',
+      },
+      access: { pt: 'Resultados filtrados por ACL', en: 'ACL-filtered results' },
+    },
+    {
+      pt: '/autorecord ligar|desligar|ver',
+      en: '/autorecord on|off|view',
+      description: {
+        pt: 'Configura início automático por canal e população. Ative apenas com a política interna necessária.',
+        en: 'Configures automatic starts by channel and population. Enable it only with the required internal policy.',
+      },
+      access: { pt: 'Gerenciar Servidor', en: 'Manage Server' },
+    },
+    {
+      pt: '/config ata-canal|ver',
+      en: '/config minutes-channel|view',
+      description: {
+        pt: 'Escolhe o canal do aviso genérico de processamento ou mostra a configuração.',
+        en: 'Chooses the generic processing-notice channel or shows the configuration.',
+      },
+      access: { pt: 'Gerenciar Servidor', en: 'Manage Server' },
+    },
+    {
+      pt: '/perguntar <pergunta> [dias]',
+      en: '/ask <question> [days]',
+      description: {
+        pt: 'Consulta texto já gerado em reuniões acessíveis. Só existe quando o provider de atas e consultas está habilitado.',
+        en: 'Queries previously generated text from accessible meetings. It only exists when the minutes and question provider is enabled.',
+      },
+      access: { pt: 'Recurso opcional', en: 'Optional feature' },
+    },
+    {
+      pt: '/mcp novo|revogar-tudo',
+      en: '/mcp new|revoke-all',
+      description: {
+        pt: 'Administra conectores da instância. Só aparece quando MCP está ligado; membros usam o app privado.',
+        en: 'Manages instance connectors. It only appears when MCP is enabled; members use the private app.',
+      },
+      access: {
+        pt: 'Visível com Gerenciar Servidor; execução somente para OWNER_IDS',
+        en: 'Visible with Manage Server; execution restricted to OWNER_IDS',
+      },
+    },
+    {
+      pt: '/privacidade',
+      en: '/privacy',
+      description: {
+        pt: 'Mostra a política pública e o contato do operador desta instância para solicitações sobre dados.',
+        en: 'Shows this instance public operator policy and contact for data requests.',
+      },
+      access: { pt: 'Qualquer membro', en: 'Any member' },
+    },
+    {
+      pt: '/ajuda e /sobre',
+      en: '/help and /about',
+      description: {
+        pt: 'Explicam os recursos realmente habilitados, a política da instância, a licença e o source correspondente.',
+        en: 'Explain the features actually enabled, the instance policy, the license, and corresponding source.',
+      },
+      access: { pt: 'Qualquer membro', en: 'Any member' },
+    },
+  ];
+  const commandCards = commands
+    .map(
+      (command) => `<article class="command-card">
+        <code>${esc(command[l])}</code>
+        <p>${esc(text(l, command.description))}</p>
+        <div class="command-meta">${esc(T('Acesso: ', 'Access: '))}${esc(text(l, command.access))}</div>
+      </article>`,
+    )
+    .join('');
+
+  const essentialEnv: EnvGroup[] = [
+    {
+      title: { pt: 'Identidade e perímetro', en: 'Identity and perimeter' },
+      summary: {
+        pt: 'Cada operador cria sua própria aplicação, URLs, política e allowlist.',
+        en: 'Every operator creates their own application, URLs, policy, and allowlist.',
+      },
+      items: [
+        {
+          name: 'APP_URL',
+          fallback: { pt: 'obrigatória', en: 'required' },
+          description: {
+            pt: 'Origem do app privado, OAuth e gravações.',
+            en: 'Origin for the private app, OAuth, and recordings.',
+          },
+        },
+        {
+          name: 'ALLOWED_GUILD_IDS',
+          fallback: { pt: 'obrigatória', en: 'required' },
+          description: {
+            pt: 'Servidores aceitos pela instância. Produção privada mantém ALLOW_ALL_GUILDS=false.',
+            en: 'Servers accepted by the instance. Private production keeps ALLOW_ALL_GUILDS=false.',
+          },
+        },
+        {
+          name: 'OPERATOR_NAME',
+          fallback: { pt: 'obrigatória em produção', en: 'required in production' },
+          description: {
+            pt: 'Nome público de quem opera e controla os dados desta instância.',
+            en: 'Public name of the entity operating and controlling this instance data.',
+          },
+        },
+        {
+          name: 'OPERATOR_CONTACT_URL',
+          fallback: { pt: 'obrigatória em produção', en: 'required in production' },
+          description: {
+            pt: 'Canal público para suporte e solicitações sobre dados.',
+            en: 'Public channel for support and data requests.',
+          },
+        },
+        {
+          name: 'PRIVACY_POLICY_URL',
+          fallback: 'APP_URL/privacy',
+          description: {
+            pt: 'Política dinâmica da instância. Em produção, aponta para a rota canônica do app.',
+            en: 'Dynamic instance policy. In production, it points to the canonical app route.',
+          },
+        },
+        {
+          name: 'DATA_DELETION_URL',
+          fallback: 'APP_URL/privacy#data-rights',
+          description: {
+            pt: 'Fluxo público para pedir correção ou exclusão.',
+            en: 'Public flow for correction or deletion requests.',
+          },
+        },
+        {
+          name: 'TERMS_OF_SERVICE_URL',
+          fallback: { pt: 'opcional', en: 'optional' },
+          description: {
+            pt: 'Termos próprios do operador, quando existirem.',
+            en: 'Operator-specific terms, when applicable.',
+          },
+        },
+        {
+          name: 'SOURCE_URL',
+          fallback: { pt: 'obrigatória em produção', en: 'required in production' },
+          description: {
+            pt: 'Source correspondente da versão ou fork em execução; somente o desenvolvimento local usa o upstream como fallback.',
+            en: 'Corresponding source for the running version or fork; only local development falls back to upstream.',
+          },
+        },
+      ],
+    },
+    {
+      title: { pt: 'Contrato público de privacidade', en: 'Public privacy contract' },
+      summary: {
+        pt: 'Produção não inicia com declaração incompleta ou coordenadas privadas do host.',
+        en: 'Production does not start with an incomplete statement or private host coordinates.',
+      },
+      items: [
+        {
+          name: 'PRIVACY_EFFECTIVE_DATE / PRIVACY_POLICY_VERSION',
+          fallback: { pt: 'obrigatórias em produção', en: 'required in production' },
+          description: {
+            pt: 'Data real não futura e identificador público da versão da política.',
+            en: 'Real non-future date and public policy-version identifier.',
+          },
+        },
+        {
+          name: 'PRIVACY_AUDIENCE / PRIVACY_PURPOSES / PRIVACY_LAWFUL_BASIS',
+          fallback: { pt: 'obrigatórias em produção', en: 'required in production' },
+          description: {
+            pt: 'Público abrangido, finalidades e base ou justificativa declarada pelo operador.',
+            en: 'Covered people, purposes, and the basis or justification declared by the operator.',
+          },
+        },
+        {
+          name: 'INFRASTRUCTURE_PROVIDER / INFRASTRUCTURE_REGION',
+          fallback: { pt: 'obrigatórias em produção', en: 'required in production' },
+          description: {
+            pt: 'Provider e região/escopo públicos; nunca IP, hostname, ID de conta ou nome da VPS.',
+            en: 'Public provider and region/scope; never an IP, hostname, account ID, or VPS name.',
+          },
+        },
+        {
+          name: 'EDGE_PROVIDER / EDGE_REGION',
+          fallback: 'none / none',
+          description: {
+            pt: 'Provider de túnel/CDN e região ou escopo; com o profile tunnel, não pode ficar none.',
+            en: 'Tunnel/CDN provider and region or scope; it cannot remain none with the tunnel profile.',
+          },
+        },
+        {
+          name: 'OPERATIONAL_LOG_RETENTION',
+          fallback: { pt: 'obrigatória em produção', en: 'required in production' },
+          description: {
+            pt: 'Prazo ou processo real de expurgo nos logs do app, host e providers.',
+            en: 'Actual expiry period or process for app, host, and provider logs.',
+          },
+        },
+        {
+          name: 'BACKUP_STATUS / BACKUP_PROVIDER / BACKUP_REGION / BACKUP_RETENTION_DAYS',
+          fallback: 'disabled / none / none / 0',
+          description: {
+            pt: 'Declara a operação real; esses campos não ligam backup sozinhos.',
+            en: 'Declares the actual operation; these fields do not enable backups by themselves.',
+          },
+        },
+        {
+          name: 'DATA_REQUEST_PROCESS / DATA_REQUEST_RESPONSE_DAYS',
+          fallback: { pt: 'obrigatórias em produção', en: 'required in production' },
+          description: {
+            pt: 'Verificação, entrega e prazo público para acesso, correção ou exclusão.',
+            en: 'Verification, delivery, and public response window for access, correction, or deletion.',
+          },
+        },
+        {
+          name: 'INCIDENT_CONTACT_URL / INCIDENT_PROCESS',
+          fallback: { pt: 'obrigatórias em produção', en: 'required in production' },
+          description: {
+            pt: 'Canal e processo público para incidente, sem expor coordenação interna.',
+            en: 'Public incident channel and process without exposing internal coordination.',
+          },
+        },
+      ],
+    },
+    {
+      title: { pt: 'Recursos e egress', en: 'Features and egress' },
+      summary: {
+        pt: 'Cada integração exige configuração explícita; definir MCP_SECRET é o opt-in do MCP.',
+        en: 'Every integration requires explicit configuration; setting MCP_SECRET is the MCP opt-in.',
+      },
+      items: [
+        {
+          name: 'TRANSCRIBE_PROVIDER',
+          fallback: 'none',
+          description: {
+            pt: 'Provider explícito de transcrição ou comando em imagem customizada.',
+            en: 'Explicit transcription provider or command in a custom image.',
+          },
+        },
+        {
+          name: 'TRANSCRIBE_FALLBACK_PROVIDER',
+          fallback: 'none',
+          description: {
+            pt: 'Fallback externo deliberado. O padrão não envia áudio.',
+            en: 'Deliberate external fallback. The default sends no audio.',
+          },
+        },
+        {
+          name: 'TRANSCRIBE_SEND_MEETING_CONTEXT',
+          fallback: 'false',
+          description: {
+            pt: 'Autoriza ou bloqueia nomes e contexto enviados ao ASR.',
+            en: 'Allows or blocks names and context sent to ASR.',
+          },
+        },
+        {
+          name: 'MINUTES_ENABLED',
+          fallback: 'false',
+          description: {
+            pt: 'Liga ata e perguntas por IA depois que existe transcrição.',
+            en: 'Enables AI minutes and questions after a transcript exists.',
+          },
+        },
+        {
+          name: 'MCP_SECRET',
+          fallback: { pt: 'desligado', en: 'disabled' },
+          description: {
+            pt: 'Segredo dedicado que habilita API e conexão MCP.',
+            en: 'Dedicated secret that enables the MCP API and connection flow.',
+          },
+        },
+        {
+          name: 'MINUTES_WEBHOOK_URL / MINUTES_WEBHOOK_SECRET',
+          fallback: { pt: 'desligados', en: 'disabled' },
+          description: {
+            pt: 'Webhook HTTPS opcional, assinado com segredo próprio.',
+            en: 'Optional HTTPS webhook signed with its own secret.',
+          },
+        },
+      ],
+    },
+    {
+      title: { pt: 'Dados e operação', en: 'Data and operations' },
+      summary: {
+        pt: 'Retenção, isolamento e limites que precisam refletir a política do operador.',
+        en: 'Retention, isolation, and limits that must match the operator policy.',
+      },
+      items: [
+        {
+          name: 'RETENTION_DAYS',
+          fallback: '7',
+          description: { pt: 'Expiração padrão do áudio.', en: 'Default audio expiration.' },
+        },
+        {
+          name: 'TEXT_RETENTION_DAYS',
+          fallback: '90',
+          description: {
+            pt: 'Expiração de transcrição, ata, notas e metadados textuais.',
+            en: 'Expiration for transcripts, minutes, notes, and text metadata.',
+          },
+        },
+        {
+          name: 'KASSINAO_DATA_ROOT',
+          fallback: '/var/lib/kassinao',
+          description: {
+            pt: 'Raiz privada do kit de produção, em storage dm-crypt/LUKS.',
+            en: 'Private production-bundle root on dm-crypt/LUKS storage.',
+          },
+        },
+        {
+          name: 'PUBLIC_SURFACES_ENABLED',
+          fallback: 'false',
+          description: {
+            pt: 'No core de produção, impede servir landing, docs e demo com segredos.',
+            en: 'On the production core, prevents serving landing, docs, and demo with secrets.',
+          },
+        },
+        {
+          name: 'TRUST_PROXY_HOPS',
+          fallback: '1',
+          description: {
+            pt: 'Contagem exata na topologia do túnel do kit. Não aumente por tentativa.',
+            en: 'Exact count for the bundle tunnel topology. Never increase it by trial and error.',
+          },
+        },
+        {
+          name: 'LOG_PII',
+          fallback: 'false',
+          description: {
+            pt: 'Mantém identificadores, origens e erros privados fora dos logs operacionais.',
+            en: 'Keeps identifiers, origins, and private errors out of operational logs.',
+          },
+        },
+        {
+          name: 'KASSINAO_ROLLBACK_RETENTION_HOURS',
+          fallback: '72',
+          description: {
+            pt: 'Janela máxima de snapshot após deploy falho; 1..168 e igual em .env/app.env.',
+            en: 'Maximum failed-deploy snapshot window; 1..168 and identical in .env/app.env.',
+          },
+        },
+        {
+          name: 'KASSINAO_DEDICATED_DOCKER_HOST_ACK',
+          fallback: { pt: 'aceite manual obrigatório no bundle', en: 'manual bundle acknowledgement required' },
+          description: {
+            pt: 'Confirma que o daemon Docker inteiro pertence somente ao Kassinão.',
+            en: 'Confirms that the entire Docker daemon is dedicated to Kassinão.',
+          },
+        },
+      ],
+    },
+  ];
+  const envCards = essentialEnv
+    .map(
+      (group, index) => `<details class="env-group"${index === 0 ? ' open' : ''}>
+        <summary><span class="env-title"><strong>${esc(text(l, group.title))}</strong><span>${esc(text(l, group.summary))}</span></span></summary>
+        <dl class="env-list">${group.items
+          .map(
+            (item) =>
+              `<div class="env-item"><dt>${esc(item.name)}</dt><dd><span class="env-default">${esc(T('Padrão: ', 'Default: '))}${esc(localValue(l, item.fallback))}</span><span class="env-description">${esc(text(l, item.description))}</span></dd></div>`,
+          )
+          .join('')}</dl>
+      </details>`,
+    )
+    .join('');
+
   const nav = [
-    ['inicio', T('Início rápido', 'Quick start')],
-    ['requisitos', T('Requisitos', 'Requirements')],
-    ['docker', T('Instalação com Docker', 'Docker installation')],
-    ['configuracao', T('Variáveis e configuração', 'Variables and configuration')],
-    ['comandos', T('Comandos', 'Commands')],
-    ['fluxo', T('Fluxo de gravação', 'Recording flow')],
-    ['transcricao', T('Transcrição e IA', 'Transcription and AI')],
-    ['privacidade', T('Privacidade e permissões', 'Privacy and permissions')],
-    ['mcp', T('Conector MCP', 'MCP connector')],
-    ['problemas', T('Troubleshooting', 'Troubleshooting')],
-    ['links', T('Links', 'Links')],
+    ['visao', T('O que é', 'What it is')],
+    ['fluxo', T('Fluxo no Discord', 'Discord flow')],
+    ['limites', T('Projeto e instância', 'Project and instance')],
+    ['local', T('Teste local', 'Local test')],
+    ['producao', T('Produção endurecida', 'Hardened production')],
+    ['discord', 'Discord Portal'],
+    ['comandos', T('Comandos e recursos', 'Commands and features')],
+    ['acesso', T('Acesso, dados e IA', 'Access, data, and AI')],
+    ['mcp', 'MCP'],
+    ['operacao', T('Operação e mudanças', 'Operations and changes')],
+    ['problemas', T('Diagnóstico', 'Troubleshooting')],
+    ['links', T('Referências', 'References')],
   ];
 
   return `<!doctype html>
@@ -2046,14 +1884,14 @@ WHISPER_MODEL=small`,
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)} | Kassinão</title>
 <meta name="description" content="${esc(description)}">
-<link rel="canonical" href="${esc(canonical)}">
+<link rel="canonical" href="${esc(site.canonicalUrl)}">
 <link rel="alternate" hreflang="pt-BR" href="${esc(ptDocs)}">
 <link rel="alternate" hreflang="en" href="${esc(enDocs)}">
 <link rel="alternate" hreflang="x-default" href="${esc(enDocs)}">
 <meta property="og:title" content="${esc(title)} | Kassinão">
 <meta property="og:description" content="${esc(description)}">
 <meta property="og:image" content="${esc(config.publicUrl)}/og-${l}.png">
-<meta property="og:url" content="${esc(canonical)}">
+<meta property="og:url" content="${esc(site.canonicalUrl)}">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Kassinão">
 <meta name="twitter:card" content="summary_large_image">
@@ -2066,387 +1904,156 @@ WHISPER_MODEL=small`,
 </head>
 <body>
 <a class="skip-link" href="#conteudo">${esc(T('Pular para o conteúdo', 'Skip to content'))}</a>
-<header class="topbar">
-  <div class="topbar-inner">
-    <button class="control mobile-menu" id="mobile-menu" type="button" aria-controls="docs-sidebar" aria-expanded="false">${esc(T('Menu', 'Menu'))}</button>
-    <a class="brand" href="${site.links.home}" aria-label="${esc(T('Kassinão, página inicial', 'Kassinão, home page'))}">
-      <span class="brand-mark" aria-hidden="true">k/</span>
-      <span>Kassinão</span><span class="brand-context">${esc(T('Documentação', 'Docs'))}</span>
-    </a>
-    <div class="topbar-actions">
-      <div class="language" aria-label="${esc(T('Idioma', 'Language'))}">
-        <a href="${ptDocs}"${l === 'pt' ? ' aria-current="page"' : ''} lang="pt-BR">PT</a>
-        <a href="${enDocs}"${l === 'en' ? ' aria-current="page"' : ''} lang="en">EN</a>
-      </div>
-      <button class="control" id="theme-toggle" type="button" aria-label="${esc(T('Alternar tema claro e escuro', 'Toggle light and dark theme'))}" aria-pressed="false"><span class="theme-label">${esc(T('Tema', 'Theme'))}</span></button>
-      <a class="primary-link" href="${repoUrl}" target="_blank" rel="noopener noreferrer">GitHub</a>
-    </div>
+<header class="topbar"><div class="topbar-inner">
+  <button class="control mobile-menu" id="mobile-menu" type="button" aria-controls="docs-sidebar" aria-expanded="false">${esc(T('Menu', 'Menu'))}</button>
+  <a class="brand" href="${site.links.home}" aria-label="${esc(T('Kassinão, página inicial', 'Kassinão, home page'))}"><span class="brand-mark" aria-hidden="true">k/</span><span>Kassinão</span><span class="brand-context">${esc(T('Documentação', 'Docs'))}</span></a>
+  <div class="topbar-actions">
+    <div class="language" aria-label="${esc(T('Idioma', 'Language'))}"><a href="${ptDocs}"${l === 'pt' ? ' aria-current="page"' : ''} lang="pt-BR">PT</a><a href="${enDocs}"${l === 'en' ? ' aria-current="page"' : ''} lang="en">EN</a></div>
+    <button class="control" id="theme-toggle" type="button" aria-label="${esc(T('Alternar tema claro e escuro', 'Toggle light and dark theme'))}" aria-pressed="false"><span class="theme-label">${esc(T('Tema', 'Theme'))}</span></button>
+    <a class="primary-link" href="${repoUrl}" target="_blank" rel="noopener noreferrer">GitHub</a>
   </div>
-</header>
+</div></header>
 <div class="docs-shell">
   <aside class="sidebar" id="docs-sidebar" aria-label="${esc(T('Navegação da documentação', 'Documentation navigation'))}">
-    <div class="search-block">
-      <label for="docs-search">${esc(T('Buscar na documentação', 'Search documentation'))}</label>
-      <input class="search-input" id="docs-search" type="search" placeholder="${esc(T('Comando, variável ou dúvida', 'Command, variable, or question'))}" autocomplete="off">
-      <p class="search-status" id="search-status" aria-live="polite"></p>
-    </div>
-    <nav class="side-nav">
-      ${nav
-        .map(
-          ([id, label], index) =>
-            `<a href="#${id}" data-nav-link${index === 0 ? ' aria-current="location"' : ''}>${esc(label)}</a>`,
-        )
-        .join('')}
-    </nav>
-    <p class="side-note">${esc(
-      T(
-        'Os exemplos desta página não contêm credenciais reais. Nunca compartilhe seu .env.',
-        'Examples on this page contain no real credentials. Never share your .env file.',
-      ),
-    )}</p>
+    <div class="search-block"><label for="docs-search">${esc(T('Buscar na documentação', 'Search documentation'))}</label><input class="search-input" id="docs-search" type="search" placeholder="${esc(T('Comando, operação ou dúvida', 'Command, operation, or question'))}" autocomplete="off"><p class="search-status" id="search-status" aria-live="polite"></p></div>
+    <nav class="side-nav">${nav.map(([id, label], index) => `<a href="#${id}" data-nav-link${index === 0 ? ' aria-current="location"' : ''}>${esc(label)}</a>`).join('')}</nav>
+    <p class="side-note">${esc(T('Nunca copie credenciais, IDs privados, domínios internos ou dados de reunião para Git, issues ou logs públicos.', 'Never copy credentials, private IDs, internal domains, or meeting data into Git, issues, or public logs.'))}</p>
   </aside>
   <button class="nav-backdrop" id="nav-backdrop" type="button" aria-label="${esc(T('Fechar menu', 'Close menu'))}"></button>
-  <main class="docs-main" id="conteudo">
-    <div class="docs-main-inner">
-      <header class="docs-hero">
-        <h1>${esc(T('Coloque o Kassinão no seu Discord.', 'Bring Kassinão into your Discord.'))}</h1>
-        <p>${esc(description)}</p>
-        <div class="hero-actions">
-          <a class="primary-link" href="#inicio">${esc(T('Instalar agora', 'Install now'))}</a>
-          <a class="control" href="${NPM_URL}" target="_blank" rel="noopener noreferrer">MCP</a>
-        </div>
-        <p>${esc(T('Não existe workspace hospedado nem cadastro público. Este guia cria o seu bot, app privado e API MCP na sua própria infraestrutura.', 'There is no hosted workspace or public signup. This guide creates your bot, private app, and MCP API on your own infrastructure.'))}</p>
-      </header>
+  <main class="docs-main" id="conteudo"><div class="docs-main-inner">
+    <header class="docs-hero">
+      <h1>${esc(T('Seu bot. Sua instância. Suas calls.', 'Your bot. Your instance. Your calls.'))}</h1>
+      <p>${esc(description)}</p>
+      <div class="hero-actions"><a class="primary-link" href="#local">${esc(T('Testar pelo source', 'Test from source'))}</a><a class="control" href="${site.links.demo}">${esc(T('Ver o fluxo', 'See the flow'))}</a></div>
+      <p>${esc(T('O projeto é público. Cada deploy real é uma instância privada, com aplicação Discord, URLs, política, credenciais, guilds e dados próprios.', 'The project is public. Every real deployment is a private instance with its own Discord application, URLs, policy, credentials, guilds, and data.'))}</p>
+    </header>
 
-      <section class="doc-section" id="inicio" data-doc-section data-keywords="quickstart setup começar iniciar clone discord bot">
-        <div class="section-head">
-          <h2>${esc(T('Início rápido', 'Quick start'))}</h2>
-          <p>${esc(
-            T(
-              'O caminho mínimo entre um servidor novo e a primeira call gravada.',
-              'The shortest path from a new server to your first recorded call.',
-            ),
-          )}</p>
-        </div>
-        <div class="quick-layout">
-          <ol class="quick-list">
-            <li><strong>${esc(T('Crie o app', 'Create the app'))}</strong><span>${esc(T('Copie Application ID, token do bot e Client Secret.', 'Copy the Application ID, bot token, and Client Secret.'))}</span></li>
-            <li><strong>${esc(T('Prepare o servidor', 'Prepare the server'))}</strong><span>${esc(T('Clone o projeto e preencha credenciais, APP_URL e a allowlist de guilds.', 'Clone the project and fill in credentials, APP_URL, and the guild allowlist.'))}</span></li>
-            <li><strong>${esc(T('Suba o Docker', 'Start Docker'))}</strong><span>${esc(T('Acompanhe os logs até aparecer que o Kassinão está online.', 'Follow the logs until Kassinão reports that it is online.'))}</span></li>
-            <li><strong>${esc(T('Grave uma call', 'Record a call'))}</strong><span>${esc(T('Entre num canal de voz e use /gravar.', 'Join a voice channel and use /record.'))}</span></li>
-          </ol>
-          <div class="code-stack">${clone}${requiredEnv}${start}</div>
-        </div>
-        <div class="callout">
-          <strong>${esc(T('O bot já grava sem IA.', 'The bot records without AI.'))}</strong>
-          <p>${esc(
-            T(
-              'Transcrição e ata são opcionais. Configure um provider depois de validar a gravação, o login e os downloads.',
-              'Transcription and minutes are optional. Configure a provider after validating recording, login, and downloads.',
-            ),
-          )}</p>
-        </div>
-        <div class="callout danger">
-          <strong>${esc(T('A URL não é segredo.', 'The URL is not a secret.'))}</strong>
-          <p>${esc(T('Qualquer hostname público pode ser descoberto. A proteção vem da allowlist de guilds, vínculo atual com o Discord, OAuth e ACL de cada gravação.', 'Any public hostname can be discovered. Protection comes from the guild allowlist, current Discord membership, OAuth, and each recording ACL.'))}</p>
-        </div>
-      </section>
+    <section class="doc-section" id="visao" data-doc-section data-keywords="bot discord self hosted audio optional ai core">
+      <div class="section-head"><h2>${esc(T('O núcleo funciona sem IA.', 'The core works without AI.'))}</h2><p>${esc(T('Kassinão entra numa call autorizada, registra áudio por stream do Discord, preserva uma faixa por conta do Discord que fala, aceita notas e entrega o histórico no app privado.', 'Kassinão joins an authorized call, records audio by Discord stream, preserves one track per Discord account that speaks, accepts notes, and serves history through the private app.'))}</p></div>
+      <div class="requirement-grid">
+        <article class="requirement-primary"><h3>${esc(T('Sempre no núcleo', 'Always in the core'))}</h3><ul class="check-list"><li>${esc(T('Gravação e faixas associadas às contas que falam', 'Recording and tracks associated with accounts that speak'))}</li><li>${esc(T('Painel e aviso técnico antes da captura', 'Panel and technical notice before capture'))}</li><li>${esc(T('Notas com timestamp, player e downloads depois da parada', 'Timestamped notes, player, and downloads after stopping'))}</li><li>${esc(T('Login Discord, allowlist de guild e ACL da reunião', 'Discord login, guild allowlist, and meeting ACL'))}</li></ul></article>
+        <article class="requirement-secondary"><h3>${esc(T('Opt-in do operador', 'Operator opt-in'))}</h3><ul class="check-list"><li>${esc(T('Transcrição por provider ou imagem customizada', 'Transcription through a provider or custom image'))}</li><li>${esc(T('Ata, decisões, tarefas e perguntas por IA', 'AI minutes, decisions, tasks, and questions'))}</li><li>${esc(T('Webhook assinado e API MCP', 'Signed webhook and MCP API'))}</li></ul></article>
+      </div>
+      <div class="callout"><strong>${esc(T('Sem promessa de identidade humana ou SLA.', 'No human-identity or processing-time promise.'))}</strong><p>${esc(T('A separação é por conta e stream do Discord. Contas compartilhadas, perda de pacotes, falhas parciais, filas e rate limits continuam possíveis.', 'Separation is based on Discord account and stream. Shared accounts, packet loss, partial failures, queues, and rate limits remain possible.'))}</p></div>
+    </section>
 
-      <section class="doc-section" id="requisitos" data-doc-section data-keywords="requirements docker compose https oauth discord permissions intents server vps node">
-        <div class="section-head">
-          <h2>${esc(T('Requisitos', 'Requirements'))}</h2>
-          <p>${esc(T('O Kassinão é um bot persistente de voz. Ele precisa ficar conectado ao Discord.', 'Kassinão is a persistent voice bot. It must stay connected to Discord.'))}</p>
-        </div>
-        <div class="requirement-grid">
-          <article class="requirement-primary">
-            <h3>${esc(T('Obrigatório para operar', 'Required to operate'))}</h3>
-            <ul class="check-list">
-              <li>${esc(T('Servidor ou computador com Docker e Docker Compose.', 'A server or computer with Docker and Docker Compose.'))}</li>
-              <li>${esc(T('Aplicação criada no Discord Developer Portal. Nenhuma privileged intent é necessária.', 'An application created in the Discord Developer Portal. No privileged intent is required.'))}</li>
-              <li>${esc(T('Sua própria URL HTTPS para login e downloads em produção.', 'Your own HTTPS URL for production login and downloads.'))}</li>
-              <li>${esc(T('ID de cada servidor Discord autorizado na allowlist.', 'Every authorized Discord server ID in the allowlist.'))}</li>
-              <li>${esc(T('Volume persistente para o diretório recordings.', 'A persistent volume for the recordings directory.'))}</li>
-            </ul>
-          </article>
-          <article class="requirement-secondary">
-            <h3>${esc(T('Opcional', 'Optional'))}</h3>
-            <ul class="check-list">
-              <li>${esc(T('Cloudflare Tunnel para publicar HTTPS sem abrir portas.', 'Cloudflare Tunnel for HTTPS without opening ports.'))}</li>
-              <li>${esc(T('Chave de um provider de transcrição e de ata.', 'A transcription and minutes provider key.'))}</li>
-              <li>${esc(T('Node.js 20+ no computador que usar o conector MCP.', 'Node.js 20+ on the computer running the MCP connector.'))}</li>
-              <li>${esc(T('Node.js 22+ apenas para desenvolver fora do Docker.', 'Node.js 22+ only for development outside Docker.'))}</li>
-            </ul>
-          </article>
-        </div>
-        <div class="callout danger">
-          <strong>${esc(T('Não use serverless.', 'Do not use serverless.'))}</strong>
-          <p>${esc(T('Vercel e Netlify não mantêm o gateway de voz WebSocket ativo. Use Docker numa máquina persistente.', 'Vercel and Netlify do not keep the voice gateway WebSocket alive. Use Docker on a persistent machine.'))}</p>
-        </div>
-      </section>
+    <section class="doc-section" id="fluxo" data-doc-section data-keywords="discord flow panel notice recording tracks note stop transcript minutes dm">
+      <div class="section-head"><h2>${esc(T('Fluxo real no Discord', 'The real Discord flow'))}</h2><p>${esc(T('A demo pública usa dados fictícios. O comportamento operacional é este.', 'The public demo uses fictional data. This is the operational behavior.'))}</p></div>
+      <ol class="flow">
+        <li><span class="flow-number">1</span><div><h3>${esc(T('Um membro inicia', 'A member starts'))}</h3><p>${esc(T('Use /gravar no canal atual. Um admin pode escolher outro canal visível.', 'Use /record in the current channel. An admin may choose another visible channel.'))}</p></div></li>
+        <li><span class="flow-number">2</span><div><h3>${esc(T('O aviso técnico vem primeiro', 'The technical notice comes first'))}</h3><p>${esc(T('O bot conecta e publica o painel no chat. Se não conseguir publicar, desfaz o início. A mudança do apelido é apenas um indicador adicional e pode falhar.', 'The bot connects and posts the panel in chat. If posting fails, startup is rolled back. The nickname change is only an extra indicator and may fail.'))}</p></div></li>
+        <li><span class="flow-number">3</span><div><h3>${esc(T('Cada conta que fala ganha uma faixa', 'Each speaking account gets a track'))}</h3><p>${esc(T('A presença na call também é registrada para acesso. O limite atual é de 25 faixas; uma falha pode produzir resultado parcial.', 'Call presence is also recorded for access. The current limit is 25 tracks; a failure may produce a partial result.'))}</p></div></li>
+        <li><span class="flow-number">4</span><div><h3>${esc(T('Notas marcam o momento', 'Notes mark the moment'))}</h3><p>${esc(T('Use /nota ou o painel. Notas sempre ficam no registro; transcrição, ata e labels só recebem a nota quando esses artefatos existem.', 'Use /note or the panel. Notes always remain in the record; transcripts, minutes, and labels receive the note only when those artifacts exist.'))}</p></div></li>
+        <li><span class="flow-number">5</span><div><h3>${esc(T('A parada libera o áudio', 'Stopping releases audio'))}</h3><p>${esc(T('Player e downloads não são servidos durante a captura. O bot também pode encerrar por canal vazio, limite, desconexão ou proteção operacional.', 'Player and downloads are not served while capturing. The bot may also stop for an empty channel, limit, disconnection, or operational protection.'))}</p></div></li>
+        <li><span class="flow-number">6</span><div><h3>${esc(T('IA entra somente se habilitada', 'AI runs only when enabled'))}</h3><p>${esc(T('A transcrição é assíncrona e pode tentar novamente. Com MINUTES_ENABLED=true, a ata usa a transcrição disponível; se ela estiver parcial, a ata também pode omitir detalhes. O canal recebe apenas aviso genérico; detalhes ficam no app privado e em DMs autorizadas quando entregues.', 'Transcription is asynchronous and may retry. With MINUTES_ENABLED=true, minutes use the available transcript; if it is partial, the minutes may also omit details. The channel receives only a generic notice; details stay in the private app and authorized DMs when delivered.'))}</p></div></li>
+      </ol>
+      <div class="callout danger"><strong>${esc(T('Aviso técnico não é consentimento jurídico.', 'A technical notice is not legal consent.'))}</strong><p>${esc(T('O operador precisa definir e cumprir a base legal, as regras internas e as exigências da sua jurisdição, especialmente antes de ativar auto-record.', 'The operator must define and follow the legal basis, internal rules, and jurisdiction requirements, especially before enabling auto-record.'))}</p></div>
+    </section>
 
-      <section class="doc-section" id="docker" data-doc-section data-keywords="docker compose installation cloudflare tunnel callback oauth invite permissions logs healthcheck">
-        <div class="section-head">
-          <h2>${esc(T('Instalação com Docker', 'Docker installation'))}</h2>
-          <p>${esc(T('Configure primeiro o Discord, depois a URL pública e só então suba o container.', 'Configure Discord first, then the public URL, and only then start the container.'))}</p>
-        </div>
-        <div class="install-steps">
-          <article class="install-step">
-            <h3>${esc(T('Crie a aplicação', 'Create the application'))}</h3>
-            <div>
-              <p>${T(
-                'No <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer">Discord Developer Portal</a>, crie uma aplicação. Copie o Application ID, gere o token do bot e copie o Client Secret em OAuth2.',
-                'In the <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer">Discord Developer Portal</a>, create an application. Copy the Application ID, generate the bot token, and copy the OAuth2 Client Secret.',
-              )}</p>
-              <p>${esc(T('Cadastre exatamente APP_URL/auth/callback em OAuth2 Redirects.', 'Register exactly APP_URL/auth/callback under OAuth2 Redirects.'))}</p>
-              <p>${esc(T('Desligue Public Bot, mantenha apenas Guild Install e não publique um link geral de instalação.', 'Disable Public Bot, keep Guild Install only, and do not publish a general install link.'))}</p>
-            </div>
-          </article>
-          <article class="install-step">
-            <h3>${esc(T('Convide o bot', 'Invite the bot'))}</h3>
-            <div>
-              <p>${esc(T('Use os scopes bot e applications.commands. O número de permissões usado pelo projeto é 68242432.', 'Use the bot and applications.commands scopes. The project permission number is 68242432.'))}</p>
-              ${codeBlock(
-                l === 'pt' ? 'URL de convite' : 'Invite URL',
-                `https://discord.com/oauth2/authorize?client_id=${T('SEU_APP_ID', 'YOUR_APP_ID')}&scope=bot%20applications.commands&permissions=68242432`,
-                copyLabel,
-              )}
-              <p>${esc(T('Permissões: Ver Canais, Enviar Mensagens, Inserir Links, Ler Histórico, Conectar e Alterar Apelido.', 'Permissions: View Channels, Send Messages, Embed Links, Read Message History, Connect, and Change Nickname.'))}</p>
-            </div>
-          </article>
-          <article class="install-step">
-            <h3>${esc(T('Publique HTTPS', 'Publish HTTPS'))}</h3>
-            <div>
-              <p>${esc(T('Com Cloudflare Tunnel, aponte seu hostname para kassinao:8080. Defina APP_URL, TUNNEL_TOKEN, COMPOSE_PROFILES=tunnel e TRUST_PROXY_HOPS=1.', 'With Cloudflare Tunnel, point your hostname to kassinao:8080. Set APP_URL, TUNNEL_TOKEN, COMPOSE_PROFILES=tunnel, and TRUST_PROXY_HOPS=1.'))}</p>
-              <p>${esc(T('Não exponha a porta da aplicação na internet. IP direto serve apenas para localhost; produção exige HTTPS.', 'Do not expose the application port to the internet. Direct IP is for localhost only; production requires HTTPS.'))}</p>
-            </div>
-          </article>
-          <article class="install-step">
-            <h3>${esc(T('Suba e valide', 'Start and validate'))}</h3>
-            <div>
-              <p>${esc(T('Suba o compose, acompanhe o log e abra /health. As gravações ficam no volume ./recordings.', 'Start Compose, follow the log, and open /health. Recordings live in the ./recordings volume.'))}</p>
-              ${start}
-            </div>
-          </article>
-        </div>
-      </section>
+    <section class="doc-section" id="limites" data-doc-section data-keywords="public project private instance agpl source secrets data url">
+      <div class="section-head"><h2>${esc(T('Projeto público, instância privada', 'Public project, private instance'))}</h2><p>${esc(T('Separar essas duas camadas evita credenciais reaproveitadas, links apontando para outro operador e uma VPS que compila o GitHub a cada deploy.', 'Separating these layers prevents reused credentials, links pointing to another operator, and a VPS that rebuilds GitHub on every deployment.'))}</p></div>
+      <div class="privacy-layout"><div class="privacy-rules">
+        <article class="privacy-rule"><h3>${esc(T('O projeto publica', 'The project publishes'))}</h3><p>${esc(T('Source AGPL, documentação genérica, Dockerfile, workflows, templates sem segredo e demo fictícia.', 'AGPL source, generic documentation, Dockerfile, workflows, secret-free templates, and a fictional demo.'))}</p></article>
+        <article class="privacy-rule"><h3>${esc(T('A instância mantém privada', 'The instance keeps private'))}</h3><p>${esc(T('Tokens, Client Secret, IDs de guild e owner, domínios operacionais, gravações, estado auth, tokens MCP, providers, backups e runbooks internos.', 'Tokens, Client Secret, guild and owner IDs, operational domains, recordings, auth state, MCP tokens, providers, backups, and internal runbooks.'))}</p></article>
+        <article class="privacy-rule"><h3>${esc(T('Modificações de software', 'Software modifications'))}</h3><p>${esc(T('Quem modifica o programa e oferece interação pela rede precisa cumprir a AGPL e apontar SOURCE_URL para o source correspondente. Dados e segredos de runtime não viram código público.', 'Anyone who modifies the program and offers network interaction must comply with the AGPL and point SOURCE_URL to the corresponding source. Runtime data and secrets do not become public code.'))}</p></article>
+      </div><aside class="permission-box"><h3>${esc(T('A URL não é segredo', 'The URL is not a secret'))}</h3><p>${esc(T('O hostname pode ser descoberto. A segurança vem de HTTPS, allowlist de guild, OAuth, membership atual, ACL por gravação, rate limits, firewall e atualizações, não de esconder o domínio.', 'The hostname can be discovered. Security comes from HTTPS, the guild allowlist, OAuth, current membership, per-recording ACLs, rate limits, firewall, and updates, not from hiding the domain.'))}</p></aside></div>
+    </section>
 
-      <section class="doc-section" id="configuracao" data-doc-section data-keywords="environment env configuration secret retention provider minutes webhook disk locale">
-        <div class="section-head">
-          <h2>${esc(T('Variáveis e configuração', 'Variables and configuration'))}</h2>
-          <p>${esc(T('Comece pelo bloco obrigatório. Abra os grupos seguintes apenas quando precisar da função.', 'Start with the required block. Open the remaining groups only when you need the feature.'))}</p>
-        </div>
-        ${renderEnvGroups(l)}
-        <div class="callout">
-          <strong>${esc(T('Defaults sem egress surpresa.', 'Defaults without surprise egress.'))}</strong>
-          <p>${esc(T('Transcrição externa, fallback, contexto da reunião, ata com IA, atribuição do OpenRouter, webhook e MCP só ligam por configuração explícita. Uma chave isolada não ativa outra integração.', 'External transcription, fallback, meeting context, AI minutes, OpenRouter attribution, webhook, and MCP require explicit configuration. A key alone does not enable another integration.'))}</p>
-        </div>
-        <div class="callout">
-          <strong>${esc(T('Atualização sem perda de função.', 'Upgrade without losing intended features.'))}</strong>
-          <p>${esc(T('Instâncias antigas devem declarar o que desejam manter: TRANSCRIBE_FALLBACK_PROVIDER=groq, TRANSCRIBE_SEND_MEETING_CONTEXT=true e MINUTES_ENABLED=true. Use OPENROUTER_SITE_URL apenas com a URL pública do seu próprio projeto.', 'Older instances should declare what they intend to keep: TRANSCRIBE_FALLBACK_PROVIDER=groq, TRANSCRIBE_SEND_MEETING_CONTEXT=true, and MINUTES_ENABLED=true. Use OPENROUTER_SITE_URL only with your own public project URL.'))}</p>
-        </div>
-        <div class="callout danger">
-          <strong>${esc(T('Segredos não entram no Git.', 'Secrets do not belong in Git.'))}</strong>
-          <p>${esc(T('O .env já é ignorado. Gere COOKIE_SECRET e MCP_SECRET com openssl rand -hex 32 e nunca use o mesmo valor nos dois.', 'The .env file is already ignored. Generate COOKIE_SECRET and MCP_SECRET with openssl rand -hex 32 and never reuse the same value.'))}</p>
-        </div>
-      </section>
+    <section class="doc-section" id="local" data-doc-section data-keywords="local source docker build compose localhost quickstart">
+      <div class="section-head"><h2>${esc(T('Primeiro, valide pelo source local.', 'First, validate from local source.'))}</h2><p>${esc(T('Este caminho serve para avaliação e desenvolvimento. Ele compila na sua máquina e não deve ser exposto como produção.', 'This path is for evaluation and development. It builds on your machine and must not be exposed as production.'))}</p></div>
+      <div class="quick-layout"><ol class="quick-list"><li><strong>${esc(T('Crie um app Discord de teste', 'Create a test Discord app'))}</strong><span>${esc(T('Use uma guild separada e credenciais descartáveis.', 'Use a separate guild and disposable credentials.'))}</span></li><li><strong>${esc(T('Clone e construa', 'Clone and build'))}</strong><span>${esc(T('A imagem local recebe o nome kassinao-local:dev.', 'The local image is named kassinao-local:dev.'))}</span></li><li><strong>${esc(T('Configure o mínimo', 'Configure the minimum'))}</strong><span>${esc(T('Defina o app, localhost e a guild de teste; mantenha todo egress desligado.', 'Set the app, localhost, and test guild; keep all egress disabled.'))}</span></li><li><strong>${esc(T('Suba sem pull', 'Start without pulling'))}</strong><span>${esc(T('Compose usa exatamente a imagem que você acabou de construir.', 'Compose uses the exact image you just built.'))}</span></li></ol><div class="code-stack">${localBuild}${localEnv}${localStart}</div></div>
+      <div class="callout"><strong>${esc(T('O quickstart local não valida a operação de uma VPS.', 'The local quickstart does not validate VPS operations.'))}</strong><p>${esc(T('Produção exige domínio HTTPS próprio, política do operador, storage criptografado, bundle verificado, processo público separado e auditoria do host.', 'Production requires your own HTTPS domain, an operator policy, encrypted storage, a verified bundle, a separate public process, and a host audit.'))}</p></div>
+    </section>
 
-      <section class="doc-section" id="comandos" data-doc-section data-keywords="slash commands gravar record parar stop nota status gravacoes recordings perguntar ask autorecord config mcp ajuda help sobre">
-        <div class="section-head">
-          <h2>${esc(T('Comandos', 'Commands'))}</h2>
-          <p>${esc(T('O Discord mostra automaticamente o nome em português ou inglês conforme o idioma do cliente.', 'Discord automatically shows Portuguese or English names based on the client language.'))}</p>
-        </div>
-        <div class="command-grid">${renderCommands(l)}</div>
-        <div class="callout">
-          <strong>${esc(T('Use comandos dentro do servidor.', 'Use commands inside the server.'))}</strong>
-          <p>${esc(T('É ali que o bot consegue validar servidor, canal e permissões. As respostas de /perguntar são efêmeras e só aparecem para quem perguntou.', 'That is where the bot can validate server, channel, and permissions. Replies from /ask are ephemeral and only visible to the person who asked.'))}</p>
-        </div>
-      </section>
+    <section class="doc-section" id="producao" data-doc-section data-keywords="production release bundle ghcr digest attestation split public luks vps">
+      <div class="section-head"><h2>${esc(T('Produção só começa numa release pública verificável.', 'Production starts only from a verifiable public release.'))}</h2><p>${esc(T('O pipeline do repositório está preparado para imagem multiarch, digest, SBOM, attestations e bundle operacional. Isso só existe para uma tag quando os artefatos aparecem publicamente na release e no registry.', 'The repository pipeline is prepared for a multi-architecture image, digest, SBOM, attestations, and an operations bundle. These exist for a tag only when the artifacts are publicly available in the release and registry.'))}</p></div>
+      <div class="callout danger"><strong>${esc(T('Não invente uma versão nem use um artefato só porque o workflow existe no source.', 'Never invent a version or use an artifact merely because its workflow exists in source.'))}</strong><p>${esc(T('Antes do deploy, confirme release imutável, checksum, attestation, digest OCI e o commit de origem. Se qualquer peça estiver ausente, o caminho de produção ainda não foi publicado.', 'Before deployment, confirm an immutable release, checksum, attestation, OCI digest, and source commit. If any piece is missing, the production path has not been published yet.'))}</p></div>
+      ${productionVerify}
+      <div class="install-steps">
+        <article class="install-step"><h3>${esc(T('1. Prepare um host dedicado', '1. Prepare a dedicated host'))}</h3><div><p>${esc(T('Use uma VPS Linux exclusiva e atualizada, sem workloads Docker alheios, com systemd 249 ou superior, Docker Engine com Compose v2, iptables/ip6tables, util-linux (flock, findmnt e lsblk), curl, Python 3, tar/gzip, SSH por chave e firewall. Os ExecStartPre do kit governam o docker.service inteiro e o audit exige somente os containers esperados. Monte /var/lib/kassinao num volume dm-crypt/LUKS e deixe a raiz 0700 root:root; o helper prepara somente os quatro filhos depois de provar o mount. O deploy também exige swap desabilitado ou coberto por dm-crypt/LUKS.', 'Use an exclusive, updated Linux VPS with no unrelated Docker workloads, systemd 249 or newer, Docker Engine with Compose v2, iptables/ip6tables, util-linux (flock, findmnt, and lsblk), curl, Python 3, tar/gzip, key-based SSH, and a firewall. The bundle ExecStartPre hooks govern the entire docker.service and the audit requires only expected containers. Mount /var/lib/kassinao on a dm-crypt/LUKS volume and leave its root as 0700 root:root; the helper prepares only the four children after proving the mount. Deployment also requires swap to be disabled or covered by dm-crypt/LUKS.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('2. Instale o bundle sem source', '2. Install the source-free bundle'))}</h3><div><p>${esc(T('Depois de verificar o tarball numa máquina confiável, transfira-o para /tmp e extraia uma única vez no diretório novo mostrado abaixo. O bloco cria pais root-owned, fixa a raiz em 0700, remove escrita de grupo/outros, confirma 700:0:0 e usa caminhos absolutos. Não extraia por cima de release antiga nem dentro de Git. A VPS puxa a imagem por image@sha256 e não executa git clone, npm install ou docker build.', 'After verifying the tarball on a trusted workstation, transfer it to /tmp and extract it once into the new directory shown below. The block creates root-owned parents, fixes the root at 0700, removes group/other write access, confirms 700:0:0, and uses absolute paths. Never extract over an older release or inside Git. The VPS pulls the image by image@sha256 and does not run git clone, npm install, or docker build.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('3. Separe público e privado', '3. Separate public and private'))}</h3><div><p>${esc(T('O kit aceita somente topologia split: landing/docs/demo num processo sem segredos; bot, app privado e API MCP no core privado. Landing e docs usam hosts diferentes de app e MCP. No Cloudflare Tunnel do Compose, aponte APP_URL e MCP_URL para http://kassinao:8080; PUBLIC_URL e DOCS_URL para http://kassinao-public:8081. Num proxy instalado no host, use respectivamente http://127.0.0.1:${KASSINAO_HOST_PORT} e http://127.0.0.1:${KASSINAO_PUBLIC_HOST_PORT}. Prepare DNS, certificados e essas quatro rotas HTTPS antes do deploy, porque o gate testa os hosts por fora. Nunca abra 8080/8081 na internet. Ainda não anuncie a instância nem distribua o invite do bot.', 'The bundle accepts split topology only: landing/docs/demo in a secretless process; bot, private app, and MCP API in the private core. Landing and docs use hosts different from app and MCP. In the Compose Cloudflare Tunnel, route APP_URL and MCP_URL to http://kassinao:8080; route PUBLIC_URL and DOCS_URL to http://kassinao-public:8081. With a proxy installed on the host, use http://127.0.0.1:${KASSINAO_HOST_PORT} and http://127.0.0.1:${KASSINAO_PUBLIC_HOST_PORT}, respectively. Prepare DNS, certificates, and these four HTTPS routes before deployment because the gate tests the hosts externally. Never expose 8080/8081 to the internet. Do not announce the instance or distribute the bot invite yet.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('4. Configure a instância e o storage', '4. Configure the instance and storage'))}</h3><div><p>${esc(T('Copie os dois templates, preencha URLs, guilds, credenciais e o contrato público de privacidade pelo injector. Depois, confirme manualmente no .env que a VPS é dedicada usando a frase KASSINAO_DEDICATED_DOCKER_HOST_ACK mostrada no bloco abaixo. Com o mount LUKS já ativo e a raiz 0700 root:root, prepare-storage.sh valida o bundle e a configuração, prova a criptografia antes de qualquer criação e materializa somente recordings, state, auth e cache como 0700 no UID/GID configurado. Esses valores e diretórios nunca entram na imagem ou no bundle público.', 'Copy both templates, then fill URLs, guilds, credentials, and the public privacy contract through the injector. Next, manually acknowledge in .env that the VPS is dedicated using the KASSINAO_DEDICATED_DOCKER_HOST_ACK phrase shown below. With the LUKS mount already active and its root at 0700 root:root, prepare-storage.sh validates the bundle and configuration, proves encryption before creating anything, and materializes only recordings, state, auth, and cache as 0700 under the configured UID/GID. These values and directories never enter the image or public bundle.'))}</p><p>${esc(T('KASSINAO_ROLLBACK_RETENTION_HOURS precisa existir e coincidir nos dois arquivos. O padrão é 72 horas e a faixa aceita é 1..168.', 'KASSINAO_ROLLBACK_RETENTION_HOURS must exist and match in both files. The default is 72 hours and the accepted range is 1..168.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('5. Audite antes do lançamento', '5. Audit before launch'))}</h3><div><p>${esc(T('Com DNS e HTTPS já propagados, o deploy valida por fora os quatro hosts, a identidade da release, a política PT/EN, a separação de superfícies e a negação de rotas privadas. O audit também verifica layout, rede, containers, firewall, storage, permissões, listeners e headers. Só depois anuncie as URLs, distribua o invite ou habilite uso real.', 'With DNS and HTTPS already propagated, deployment externally validates all four hosts, release identity, the PT/EN policy, surface separation, and denial of private routes. The audit also verifies layout, networking, containers, firewall, storage, permissions, listeners, and headers. Only then announce the URLs, distribute the invite, or enable real use.'))}</p></div></article>
+      </div>
+      ${productionDeploy}
+      <div class="callout"><strong>${esc(T('Rollback não é backup.', 'Rollback is not a backup.'))}</strong><p>${esc(T('Um deploy saudável apaga o snapshot imediatamente. Se falhar, o snapshot contém somente estado operacional e metadados de gravações, sem auth nem faixas de áudio, e o timer persistente do host o remove dentro da janela declarada mesmo sem outro deploy.', 'A healthy deployment deletes its snapshot immediately. If it fails, the snapshot contains only operational state and recording metadata, without auth or audio tracks, and the persistent host timer removes it within the declared window even if no later deployment runs.'))}</p></div>
+    </section>
 
-      <section class="doc-section" id="fluxo" data-doc-section data-keywords="recording flow audio opus pcm flac ffmpeg vad mix download audacity panel consent">
-        <div class="section-head">
-          <h2>${esc(T('Fluxo de gravação', 'Recording flow'))}</h2>
-          <p>${esc(T('Do comando no canal de voz até a central privada.', 'From the voice-channel command to the private workspace.'))}</p>
-        </div>
-        <ol class="flow">
-          <li><span class="flow-number">1</span><div><h3>${esc(T('O aviso aparece antes do áudio', 'The notice appears before audio starts'))}</h3><p>${esc(T('O bot entra no canal, publica o painel e usa o prefixo [GRAVANDO] no apelido. A captura só começa depois do aviso.', 'The bot joins the channel, posts the panel, and adds [RECORDING] to its nickname. Capture starts only after the notice.'))}</p></div></li>
-          <li><span class="flow-number">2</span><div><h3>${esc(T('Cada pessoa ganha uma faixa', 'Each person gets a track'))}</h3><p>${esc(T('Os pacotes Opus são decodificados para PCM e um ffmpeg por pessoa grava FLAC contínuo e sincronizado. Não há diarização para adivinhar o falante.', 'Opus packets are decoded to PCM and one ffmpeg process per person records continuous synchronized FLAC. No diarization guesses the speaker.'))}</p></div></li>
-          <li><span class="flow-number">3</span><div><h3>${esc(T('Notas preservam o segundo exato', 'Notes preserve the exact second'))}</h3><p>${esc(T('Use /nota ou os botões do painel. As marcações entram na página, na transcrição e nos labels do Audacity.', 'Use /note or the panel buttons. Marks appear on the page, in the transcript, and in Audacity labels.'))}</p></div></li>
-          <li><span class="flow-number">4</span><div><h3>${esc(T('A gravação encerra com segurança', 'The recording ends safely'))}</h3><p>${esc(T('Use /parar. O bot também encerra quando o canal esvazia, passa do limite ou é desconectado. Silêncio prolongado gera aviso, não parada.', 'Use /stop. The bot also ends when the channel empties, reaches the limit, or is disconnected. Extended silence triggers a warning, not a stop.'))}</p></div></li>
-          <li><span class="flow-number">5</span><div><h3>${esc(T('O áudio fica disponível primeiro', 'Audio becomes available first'))}</h3><p>${esc(T('O mix pré-processado alimenta o player imediatamente. MP3, FLAC, mix e projeto do Audacity são gerados sob demanda e ficam em cache.', 'The preprocessed mix powers the player immediately. MP3, FLAC, mix, and Audacity projects are generated on demand and cached.'))}</p></div></li>
-          <li><span class="flow-number">6</span><div><h3>${esc(T('Transcrição e ata entram na fila', 'Transcript and minutes enter the queue'))}</h3><p>${esc(T('O VAD normalmente envia só os trechos com fala; se a detecção falhar, usa blocos fixos para não perder a call. Depois, a ata gera resumo, decisões e tarefas.', 'VAD normally sends only speech segments; if detection fails, fixed chunks keep the call from being lost. Then minutes create a summary, decisions, and tasks.'))}</p></div></li>
-        </ol>
-      </section>
+    <section class="doc-section" id="discord" data-doc-section data-keywords="discord portal guild install bot applications commands permissions 68242432 identify callback privacy public bot">
+      <div class="section-head"><h2>${esc(T('Configure o Discord Portal sem permissões extras.', 'Configure the Discord Portal without extra permissions.'))}</h2><p>${esc(T('Cada operador cria sua própria Application. Não reutilize o bot, token ou Client Secret de outra instância.', 'Every operator creates their own Application. Never reuse another instance bot, token, or Client Secret.'))}</p></div>
+      <div class="install-steps">
+        <article class="install-step"><h3>Installation</h3><div><p>${esc(T('Use Guild Install. Selecione os scopes bot e applications.commands. Em Permissions, use exatamente o bitfield 68242432.', 'Use Guild Install. Select the bot and applications.commands scopes. Under Permissions, use the exact bitfield 68242432.'))}</p><p>${esc(T('Ele soma View Channel, Send Messages, Embed Links, Read Message History, Connect e Change Nickname. A última é recomendada; o apelido não é garantia de captura.', 'It combines View Channel, Send Messages, Embed Links, Read Message History, Connect, and Change Nickname. The last one is recommended; the nickname is not a capture guarantee.'))}</p></div></article>
+        <article class="install-step"><h3>OAuth2</h3><div><p>${esc(T('Cadastre exatamente APP_URL/auth/callback em Redirects. O login do app pede somente identify; membership nas guilds permitidas é conferida pelo bot no servidor.', 'Register exactly APP_URL/auth/callback under Redirects. App login requests only identify; membership in allowed guilds is checked server-side by the bot.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('Política e dados', 'Policy and data'))}</h3><div><p>${esc(T('Em General Information, use APP_URL/privacy como Privacy Policy URL. A mesma política expõe o contato do operador e APP_URL/privacy#data-rights para pedidos de acesso, correção ou exclusão.', 'Under General Information, use APP_URL/privacy as the Privacy Policy URL. The same policy exposes the operator contact and APP_URL/privacy#data-rights for access, correction, or deletion requests.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('Bot privado', 'Private bot'))}</h3><div><p>${esc(T('Para uma instância empresarial privada, desligue Public Bot. Isso impede instalação por terceiros, mas não substitui ALLOWED_GUILD_IDS e as checagens do runtime.', 'For a private company instance, disable Public Bot. This prevents third-party installation but does not replace ALLOWED_GUILD_IDS and runtime checks.'))}</p></div></article>
+        <article class="install-step"><h3>Gateway</h3><div><p>${esc(T('O produto usa Guilds, GuildVoiceStates e DirectMessages. Não habilite Message Content, Guild Members ou Presence. Em DM com o bot, ele lê apenas o necessário para detectar uma tentativa de slash command e orientar.', 'The product uses Guilds, GuildVoiceStates, and DirectMessages. Do not enable Message Content, Guild Members, or Presence. In DMs with the bot, it reads only what is needed to detect a slash-command attempt and provide guidance.'))}</p></div></article>
+      </div>
+      ${inviteUrl}
+      <div class="callout"><strong>${esc(T('Projeto independente.', 'Independent project.'))}</strong><p>${esc(T('Kassinão não é afiliado, patrocinado nem endossado pelo Discord. O operador continua responsável pela própria Application e pelo uso permitido dos dados da API.', 'Kassinão is not affiliated with, sponsored by, or endorsed by Discord. The operator remains responsible for their own Application and permitted use of API data.'))}</p></div>
+    </section>
 
-      <section class="doc-section" id="transcricao" data-doc-section data-keywords="transcription ai assemblyai groq openai gemini command local whisper minutes openrouter vad zdr">
-        <div class="section-head">
-          <h2>${esc(T('Transcrição e IA', 'Transcription and AI'))}</h2>
-          <p>${esc(T('A gravação funciona sem IA. Quando ativada, a IA entra depois da call e nunca decide quem falou.', 'Recording works without AI. When enabled, AI runs after the call and never decides who spoke.'))}</p>
-        </div>
-        <div class="provider-layout">
-          <div class="provider-list">
-            <div class="provider"><strong>AssemblyAI</strong><span>${esc(T('Universal-3.5-Pro e keyterms. Fallback para Groq só com TRANSCRIBE_FALLBACK_PROVIDER=groq.', 'Universal-3.5-Pro and keyterms. Groq fallback requires TRANSCRIBE_FALLBACK_PROVIDER=groq.'))}</span></div>
-            <div class="provider"><strong>Groq</strong><span>${esc(T('Whisper Large V3. Útil para começar com free tier. Ative Zero Data Retention.', 'Whisper Large V3. Useful for starting with a free tier. Enable Zero Data Retention.'))}</span></div>
-            <div class="provider"><strong>OpenAI</strong><span>${esc(T('Whisper com segmentos e timestamps.', 'Whisper with segments and timestamps.'))}</span></div>
-            <div class="provider"><strong>Gemini</strong><span>${esc(T('Áudio via Gemini. Revise a política de retenção do tier usado.', 'Audio through Gemini. Review the retention policy for your tier.'))}</span></div>
-            <div class="provider"><strong>${esc(T('Comando local', 'Local command'))}</strong><span>${esc(T('faster-whisper, whisper.cpp ou outro comando que gere o JSON esperado.', 'faster-whisper, whisper.cpp, or another command that outputs the expected JSON.'))}</span></div>
-          </div>
-          <aside class="pipeline-note">
-            <h3>${esc(T('O que é enviado', 'What gets sent'))}</h3>
-            <p>${esc(T('O VAD normalmente corta silêncio por faixa. Se falhar, blocos fixos preservam a call. Nomes, servidor e canal só saem quando TRANSCRIBE_SEND_MEETING_CONTEXT=true.', 'VAD normally removes silence per track. If it fails, fixed chunks preserve the call. Names, server, and channel leave only with TRANSCRIBE_SEND_MEETING_CONTEXT=true.'))}</p>
-            <p>${esc(T('A ata recebe texto da transcrição, nomes de participantes/falantes, nome do canal e notas marcadas, nunca áudio, e fica desligada até MINUTES_ENABLED=true. OPENROUTER_SITE_URL vazio não envia domínio de atribuição.', 'Minutes receive transcript text, participant/speaker names, the voice-channel name, and marked notes, never audio, and stay off until MINUTES_ENABLED=true. An empty OPENROUTER_SITE_URL sends no attribution domain.'))}</p>
-          </aside>
-        </div>
-        <div class="callout">
-          <strong>${esc(T('Self-hosted não significa offline.', 'Self-hosted does not mean offline.'))}</strong>
-          <p>${esc(T('O arquivo principal fica na sua infraestrutura. Providers ASR recebem áudio, atas recebem texto, MCP entrega respostas ao cliente e o webhook recebe a ata somente quando cada integração está habilitada.', 'The primary archive stays on your infrastructure. ASR providers receive audio, minutes providers receive text, MCP returns data to the client, and the webhook receives minutes only when each integration is enabled.'))}</p>
-        </div>
-        <h3>${esc(T('Protocolo do webhook de atas', 'Minutes webhook protocol'))}</h3>
-        <p>${esc(T('O receptor precisa autenticar o corpo bruto exato antes de interpretar o JSON. O Kassinão envia os headers abaixo.', 'The receiver must authenticate the exact raw body before parsing JSON. Kassinão sends the headers below.'))}</p>
-        ${codeBlock(
-          'HTTP',
-          `X-Kassinao-Event: minutes.ready
-X-Kassinao-Schema-Version: 1
-X-Kassinao-Delivery-Id: <stable-delivery-uuid>
-X-Kassinao-Timestamp: <unix-seconds>
-X-Kassinao-Signature: v1=<lowercase-hex-hmac-sha256>`,
-          copyLabel,
-        )}
-        <p>${esc(T('Calcule HMAC-SHA256 com MINUTES_WEBHOOK_SECRET sobre timestamp + "." + corpo bruto, prefixe o hexadecimal minúsculo com v1=, confirme tamanhos iguais e compare em tempo constante. Não serialize o JSON novamente antes de verificar.', 'Compute HMAC-SHA256 with MINUTES_WEBHOOK_SECRET over timestamp + "." + raw body, prefix the lowercase hex digest with v1=, require equal lengths, and compare in constant time. Do not reserialize JSON before verification.'))}</p>
-        <p>${esc(T('Rejeite timestamps mais de cinco minutos no passado ou futuro e persista X-Kassinao-Delivery-Id antes de aplicar efeitos. Tentativas mantêm o mesmo delivery id, mas recebem timestamp e assinatura novos. Somente 2xx confirma a entrega.', 'Reject timestamps more than five minutes in the past or future, and persist X-Kassinao-Delivery-Id before applying side effects. Retries keep the same delivery id but receive a new timestamp and signature. Only 2xx acknowledges delivery.'))}</p>
-        <h3>${esc(T('Transcrição totalmente local', 'Fully local transcription'))}</h3>
-        <p>${esc(T('Construa a imagem com LOCAL_TRANSCRIBE=1 e use o wrapper incluído. O comando precisa escrever em {output} um array JSON com start, end e text. {input} e {output} são argumentos separados; não há shell, e pipes, redirecionamentos, expansão de variável, glob e comentários são rejeitados.', 'Build the image with LOCAL_TRANSCRIBE=1 and use the included wrapper. The command must write a JSON array with start, end, and text to {output}. {input} and {output} are separate arguments; no shell is involved, and pipes, redirects, environment expansion, globs, and comments are rejected.'))}</p>
-        ${localTranscription}
-        ${codeBlock(
-          l === 'pt' ? 'Terminal' : 'Terminal',
-          'docker compose build --build-arg LOCAL_TRANSCRIBE=1\ndocker compose up -d',
-          copyLabel,
-        )}
-      </section>
+    <section class="doc-section" id="comandos" data-doc-section data-keywords="commands gravar record stop note status recordings autorecord config ask mcp help about">
+      <div class="section-head"><h2>${esc(T('Comandos refletem as capacidades ligadas.', 'Commands reflect enabled capabilities.'))}</h2><p>${esc(T('Os nomes aparecem em PT-BR ou inglês conforme o locale do Discord. Recursos opcionais não devem parecer parte automática da gravação.', 'Names appear in PT-BR or English according to the Discord locale. Optional features must not look like an automatic part of recording.'))}</p></div>
+      <div class="command-grid">${commandCards}</div>
+    </section>
 
-      <section class="doc-section" id="privacidade" data-doc-section data-keywords="privacy permissions oauth access consent restricted channel retention delete fail closed prompt injection personal data">
-        <div class="section-head">
-          <h2>${esc(T('Privacidade e permissões', 'Privacy and permissions'))}</h2>
-          <p>${esc(T('Voz é dado pessoal. O controle de acesso é aplicado no servidor em toda abertura, busca e conexão.', 'Voice is personal data. Server-side access control applies to every open, search, and connection.'))}</p>
-        </div>
-        <div class="privacy-layout">
-          <div class="privacy-rules">
-            <article class="privacy-rule"><h3>${esc(T('Consentimento visível', 'Visible consent'))}</h3><p>${esc(T('O bot entra no canal, publica um painel e muda o apelido para [GRAVANDO] antes de capturar áudio.', 'The bot joins the channel, posts a panel, and changes its nickname to [RECORDING] before capturing audio.'))}</p></article>
-            <article class="privacy-rule"><h3>${esc(T('Acesso revalidado', 'Revalidated access'))}</h3><p>${esc(T('A página exige OAuth do Discord e participação atual no servidor. Sair do servidor encerra o acesso.', 'The page requires Discord OAuth and current server membership. Leaving the server ends access.'))}</p></article>
-            <article class="privacy-rule"><h3>${esc(T('Guilds permitidas', 'Allowed guilds'))}</h3><p>${esc(T('ALLOWED_GUILD_IDS define os servidores aceitos. Conhecer o domínio ou adicionar o bot em outra guild não cria acesso.', 'ALLOWED_GUILD_IDS defines accepted servers. Knowing the domain or adding the bot to another guild creates no access.'))}</p></article>
-            <article class="privacy-rule"><h3>${esc(T('Histórico da gravação', 'Recording history'))}</h3><p>${esc(T('Em qualquer canal, só abre para quem estava na call, mesmo mutado, quem iniciou ou um admin atual. Receber permissão depois não libera o passado.', 'In every channel, only call participants, including muted participants, the starter, or a current admin can open it. Later permission does not unlock the past.'))}</p></article>
-            <article class="privacy-rule"><h3>${esc(T('Falha para o lado seguro', 'Fails closed'))}</h3><p>${esc(T('Se o Discord não consegue confirmar o acesso, a página nega. A API do MCP devolve erro temporário quando a checagem está indisponível.', 'If Discord cannot confirm access, the page denies it. The MCP API returns a temporary error when the check is unavailable.'))}</p></article>
-            <article class="privacy-rule"><h3>${esc(T('Retenção em camadas', 'Tiered retention'))}</h3><p>${esc(T('O áudio pode expirar antes da transcrição, ata e notas. Apagar remove da instância ativa, não de backups, providers ou integrações externas.', 'Audio can expire before transcripts, minutes, and notes. Deletion removes data from the active instance, not backups, providers, or external integrations.'))}</p></article>
-            <article class="privacy-rule"><h3>${esc(T('Segredos isolados', 'Isolated secrets'))}</h3><p>${esc(T('Cookies e MCP usam segredos diferentes. Girar MCP_SECRET revoga todos os conectores sem invalidar a regra de acesso.', 'Cookies and MCP use different secrets. Rotating MCP_SECRET revokes every connector without changing access rules.'))}</p></article>
-          </div>
-          <aside class="permission-box">
-            <h3>${esc(T('Quem pode fazer o quê', 'Who can do what'))}</h3>
-            <ul>
-              <li>${esc(T('Gravar: qualquer membro no canal atual.', 'Record: any member in their current channel.'))}</li>
-              <li>${esc(T('Indicar outro canal: Gerenciar Servidor.', 'Target another channel: Manage Server.'))}</li>
-              <li>${esc(T('Parar e anotar: continuar vendo o canal.', 'Stop and annotate: must still see the channel.'))}</li>
-              <li>${esc(T('Auto-record e configuração: Gerenciar Servidor.', 'Auto-record and configuration: Manage Server.'))}</li>
-              <li>${esc(T('Apagar: quem iniciou ou admin, com checagem atual.', 'Delete: starter or admin, with a current check.'))}</li>
-              <li>${esc(T('Perguntar, busca e MCP: somente reuniões acessíveis.', 'Ask, search, and MCP: accessible meetings only.'))}</li>
-            </ul>
-          </aside>
-        </div>
-        <div class="callout danger">
-          <strong>${esc(T('Se uma credencial vazar, gire imediatamente.', 'Rotate any exposed credential immediately.'))}</strong>
-          <p>${esc(T('Troque DISCORD_TOKEN, DISCORD_CLIENT_SECRET, TUNNEL_TOKEN e chaves de API. Problemas de segurança devem ser reportados em privado.', 'Replace DISCORD_TOKEN, DISCORD_CLIENT_SECRET, TUNNEL_TOKEN, and API keys. Security issues must be reported privately.'))}</p>
-        </div>
-        <div class="callout">
-          <strong>${esc(T('Proteja também a VPS.', 'Protect the VPS too.'))}</strong>
-          <p>${esc(T('Use firewall, SSH por chave, atualizações de segurança e backup criptografado. Com o túnel, não publique a porta 8080. Antes de expor o hostname, rode sudo ./scripts/audit-vps-security.sh: o comando reprova SSH, firewall, listeners, Docker ou modos de segredo inseguros. O Kassinão suporta uma única réplica gravando no mesmo volume.', 'Use a firewall, key-based SSH, security updates, and encrypted backups. With the tunnel, do not publish port 8080. Before exposing the hostname, run sudo ./scripts/audit-vps-security.sh: it fails on unsafe SSH, firewall, listeners, Docker isolation, or secret modes. Kassinão supports a single replica writing to the same volume.'))}</p>
-        </div>
-      </section>
+    <section class="doc-section" id="acesso" data-doc-section data-keywords="access acl oauth guild membership retention provider egress privacy deletion backup encryption">
+      <div class="section-head"><h2>${esc(T('Acesso e dados são decisões da instância.', 'Access and data are instance decisions.'))}</h2><p>${esc(T('A política pública em APP_URL/privacy abre sem login e é renderizada pelo core com a configuração real do operador. Ela não pode ser substituída por uma política genérica do projeto.', "The public policy at APP_URL/privacy opens without login and is rendered by the core using the operator's actual configuration. It cannot be replaced with a generic project policy."))}</p></div>
+      <div class="privacy-layout"><div class="privacy-rules">
+        <article class="privacy-rule"><h3>${esc(T('A política descreve os dados reais', 'The policy describes actual data'))}</h3><p>${esc(T('Ela cobre perfil e IDs do Discord, presença na call, áudio, notas, artefatos de texto, metadados, sessões web, tokens MCP, providers, retenção e o processo do operador para responder solicitações.', 'It covers Discord profile and IDs, call presence, audio, notes, text artifacts, metadata, web sessions, MCP tokens, providers, retention, and the operator process for handling requests.'))}</p></article>
+        <article class="privacy-rule"><h3>${esc(T('Login e membership atuais', 'Current login and membership'))}</h3><p>${esc(T('O app usa OAuth do Discord e exige vínculo atual com uma guild da allowlist. Sair da guild encerra o acesso.', 'The app uses Discord OAuth and requires current membership in an allowlisted guild. Leaving the guild ends access.'))}</p></article>
+        <article class="privacy-rule"><h3>${esc(T('ACL histórica da reunião', 'Historical meeting ACL'))}</h3><p>${esc(T('Abre para quem iniciou, esteve na call ou tem Gerenciar Servidor agora. Ganhar acesso ao canal depois não abre o passado. OWNER_IDS não concede acesso universal às gravações.', 'Access is granted to the starter, call participants, or someone with Manage Server now. Later channel access does not unlock history. OWNER_IDS does not grant universal recording access.'))}</p></article>
+        <article class="privacy-rule"><h3>${esc(T('Falha fechada', 'Fail closed'))}</h3><p>${esc(T('Se o Discord não confirma membership ou permissão, web e bot negam; a API MCP responde indisponibilidade temporária quando a checagem falha transitoriamente.', 'If Discord cannot confirm membership or permission, web and bot deny access; the MCP API returns temporary unavailability when the check fails transiently.'))}</p></article>
+        <article class="privacy-rule"><h3>${esc(T('Busca limitada e paginada', 'Bounded and paginated search'))}</h3><p>${esc(T('A busca no app opera sobre a página carregada e seus limites. Ela não promete indexação global ilimitada do acervo.', 'Private-app search operates over the loaded page and its limits. It does not promise unlimited global indexing of the archive.'))}</p></article>
+        <article class="privacy-rule"><h3>${esc(T('Storage ativo e backup são controles diferentes', 'Active storage and backup are separate controls'))}</h3><p>${esc(T('O kit exige dados ativos, auth e cache em dm-crypt/LUKS, com swap desabilitado ou também criptografado. O backup inclui recordings e state, exclui auth e usa um remote rclone crypt. Um backup criptografado não substitui a criptografia do volume ativo.', 'The bundle requires active data, auth, and cache on dm-crypt/LUKS, with swap disabled or encrypted as well. Backups include recordings and state, exclude auth, and use an rclone crypt remote. An encrypted backup does not replace active-volume encryption.'))}</p></article>
+        <article class="privacy-rule"><h3>${esc(T('Direitos sobre dados', 'Data rights'))}</h3><p>${esc(T('A política identifica o operador e oferece um canal para pedir acesso, correção ou exclusão. Solicitações reais nunca devem ser abertas em issue pública do projeto.', 'The policy identifies the operator and offers a channel for access, correction, or deletion requests. Real requests must never be opened in a public project issue.'))}</p></article>
+      </div><aside class="permission-box"><h3>${esc(T('Defaults de uma instalação nova', 'New-install defaults'))}</h3><ul><li><code>TRANSCRIBE_PROVIDER=none</code></li><li><code>TRANSCRIBE_FALLBACK_PROVIDER=none</code></li><li><code>MINUTES_ENABLED=false</code></li><li><code>MCP_SECRET</code> ${esc(T('vazio', 'empty'))}</li><li><code>RETENTION_DAYS=7</code></li><li><code>TEXT_RETENTION_DAYS=90</code></li></ul></aside></div>
+      <h3>${esc(T('Configuração essencial', 'Essential configuration'))}</h3><p>${esc(T('A lista completa, com limites e providers, fica no .env.example. Aqui estão apenas os controles que mudam a fronteira de produto e segurança.', 'The complete list, including limits and providers, lives in .env.example. These are only the controls that change the product and security boundary.'))}</p><div class="env-groups">${envCards}</div>
+      <h3>${esc(T('Egress por provider', 'Provider egress'))}</h3><div class="provider-layout"><div class="provider-list"><div class="provider"><strong>${esc(T('Gravação', 'Recording'))}</strong><span>${esc(T('Fica na instância até a retenção ou exclusão.', 'Stays in the instance until retention or deletion.'))}</span></div><div class="provider"><strong>${esc(T('ASR externo', 'External ASR'))}</strong><span>${esc(T('Recebe áudio quando selecionado. TRANSCRIBE_SEND_MEETING_CONTEXT controla nomes automáticos do Discord; prompt e keyterms configurados manualmente também podem sair. Um comando customizado recebe o áudio e pode usar rede.', 'Receives audio when selected. TRANSCRIBE_SEND_MEETING_CONTEXT controls automatic Discord names; manually configured prompts and keyterms may also leave. A custom command receives audio and may use the network.'))}</span></div><div class="provider"><strong>${esc(T('Ata por IA', 'AI minutes'))}</strong><span>${esc(T('Recebe texto somente com MINUTES_ENABLED=true e provider configurado.', 'Receives text only with MINUTES_ENABLED=true and a configured provider.'))}</span></div><div class="provider"><strong>Webhook</strong><span>${esc(T('Recebe ID e link da gravação, servidor, canal, horários, participantes e ata, com URL HTTPS e HMAC dedicado.', 'Receives recording ID and link, server, channel, timestamps, participants, and minutes, using an HTTPS URL and dedicated HMAC.'))}</span></div><div class="provider"><strong>MCP</strong><span>${esc(T('Entrega texto e metadados autorizados ao dispositivo e ao host MCP escolhido pelo membro.', 'Delivers authorized text and metadata to the member device and chosen MCP host.'))}</span></div></div><aside class="pipeline-note"><h3>${esc(T('Cada integração tem seu próprio opt-in.', 'Each integration has its own opt-in.'))}</h3><p>${esc(T('Transcrição e ata exigem flags explícitas. Definir MCP_SECRET habilita o MCP; URL e segredo habilitam o webhook. Documente os providers realmente usados na política da sua instância.', 'Transcription and minutes require explicit flags. Setting MCP_SECRET enables MCP; URL and secret enable the webhook. Document the providers actually used in your instance policy.'))}</p></aside></div>
+    </section>
 
-      <section class="doc-section" id="mcp" data-doc-section data-keywords="mcp claude cursor connector token refresh list meetings pending actions search who said get meeting">
-        <div class="section-head">
-          <h2>${esc(T('Conector MCP', 'MCP connector'))}</h2>
-          <p>${esc(T('Leve a memória das reuniões para Claude, Cursor ou outro cliente MCP sem copiar o acervo para a máquina.', 'Bring meeting memory to Claude, Cursor, or another MCP client without copying the archive to the machine.'))}</p>
-        </div>
-        <div class="callout">
-          <strong>${esc(T('MCP é opt-in e somente leitura.', 'MCP is opt-in and read-only.'))}</strong>
-          <p>${esc(T('Ele não entrega áudio, não apaga gravações e não amplia permissões. Cada chamada passa pela mesma checagem da web.', 'It does not serve audio, delete recordings, or widen permissions. Every request goes through the same web access check.'))}</p>
-        </div>
-        <div class="callout">
-          <strong>${esc(T('Cada instância tem a própria API.', 'Every instance has its own API.'))}</strong>
-          <p>${esc(T('O pacote no npm é público, mas não existe API MCP compartilhada. KASSINAO_URL sempre recebe o MCP_URL emitido pelo seu próprio operador.', 'The npm package is public, but there is no shared MCP API. KASSINAO_URL always receives the MCP_URL issued by your own operator.'))}</p>
-        </div>
-        <h3>${esc(T('Ative no servidor', 'Enable on the server'))}</h3>
-        <p>${esc(T('Defina um MCP_SECRET dedicado com no mínimo 32 bytes e reinicie. A página /app/conectar-ia e a API só existem quando esse segredo está presente.', 'Set a dedicated MCP_SECRET with at least 32 bytes and restart. The /app/conectar-ia page and API exist only when this secret is present.'))}</p>
-        ${codeBlock(l === 'pt' ? 'Terminal' : 'Terminal', 'openssl rand -hex 32', copyLabel)}
-        <h3>${esc(T('Conecte cada pessoa', 'Connect each person'))}</h3>
-        <p>${esc(T('Abra /app/conectar-ia, entre com Discord e gere uma conexão nomeada. Copie o código descartável e execute o comando exibido: ele pede o código com a entrada oculta, salva o token em um arquivo local protegido (0600 no macOS/Linux; ACL herdada do perfil no Windows) e imprime uma configuração sem segredo. O computador precisa de Node.js 20 ou superior.', 'Open /app/conectar-ia, sign in with Discord, and create a named connection. Copy the one-time code and run the displayed command: it asks for the code with hidden input, saves the token in a protected local file (0600 on macOS/Linux; inherited profile ACL on Windows), and prints a secret-free config. The computer needs Node.js 20 or newer.'))}</p>
-        ${mcpConfig}
-        <p>${esc(T('O mesmo fluxo funciona sem navegador: um ID presente em OWNER_IDS gera um código com /mcp novo e faz a troca pelo terminal.', 'The same flow works without a browser: an ID listed in OWNER_IDS generates a code with /mcp new and exchanges it in the terminal.'))}</p>
-        ${codeBlock(
-          l === 'pt' ? 'Terminal' : 'Terminal',
-          T(
-            'npx -y kassinao-mcp@1.0.6 exchange --stdin --url https://SEU-KASSINAO',
-            'npx -y kassinao-mcp@1.0.6 exchange --stdin --url https://YOUR-KASSINAO',
-          ),
-          copyLabel,
-        )}
-        <h3>${esc(T('Ferramentas disponíveis', 'Available tools'))}</h3>
-        <div class="mcp-tools">
-          <article class="mcp-tool"><code>list_meetings</code><p>${esc(T('Lista reuniões num período.', 'Lists meetings in a time range.'))}</p></article>
-          <article class="mcp-tool"><code>pending_actions</code><p>${esc(T('Cruza pendências e prazos.', 'Combines pending actions and deadlines.'))}</p></article>
-          <article class="mcp-tool"><code>search_meetings</code><p>${esc(T('Busca em transcrições, atas e notas.', 'Searches transcripts, minutes, and notes.'))}</p></article>
-          <article class="mcp-tool"><code>who_said</code><p>${esc(T('Encontra o que uma pessoa disse sobre um tema.', 'Finds what someone said about a topic.'))}</p></article>
-          <article class="mcp-tool"><code>get_meeting</code><p>${esc(T('Abre o dossiê completo de uma reunião.', 'Opens a complete meeting dossier.'))}</p></article>
-        </div>
-        <h3>${esc(T('Tokens e revogação', 'Tokens and revocation'))}</h3>
-        <p>${esc(T('O refresh token fica em ~/.config/kassinao-mcp, protegido por modo 0600 no macOS/Linux e pelas ACLs herdadas do perfil no Windows, e gira a cada renovação. Revogue uma conexão na página, use /mcp revogar-tudo ou gire MCP_SECRET para revogar todos.', 'The refresh token lives under ~/.config/kassinao-mcp, protected by mode 0600 on macOS/Linux and by the inherited profile ACLs on Windows, and rotates on renewal. Revoke one connection on the page, use /mcp revoke-all, or rotate MCP_SECRET to revoke everyone.'))}</p>
-      </section>
+    <section class="doc-section" id="mcp" data-doc-section data-keywords="mcp connector tools token exchange revoke read only instance url">
+      <div class="section-head"><h2>${esc(T('MCP consulta a sua instância, não um serviço central.', 'MCP queries your instance, not a central service.'))}</h2><p>${esc(T('O pacote público kassinao-mcp se conecta ao MCP_URL escolhido pelo operador. KASSINAO_URL é obrigatório e não possui fallback para uma instância oficial.', 'The public kassinao-mcp package connects to the MCP_URL selected by the operator. KASSINAO_URL is required and has no fallback to an official instance.'))}</p></div>
+      <div class="callout"><strong>${esc(T('As cinco tools atuais são somente leitura.', 'The current five tools are read-only.'))}</strong><p>${esc(T('Elas não entregam áudio, não iniciam ou apagam gravações e não contornam a ACL. O conector pede dados autorizados à API; ele não monta nem lê diretamente os arquivos do servidor.', 'They do not serve audio, start or delete recordings, or bypass the ACL. The connector requests authorized data from the API; it does not mount or directly read server files.'))}</p></div>
+      <div class="mcp-tools"><article class="mcp-tool"><code>list_meetings</code><p>${esc(T('Lista reuniões acessíveis.', 'Lists accessible meetings.'))}</p></article><article class="mcp-tool"><code>pending_actions</code><p>${esc(T('Organiza ações e prazos acessíveis.', 'Organizes accessible actions and deadlines.'))}</p></article><article class="mcp-tool"><code>search_meetings</code><p>${esc(T('Busca texto dentro dos limites da API.', 'Searches text within API limits.'))}</p></article><article class="mcp-tool"><code>who_said</code><p>${esc(T('Busca atribuição por conta do Discord.', 'Searches attribution by Discord account.'))}</p></article><article class="mcp-tool"><code>get_meeting</code><p>${esc(T('Abre os dados autorizados de uma reunião.', 'Returns authorized meeting data.'))}</p></article></div>
+      <h3>${esc(T('Conexão e revogação', 'Connection and revocation'))}</h3><p>${esc(T('Ative com MCP_SECRET dedicado. Cada membro gera no app privado um código de troca curto e descartável, salva o refresh token no próprio perfil local e pode revogar a conexão. O slash command fica oculto para quem não tem Gerenciar Servidor e a execução continua restrita a OWNER_IDS.', 'Enable it with a dedicated MCP_SECRET. Each member creates a short-lived one-time exchange code in the private app, stores the refresh token in their own local profile, and can revoke the connection. The slash command is hidden from members without Manage Server and execution remains restricted to OWNER_IDS.'))}</p>${mcpSetup}
+      <p>${esc(T('Teste o cliente e a versão que sua organização escolheu antes de declarar compatibilidade. Conteúdo de reunião é marcado como não confiável, mas isso é defesa em profundidade, não garantia contra prompt injection.', 'Test the client and version selected by your organization before claiming compatibility. Meeting content is marked untrusted, but that is defense in depth, not a guarantee against prompt injection.'))}</p>
+    </section>
 
-      <section class="doc-section" id="problemas" data-doc-section data-keywords="troubleshooting error not online commands missing oauth callback tunnel transcript minutes mcp 404 denied disk audio expired">
-        <div class="section-head">
-          <h2>${esc(T('Troubleshooting', 'Troubleshooting'))}</h2>
-          <p>${esc(T('Comece sempre por docker compose logs -f. O bot valida a configuração no boot e explica as variáveis inválidas.', 'Always start with docker compose logs -f. The bot validates configuration on boot and explains invalid variables.'))}</p>
-        </div>
-        <div class="troubleshooting">
-          <details class="trouble"><summary>${esc(T('O container não fica online', 'The container does not stay online'))}</summary><div class="trouble-body"><p>${esc(T('Confirme DISCORD_TOKEN, APPLICATION_ID e DISCORD_CLIENT_SECRET. Verifique também se APP_URL é uma origem HTTP ou HTTPS sem caminho, query ou hash.', 'Confirm DISCORD_TOKEN, APPLICATION_ID, and DISCORD_CLIENT_SECRET. Also verify that APP_URL is an HTTP or HTTPS origin without a path, query, or hash.'))}</p><p><code>docker compose logs --tail=200 kassinao</code></p></div></details>
-          <details class="trouble"><summary>${esc(T('Os comandos não aparecem', 'Commands do not appear'))}</summary><div class="trouble-body"><p>${esc(T('Confirme que o convite incluiu applications.commands e que o bot já está no servidor. Reinicie o bot. Se GUILD_ID estiver definido, os comandos só são registrados naquele servidor.', 'Confirm the invite included applications.commands and that the bot is already in the server. Restart the bot. If GUILD_ID is set, commands are registered only in that server.'))}</p></div></details>
-          <details class="trouble"><summary>${esc(T('O login do Discord volta com erro', 'Discord login returns an error'))}</summary><div class="trouble-body"><p>${esc(T('Cadastre exatamente APP_URL/auth/callback em OAuth2 Redirects. Em produção, APP_URL precisa usar HTTPS. Depois de mudar a origem, atualize o redirect e reinicie.', 'Register exactly APP_URL/auth/callback under OAuth2 Redirects. In production, APP_URL must use HTTPS. After changing the origin, update the redirect and restart.'))}</p></div></details>
-          <details class="trouble"><summary>${esc(T('O Cloudflare Tunnel não sobe', 'Cloudflare Tunnel does not start'))}</summary><div class="trouble-body"><p>${esc(T('O serviço fica num profile. Defina COMPOSE_PROFILES=tunnel ou execute docker compose --profile tunnel up -d. No painel da Cloudflare, o destino interno é kassinao:8080.', 'The service is in a profile. Set COMPOSE_PROFILES=tunnel or run docker compose --profile tunnel up -d. In Cloudflare, the internal target is kassinao:8080.'))}</p></div></details>
-          <details class="trouble"><summary>${esc(T('A gravação existe, mas não há transcrição', 'The recording exists, but there is no transcript'))}</summary><div class="trouble-body"><p>${esc(T('Confirme que TRANSCRIBE_PROVIDER não está como none e que a chave do provider existe. Consulte o log da fila. A gravação e os downloads continuam válidos mesmo sem IA.', 'Confirm TRANSCRIBE_PROVIDER is not none and that its provider key exists. Check queue logs. Recording and downloads remain valid without AI.'))}</p></div></details>
-          <details class="trouble"><summary>${esc(T('A transcrição saiu, mas a ata não', 'The transcript is ready, but minutes are not'))}</summary><div class="trouble-body"><p>${esc(T('A ata fica desligada por padrão. Defina MINUTES_ENABLED=true, MINUTES_PROVIDER e a chave correspondente. Auto existe apenas para compatibilidade com instalações antigas.', 'Minutes are off by default. Set MINUTES_ENABLED=true, MINUTES_PROVIDER, and the matching key. Auto exists only for compatibility with older installations.'))}</p></div></details>
-          <details class="trouble"><summary>${esc(T('A página de MCP retorna 404', 'The MCP page returns 404'))}</summary><div class="trouble-body"><p>${esc(T('Isso é esperado quando MCP_SECRET está vazio. Gere um segredo dedicado com 32 bytes ou mais, diferente de COOKIE_SECRET, e reinicie o bot.', 'This is expected when MCP_SECRET is empty. Generate a dedicated secret of at least 32 bytes, different from COOKIE_SECRET, and restart the bot.'))}</p></div></details>
-          <details class="trouble"><summary>${esc(T('Uma pessoa recebeu acesso negado', 'Someone received access denied'))}</summary><div class="trouble-body"><p>${esc(T('Confirme que ela continua no servidor. Em qualquer canal, ela precisa ter estado na call, ter iniciado a gravação ou ser admin atual. Ganhar acesso ao canal depois não libera o histórico.', 'Confirm they are still in the server. In every channel, they must have joined the call, started the recording, or be a current admin. Later channel access does not unlock history.'))}</p></div></details>
-          <details class="trouble"><summary>${esc(T('O bot recusou ou encerrou por espaço', 'The bot refused or stopped because of disk space'))}</summary><div class="trouble-body"><p>${esc(T('Libere espaço no host ou ajuste MIN_FREE_MB_START e MIN_FREE_MB_ABORT com cuidado. O limite de abortar não pode ser maior que o limite de iniciar.', 'Free disk space on the host or carefully adjust MIN_FREE_MB_START and MIN_FREE_MB_ABORT. The abort threshold cannot exceed the start threshold.'))}</p></div></details>
-          <details class="trouble"><summary>${esc(T('O áudio sumiu, mas a ata continua', 'Audio is gone, but minutes remain'))}</summary><div class="trouble-body"><p>${esc(T('É o comportamento da retenção em camadas. RETENTION_DAYS controla o áudio e TEXT_RETENTION_DAYS controla transcrição, ata e notas. Use zero para não expirar automaticamente.', 'This is tiered retention. RETENTION_DAYS controls audio and TEXT_RETENTION_DAYS controls transcript, minutes, and notes. Use zero to disable automatic expiration.'))}</p></div></details>
-        </div>
-      </section>
+    <section class="doc-section" id="operacao" data-doc-section data-keywords="upgrade backup restore domain migration decommission rotate release audit">
+      <div class="section-head"><h2>${esc(T('Opere mudanças como mudanças de segurança.', 'Operate changes as security changes.'))}</h2><p>${esc(T('Upgrade, restauração, troca de domínio e encerramento alteram dados, OAuth ou fronteiras de rede. Faça cada um com janela, backup e validação.', 'Upgrade, restore, domain migration, and shutdown change data, OAuth, or network boundaries. Perform each with a maintenance window, backup, and validation.'))}</p></div>
+      <div class="install-steps">
+        <article class="install-step"><h3>${esc(T('Upgrade', 'Upgrade'))}</h3><div><p>${esc(T('Verifique a nova release e o bundle numa máquina confiável. Faça backup coerente, instale em novo diretório root-owned, preserve os diretórios de dados, rode deploy e audit, valide /health e um fluxo real, e só então troque o current. Nunca faça build na VPS.', 'Verify the new release and bundle on a trusted workstation. Create a consistent backup, install in a new root-owned directory, preserve data directories, run deploy and audit, validate /health and a real flow, and only then switch current. Never build on the VPS.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('Backup', 'Backup'))}</h3><div><p>${esc(T('scripts/backup.sh exige o writer parado ou BACKUP_STOP_CONTAINER=true, prova dm-crypt/LUKS e remote rclone crypt. O arquivo contém somente recordings e state; auth, sessões, cache e segredos ficam de fora por construção.', 'scripts/backup.sh requires a stopped writer or BACKUP_STOP_CONTAINER=true, proves dm-crypt/LUKS, and requires an rclone crypt remote. The archive contains only recordings and state; auth, sessions, cache, and secrets are excluded by construction.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('Restauração', 'Restore'))}</h3><div><p>${esc(T('Restaure somente um archive com manifesto kassinao-backup-v2 em storage LUKS vazio, com o core parado. Recrie auth e credenciais em vez de copiar de outra instância, ajuste owner/mode, suba o mesmo release verificado, audite e faça teste de acesso antes de reabrir.', 'Restore only an archive with a kassinao-backup-v2 manifest into empty LUKS storage with the core stopped. Recreate auth and credentials instead of copying them from another instance, fix ownership and modes, start the same verified release, audit, and test access before reopening.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('Troca de domínio', 'Domain migration'))}</h3><div><p>${esc(T('Escolha as quatro origens novas, configure DNS/túnel e certificados, atualize APP_URL, MCP_URL, PUBLIC_URL, DOCS_URL, política e contato. No Discord Portal, troque OAuth Redirect para APP_URL/auth/callback e Privacy Policy para APP_URL/privacy. Reinicie, invalide sessões/conectores quando necessário, valide POSTs e só depois remova os hosts antigos.', 'Choose the four new origins, configure DNS or tunnel and certificates, then update APP_URL, MCP_URL, PUBLIC_URL, DOCS_URL, policy, and contact. In the Discord Portal, change OAuth Redirect to APP_URL/auth/callback and Privacy Policy to APP_URL/privacy. Restart, invalidate sessions and connectors when needed, validate POST requests, and only then remove old hosts.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('Remover controles do host', 'Remove host controls'))}</h3><div><p>${esc(T('Faça isso somente ao mover ou encerrar a instância. Primeiro use docker compose down; alternativamente, todos os containers Kassinão precisam estar parados e com restart=no. O uninstall recusa snapshots pendentes e drift, remove somente os artefatos exatos instalados, não para containers, não reinicia o Docker e nunca apaga KASSINAO_DATA_ROOT. Um snapshot de deploy falho precisa expirar pelo timer ou ser resolvido por um deploy saudável antes da remoção.', 'Do this only when moving or shutting down the instance. First run docker compose down; alternatively, every Kassinão container must be stopped with restart=no. The uninstall rejects pending snapshots and drift, removes only the exact installed artifacts, does not stop containers, does not restart Docker, and never deletes KASSINAO_DATA_ROOT. A failed-deploy snapshot must expire through the timer or be resolved by a healthy deployment before removal.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('Desativação', 'Decommission'))}</h3><div><p>${esc(T('Pare bot e túnel, confirme zero gravações ativas, revogue token e Client Secret do Discord, MCP, providers, webhook e túnel, remova callbacks e DNS, aplique a política de retenção ao backup e destrua com segurança volumes, snapshots e envs. Preserve apenas o que a política e a obrigação legal exigirem.', 'Stop the bot and tunnel, confirm zero active recordings, revoke Discord token and Client Secret, MCP, providers, webhook, and tunnel credentials, remove callbacks and DNS, apply retention policy to backups, and securely destroy volumes, snapshots, and env files. Preserve only what policy and legal obligations require.'))}</p></div></article>
+      </div>
+      ${uninstallHostControls}
+    </section>
 
-      <section class="doc-section" id="links" data-doc-section data-keywords="links github security license issues environment mcp discord cloudflare">
-        <div class="section-head">
-          <h2>${esc(T('Links', 'Links'))}</h2>
-          <p>${esc(T('Código, MCP, configuração e canais corretos para suporte.', 'Code, MCP, configuration, and the right support channels.'))}</p>
-        </div>
-        <div class="link-grid">
-          <a class="resource-link" href="${site.links.demo}"><strong>${esc(T('Demo pública', 'Public demo'))}</strong><span>${esc(T('Reunião fictícia na interface real do produto.', 'Fictional meeting in the real product interface.'))}</span></a>
-          <a class="resource-link" href="${NPM_URL}" target="_blank" rel="noopener noreferrer"><strong>kassinao-mcp</strong><span>${esc(T('Pacote publicado do conector MCP.', 'Published MCP connector package.'))}</span></a>
-          <a class="resource-link" href="${repoUrl}" target="_blank" rel="noreferrer"><strong>GitHub</strong><span>${esc(T('Código-fonte e README.', 'Source code and README.'))}</span></a>
-          <a class="resource-link" href="${repoUrl}/blob/main/.env.example" target="_blank" rel="noreferrer"><strong>.env.example</strong><span>${esc(T('Todas as opções comentadas.', 'Every option with comments.'))}</span></a>
-          <a class="resource-link" href="${repoUrl}/tree/main/mcp" target="_blank" rel="noreferrer"><strong>${esc(T('MCP no GitHub', 'MCP on GitHub'))}</strong><span>${esc(T('Cliente e configuração do conector.', 'Connector client and setup.'))}</span></a>
-          <a class="resource-link" href="${repoUrl}/issues" target="_blank" rel="noreferrer"><strong>Issues</strong><span>${esc(T('Bugs e propostas públicas.', 'Public bugs and proposals.'))}</span></a>
-          <a class="resource-link" href="${repoUrl}/security/advisories/new" target="_blank" rel="noreferrer"><strong>${esc(T('Reportar vulnerabilidade', 'Report a vulnerability'))}</strong><span>${esc(T('Canal privado do GitHub.', 'Private GitHub channel.'))}</span></a>
-          <a class="resource-link" href="${repoUrl}/blob/main/LICENSE" target="_blank" rel="noreferrer"><strong>AGPL-3.0</strong><span>${esc(T('Licença do projeto.', 'Project license.'))}</span></a>
-          <a class="resource-link" href="https://discord.com/developers/applications" target="_blank" rel="noreferrer"><strong>Discord Developer Portal</strong><span>${esc(T('Aplicação, bot e OAuth2.', 'Application, bot, and OAuth2.'))}</span></a>
-        </div>
-      </section>
+    <section class="doc-section" id="problemas" data-doc-section data-keywords="troubleshooting boot commands oauth origin policy transcript minutes mcp access disk audit">
+      <div class="section-head"><h2>${esc(T('Diagnóstico começa pelo gate que falhou.', 'Troubleshooting starts at the failed gate.'))}</h2><p>${esc(T('Não afrouxe firewall, proxy, ACL ou validação de origem para fazer um erro desaparecer.', 'Do not weaken firewall, proxy, ACL, or origin validation to make an error disappear.'))}</p></div>
+      <div class="troubleshooting">
+        <details class="trouble"><summary>${esc(T('O container não inicia', 'The container does not start'))}</summary><div class="trouble-body"><p>${esc(T('Leia docker compose logs --tail=200 kassinao. Confirme credenciais, APP_URL, allowlist e os campos públicos do operador. Em produção, URLs exigidas usam HTTPS e host público.', 'Read docker compose logs --tail=200 kassinao. Confirm credentials, APP_URL, allowlist, and public operator fields. In production, required URLs use HTTPS and a public host.'))}</p></div></details>
+        <details class="trouble"><summary>${esc(T('Os comandos não aparecem', 'Commands do not appear'))}</summary><div class="trouble-body"><p>${esc(T('Confirme Guild Install, scopes bot e applications.commands, guild na allowlist e registro concluído. /perguntar e /mcp dependem das respectivas capacidades.', 'Confirm Guild Install, bot and applications.commands scopes, the guild allowlist, and completed registration. /ask and /mcp depend on their respective capabilities.'))}</p></div></details>
+        <details class="trouble"><summary>${esc(T('OAuth retorna origem inválida', 'OAuth returns invalid origin'))}</summary><div class="trouble-body"><p>${esc(T('APP_URL é uma origem sem caminho. O Redirect cadastrado é exatamente APP_URL/auth/callback. Depois de trocar domínio, atualize Portal, env e processo antes de testar novamente.', 'APP_URL is a pathless origin. The registered Redirect is exactly APP_URL/auth/callback. After a domain change, update the Portal, env, and process before testing again.'))}</p></div></details>
+        <details class="trouble"><summary>${esc(T('Há áudio, mas não transcrição ou ata', 'Audio exists, but transcript or minutes do not'))}</summary><div class="trouble-body"><p>${esc(T('Isso é normal com os defaults. Transcrição exige provider explícito; ata exige alguma transcrição disponível, MINUTES_ENABLED=true, provider e chave. Uma transcrição parcial pode gerar uma ata incompleta. Consulte a fila sem habilitar LOG_PII fora de uma janela controlada.', 'This is normal with defaults. Transcription requires an explicit provider; minutes require some available transcript, MINUTES_ENABLED=true, a provider, and a key. A partial transcript can produce incomplete minutes. Inspect the queue without enabling LOG_PII outside a controlled window.'))}</p></div></details>
+        <details class="trouble"><summary>${esc(T('MCP retorna 404 ou 503', 'MCP returns 404 or 503'))}</summary><div class="trouble-body"><p>${esc(T('404 é esperado quando MCP_SECRET está vazio ou a rota não pertence ao host MCP. 503 indica que o Discord não confirmou membership de forma transitória; não transforme isso em allow.', '404 is expected when MCP_SECRET is empty or the route is not on the MCP host. 503 means Discord did not confirm membership transiently; never turn it into allow.'))}</p></div></details>
+        <details class="trouble"><summary>${esc(T('O audit da VPS falha', 'The VPS audit fails'))}</summary><div class="trouble-body"><p>${esc(T('Corrija o item relatado. O audit reprova, entre outros, checkout Git, imagem sem digest, storage sem LUKS, topologia não split, portas externas, permissões frouxas e segredos no processo público.', 'Fix the reported item. The audit rejects, among other issues, a Git checkout, an image without a digest, storage without LUKS, non-split topology, external ports, loose permissions, and secrets in the public process.'))}</p></div></details>
+      </div>
+    </section>
 
-      <section class="no-results" id="no-results" hidden>
-        <h2>${esc(T('Nada encontrado', 'Nothing found'))}</h2>
-        <p>${esc(T('Tente um comando como gravar, uma variável como APP_URL ou um tema como privacidade.', 'Try a command such as record, a variable such as APP_URL, or a topic such as privacy.'))}</p>
-      </section>
+    <section class="doc-section" id="links" data-doc-section data-keywords="links demo github env privacy security license discord npm">
+      <div class="section-head"><h2>${esc(T('Referências e canais corretos', 'References and proper channels'))}</h2><p>${esc(T('Use links públicos para o projeto. Dados e solicitações de uma instância vão para o contato do operador, nunca para uma issue.', 'Use public links for the project. Instance data and requests go to the operator contact, never to an issue.'))}</p></div>
+      <div class="link-grid"><a class="resource-link" href="${site.links.demo}"><strong>${esc(T('Demo pública', 'Public demo'))}</strong><span>${esc(T('Fluxo fictício na interface real.', 'Fictional flow in the real interface.'))}</span></a><a class="resource-link" href="${repoUrl}" target="_blank" rel="noreferrer"><strong>GitHub</strong><span>${esc(T('Source e README.', 'Source and README.'))}</span></a><a class="resource-link" href="${repoUrl}/blob/main/.env.example" target="_blank" rel="noreferrer"><strong>.env.example</strong><span>${esc(T('Referência completa de configuração.', 'Complete configuration reference.'))}</span></a><a class="resource-link" href="${NPM_URL}" target="_blank" rel="noopener noreferrer"><strong>kassinao-mcp</strong><span>${esc(T('Pacote público do conector.', 'Public connector package.'))}</span></a><a class="resource-link" href="${repoUrl}/blob/main/SECURITY.md" target="_blank" rel="noreferrer"><strong>SECURITY.md</strong><span>${esc(T('Reporte vulnerabilidades em privado.', 'Report vulnerabilities privately.'))}</span></a><a class="resource-link" href="${repoUrl}/blob/main/PRIVACY.md" target="_blank" rel="noreferrer"><strong>PRIVACY.md</strong><span>${esc(T('Política do projeto e responsabilidade do operador.', 'Project policy and operator responsibility.'))}</span></a><a class="resource-link" href="${repoUrl}/blob/main/LICENSE" target="_blank" rel="noreferrer"><strong>AGPL-3.0</strong><span>${esc(T('Licença e source correspondente.', 'License and corresponding source.'))}</span></a><a class="resource-link" href="https://discord.com/developers/applications" target="_blank" rel="noreferrer"><strong>Discord Developer Portal</strong><span>${esc(T('Application, bot, instalação e OAuth.', 'Application, bot, installation, and OAuth.'))}</span></a></div>
+    </section>
 
-      <footer class="docs-footer">
-        <p>Kassinão. ${esc(T('Bot de Discord self-hosted sob AGPL-3.0.', 'Self-hosted Discord bot under AGPL-3.0.'))} <a href="${altDocs}">${esc(T('Read in English', 'Ler em português'))}</a>.</p>
-      </footer>
-    </div>
-  </main>
+    <section class="no-results" id="no-results" hidden><h2>${esc(T('Nada encontrado', 'Nothing found'))}</h2><p>${esc(T('Tente gravar, OAuth, privacidade, retenção, backup ou domínio.', 'Try record, OAuth, privacy, retention, backup, or domain.'))}</p></section>
+    <footer class="docs-footer"><p>Kassinão. ${esc(T('Bot de Discord self-hosted sob AGPL-3.0.', 'Self-hosted Discord bot under AGPL-3.0.'))} <a href="${altDocs}">${esc(T('Read in English', 'Ler em português'))}</a>.</p></footer>
+  </div></main>
 </div>
 ${docsScript(l)}
 </body>

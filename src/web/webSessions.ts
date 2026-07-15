@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
+import { operationalError, operationalFailure } from '../operationalLog';
 
 /**
  * Sessões web ATIVAS. O cookie continua assinado e carrega a identidade, mas o
@@ -18,7 +19,7 @@ interface WebSession {
   createdAt: number;
 }
 
-const FILE = path.join(config.recordingsDir, '.web-sessions.json');
+const FILE = path.join(config.authStateDir, 'web-sessions.json');
 const sessions = new Map<string, WebSession>();
 let loaded = false;
 const MAX_SESSIONS_PER_USER = 10;
@@ -51,7 +52,7 @@ function load(): void {
     // Primeiro uso: ainda não existe arquivo. Qualquer outro erro também fica
     // fail-closed (nenhum cookie antigo é aceito), sem impedir o bot de subir.
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
-      console.error(`Sessões web ignoradas por arquivo inválido/indisponível: ${(err as Error).message}`);
+      operationalFailure(`Sessões web ignoradas por arquivo inválido/indisponível: ${operationalError(err)}`);
   }
   gcWebSessions(false);
 }

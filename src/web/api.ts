@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import express, { Express, NextFunction, Request, Response } from 'express';
 import { config } from '../config';
 import { isClientReady } from '../discord/ready';
+import { operationalError, operationalPii } from '../operationalLog';
 import { minutesToMarkdown } from '../processing/minutes';
 import { transcriptToMarkdown } from '../processing/transcribe';
 import { cleanInline, cleanText, neutralizeFences } from '../sanitize';
@@ -832,7 +833,7 @@ function audit(req: Request, res: Response, next: NextFunction): void {
   res.on('finish', () => {
     const u = res.locals.mcpUser as McpToken | undefined;
     console.log(
-      `[mcp-api] ${cleanInline(req.method)} ${cleanInline(req.path)} user=${cleanInline(u?.id ?? '-')} sid=${cleanInline(u?.jti ?? '-')} -> ${res.statusCode}`,
+      `[mcp-api] ${cleanInline(req.method)} path=${operationalPii(req.path)} user=${operationalPii(u?.id)} sid=${operationalPii(u?.jti)} -> ${res.statusCode}`,
     );
   });
   next();
@@ -858,7 +859,7 @@ function handle(fn: (req: Request, res: Response) => Promise<void>) {
         res.status(503).set('Retry-After', '3').json({ error: 'starting' });
         return;
       }
-      console.error('[mcp-api] erro:', err);
+      console.error(`[mcp-api] erro: ${operationalError(err)}`);
       if (!res.headersSent) res.status(500).json({ error: 'internal' });
     });
   };

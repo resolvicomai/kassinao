@@ -1,0 +1,3 @@
+# Gerado pelo installer. O limiar fica 31 minutos abaixo do contrato porque o
+# timer roda a cada meia hora; assim a execução seguinte não ultrapassa a janela.
+d @ROLLBACK_DIR@ 0700 root root mM:@CLEANUP_AGE@ -

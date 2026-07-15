@@ -24,7 +24,7 @@ interface Session {
   /** expiração do refresh (ms epoch), deslizante a cada rotação. */
   exp: number;
   createdAt: number;
-  /** apelido dado pelo usuário ao gerar ("Claude do notebook") — só exibição. */
+  /** apelido dado pelo usuário ao gerar ("notebook de trabalho") — só exibição. */
   label?: string;
   /** último refresh bem-sucedido = conector em uso (sessões antigas não têm). */
   lastSeenAt?: number;
@@ -37,7 +37,7 @@ interface Session {
   };
 }
 
-const FILE = path.join(config.recordingsDir, '.mcp-sessions.json');
+const FILE = path.join(config.authStateDir, 'mcp-sessions.json');
 const sessions = new Map<string, Session>();
 let loaded = false;
 const MAX_SESSIONS_PER_USER = 10;

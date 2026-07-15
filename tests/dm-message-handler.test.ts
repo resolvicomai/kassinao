@@ -87,4 +87,15 @@ describe('handler de DM', () => {
     expect(log).not.toHaveBeenCalled();
     log.mockRestore();
   });
+
+  it('não direciona para um /ask que não foi registrado nesta instância', async () => {
+    const message = directMessage({ content: '/ask what changed?' });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await handleDirectMessage(message as never, { admit: () => true }, async () => true);
+
+    expect(message.channel.send).toHaveBeenCalledWith(expect.stringContaining('is not enabled on this instance'));
+    expect(message.channel.send).not.toHaveBeenCalledWith(expect.stringContaining('/app/conectar-ia'));
+    log.mockRestore();
+  });
 });

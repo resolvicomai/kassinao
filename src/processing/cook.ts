@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
 import { freeMB } from '../disk';
+import { operationalFailure, operationalPii, operationalWarn } from '../operationalLog';
 import { formatDuration, sanitizeFilename, formatOffset } from '../recorder/RecordingSession';
 import { cacheDir, RecordingMeta, tracksDir } from '../store';
 import { runFfmpeg } from './ffmpeg';
@@ -113,7 +114,9 @@ async function doCook(meta: RecordingMeta, format: CookFormat, live: boolean): P
         // valida o snapshot (header/streams ok) antes de contar com ele
         await runFfmpeg(['-i', snapshot, '-t', '0.01', '-f', 'null', '-']);
       } catch {
-        console.error(`Faixa ${p.index} (${p.name}) da gravação ${meta.id} está corrompida — excluída do export.`);
+        operationalFailure(
+          `Faixa corrompida track=${p.index} participant=${operationalPii(p.name)} recording=${operationalPii(meta.id)}; excluída do export.`,
+        );
         missing.push(p);
         continue;
       }
@@ -121,8 +124,8 @@ async function doCook(meta: RecordingMeta, format: CookFormat, live: boolean): P
     }
     if (sources.length === 0) throw new Error('nenhuma faixa de áudio utilizável nesta gravação');
     if (missing.length > 0) {
-      console.warn(
-        `Gravação ${meta.id}: ${missing.length} faixa(s) fora do export (${missing.map((p) => p.name).join(', ')}).`,
+      operationalWarn(
+        `Faixas fora do export recording=${operationalPii(meta.id)} count=${missing.length} participants=${operationalPii(missing.map((p) => p.name).join(', '))}.`,
       );
     }
 

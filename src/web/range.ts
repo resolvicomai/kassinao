@@ -1,7 +1,7 @@
 import { config } from '../config';
 
 /**
- * Motor de janela de tempo, correto no fuso do config (America/Sao_Paulo por padrão).
+ * Motor de janela de tempo, correto no fuso configurado pelo operador (UTC por padrão).
  *
  * O container roda em UTC, então `setHours`/`getHours` nativos erram a borda do dia
  * em até 3h. Aqui as bordas civis (00:00 de um dia no fuso) são calculadas via

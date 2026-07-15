@@ -1,7 +1,7 @@
 [Unit]
-Description=Restart Kassinão only when its Docker healthcheck is unhealthy
-After=docker.service
-Requires=docker.service
+Description=Recover unhealthy Kassinão components without exposing the Docker socket
+After=docker.service kassinao-docker-egress.service
+Requires=docker.service kassinao-docker-egress.service
 ConditionPathExists=/var/run/docker.sock
 
 [Service]
@@ -13,7 +13,12 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/run/lock
-RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/run/lock/kassinao
+PrivateDevices=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 LockPersonality=true
 MemoryDenyWriteExecute=true

@@ -6,14 +6,14 @@
  * See <https://www.gnu.org/licenses/> for the full license text.
  */
 /**
- * Kassinão MCP connector (runs LOCALLY on the Claude Desktop/Cursor user's machine).
+ * Kassinão MCP connector (runs LOCALLY on the MCP client user's machine).
  *
  * This is a THIN HTTP client: it does NOT read recordings or decide access. It loads a
  * personal token and calls the bot's /api/* endpoints, which apply the same checkAccess
  * rules as the web app. Users only see meetings they can already access. Read-only.
  *
  * Usage:
- *   kassinao-mcp                  starts the MCP server (stdio) for Claude/Cursor
+ *   kassinao-mcp                  starts the MCP server over stdio
  *   kassinao-mcp exchange --stdin --url <origin>
  *                                 reads a one-time code without putting it in argv/history
  *
@@ -221,7 +221,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'list_meetings',
     description:
-      'List recorded meetings in a time window (defaults to the last 30 days). Only meetings the user can access are returned. Each item carries transcriptStatus ("partial" = some speakers not transcribed yet), presentSilent (people in the call who never spoke) and audioDeleted (tiered retention: audio expired, text remains). Follow nextCursor until null; only then continue with nextScanCursor. Use for "what meetings happened between X and Y" / "list this week\'s calls".',
+      'List recorded meetings in a time window (defaults to the last 30 days). Only meetings the user can access are returned. Each item carries transcriptStatus ("partial" = some account/stream tracks not transcribed yet), presentSilent (accounts present in the call with no captured speech) and audioDeleted (tiered retention: audio expired, text remains). Discord labels identify the captured account/stream, not a human identity. Follow nextCursor until null; only then continue with nextScanCursor. Use for "what meetings happened between X and Y" / "list this week\'s calls".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -296,7 +296,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'who_said',
     description:
-      'Find transcript segments matching a query (accent-insensitive), with speaker, timestamp, surrounding context and a deep link. transcriptStatus="partial" means some speakers are not transcribed yet — absence of a match is not proof nobody said it. Follow nextCursor until null; only then continue with nextScanCursor. Use for "when did Ana talk about budget".',
+      'Find transcript segments matching a query (accent-insensitive), with Discord account/stream label, timestamp, surrounding context and a deep link. Labels are source metadata, not proof of human identity. transcriptStatus="partial" means some tracks are not transcribed yet — absence of a match is not proof nobody said it. Follow nextCursor until null; only then continue with nextScanCursor. Use for "when did the account labeled Ana mention budget".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -323,7 +323,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'get_meeting',
     description:
-      'Full dossier of one meeting: metadata, minutes (summary/decisions/actions/topics/per-participant), transcript, notes and a merged timeline. Check transcriptStatus: "partial" = transcript incomplete (pending speakers). include is a CSV of meta,minutes,transcript,notes,timeline.',
+      'Full dossier of one meeting: metadata, minutes (summary/decisions/actions/topics/per-account label), transcript, notes and a merged timeline. Discord labels identify the captured account/stream, not a human identity. Check transcriptStatus: "partial" = transcript incomplete (pending tracks). include is a CSV of meta,minutes,transcript,notes,timeline.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -359,7 +359,7 @@ async function runExchange(code: string): Promise<void> {
     async (response) => {
       if (!response.ok) {
         console.error(
-          `Could not exchange the code (HTTP ${response.status}). Codes expire in about 5 minutes and can only be used once. Generate another with /mcp new.`,
+          `Could not exchange the code (HTTP ${response.status}). Codes expire in about 5 minutes and can only be used once. Generate another in the private app; instance owners may also use /mcp new.`,
         );
         process.exit(1);
       }
@@ -387,7 +387,9 @@ async function runExchange(code: string): Promise<void> {
   console.error(
     `Connected. Token stored at ~/.config/kassinao-mcp/${path.basename(profileStoreFile)} (${protection}).`,
   );
-  console.error('Paste this block into claude_desktop_config.json (or the Cursor equivalent), then restart the app:\n');
+  console.error(
+    "Paste this block into your MCP host's local stdio server configuration, then restart the host if required:\n",
+  );
   console.log(cfg); // stdout contains only the copy-ready config
 }
 

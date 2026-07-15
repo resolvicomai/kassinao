@@ -4,6 +4,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseShellCommand } from 'shell-quote';
 import { config } from '../config';
+import {
+  operationalError,
+  operationalFailure,
+  operationalInfo,
+  operationalPii,
+  operationalWarn,
+} from '../operationalLog';
 import { cleanInline, neutralizeFences } from '../sanitize';
 import {
   cacheDir,
@@ -224,7 +231,9 @@ function settle(recordingId: string): void {
     try {
       callback();
     } catch (err) {
-      console.error(`Falha liberando admissão de ${recordingId}:`, err);
+      operationalFailure(
+        `Falha liberando admissão recording=${operationalPii(recordingId)} error=${operationalError(err)}.`,
+      );
     }
   }
 }
@@ -237,7 +246,9 @@ function notifyDone(
   try {
     onDone?.(meta);
   } catch (err) {
-    console.error(`Callback final da transcrição ${recordingId} falhou:`, err);
+    operationalFailure(
+      `Callback final da transcrição falhou recording=${operationalPii(recordingId)} error=${operationalError(err)}.`,
+    );
   }
 }
 
@@ -306,7 +317,9 @@ export function enqueueTranscription(
 
   queue = queue
     .then(() => transcribeRecording(recordingId))
-    .catch((err) => console.error(`Transcrição de ${recordingId} falhou:`, err))
+    .catch((err) =>
+      operationalFailure(`Transcrição falhou recording=${operationalPii(recordingId)} error=${operationalError(err)}.`),
+    )
     .then(() => {
       queued.delete(recordingId);
       const fresh = readMeta(recordingId);
@@ -332,8 +345,8 @@ export function enqueueTranscription(
       if ((st === 'partial' || st === 'error') && tries < MAX_TRANSCRIPTION_ATTEMPTS) {
         fresh.transcription = { status: st, ...fresh.transcription, retryScheduled: true };
         saveMeta(fresh);
-        console.log(
-          `Transcrição de ${recordingId} ${st === 'partial' ? 'parcial' : 'falhou'} (${fresh.transcription.error ?? '?'}) — nova rodada em ${Math.round(PARTIAL_RETRY_DELAY_MS / 60000)} min.`,
+        operationalInfo(
+          `Transcrição ${st === 'partial' ? 'parcial' : 'falhou'} recording=${operationalPii(recordingId)} error=${operationalError(fresh.transcription.error ?? 'unknown')} retry_min=${Math.round(PARTIAL_RETRY_DELAY_MS / 60000)}.`,
         );
         const timer = setTimeout(() => enqueueTranscription(recordingId, onDone), PARTIAL_RETRY_DELAY_MS);
         timer.unref?.();
@@ -401,7 +414,11 @@ export function enqueueMinutesOnly(
   saveMeta(meta);
   queue = queue
     .then(() => generateMinutesStep(recordingId, segments))
-    .catch((err) => console.error(`Ata (retomada) de ${recordingId} falhou:`, err))
+    .catch((err) =>
+      operationalFailure(
+        `Ata retomada falhou recording=${operationalPii(recordingId)} error=${operationalError(err)}.`,
+      ),
+    )
     .then(() => {
       queued.delete(recordingId);
       const fresh = readMeta(recordingId);
@@ -493,7 +510,9 @@ async function transcribeRecording(recordingId: string): Promise<void> {
         }
       } catch (err) {
         if (isGuildWorkPausedError(err)) throw err;
-        console.error(`Transcrição de uma faixa (${meta.id}) falhou:`, (err as Error).message);
+        operationalFailure(
+          `Transcrição de faixa falhou recording=${operationalPii(meta.id)} error=${operationalError(err)}.`,
+        );
         failed.push(participant.name);
       }
     }
@@ -597,7 +616,7 @@ async function generateMinutesStep(
       }
       return;
     }
-    console.error(`Ata de ${recordingId} falhou:`, (err as Error).message);
+    operationalFailure(`Ata falhou recording=${operationalPii(recordingId)} error=${operationalError(err)}.`);
     const fresh = readMeta(recordingId);
     if (fresh) {
       fresh.minutes = {
@@ -826,7 +845,7 @@ function transcribeChunk(
         assertGuildWorkActive(guildWork);
         if (err instanceof ChunkContentError || config.transcribeFallbackProvider !== 'groq' || !config.groqApiKey)
           throw err;
-        console.warn(`AssemblyAI falhou (${(err as Error).message}) — tentando o mesmo chunk na Groq.`);
+        operationalWarn(`AssemblyAI falhou error=${operationalError(err)}; tentando o mesmo chunk na Groq.`);
         return whisperApi(
           'https://api.groq.com/openai/v1/audio/transcriptions',
           config.groqApiKey,
@@ -972,7 +991,7 @@ async function assemblyaiTranscribe(
       err.status < 500 &&
       err.category === 'context-fields-rejected'
     ) {
-      console.warn('AssemblyAI recusou prompt/keyterms — reenviando sem eles.');
+      operationalWarn('AssemblyAI recusou prompt/keyterms; reenviando sem eles.');
       created = await createJob(baseBody);
     } else {
       throw err;

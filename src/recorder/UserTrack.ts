@@ -1,4 +1,5 @@
 import { ChildProcess } from 'node:child_process';
+import { operationalFailure, operationalPii, operationalWarn } from '../operationalLog';
 import { spawnFfmpegStdin } from '../processing/ffmpeg';
 
 const SAMPLE_RATE = 48000;
@@ -59,7 +60,9 @@ export class UserTrack {
     this.proc.stderr?.on('data', (d) => (stderr += d));
     this.proc.on('close', (code) => {
       if (code !== 0 && !this.closed) {
-        console.error(`ffmpeg da faixa ${userId} morreu (código ${code}): ${stderr.slice(-400)}`);
+        operationalFailure(
+          `ffmpeg da faixa encerrou user=${operationalPii(userId)} code=${code} stderr=${operationalPii(stderr.slice(-400))}.`,
+        );
       }
     });
     this.proc.stdin?.on('error', () => {
@@ -156,7 +159,9 @@ export class UserTrack {
         return;
       }
       const timeout = setTimeout(() => {
-        console.warn(`ffmpeg da faixa ${this.userId} demorou para fechar — master pode estar incompleto.`);
+        operationalWarn(
+          `ffmpeg da faixa demorou para fechar user=${operationalPii(this.userId)}; master pode estar incompleto.`,
+        );
         this.proc.kill('SIGKILL');
         resolve(false);
         // 20s: precisa caber DENTRO do stop_grace_period do Docker (30s), senão

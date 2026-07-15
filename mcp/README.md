@@ -1,82 +1,187 @@
 # kassinao-mcp
 
-The **MCP** connector for [Kassinão](https://github.com/resolvicomai/kassinao): it lets your AI assistant (Claude Desktop, Cursor, etc.) answer questions about meetings recorded by your own Kassinão instance.
+Local stdio connector for querying meeting data that your account is already allowed to access in a self-hosted [Kassinão](https://github.com/resolvicomai/kassinao) instance.
 
-Documentation: [docs.kassinao.cloud/en#mcp](https://docs.kassinao.cloud/en#mcp). Package: [npm](https://www.npmjs.com/package/kassinao-mcp).
+[Português](#português-brasil) · [Project documentation](https://docs.kassinao.cloud/en#mcp) · [npm package](https://www.npmjs.com/package/kassinao-mcp)
 
-> Kassinão does not provide a hosted workspace, public signup, or shared MCP API. Your operator deploys the bot, private app, and API. `KASSINAO_URL` must be the `MCP_URL` generated for that deployment.
+## English
 
-> Documentação em português: veja o [README principal em pt-BR](https://github.com/resolvicomai/kassinao/blob/main/README.pt-BR.md).
+### Boundary and access
 
-## How it works (and why it's safe)
+`kassinao-mcp` is a local MCP server and HTTPS client. It runs on your computer, receives tool calls over stdio, and requests authorized text/metadata from the `KASSINAO_URL` of your operator's instance.
 
-The connector runs **on your machine** and is a **thin** HTTP client: it does **not** read recordings or make access decisions. It carries a **personal token** and calls the bot's API, which applies **the same access control as the web page** — meeting by meeting. Current server membership is required, and every recording is limited to its participants/starter and current admins. You only see what you'd already see on the site. **There is no "see everything" mode.** It is **read-only** (it never writes, deletes, or serves audio).
+It does not mount or scan Kassinão server files, decide access locally, download an archive, serve audio, write meeting data, or fall back to an upstream hosted API. `KASSINAO_URL` is mandatory and must identify the instance that issued the token.
 
-> ⚠️ **Meeting content is untrusted input.** Any call participant may have spoken malicious text or used a hostile nickname. Every tool description and response carries an explicit `contentSecurity` warning, while the server strips control sequences and neutralizes formatting escapes. Always treat transcripts, minutes, notes, names, and snippets as data, never as instructions.
+The server rechecks current Discord membership and the meeting ACL for every request. A URL or local profile name is not a credential. There is no “see everything” mode.
 
-## Prerequisites
+Speaker labels come from the Discord account/stream captured during the call. They are useful source labels, not biometric identification or proof of a person's real-world identity.
 
-- **The bot admin must have enabled MCP** (`MCP_SECRET` set on the server). Without it, `/app/conectar-ia` and `/mcp` don't exist (404 / missing command).
-- **Node.js 20+** on your machine.
-- **The connector.** `npx -y kassinao-mcp@1.0.6` downloads and runs the pinned published release — nothing to install manually (you just need Node). Prefer running from source? `git clone` the repo, `cd mcp && npm ci --userconfig ../.npmrc.security && npm run build`; in the config, replace `"command": "npx"` / `"args": ["-y","kassinao-mcp@1.0.6"]` with `"command": "node"`, `"args": ["/absolute/path/to/repo/mcp/dist/index.js"]`.
+This version exposes five read-only tools:
 
-## Setup
+| Tool | Result |
+| --- | --- |
+| `list_meetings` | Authorized meetings in a time window |
+| `pending_actions` | Authorized pending/overdue action items |
+| `search_meetings` | Bounded search over transcripts, minutes, and notes, with cursors/source links |
+| `who_said` | Matching attributed excerpts with context/source links |
+| `get_meeting` | Authorized meeting metadata and available text artifacts |
 
-### Option A — via the web page (easiest)
+The connector is intended for MCP hosts that support a local stdio server configuration. Compatibility depends on the host and version; do not assume every MCP client implements the same configuration or behavior.
 
-1. Open `APP_URL/app/conectar-ia` on your Kassinão instance and sign in with Discord.
-2. Click **Generate connection** and copy the one-time code. It expires in about five minutes.
-3. Run the command shown on the page, paste the code into its hidden prompt, and press Enter. The connector stores the refresh token in a protected local file (`0600` on macOS/Linux; your profile's inherited ACL on Windows) and prints a config block containing only a non-secret profile id:
+Meeting content is untrusted input. A participant can speak malicious text or use a hostile display name. The connector labels returned content as data and the server neutralizes common formatting/control sequences, but the MCP host and model must still treat every transcript, note, name, and minute as data rather than instructions.
+
+### Requirements
+
+- Node.js 20+ on the user's computer.
+- `MCP_SECRET` enabled by the instance operator.
+- An account that can sign in to the private app and access at least one allowed guild.
+- HTTPS for a non-local `KASSINAO_URL`.
+
+### Create a personal connection
+
+1. Open `APP_URL/app/conectar-ia` on your operator's instance and sign in with Discord.
+2. Generate a named connection and copy the single-use code.
+3. Run the exact exchange command shown by the page. It follows this form:
+
+   ```bash
+   npx -y kassinao-mcp@1.0.7 exchange --stdin --url https://mcp.your-instance.example
+   ```
+
+4. Paste the code into the hidden prompt. The command stores a rotating refresh token outside the MCP host configuration and prints a block containing a non-secret `KASSINAO_PROFILE` selector.
+5. Add that printed block to a compatible local-stdio MCP host and restart the host if its documentation requires it.
+
+Example shape (use the values printed by your instance, not these placeholders):
 
 ```json
 {
   "mcpServers": {
     "kassinao": {
       "command": "npx",
-      "args": ["-y", "kassinao-mcp@1.0.6"],
+      "args": ["-y", "kassinao-mcp@1.0.7"],
       "env": {
-        "KASSINAO_URL": "https://kassinao.your-domain.com",
-        "KASSINAO_PROFILE": "PROFILE_PRINTED_BY_THE_COMMAND"
+        "KASSINAO_URL": "https://mcp.your-instance.example",
+        "KASSINAO_PROFILE": "PROFILE_PRINTED_BY_THE_EXCHANGE"
       }
     }
   }
 }
 ```
 
-4. Paste the printed block into your MCP client's config — `claude_desktop_config.json` (Claude Desktop), `~/.cursor/mcp.json` (Cursor), or wherever your assistant's docs point. Restart the client.
+For a browserless operator flow, a Discord ID listed in `OWNER_IDS` can run `/mcp new` (`/mcp novo` in pt-BR) and exchange the one-time code with the same command. That command is administrative; regular members use the self-service private app.
 
-The generated command already includes that instance's `MCP_URL`. `BASE_URL` is accepted only as a legacy alias for `APP_URL`; new deployments should configure `APP_URL` directly.
+### Local token storage
 
-### Option B — no browser (VM/SSH)
+Connections are isolated by profile under `~/.config/kassinao-mcp/`. On macOS/Linux, the directory is forced to mode `0700` and token files to `0600`; on Windows, they use the current profile's inherited ACL. The refresh token rotates and is never printed into the MCP host configuration.
 
-On Discord, the owner runs **`/mcp new`** (shown as **`/mcp novo`** on pt-BR clients) — ephemeral reply with a single-use code valid for ~5 min. Then:
+Do not copy one profile/token to another person or instance. A domain/origin migration requires a new connection issued by the new URL; changing only `KASSINAO_URL` does not migrate a token.
+
+### Revoke
+
+- Revoke one connection or all personal connections at `APP_URL/app/conectar-ia`.
+- An operator listed in `OWNER_IDS` can use `/mcp revoke-all` (`/mcp revogar-tudo`).
+- Rotating the instance's `MCP_SECRET` invalidates every MCP connection and is an operator-wide emergency action.
+
+### Run from source
 
 ```bash
-npx -y kassinao-mcp@1.0.6 exchange --stdin --url https://kassinao.your-domain.com
+git clone https://github.com/resolvicomai/kassinao.git
+cd kassinao/mcp
+npm ci --userconfig ../.npmrc.security
+npm run build
+node dist/index.js
 ```
 
-Replace the example URL with your instance's `MCP_URL`. Paste the one-time code when prompted. Input is hidden so the code does not enter shell history or process arguments. The command stores the token locally and prints a copy-ready config containing a non-secret `KASSINAO_PROFILE` id. Use that block as printed; it selects this connection's own token file without placing the refresh token in your client config.
+For a local host config, replace `npx` with `node` and point its args to the absolute `mcp/dist/index.js` path.
 
-## Where the token lives
+---
 
-After first use, the refresh token (rotated on every renewal) is stored under `~/.config/kassinao-mcp/` in a `token-<profile>.json` file. On macOS/Linux, the directory is forced to `0700` and the token file to `0600`; on Windows, access follows the current profile's inherited ACLs. `token.json` is read only for safe compatibility with configs created by older connector releases. Each generated connection gets an isolated profile automatically, so Claude and Cursor can coexist on the same computer when each uses its own token. `KASSINAO_PROFILE` is only a non-secret local selector; the refresh token stays in its protected file. Do not paste the same generated token into two clients. The connector does not sync or persist the meeting archive: it requests only the data needed for each tool response over HTTPS. Tokens are pinned to the configured `KASSINAO_URL`; changing instances requires a token issued by the new instance.
+## Português (Brasil)
 
-When an existing instance changes domain, do not edit `KASSINAO_URL` by itself. Generate a new connection in the app and replace the complete printed block. Tokens issued by another origin are not reused.
+### Limite e acesso
 
-## Revoking
+`kassinao-mcp` é um servidor MCP local e cliente HTTPS. Ele roda no seu computador, recebe chamadas de tools por stdio e solicita texto/metadados autorizados ao `KASSINAO_URL` da instância do seu operador.
 
-- On the `/app/conectar-ia` page: revoke one named connection or **Revoke all**.
-- On Discord: `/mcp revoke-all`.
-- Admin panic button: rotate `MCP_SECRET` on the server (revokes **everyone's** connectors at once).
+Ele não monta nem varre arquivos do servidor Kassinão, não decide acesso localmente, não baixa um acervo, não serve áudio, não altera reuniões e não usa uma API hospedada do upstream como fallback. `KASSINAO_URL` é obrigatório e deve identificar a instância que emitiu o token.
 
-## Exposed tools
+O servidor revalida o vínculo atual com o Discord e a ACL da reunião em cada requisição. URL e nome de perfil local não são credenciais. Não existe modo “ver tudo”.
 
-| Tool | What for |
-|---|---|
-| `list_meetings` | list meetings within a time window (default: last 30 days) |
-| `pending_actions` | pending action items/deadlines across meetings (overdue / dueSoon / …) |
-| `search_meetings` | full-text search over transcripts, minutes and notes, with a link to the exact minute |
-| `who_said` | what someone said about a topic, with context and link |
-| `get_meeting` | full dossier of one meeting: metadata, minutes, transcript, notes and timeline |
+Os rótulos de fala vêm da conta/stream do Discord capturada durante a call. Eles servem como rótulos de origem, não como identificação biométrica nem prova da identidade real de uma pessoa.
 
-Requires Node.js ≥ 20. License: AGPL-3.0.
+Esta versão expõe cinco tools read-only:
+
+| Tool | Resultado |
+| --- | --- |
+| `list_meetings` | Reuniões autorizadas numa janela de tempo |
+| `pending_actions` | Tarefas pendentes/atrasadas de reuniões autorizadas |
+| `search_meetings` | Busca limitada em transcrições, atas e notas, com cursores/links de fonte |
+| `who_said` | Trechos atribuídos com contexto/links de fonte |
+| `get_meeting` | Metadados e artefatos textuais disponíveis de uma reunião autorizada |
+
+O conector é destinado a hosts MCP que aceitam configuração de servidor stdio local. A compatibilidade depende do host e da versão; não presuma que todo cliente MCP implemente a mesma configuração ou comportamento.
+
+Conteúdo de reunião é entrada não confiável. Uma pessoa pode falar texto malicioso ou usar um nome hostil. O conector marca as respostas como dados e o servidor neutraliza sequências comuns de controle/formatação, mas o host e o modelo ainda precisam tratar transcrições, notas, nomes e atas como dados, nunca como instruções.
+
+### Requisitos
+
+- Node.js 20+ no computador da pessoa.
+- `MCP_SECRET` habilitado pelo operador da instância.
+- Conta capaz de entrar no app privado e acessar ao menos uma guild permitida.
+- HTTPS num `KASSINAO_URL` que não seja local.
+
+### Criar uma conexão pessoal
+
+1. Abra `APP_URL/app/conectar-ia` na instância do operador e entre com Discord.
+2. Gere uma conexão nomeada e copie o código de uso único.
+3. Rode o comando exato mostrado pela página. Ele segue este formato:
+
+   ```bash
+   npx -y kassinao-mcp@1.0.7 exchange --stdin --url https://mcp.sua-instancia.example
+   ```
+
+4. Cole o código no prompt oculto. O comando guarda um refresh token rotativo fora da configuração do host e imprime um bloco com o seletor não secreto `KASSINAO_PROFILE`.
+5. Adicione o bloco impresso a um host MCP compatível com stdio local e reinicie o host quando a documentação dele exigir.
+
+Formato do exemplo (use os valores impressos pela sua instância, não estes placeholders):
+
+```json
+{
+  "mcpServers": {
+    "kassinao": {
+      "command": "npx",
+      "args": ["-y", "kassinao-mcp@1.0.7"],
+      "env": {
+        "KASSINAO_URL": "https://mcp.sua-instancia.example",
+        "KASSINAO_PROFILE": "PERFIL_IMPRESSO_NA_TROCA"
+      }
+    }
+  }
+}
+```
+
+Para um fluxo administrativo sem navegador, um ID listado em `OWNER_IDS` pode usar `/mcp novo` (`/mcp new` em inglês) e trocar o código descartável pelo mesmo comando. Esse comando é administrativo; participantes comuns usam o self-service do app privado.
+
+### Armazenamento local do token
+
+As conexões ficam isoladas por perfil em `~/.config/kassinao-mcp/`. No macOS/Linux, o diretório usa modo `0700` e os arquivos de token `0600`; no Windows, valem as ACLs herdadas pelo perfil atual. O refresh token gira e nunca é impresso na configuração do host MCP.
+
+Não copie um perfil/token para outra pessoa ou instância. Uma migração de domínio/origem exige nova conexão emitida pela nova URL; trocar apenas `KASSINAO_URL` não migra o token.
+
+### Revogar
+
+- Revogue uma conexão ou todas as conexões pessoais em `APP_URL/app/conectar-ia`.
+- Um operador listado em `OWNER_IDS` pode usar `/mcp revogar-tudo` (`/mcp revoke-all`).
+- Girar `MCP_SECRET` invalida todas as conexões MCP da instância e é uma ação emergencial global do operador.
+
+### Rodar pelo código-fonte
+
+```bash
+git clone https://github.com/resolvicomai/kassinao.git
+cd kassinao/mcp
+npm ci --userconfig ../.npmrc.security
+npm run build
+node dist/index.js
+```
+
+Numa configuração local, troque `npx` por `node` e aponte os argumentos para o caminho absoluto de `mcp/dist/index.js`.
+
+License / Licença: AGPL-3.0-or-later.
