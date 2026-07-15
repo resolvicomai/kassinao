@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
 import { t } from './i18n';
+import { operationalInfo, operationalPii } from './operationalLog';
 import {
   MAX_MINUTES_BYTES,
   MAX_MINUTES_ITEMS_PER_COLLECTION,
@@ -75,7 +76,7 @@ export interface MinutesTopic {
   inicioMs: number;
 }
 
-/** O que cada participante trouxe/decidiu — a ata organizada por pessoa. */
+/** O que cada rótulo de conta/stream trouxe ou decidiu — não comprova identidade humana. */
 export interface MinutesPerson {
   nome: string;
   pontos: string[];
@@ -352,7 +353,7 @@ function writePrivateJsonAtomic(file: string, value: unknown, pretty = false): v
   if (process.platform !== 'win32') fs.chmodSync(file, 0o600);
 }
 
-const discordSurfaceInventoryPath = (): string => path.join(config.recordingsDir, '.discord-surface-inventory.json');
+const discordSurfaceInventoryPath = (): string => path.join(config.stateDir, 'discord-surface-inventory.json');
 
 export function readDiscordSurfaceInventory(): DiscordGuildSurfaceMigrationStore {
   try {
@@ -841,23 +842,51 @@ export function pageUrl(id: string): string {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Quando o ÁUDIO desta gravação expira — respondido pela CONFIG ATUAL, não pelo
- * `expiresAt` gravado no meta. Motivo: gravações feitas antes de o operador mudar
- * pra retenção ilimitada carregam uma data de morte persistida; se ela mandasse,
- * mudar RETENTION_DAYS pra 0 não salvaria o histórico existente.
+ * Quando o ÁUDIO desta gravação expira — respondido sempre pela CONFIG ATUAL.
+ * Os campos persistidos são uma projeção para interfaces antigas, não uma regra
+ * imutável: reduzir, aumentar ou desativar retenção também afeta o acervo.
  * `undefined` = nunca expira (ou ainda está gravando).
  */
 export function audioExpiryOf(meta: RecordingMeta): number | undefined {
   if (config.audioRetentionUnlimited) return undefined;
-  if (meta.expiresAt) return meta.expiresAt;
   return meta.endedAt ? meta.endedAt + config.retentionDays * DAY_MS : undefined;
 }
 
 /** Quando transcrição/ata/meta expiram (config atual manda). `undefined` = nunca. */
 export function textExpiryOf(meta: RecordingMeta): number | undefined {
   if (config.textRetentionUnlimited) return undefined;
-  if (meta.textExpiresAt) return meta.textExpiresAt;
   return meta.endedAt ? meta.endedAt + config.textRetentionDays * DAY_MS : undefined;
+}
+
+/**
+ * Mantém os deadlines persistidos alinhados à política ativa. Retorna true
+ * quando o chamador precisa salvar a meta. Isso torna transições 30→7, 7→30,
+ * finito→ilimitado e ilimitado→finito explícitas e auditáveis.
+ */
+export function syncRetentionDeadlines(meta: RecordingMeta): boolean {
+  if (!meta.endedAt) return false;
+  const audio = audioExpiryOf(meta);
+  const text = textExpiryOf(meta);
+  let changed = false;
+  if (audio === undefined) {
+    if (meta.expiresAt !== undefined) {
+      delete meta.expiresAt;
+      changed = true;
+    }
+  } else if (meta.expiresAt !== audio) {
+    meta.expiresAt = audio;
+    changed = true;
+  }
+  if (text === undefined) {
+    if (meta.textExpiresAt !== undefined) {
+      delete meta.textExpiresAt;
+      changed = true;
+    }
+  } else if (meta.textExpiresAt !== text) {
+    meta.textExpiresAt = text;
+    changed = true;
+  }
+  return changed;
 }
 
 // ---------- tamanho em disco (pro painel de gestão do /gravacoes) ----------
@@ -974,7 +1003,7 @@ export function recoverInterruptedRecordings(): RecordingMeta[] {
     }
     saveMeta(meta);
     recovered.push(meta);
-    console.log(`Gravação ${meta.id} recuperada após reinício (marcada como encerrada).`);
+    operationalInfo(`Gravação recuperada após reinício recording=${operationalPii(meta.id)} (marcada como encerrada).`);
   }
   return recovered;
 }

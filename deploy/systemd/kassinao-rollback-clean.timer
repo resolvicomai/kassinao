@@ -1,0 +1,12 @@
+[Unit]
+Description=Expire Kassinão rollback snapshots within their declared window
+
+[Timer]
+OnCalendar=*:0/30
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=true
+Unit=kassinao-rollback-clean.service
+
+[Install]
+WantedBy=timers.target

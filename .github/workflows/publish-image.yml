@@ -1,0 +1,575 @@
+name: Publish app image
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: publish-image-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      NPM_CONFIG_BUILD_FROM_SOURCE: 'true'
+      NPM_CONFIG_OMIT: 'peer'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Require an externally verified immutable-release policy
+        env:
+          IMMUTABLE_RELEASES_ENABLED: ${{ vars.IMMUTABLE_RELEASES_ENABLED }}
+          RELEASE_TAG_RULESET_ENABLED: ${{ vars.RELEASE_TAG_RULESET_ENABLED }}
+        run: |
+          set -euo pipefail
+          test "$IMMUTABLE_RELEASES_ENABLED" = true || {
+            echo 'Repository variable IMMUTABLE_RELEASES_ENABLED must be true only after an administrator verifies the live repository setting.' >&2
+            exit 1
+          }
+          test "$RELEASE_TAG_RULESET_ENABLED" = true || {
+            echo 'Repository variable RELEASE_TAG_RULESET_ENABLED must be true only after an administrator restricts creation of v* tags and blocks their update/deletion; MCP uses its own mcp-v* gate.' >&2
+            exit 1
+          }
+
+      - name: Match the release tag to package.json and main
+        id: release
+        run: |
+          set -euo pipefail
+          tag_oid="$(git rev-parse "$GITHUB_REF")"
+          release_commit="$(git rev-parse "$GITHUB_REF^{commit}")"
+          main_commit="$(git rev-parse origin/main^{commit})"
+          test "$release_commit" = "$main_commit" || {
+            echo "The image tag must point to the exact reviewed head of main" >&2
+            exit 1
+          }
+
+          version="$(node -p "require('./package.json').version")"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] || {
+            echo "package.json must use SemVer without build metadata" >&2
+            exit 1
+          }
+          test "$GITHUB_REF_NAME" = "v$version" || {
+            echo "Tag $GITHUB_REF_NAME does not match package.json $version" >&2
+            exit 1
+          }
+
+          printf 'version=%s\ntag_oid=%s\nrelease_commit=%s\n' "$version" "$tag_oid" "$release_commit" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then
+            printf 'stable=false\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'stable=true\nminor=%s\n' "${version%.*}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gate the release on the audited source tree
+        run: |
+          npm ci
+          npm audit --audit-level=high
+          npm audit signatures
+          npm run lint
+          npm run format:check
+          npm test
+          npm run build
+          npm run typecheck:preview
+
+      - name: Install QEMU emulators before creating the multi-platform builder
+        uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+        with:
+          platforms: arm64
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.35.0
+          driver-opts: image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
+
+      - name: Log in to GHCR with the ephemeral workflow token
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate metadata for the commit-addressed candidate
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: type=raw,value=sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+
+      - name: Reuse only a candidate attested by this release workflow
+        id: candidate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          candidate="$image:sha-$GITHUB_SHA"
+          signer="${GITHUB_SERVER_URL#https://}/$GITHUB_REPOSITORY/.github/workflows/publish-image.yml"
+
+          manifest="$(docker buildx imagetools inspect "$candidate" --format '{{json .Manifest}}' 2>/dev/null)" || {
+            echo 'reuse=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          digest="$(jq -er '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' <<< "$manifest")"
+
+          if gh attestation verify "oci://$image@$digest" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$signer" \
+            --source-ref "$GITHUB_REF" \
+            --source-digest "$GITHUB_SHA" \
+            --deny-self-hosted-runners >/dev/null; then
+            printf 'reuse=true\ndigest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          else
+            echo 'The SHA tag exists without acceptable provenance; rebuilding it' >&2
+            echo 'reuse=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and publish the exact source revision
+        if: steps.candidate.outputs.reuse != 'true'
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Select and validate the candidate digest
+        id: image
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.candidate.outputs.reuse }}" == 'true' ]]; then
+            digest="${{ steps.candidate.outputs.digest }}"
+          else
+            digest="${{ steps.push.outputs.digest }}"
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Invalid image digest: $digest" >&2
+            exit 1
+          }
+
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          candidate="$image:sha-$GITHUB_SHA"
+          manifest="$(docker buildx imagetools inspect "$candidate" --format '{{json .Manifest}}')"
+          actual="$(jq -er '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' <<< "$manifest")"
+          test "$actual" = "$digest" || {
+            echo "Candidate tag resolved to $actual, expected $digest" >&2
+            exit 1
+          }
+          jq -e '
+            ([.manifests[]?
+              | select(.platform.os == "linux")
+              | .platform.architecture] | unique) as $platforms
+            | ($platforms | index("amd64")) != null
+              and ($platforms | index("arm64")) != null
+          ' <<< "$manifest" >/dev/null || {
+            echo 'Candidate image is missing linux/amd64 or linux/arm64' >&2
+            exit 1
+          }
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Bind a new OCI digest to this repository and workflow
+        if: steps.candidate.outputs.reuse != 'true'
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify the exact OCI digest before promotion
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          digest="${{ steps.image.outputs.digest }}"
+          signer="${GITHUB_SERVER_URL#https://}/$GITHUB_REPOSITORY/.github/workflows/publish-image.yml"
+
+          for attempt in 1 2 3 4 5; do
+            if gh attestation verify "oci://$image@$digest" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$signer" \
+              --source-ref "$GITHUB_REF" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners >/dev/null; then
+              exit 0
+            fi
+            sleep "$((attempt * 3))"
+          done
+          echo "Could not verify provenance for $image@$digest" >&2
+          exit 1
+
+      - name: Prove anonymous pulls and hardened runtime behavior
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf -- "$anonymous_config"' EXIT
+
+          DOCKER_CONFIG="$anonymous_config" docker buildx imagetools inspect "$image" >/dev/null
+          DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/amd64 "$image" >/dev/null
+
+          docker run --rm --platform linux/amd64 --network none --read-only --user 1000:1000 \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+            --entrypoint node "$image" -e '
+              const fs = require("node:fs");
+              if (process.getuid?.() === 0) process.exit(10);
+              fs.accessSync("/app/dist/index.js", fs.constants.R_OK);
+              try { fs.writeFileSync("/app/runtime-write", "blocked"); process.exit(11); }
+              catch (error) { if (error?.code !== "EROFS") throw error; }
+              fs.writeFileSync("/tmp/runtime-write", "ok");
+            '
+          DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/arm64 "$image" >/dev/null
+
+      - name: Prepare image-security reports
+        run: mkdir -p dist/release
+
+      - name: Scan the final amd64 image for fixable high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/amd64
+        with:
+          scan-type: image
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: json
+          output: dist/release/trivy-image-${{ github.ref_name }}-linux-amd64.json
+          version: v0.70.0
+
+      - name: Scan the final arm64 image for fixable high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        with:
+          scan-type: image
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: json
+          output: dist/release/trivy-image-${{ github.ref_name }}-linux-arm64.json
+          version: v0.70.0
+          skip-setup-trivy: true
+
+      - name: Build the source-free operations bundle with the exact image digest
+        run: |
+          ./scripts/package-ops-bundle.sh \
+            "$GITHUB_REF_NAME" \
+            dist/release \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
+
+      - name: Check whether this exact operations bundle is already attested
+        id: bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          archive="dist/release/kassinao-ops-$GITHUB_REF_NAME.tar.gz"
+          checksum="$archive.sha256"
+          signer="${GITHUB_SERVER_URL#https://}/$GITHUB_REPOSITORY/.github/workflows/publish-image.yml"
+          (cd "$(dirname "$checksum")" && sha256sum -c "$(basename "$checksum")")
+
+          if gh attestation verify "$archive" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$signer" \
+            --source-ref "$GITHUB_REF" \
+            --source-digest "$GITHUB_SHA" \
+            --deny-self-hosted-runners >/dev/null; then
+            echo 'reuse=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'reuse=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Attest the operations bundle
+        if: steps.bundle.outputs.reuse != 'true'
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: dist/release/kassinao-ops-${{ github.ref_name }}.tar.gz
+
+      - name: Verify the operations bundle provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          archive="dist/release/kassinao-ops-$GITHUB_REF_NAME.tar.gz"
+          signer="${GITHUB_SERVER_URL#https://}/$GITHUB_REPOSITORY/.github/workflows/publish-image.yml"
+
+          for attempt in 1 2 3 4 5; do
+            if gh attestation verify "$archive" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$signer" \
+              --source-ref "$GITHUB_REF" \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners >/dev/null; then
+              exit 0
+            fi
+            sleep "$((attempt * 3))"
+          done
+          echo "Could not verify provenance for $archive" >&2
+          exit 1
+
+      - name: Promote the verified digest to the exact version tag
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          digest="${{ steps.image.outputs.digest }}"
+          version="${{ steps.release.outputs.version }}"
+
+          inspect_digest() {
+            local manifest
+            manifest="$(docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' 2>/dev/null)" || return 1
+            jq -er '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' <<< "$manifest"
+          }
+          promote() {
+            local tag="$1"
+            local current
+            if current="$(inspect_digest "$image:$tag")" && [[ "$current" == "$digest" ]]; then
+              return 0
+            fi
+            docker buildx imagetools create --tag "$image:$tag" "$image@$digest"
+            current="$(inspect_digest "$image:$tag")"
+            test "$current" = "$digest" || {
+              echo "$image:$tag resolved to $current after promotion, expected $digest" >&2
+              exit 1
+            }
+          }
+
+          exact_error="$(mktemp)"
+          if exact_manifest="$(docker buildx imagetools inspect "$image:$version" --format '{{json .Manifest}}' 2>"$exact_error")"; then
+            current="$(jq -er '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' <<< "$exact_manifest")"
+            test "$current" = "$digest" || {
+              echo "Refusing to overwrite immutable tag $image:$version ($current)" >&2
+              rm -f -- "$exact_error"
+              exit 1
+            }
+          elif grep -Eqi '(manifest unknown|name unknown|not found|404)' "$exact_error"; then
+            promote "$version"
+          else
+            echo "Could not safely determine whether immutable tag $image:$version exists" >&2
+            cat "$exact_error" >&2
+            rm -f -- "$exact_error"
+            exit 1
+          fi
+          rm -f -- "$exact_error"
+
+      - name: Publish one immutable release after both assets are complete
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          archive="dist/release/kassinao-ops-$tag.tar.gz"
+          checksum="$archive.sha256"
+          digest="${{ steps.image.outputs.digest }}"
+          version="${{ steps.release.outputs.version }}"
+          notes_file="$(mktemp)"
+
+          awk -v heading="## [$version]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > "$notes_file"
+          test -s "$notes_file" || {
+            echo "CHANGELOG.md has no release notes for $version" >&2
+            exit 1
+          }
+          printf '\n---\n\nImagem OCI multiarch por digest: `%s@%s`.\n\n%s\n' \
+            "$REGISTRY/$IMAGE_NAME" \
+            "$digest" \
+            'O kit operacional não contém source nem credenciais. Verifique checksum e attestations antes do deploy. A imagem final passou pelo gate Trivy atual em amd64 e arm64.' \
+            >> "$notes_file"
+
+          remote_tag_oids="$(git ls-remote --refs origin "$GITHUB_REF" | awk '{print $1}')"
+          test "$(wc -w <<< "$remote_tag_oids")" -eq 1 \
+            && test "$remote_tag_oids" = "${{ steps.release.outputs.tag_oid }}" || {
+              echo "Remote tag $GITHUB_REF changed during the release run" >&2
+              exit 1
+            }
+
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            create_args=(
+              release create "$tag"
+              --draft
+              --verify-tag
+              --title "Kassinão $tag"
+              --notes-file "$notes_file"
+            )
+            if [[ "${{ steps.release.outputs.stable }}" != 'true' ]]; then
+              create_args+=(--prerelease)
+            fi
+            gh "${create_args[@]}"
+          fi
+
+          release_state="$(gh release view "$tag" --json isDraft,isImmutable --jq '[.isDraft,.isImmutable] | @tsv')"
+          is_draft="${release_state%%$'\t'*}"
+          is_immutable="${release_state##*$'\t'}"
+          if [[ "$is_draft" != 'true' && "$is_immutable" != 'true' ]]; then
+            gh release edit "$tag" --draft
+            repaired="$(gh release view "$tag" --json isDraft --jq .isDraft)"
+            [[ "$repaired" == 'true' ]] || {
+              echo "Existing release $tag is public, mutable, and could not be returned to draft" >&2
+              exit 1
+            }
+            is_draft=true
+          fi
+          if [[ "$is_draft" == 'true' ]]; then
+            gh release edit "$tag" --notes-file "$notes_file"
+          fi
+
+          verify_uploaded_asset() {
+            local asset="$1"
+            local name
+            local download_dir
+            name="$(basename "$asset")"
+            download_dir="$(mktemp -d)"
+            gh release download "$tag" --pattern "$name" --dir "$download_dir"
+            cmp --silent "$asset" "$download_dir/$name" || {
+              echo "Release asset $name differs from the locally verified artifact" >&2
+              rm -rf -- "$download_dir"
+              return 1
+            }
+            rm -rf -- "$download_dir"
+          }
+
+          expected_assets="$(printf '%s\n' \
+            "$(basename "$archive")" \
+            "$(basename "$checksum")" | sort)"
+          current_assets="$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)"
+          extra_assets="$(comm -13 <(printf '%s\n' "$expected_assets") <(printf '%s\n' "$current_assets"))"
+          if [[ -n "$extra_assets" ]]; then
+            [[ "$is_draft" == 'true' ]] || {
+              echo "Immutable release $tag contains unexpected assets" >&2
+              exit 1
+            }
+            while IFS= read -r extra; do
+              [[ -z "$extra" ]] || gh release delete-asset "$tag" "$extra" --yes
+            done <<< "$extra_assets"
+          fi
+
+          for asset in "$archive" "$checksum"; do
+            name="$(basename "$asset")"
+            if gh release view "$tag" --json assets --jq '.assets[].name' | grep -Fqx -- "$name"; then
+              if ! verify_uploaded_asset "$asset"; then
+                [[ "$is_draft" == 'true' ]] || {
+                  echo "Immutable release $tag contains a divergent asset" >&2
+                  exit 1
+                }
+                gh release delete-asset "$tag" "$name" --yes
+                gh release upload "$tag" "$asset"
+                verify_uploaded_asset "$asset"
+              fi
+            else
+              [[ "$is_draft" == 'true' ]] || {
+                echo "Immutable release $tag is missing $name" >&2
+                exit 1
+              }
+              gh release upload "$tag" "$asset"
+              verify_uploaded_asset "$asset"
+            fi
+          done
+
+          if [[ "$is_draft" == 'true' ]]; then
+            if [[ "${{ steps.release.outputs.stable }}" == 'true' ]]; then
+              gh release edit "$tag" --draft=false --latest
+            else
+              gh release edit "$tag" --draft=false
+            fi
+          fi
+
+          immutable=false
+          for attempt in 1 2 3 4 5; do
+            release_state="$(gh release view "$tag" --json isDraft,isImmutable --jq '[.isDraft,.isImmutable] | @tsv')"
+            is_draft="${release_state%%$'\t'*}"
+            is_immutable="${release_state##*$'\t'}"
+            if [[ "$is_draft" == 'false' && "$is_immutable" == 'true' ]]; then
+              immutable=true
+              break
+            fi
+            sleep "$((attempt * 3))"
+          done
+          if [[ "$immutable" != 'true' ]]; then
+            # With the policy accidentally disabled, minimize exposure: return
+            # the still-mutable release to draft before failing. Immutable
+            # releases cannot be changed and therefore never enter this branch.
+            if [[ "$is_draft" == 'false' && "$is_immutable" != 'true' ]]; then
+              gh release edit "$tag" --draft
+            fi
+            echo "Release $tag did not become immutable; rolling tags were not promoted" >&2
+            exit 1
+          fi
+
+          for attempt in 1 2 3 4 5; do
+            if gh release verify "$tag" >/dev/null \
+              && gh release verify-asset "$tag" "$archive" >/dev/null \
+              && gh release verify-asset "$tag" "$checksum" >/dev/null; then
+              exit 0
+            fi
+            sleep "$((attempt * 3))"
+          done
+          echo "Published release $tag is not verifiably immutable" >&2
+          exit 1
+
+      - name: Promote rolling tags only after the immutable release is verified
+        if: steps.release.outputs.stable == 'true'
+        run: |
+          set -euo pipefail
+          image="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          digest="${{ steps.image.outputs.digest }}"
+
+          inspect_digest() {
+            local manifest
+            manifest="$(docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' 2>/dev/null)" || return 1
+            jq -er '.digest | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))' <<< "$manifest"
+          }
+          promote() {
+            local tag="$1" current
+            if current="$(inspect_digest "$image:$tag")" && [[ "$current" == "$digest" ]]; then
+              return 0
+            fi
+            docker buildx imagetools create --tag "$image:$tag" "$image@$digest"
+            current="$(inspect_digest "$image:$tag")"
+            test "$current" = "$digest" || {
+              echo "$image:$tag resolved to $current after promotion, expected $digest" >&2
+              exit 1
+            }
+          }
+
+          promote "${{ steps.release.outputs.minor }}"
+          promote latest

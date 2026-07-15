@@ -20,9 +20,37 @@ Object.assign(process.env, {
   DISCORD_CLIENT_SECRET: 'preview-only-client-secret',
   COOKIE_SECRET: 'preview-only-cookie-secret-with-more-than-32-bytes',
   APP_URL: `http://localhost:${previewPort}`,
+  ALLOW_LOCAL_APP_URL: 'true',
+  OPERATOR_NAME: 'Operador fictício do preview',
+  OPERATOR_CONTACT_URL: `http://localhost:${previewPort}/privacy#contact`,
+  PRIVACY_POLICY_URL: `http://localhost:${previewPort}/privacy`,
+  DATA_DELETION_URL: `http://localhost:${previewPort}/privacy#data-rights`,
+  PRIVACY_EFFECTIVE_DATE: '2026-07-14',
+  PRIVACY_POLICY_VERSION: 'preview-1',
+  PRIVACY_AUDIENCE: 'Somente pessoas usando os dados fictícios deste preview local',
+  PRIVACY_PURPOSES: 'Validação visual local sem dados reais de reunião',
+  PRIVACY_LAWFUL_BASIS: 'Demonstração local somente com dados fictícios',
+  INFRASTRUCTURE_PROVIDER: 'Máquina local do preview',
+  INFRASTRUCTURE_REGION: 'Dispositivo local',
+  EDGE_PROVIDER: 'none',
+  EDGE_REGION: 'none',
+  OPERATIONAL_LOG_RETENTION: 'Somente durante a execução deste preview local',
+  BACKUP_STATUS: 'disabled',
+  BACKUP_PROVIDER: 'none',
+  BACKUP_REGION: 'none',
+  BACKUP_RETENTION_DAYS: '0',
+  DATA_REQUEST_PROCESS: 'Fechar o preview e remover os fixtures fictícios locais',
+  DATA_REQUEST_RESPONSE_DAYS: '30',
+  INCIDENT_CONTACT_URL: `http://localhost:${previewPort}/privacy#contact`,
+  INCIDENT_PROCESS: 'Fechar o preview e revisar somente os fixtures locais',
+  KASSINAO_ROLLBACK_RETENTION_HOURS: '72',
+  SOURCE_URL: 'https://github.com/resolvicomai/kassinao',
   ALLOW_ALL_GUILDS: 'true',
   PORT: String(previewPort),
   RECORDINGS_DIR: '/tmp/kassinao-preview-recordings',
+  STATE_DIR: '/tmp/kassinao-preview-state',
+  AUTH_STATE_DIR: '/tmp/kassinao-preview-auth',
+  DOTENV_CONFIG_PATH: '/tmp/kassinao-preview-disabled.env',
   RETENTION_DAYS: '7',
   TEXT_RETENTION_DAYS: '90',
   TRANSCRIBE_PROVIDER: 'none',
@@ -61,6 +89,7 @@ async function main(): Promise<void> {
     pageModule,
     siteModule,
     discordDemoModule,
+    privacyModule,
     authModule,
     cspModule,
   ] = await Promise.all([
@@ -72,6 +101,7 @@ async function main(): Promise<void> {
     import('../src/web/page'),
     import('../src/web/site'),
     import('../src/web/discordDemo'),
+    import('../src/web/privacy'),
     import('../src/web/auth'),
     import('../src/web/csp'),
   ]);
@@ -84,6 +114,7 @@ async function main(): Promise<void> {
   const { connectPage, recordingPage, recordingsIndexPage } = pageModule;
   const { localeCookie, localeFromValue, resolveWebLocale } = siteModule;
   const { discordDemoPage } = discordDemoModule;
+  const { privacyPage } = privacyModule;
   const { isAllowedWebMutation } = authModule;
   const { referrerPolicyForPath } = cspModule;
 
@@ -395,12 +426,12 @@ async function main(): Promise<void> {
   });
 
   const publicVisuals = new Map<string, string>([
-    ['discord-demo-pt.webm', 'video/webm'],
-    ['discord-demo-en.webm', 'video/webm'],
-    ['discord-demo-pt.png', 'image/png'],
-    ['discord-demo-en.png', 'image/png'],
-    ['discord-demo-pt.gif', 'image/gif'],
-    ['discord-demo-en.gif', 'image/gif'],
+    ['discord-demo-pt-v2.webm', 'video/webm'],
+    ['discord-demo-en-v2.webm', 'video/webm'],
+    ['discord-demo-pt-v2.png', 'image/png'],
+    ['discord-demo-en-v2.png', 'image/png'],
+    ['discord-demo-pt-v2.gif', 'image/gif'],
+    ['discord-demo-en-v2.gif', 'image/gif'],
     ['meeting-demo-pt.png', 'image/png'],
     ['meeting-demo-en.png', 'image/png'],
   ]);
@@ -437,6 +468,14 @@ async function main(): Promise<void> {
     sendPublicPage(res, 'en', docsPage('en'));
   });
 
+  app.get('/privacy', (_req, res) => {
+    sendPublicPage(res, 'pt', privacyPage('pt'));
+  });
+
+  app.get('/en/privacy', (_req, res) => {
+    sendPublicPage(res, 'en', privacyPage('en'));
+  });
+
   const renderDemo = (locale: Locale): string =>
     recordingPage(fixtureMeta, {
       live: false,
@@ -463,7 +502,7 @@ async function main(): Promise<void> {
     const locale = localeFromValue(req.query.lang) ?? 'pt';
     const rawPhase = String(req.query.phase ?? 'auto');
     const phase: DiscordDemoPhase =
-      rawPhase === 'auto' ? 'auto' : (Math.max(0, Math.min(4, Number(rawPhase) || 0)) as 0 | 1 | 2 | 3 | 4);
+      rawPhase === 'auto' ? 'auto' : (Math.max(0, Math.min(5, Number(rawPhase) || 0)) as 0 | 1 | 2 | 3 | 4 | 5);
     res.type('html').send(discordDemoPage(locale, phase));
   });
 
@@ -546,14 +585,14 @@ async function main(): Promise<void> {
   const previewConnections = [
     {
       sid: 'preview-claude-desktop',
-      label: 'Claude do notebook',
+      label: 'Notebook de trabalho',
       createdAt: now - 8 * DAY,
       lastSeenAt: now - 35 * MINUTE,
       exp: now + 82 * DAY,
     },
     {
       sid: 'preview-cursor-work',
-      label: 'Cursor do trabalho',
+      label: 'Desktop pessoal',
       createdAt: now - 3 * DAY,
       exp: now + 87 * DAY,
     },
@@ -580,7 +619,7 @@ async function main(): Promise<void> {
         lang: locale,
         user: previewUserFor(locale),
         exchangeCode: 'preview-only-code-never-valid',
-        label: locale === 'pt' ? 'Claude do notebook' : 'Claude on my laptop',
+        label: locale === 'pt' ? 'Notebook de trabalho' : 'Work laptop',
       }),
     );
   });
@@ -787,7 +826,7 @@ async function main(): Promise<void> {
   const server = app.listen(previewPort, '127.0.0.1', () => {
     console.log(`Preview visual do Kassinão: http://localhost:${previewPort}`);
     console.log(
-      'Rotas: / · /en · /docs · /en/docs · /demo · /en/demo · /preview/app · /preview/discord-demo · /preview/empty · /preview/live · /preview/audio-gone · /preview/connect · /preview/connect-token',
+      'Rotas: / · /en · /docs · /en/docs · /privacy · /en/privacy · /demo · /en/demo · /preview/app · /preview/discord-demo · /preview/empty · /preview/live · /preview/audio-gone · /preview/connect · /preview/connect-token',
     );
   });
 

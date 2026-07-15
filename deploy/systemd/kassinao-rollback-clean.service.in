@@ -1,0 +1,25 @@
+[Unit]
+Description=Expire Kassinão deployment rollback snapshots
+After=systemd-tmpfiles-setup.service
+RequiresMountsFor=@ROLLBACK_DIR@
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemd-tmpfiles --clean /etc/tmpfiles.d/kassinao-rollback.conf
+Environment=KASSINAO_ROLLBACK_RETENTION_HOURS=@RETENTION_HOURS@ KASSINAO_ROLLBACK_CLEANUP_AGE=@CLEANUP_AGE@
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=@ROLLBACK_DIR@
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=

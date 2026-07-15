@@ -11,7 +11,7 @@ export interface AutoRecordRule {
 
 type RulesFile = Record<string, AutoRecordRule[]>; // guildId -> regras
 
-const FILE = () => path.join(config.recordingsDir, 'autorecord.json');
+const FILE = () => path.join(config.stateDir, 'autorecord.json');
 
 function load(): RulesFile {
   try {
@@ -22,7 +22,7 @@ function load(): RulesFile {
 }
 
 function save(rules: RulesFile): void {
-  fs.mkdirSync(config.recordingsDir, { recursive: true });
+  fs.mkdirSync(config.stateDir, { recursive: true });
   fs.writeFileSync(FILE(), JSON.stringify(rules, null, 2));
 }
 

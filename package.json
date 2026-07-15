@@ -1,8 +1,8 @@
 {
   "name": "kassinao",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "private": true,
-  "description": "Open-source, self-hosted Discord bot that turns per-speaker recordings into searchable transcripts, meeting notes, tasks, and sourced answers.",
+  "description": "Open-source, self-hosted Discord bot for recording calls with separate Discord-account audio tracks and optional transcripts, minutes, and MCP access.",
   "license": "AGPL-3.0-or-later",
   "author": "Mauro Marques",
   "homepage": "https://kassinao.cloud/en",
@@ -32,6 +32,8 @@
     "node": ">=22"
   },
   "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "prebuild": "npm run clean",
     "build": "tsc",
     "typecheck:preview": "tsc -p tsconfig.preview.json",
     "dev": "tsx watch src/index.ts",
@@ -39,6 +41,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "assets:launch": "node scripts/render-launch-assets.cjs",
     "test": "vitest run"
   },
   "dependencies": {
@@ -67,6 +70,7 @@
     "eslint": "^10.6.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.4",
+    "sharp": "^0.34.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.62.1",

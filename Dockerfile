@@ -19,8 +19,9 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PYTHONDONTWRITEBYTECODE=1
 
-# Transcrição local (TRANSCRIBE_PROVIDER=command): build com --build-arg LOCAL_TRANSCRIBE=1
-# para instalar Python + faster-whisper na imagem. Padrão 0 (providers de API só precisam do Node).
+# Imagem customizada opcional (TRANSCRIBE_PROVIDER=command): o operador pode
+# compilar com --build-arg LOCAL_TRANSCRIBE=1 para incluir Python +
+# faster-whisper. A imagem publicada pelo projeto mantém o padrão 0.
 COPY requirements-whisper.txt ./
 ARG LOCAL_TRANSCRIBE=0
 RUN if [ "$LOCAL_TRANSCRIBE" = "1" ]; then \
@@ -36,13 +37,15 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg tini \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /app/recordings /home/node/.cache \
+RUN mkdir -p /app/recordings /app/state /app/auth /app/data /home/node/.cache \
     && chown -R node:node /app /home/node/.cache
 
 COPY --chown=node:node --from=build /app/node_modules ./node_modules
 COPY --chown=node:node --from=build /app/dist ./dist
 COPY --chown=node:node package.json ./
-COPY --chown=node:node scripts ./scripts
+# Runtime recebe somente o adapter local de transcrição. Scripts de deploy,
+# backup, auditoria e preview ficam no kit operacional, nunca dentro do app.
+COPY --chown=node:node scripts/transcribe-local.py ./scripts/transcribe-local.py
 COPY --chown=node:node docs ./docs
 EXPOSE 8080
 STOPSIGNAL SIGTERM

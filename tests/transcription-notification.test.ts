@@ -40,8 +40,14 @@ function recordingMeta(): RecordingMeta {
 
 describe('notificação pública de transcrição', () => {
   it.each([
-    ['pt' as const, '🔔 O processamento de uma gravação terminou. Pessoas autorizadas recebem os detalhes por DM.'],
-    ['en' as const, '🔔 A recording finished processing. Authorized people receive the details by DM.'],
+    [
+      'pt' as const,
+      '🔔 O processamento de uma gravação terminou. O bot tenta avisar pessoas autorizadas por DM; os detalhes continuam na área privada.',
+    ],
+    [
+      'en' as const,
+      '🔔 A recording finished processing. The bot attempts to notify authorized people by DM; details remain in the private app.',
+    ],
   ])('publica somente aviso genérico localizado em %s', (locale, expected) => {
     const payload = buildPublicTranscriptionNotice(locale);
 

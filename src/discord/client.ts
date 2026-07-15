@@ -5,8 +5,9 @@ import { Client, GatewayIntentBits, Partials } from 'discord.js';
  * possa consultar permissões sem import circular com o index.
  *
  * DirectMessages + Partials.Channel: para responder o guia quando alguém
- * manda DM ao bot (não lemos o conteúdo — só respondemos, então NÃO precisa
- * da intent privilegiada MessageContent).
+ * manda DM ao bot. O handler lê somente o prefixo necessário para reconhecer
+ * uma tentativa de slash command em DM; não pedimos a intent privilegiada
+ * MessageContent, que também não é necessária para DMs com o próprio app.
  */
 export const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.DirectMessages],

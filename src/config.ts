@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createGuildPolicy } from './guildPolicy';
+import { operationalError, operationalFailure } from './operationalLog';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -89,6 +90,32 @@ export interface ConfiguredOrigins {
   mcpUrl: string;
 }
 
+export interface OperatorPrivacyConfig {
+  operatorName: string;
+  operatorContactUrl: string;
+  privacyPolicyUrl: string;
+  dataDeletionUrl: string;
+  termsOfServiceUrl: string;
+  privacyEffectiveDate: string;
+  privacyPolicyVersion: string;
+  privacyAudience: string;
+  privacyPurposes: string;
+  privacyLawfulBasis: string;
+  infrastructureProvider: string;
+  infrastructureRegion: string;
+  edgeProvider: string;
+  edgeRegion: string;
+  operationalLogRetention: string;
+  backupEnabled: boolean;
+  backupProvider: string;
+  backupRegion: string;
+  backupRetentionDays: number;
+  dataRequestProcess: string;
+  dataRequestResponseDays: number;
+  incidentContactUrl: string;
+  incidentProcess: string;
+}
+
 type OriginEnvironment = Partial<
   Record<'APP_URL' | 'BASE_URL' | 'PUBLIC_URL' | 'DOCS_URL' | 'MCP_URL', string | undefined>
 >;
@@ -111,6 +138,341 @@ export function resolveConfiguredOrigins(source: OriginEnvironment, localUrl: st
   return { appUrl, publicUrl, docsUrl, mcpUrl };
 }
 
+type OperatorPrivacyEnvironment = Partial<
+  Record<
+    | 'OPERATOR_NAME'
+    | 'OPERATOR_CONTACT_URL'
+    | 'PRIVACY_POLICY_URL'
+    | 'DATA_DELETION_URL'
+    | 'TERMS_OF_SERVICE_URL'
+    | 'PRIVACY_EFFECTIVE_DATE'
+    | 'PRIVACY_POLICY_VERSION'
+    | 'PRIVACY_AUDIENCE'
+    | 'PRIVACY_PURPOSES'
+    | 'PRIVACY_LAWFUL_BASIS'
+    | 'INFRASTRUCTURE_PROVIDER'
+    | 'INFRASTRUCTURE_REGION'
+    | 'EDGE_PROVIDER'
+    | 'EDGE_REGION'
+    | 'OPERATIONAL_LOG_RETENTION'
+    | 'BACKUP_STATUS'
+    | 'BACKUP_PROVIDER'
+    | 'BACKUP_REGION'
+    | 'BACKUP_RETENTION_DAYS'
+    | 'DATA_REQUEST_PROCESS'
+    | 'DATA_REQUEST_RESPONSE_DAYS'
+    | 'INCIDENT_CONTACT_URL'
+    | 'INCIDENT_PROCESS',
+    string | undefined
+  >
+>;
+
+/**
+ * Text rendered on /privacy is public metadata. Keep it useful without turning
+ * the policy into a place to publish infrastructure coordinates or account IDs.
+ */
+export function normalizePublicStatement(name: string, raw: string, maxLength = 1_000): string {
+  const value = raw.trim();
+  if (!value) throw new Error(`${name} não pode ficar vazio`);
+  const hasControlCharacter = [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  });
+  if (value.length > maxLength || hasControlCharacter) {
+    throw new Error(`${name} precisa ter até ${maxLength} caracteres e não pode conter controles`);
+  }
+  if (
+    /https?:\/\/|mailto:|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:[0-9a-f]{1,4}:){2,}[0-9a-f:]{1,}\b|\b\d{15,22}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b|\b(?:localhost|(?:[a-z0-9-]+\.)+[a-z]{2,63})\b|@/i.test(
+      value,
+    )
+  ) {
+    throw new Error(
+      `${name} não pode expor URL, e-mail, IP, hostname interno ou ID; use somente uma descrição pública`,
+    );
+  }
+  return value;
+}
+
+function privacyInteger(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = raw?.trim() ? Number(raw) : fallback;
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} precisa ser inteiro entre ${minimum} e ${maximum}`);
+  }
+  return value;
+}
+
+function looksLikePublicHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host.endsWith('.test') ||
+    host.endsWith('.invalid')
+  )
+    return false;
+  // A política da instância deve continuar alcançável por nome público. Além de
+  // evitar RFC1918/loopback, recusar IP literal elimina ambiguidades de IPv6 e
+  // certificados improváveis em URLs cadastradas no Discord Developer Portal.
+  if (/^[0-9.]+$/.test(host) || /^[0-9a-f:]+$/i.test(host)) return false;
+  return host.includes('.') && !host.startsWith('.') && !host.endsWith('.');
+}
+
+interface PublicMetadataUrlOptions {
+  allowLocalLoopback?: boolean;
+  allowHash?: boolean;
+  production: boolean;
+  requirePath?: boolean;
+}
+
+/** Valida URLs públicas de transparência sem aceitar destinos com credenciais. */
+export function normalizePublicMetadataUrl(name: string, raw: string, options: PublicMetadataUrlOptions): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${name} precisa ser uma URL absoluta http(s)`);
+  }
+  const loopback = isLoopbackOrigin(url.origin);
+  const localLoopbackAllowed = loopback && (!options.production || options.allowLocalLoopback === true);
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && localLoopbackAllowed)) {
+    throw new Error(`${name} precisa usar HTTPS público (HTTP só é aceito em localhost no modo local explícito)`);
+  }
+  if (url.username || url.password || url.search || (!options.allowHash && url.hash)) {
+    throw new Error(`${name} não pode conter credenciais, query${options.allowHash ? '' : ' ou hash'}`);
+  }
+  if (options.production && !localLoopbackAllowed && !looksLikePublicHostname(url.hostname)) {
+    throw new Error(`${name} precisa usar um hostname DNS público, não loopback, rede interna ou IP literal`);
+  }
+  if (options.requirePath && (url.pathname === '/' || url.pathname === '')) {
+    throw new Error(`${name} precisa apontar para uma página específica, não apenas para a origem`);
+  }
+  return url.toString();
+}
+
+/** Contato pode ser formulário HTTPS ou um único mailbox, nunca headers mailto. */
+export function normalizeOperatorContactUrl(
+  raw: string,
+  production: boolean,
+  allowLocalLoopback = false,
+  name = 'OPERATOR_CONTACT_URL',
+): string {
+  if (raw.toLowerCase().startsWith('mailto:')) {
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      throw new Error(`${name} contém um endereço mailto inválido`);
+    }
+    const address = decodeURIComponent(url.pathname);
+    if (url.search || url.hash || url.username || url.password || !/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(address)) {
+      throw new Error(`${name} mailto deve conter um único e-mail, sem query, headers ou fragmento`);
+    }
+    return `mailto:${address}`;
+  }
+  return normalizePublicMetadataUrl(name, raw, {
+    production,
+    allowLocalLoopback,
+    allowHash: !production || allowLocalLoopback,
+    requirePath: true,
+  });
+}
+
+/** Resolve a política específica de cada operador; produção nunca herda a identidade do projeto. */
+export function resolveOperatorPrivacyConfig(
+  source: OperatorPrivacyEnvironment,
+  origins: ConfiguredOrigins,
+  nodeEnv: string | undefined,
+  allowLocalAppUrl = false,
+): OperatorPrivacyConfig {
+  const production = nodeEnv === 'production';
+  // A imagem Docker roda com NODE_ENV=production também no quickstart local.
+  // A exceção fica presa à flag explícita e à própria APP_URL loopback;
+  // ela não libera IP privado, hostname interno ou metadata local para um app público.
+  const allowLocalLoopback = production && allowLocalAppUrl && isLoopbackOrigin(origins.appUrl);
+  const readRequired = (name: keyof OperatorPrivacyEnvironment): string => {
+    const value = source[name]?.trim() || '';
+    if (production && !value) throw new Error(`${name} é obrigatória em produção`);
+    return value;
+  };
+
+  const operatorName = readRequired('OPERATOR_NAME') || 'Operador local do Kassinão';
+  const hasControlCharacter = [...operatorName].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  });
+  if (operatorName.length > 160 || hasControlCharacter) {
+    throw new Error('OPERATOR_NAME precisa ter até 160 caracteres e não pode conter controles');
+  }
+
+  const localPolicyUrl = `${origins.appUrl}/privacy`;
+  const privacyPolicyUrl = normalizePublicMetadataUrl(
+    'PRIVACY_POLICY_URL',
+    readRequired('PRIVACY_POLICY_URL') || localPolicyUrl,
+    { production, allowLocalLoopback, requirePath: true },
+  );
+  const operatorContactUrl = normalizeOperatorContactUrl(
+    readRequired('OPERATOR_CONTACT_URL') || `${localPolicyUrl}#contact`,
+    production,
+    allowLocalLoopback,
+  );
+  // Exceção deliberada ao bloqueio de fragmentos: o fluxo de exclusão pode ser
+  // a seção #data-rights da própria política, sem query nem estado sensível.
+  const dataDeletionUrl = normalizePublicMetadataUrl(
+    'DATA_DELETION_URL',
+    readRequired('DATA_DELETION_URL') || `${localPolicyUrl}#data-rights`,
+    { production, allowLocalLoopback, allowHash: true, requirePath: true },
+  );
+  const rawTerms = source.TERMS_OF_SERVICE_URL?.trim() || '';
+  const termsOfServiceUrl = rawTerms
+    ? normalizePublicMetadataUrl('TERMS_OF_SERVICE_URL', rawTerms, {
+        production,
+        allowLocalLoopback,
+        requirePath: true,
+      })
+    : '';
+
+  const readPublicStatement = (name: keyof OperatorPrivacyEnvironment, fallback = '', maxLength = 1_000): string => {
+    const value = readRequired(name) || fallback;
+    return value ? normalizePublicStatement(name, value, maxLength) : '';
+  };
+
+  const privacyEffectiveDate = readRequired('PRIVACY_EFFECTIVE_DATE');
+  if (privacyEffectiveDate) {
+    const date = new Date(`${privacyEffectiveDate}T00:00:00.000Z`);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(privacyEffectiveDate) ||
+      Number.isNaN(date.getTime()) ||
+      date.toISOString().slice(0, 10) !== privacyEffectiveDate ||
+      date.getTime() > Date.now()
+    ) {
+      throw new Error('PRIVACY_EFFECTIVE_DATE precisa usar uma data real, não futura, no formato YYYY-MM-DD');
+    }
+  }
+
+  const privacyPolicyVersion = readRequired('PRIVACY_POLICY_VERSION') || 'local-draft';
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/.test(privacyPolicyVersion)) {
+    throw new Error('PRIVACY_POLICY_VERSION aceita 1 a 32 caracteres: letras, números, ponto, hífen e underscore');
+  }
+  if (production && privacyPolicyVersion.toLowerCase() === 'local-draft') {
+    throw new Error('PRIVACY_POLICY_VERSION não pode usar local-draft em produção');
+  }
+
+  const privacyAudience = readPublicStatement('PRIVACY_AUDIENCE');
+  const privacyPurposes = readPublicStatement('PRIVACY_PURPOSES');
+  const privacyLawfulBasis = readPublicStatement('PRIVACY_LAWFUL_BASIS');
+  const infrastructureProvider = readPublicStatement('INFRASTRUCTURE_PROVIDER', production ? '' : 'local', 160);
+  const infrastructureRegion = readPublicStatement('INFRASTRUCTURE_REGION', production ? '' : 'local', 160);
+  if (production && /^(?:none|disabled|local)$/i.test(infrastructureProvider)) {
+    throw new Error('INFRASTRUCTURE_PROVIDER precisa identificar o provedor real desta instância');
+  }
+  if (production && /^(?:none|disabled)$/i.test(infrastructureRegion)) {
+    throw new Error('INFRASTRUCTURE_REGION precisa identificar a região ou o escopo público real');
+  }
+  if (production && !allowLocalLoopback && /\blocal (?:machine|device|host|runtime)\b/i.test(infrastructureProvider)) {
+    throw new Error('INFRASTRUCTURE_PROVIDER não pode declarar runtime local para uma APP_URL pública');
+  }
+
+  const edgeProvider = readPublicStatement('EDGE_PROVIDER', 'none', 160);
+  const edgeRegion = readPublicStatement('EDGE_REGION', 'none', 160);
+  const edgeDisabled = edgeProvider.toLowerCase() === 'none';
+  if (edgeDisabled !== (edgeRegion.toLowerCase() === 'none')) {
+    throw new Error('EDGE_PROVIDER e EDGE_REGION precisam ser ambos none ou identificar provider e região');
+  }
+  if (!edgeDisabled && /^(?:disabled|local)$/i.test(edgeProvider)) {
+    throw new Error('EDGE_PROVIDER precisa identificar o provider real ou usar none');
+  }
+  if (!edgeDisabled && /^(?:disabled|local)$/i.test(edgeRegion)) {
+    throw new Error('EDGE_REGION precisa identificar a região/escopo real ou usar none com EDGE_PROVIDER=none');
+  }
+
+  const operationalLogRetention = readPublicStatement('OPERATIONAL_LOG_RETENTION');
+  const backupStatus = (readRequired('BACKUP_STATUS') || 'disabled').toLowerCase();
+  if (backupStatus !== 'enabled' && backupStatus !== 'disabled') {
+    throw new Error('BACKUP_STATUS aceita somente enabled ou disabled');
+  }
+  const backupEnabled = backupStatus === 'enabled';
+  let backupProvider = 'none';
+  let backupRegion = 'none';
+  let backupRetentionDays = 0;
+  if (backupEnabled) {
+    backupProvider = readPublicStatement('BACKUP_PROVIDER', '', 160);
+    backupRegion = readPublicStatement('BACKUP_REGION', '', 160);
+    if (/^(?:none|disabled|local)$/i.test(backupProvider)) {
+      throw new Error('BACKUP_PROVIDER precisa identificar o provedor real quando BACKUP_STATUS=enabled');
+    }
+    if (/^(?:none|disabled|local)$/i.test(backupRegion)) {
+      throw new Error('BACKUP_REGION precisa identificar a região/escopo real quando BACKUP_STATUS=enabled');
+    }
+    const rawRetention = readRequired('BACKUP_RETENTION_DAYS');
+    backupRetentionDays = privacyInteger('BACKUP_RETENTION_DAYS', rawRetention, 0, 1, 3_650);
+  } else {
+    for (const name of ['BACKUP_PROVIDER', 'BACKUP_REGION'] as const) {
+      const value = source[name]?.trim() || '';
+      if (value && value.toLowerCase() !== 'none') {
+        throw new Error(`${name} precisa ficar vazio ou usar none quando BACKUP_STATUS=disabled`);
+      }
+    }
+    const rawRetention = source.BACKUP_RETENTION_DAYS?.trim() || '';
+    if (rawRetention && rawRetention !== '0') {
+      throw new Error('BACKUP_RETENTION_DAYS precisa ficar vazio ou usar 0 quando BACKUP_STATUS=disabled');
+    }
+  }
+
+  const dataRequestProcess = readPublicStatement('DATA_REQUEST_PROCESS');
+  const rawResponseDays = readRequired('DATA_REQUEST_RESPONSE_DAYS');
+  const dataRequestResponseDays = privacyInteger('DATA_REQUEST_RESPONSE_DAYS', rawResponseDays, 30, 1, 365);
+  const rawIncidentContact = readRequired('INCIDENT_CONTACT_URL');
+  const incidentContactUrl = rawIncidentContact
+    ? normalizeOperatorContactUrl(rawIncidentContact, production, allowLocalLoopback, 'INCIDENT_CONTACT_URL')
+    : operatorContactUrl;
+  const incidentProcess = readPublicStatement('INCIDENT_PROCESS');
+
+  // A política operacional precisa ler a configuração privada real. No deploy
+  // dividido, landing/docs não recebem providers, retenção nem MCP; copiar um
+  // snapshot para lá criaria uma segunda verdade sujeita a drift. Por isso a
+  // produção fixa a política canônica no app, mas mantém a rota sem login.
+  if (production && privacyPolicyUrl !== `${origins.appUrl}/privacy`) {
+    throw new Error('PRIVACY_POLICY_URL precisa ser exatamente APP_URL + /privacy em produção');
+  }
+  if (production && dataDeletionUrl !== `${origins.appUrl}/privacy#data-rights`) {
+    throw new Error('DATA_DELETION_URL precisa ser exatamente APP_URL + /privacy#data-rights em produção');
+  }
+
+  return {
+    operatorName,
+    operatorContactUrl,
+    privacyPolicyUrl,
+    dataDeletionUrl,
+    termsOfServiceUrl,
+    privacyEffectiveDate,
+    privacyPolicyVersion,
+    privacyAudience,
+    privacyPurposes,
+    privacyLawfulBasis,
+    infrastructureProvider,
+    infrastructureRegion,
+    edgeProvider,
+    edgeRegion,
+    operationalLogRetention,
+    backupEnabled,
+    backupProvider,
+    backupRegion,
+    backupRetentionDays,
+    dataRequestProcess,
+    dataRequestResponseDays,
+    incidentContactUrl,
+    incidentProcess,
+  };
+}
+
 export function normalizeSourceUrl(raw: string): string {
   let url: URL;
   try {
@@ -118,16 +480,47 @@ export function normalizeSourceUrl(raw: string): string {
   } catch {
     throw new Error(`SOURCE_URL precisa ser uma URL absoluta http(s) (recebido: ${JSON.stringify(raw)})`);
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:')
-    throw new Error('SOURCE_URL aceita apenas http:// ou https://');
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopbackOrigin(url.origin))) {
+    throw new Error('SOURCE_URL precisa usar HTTPS fora de localhost');
+  }
   if (url.username || url.password || url.search || url.hash)
     throw new Error('SOURCE_URL não pode conter credenciais, query ou hash');
+  if (url.pathname === '/' || url.pathname === '')
+    throw new Error('SOURCE_URL precisa apontar para o repositório correspondente, não apenas para uma origem');
   return url.toString().replace(/\/$/, '');
+}
+
+/** Fingerprint público do artefato em execução; nunca contém identidade da instância. */
+export function normalizeReleaseDigest(raw: string | undefined): string {
+  const value = raw?.trim() || '';
+  if (value && !/^sha256:[0-9a-f]{64}$/.test(value)) {
+    throw new Error('KASSINAO_RELEASE_DIGEST precisa usar sha256:<64 hex>');
+  }
+  return value;
+}
+
+/** Identificador aleatório e público do deploy; não codifica domínio, guild ou operador. */
+export function normalizeDeploymentFingerprint(raw: string | undefined): string {
+  const value = raw?.trim() || '';
+  if (value && !/^[0-9a-f]{32}$/.test(value)) {
+    throw new Error('KASSINAO_DEPLOYMENT_FINGERPRINT precisa usar 32 hex minúsculos');
+  }
+  return value;
 }
 
 function isLoopbackOrigin(origin: string): boolean {
   const host = new URL(origin).hostname;
   return host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+}
+
+/** Produção local existe, mas precisa ser uma escolha explícita do operador. */
+export function validateDeploymentAppOrigin(origin: string, nodeEnv: string | undefined, allowLocal: boolean): void {
+  if (nodeEnv === 'production' && isLoopbackOrigin(origin) && !allowLocal) {
+    throw new Error(
+      'APP_URL localhost em produção exige ALLOW_LOCAL_APP_URL=true explícito. ' +
+        'Uma instância exposta à internet precisa usar sua própria origem HTTPS.',
+    );
+  }
 }
 
 /** Segredos HMAC fracos não podem parecer configuração válida. */
@@ -151,21 +544,50 @@ export function validateDedicatedSecret(
 }
 
 const recordingsDir = path.resolve(process.env.RECORDINGS_DIR || './recordings');
+// Instalações antigas continuam válidas porque ambos caem para RECORDINGS_DIR.
+// Novas instalações/produção devem apontar cada classe para um volume distinto:
+// gravações, estado operacional e autenticação revogável.
+const stateDir = path.resolve(process.env.STATE_DIR || recordingsDir);
+const authStateDir = path.resolve(process.env.AUTH_STATE_DIR || recordingsDir);
+const allowLegacySharedState = booleanEnv('ALLOW_LEGACY_SHARED_STATE', false);
 
-try {
-  fs.mkdirSync(recordingsDir, { recursive: true, mode: 0o700 });
-  if (process.platform !== 'win32') fs.chmodSync(recordingsDir, 0o700);
-} catch (err) {
-  console.error(`Não foi possível proteger o diretório de gravações ${recordingsDir}: ${(err as Error).message}`);
-  process.exit(1);
+function sameFileSystemObject(left: string, right: string): boolean {
+  if (path.resolve(left) === path.resolve(right)) return true;
+  try {
+    const a = fs.statSync(left);
+    const b = fs.statSync(right);
+    return a.dev === b.dev && a.ino === b.ino;
+  } catch {
+    return false;
+  }
 }
 
-/**
- * Segredo usado para assinar os cookies de sessão da página web.
- * Se não vier do ambiente, gera um e persiste em disco para que
- * as sessões sobrevivam a reinícios do bot.
- */
-function loadCookieSecret(): string {
+function pathsOverlap(left: string, right: string): boolean {
+  const a = path.resolve(left);
+  const b = path.resolve(right);
+  const aToB = path.relative(a, b);
+  const bToA = path.relative(b, a);
+  return (
+    aToB === '' ||
+    (!aToB.startsWith(`..${path.sep}`) && aToB !== '..' && !path.isAbsolute(aToB)) ||
+    (!bToA.startsWith(`..${path.sep}`) && bToA !== '..' && !path.isAbsolute(bToA))
+  );
+}
+
+function regularFileValue(file: string, label: string): string | undefined {
+  try {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('não é arquivo regular');
+    return fs.readFileSync(file, 'utf8').trim();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    console.error(`Não foi possível ler ${label}: ${(err as Error).message}`);
+    process.exit(1);
+  }
+}
+
+/** Lê ou gera em memória; persistência só acontece depois de toda validação. */
+function prepareCookieSecret(): string {
   if (process.env.COOKIE_SECRET) {
     try {
       return validateSecret('COOKIE_SECRET', process.env.COOKIE_SECRET);
@@ -174,31 +596,230 @@ function loadCookieSecret(): string {
       process.exit(1);
     }
   }
-  const secretFile = path.join(recordingsDir, '.cookie-secret');
+  const candidates = [path.join(authStateDir, '.cookie-secret'), path.join(recordingsDir, '.cookie-secret')];
+  for (const file of candidates) {
+    const value = regularFileValue(file, 'o segredo de sessão');
+    if (value !== undefined) {
+      try {
+        return validateSecret('.cookie-secret', value);
+      } catch (err) {
+        console.error(`Segredo de sessão inválido: ${(err as Error).message}`);
+        process.exit(1);
+      }
+    }
+  }
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function prepareInstanceId(): string {
+  const saved = regularFileValue(path.join(authStateDir, '.instance-id'), 'a identidade da instância');
+  if (saved === undefined) return crypto.randomUUID();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(saved)) {
+    console.error('Identidade da instância inválida; não substitua esse arquivo numa instância existente.');
+    process.exit(1);
+  }
+  return saved.toLowerCase();
+}
+
+function filesEqual(left: string, right: string): boolean {
   try {
-    const saved = validateSecret('.cookie-secret', fs.readFileSync(secretFile, 'utf8').trim());
-    if (process.platform !== 'win32') fs.chmodSync(secretFile, 0o600);
-    return saved;
+    return fs.readFileSync(left).equals(fs.readFileSync(right));
+  } catch {
+    return false;
+  }
+}
+
+/** Migração autenticável move; estado operacional é copiado para permitir rollback de dados. */
+function migratePrivateStateFile(source: string, destination: string, removeSource: boolean): void {
+  if (path.resolve(source) === path.resolve(destination) || !fs.existsSync(source)) return;
+  if (fs.existsSync(destination)) {
+    if (sameFileSystemObject(source, destination)) return;
+    if (filesEqual(source, destination)) {
+      if (removeSource) fs.unlinkSync(source);
+      return;
+    }
+    operationalFailure('Migração de estado ambígua: origem e destino privados já existem');
+    process.exit(1);
+  }
+  try {
+    const stat = fs.lstatSync(source);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('a origem não é um arquivo regular');
+    fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+    fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+    if (!filesEqual(source, destination)) throw new Error('a cópia não passou na verificação de bytes');
+    if (removeSource) fs.unlinkSync(source);
+    if (process.platform !== 'win32') fs.chmodSync(destination, 0o600);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error(
-        `Não foi possível carregar o segredo de sessão ${secretFile}: ${(err as Error).message}. ` +
-          'Corrija o arquivo ou apague-o deliberadamente para gerar outro (isso encerra os logins atuais).',
-      );
-      process.exit(1);
+    // Test workers/replicas can race on the same first boot. Quem perdeu a
+    // corrida aceita somente o destino já criado; ausência dos dois é erro.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT' && fs.existsSync(destination)) return;
+    operationalFailure(`Não foi possível migrar estado privado: ${operationalError(err)}`);
+    process.exit(1);
+  }
+}
+
+function persistExact(file: string, value: string): void {
+  const existing = regularFileValue(file, 'estado privado persistente');
+  if (existing !== undefined) {
+    if (existing !== value) throw new Error('o valor persistido diverge do valor validado em memória');
+    if (process.platform !== 'win32') fs.chmodSync(file, 0o600);
+    return;
+  }
+  fs.writeFileSync(file, value, { mode: 0o600, flag: 'wx' });
+}
+
+function replacePrivateFile(file: string, value: string): void {
+  const temp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  fs.writeFileSync(temp, value, { mode: 0o600, flag: 'wx' });
+  fs.renameSync(temp, file);
+  if (process.platform !== 'win32') fs.chmodSync(file, 0o600);
+}
+
+function assertDedicatedDataPath(dir: string): void {
+  if (process.platform === 'win32') return;
+  const resolved = path.resolve(dir);
+  const forbidden = new Set([
+    '/',
+    '/app',
+    '/etc',
+    '/home',
+    '/opt',
+    '/root',
+    '/run',
+    '/srv',
+    '/tmp',
+    '/usr',
+    '/var',
+    '/var/lib',
+  ]);
+  if (forbidden.has(resolved)) throw new Error(`${resolved} é um diretório de sistema, não um volume dedicado`);
+}
+
+function assertMigrationPair(source: string, destination: string): void {
+  if (!fs.existsSync(source) || !fs.existsSync(destination) || sameFileSystemObject(source, destination)) return;
+  if (!filesEqual(source, destination)) {
+    throw new Error('origem legada e destino novo divergem; restaure ou reconcilie manualmente antes do boot');
+  }
+}
+
+/** Único ponto interno de mutação do bootstrap. */
+function persistPrivateStateLayout(cookieSecret: string, instanceId: string): void {
+  try {
+    for (const dir of [recordingsDir, stateDir, authStateDir]) assertDedicatedDataPath(dir);
+    const overlaps =
+      pathsOverlap(recordingsDir, stateDir) ||
+      pathsOverlap(recordingsDir, authStateDir) ||
+      pathsOverlap(stateDir, authStateDir);
+    const intentionalLegacyAlias =
+      allowLegacySharedState &&
+      sameFileSystemObject(recordingsDir, stateDir) &&
+      sameFileSystemObject(recordingsDir, authStateDir);
+    if (overlaps && !intentionalLegacyAlias) {
+      throw new Error('RECORDINGS_DIR, STATE_DIR e AUTH_STATE_DIR não podem coincidir nem ficar aninhados');
     }
-    const secret = crypto.randomBytes(32).toString('hex');
-    fs.mkdirSync(recordingsDir, { recursive: true });
+    if (!fs.existsSync(path.join(stateDir, '.layout-v2'))) {
+      for (const [legacyName, destination] of [
+        ['guildconfig.json', path.join(stateDir, 'guildconfig.json')],
+        ['autorecord.json', path.join(stateDir, 'autorecord.json')],
+        ['.recording-admission.json', path.join(stateDir, 'recording-admission.json')],
+        ['.discord-surface-inventory.json', path.join(stateDir, 'discord-surface-inventory.json')],
+      ] as const) {
+        assertMigrationPair(path.join(recordingsDir, legacyName), destination);
+      }
+    }
+    for (const [legacyName, destination] of [
+      ['.cookie-secret', path.join(authStateDir, '.cookie-secret')],
+      ['.web-sessions.json', path.join(authStateDir, 'web-sessions.json')],
+      ['.mcp-sessions.json', path.join(authStateDir, 'mcp-sessions.json')],
+    ] as const) {
+      assertMigrationPair(path.join(recordingsDir, legacyName), destination);
+    }
+  } catch (err) {
+    console.error(`Layout privado inválido: ${(err as Error).message}`);
+    process.exit(1);
+  }
+
+  for (const [label, dir] of [
+    ['gravações', recordingsDir],
+    ['estado operacional', stateDir],
+    ['estado de autenticação', authStateDir],
+  ] as const) {
     try {
-      fs.writeFileSync(secretFile, secret, { mode: 0o600, flag: 'wx' });
-      return secret;
-    } catch (writeErr) {
-      // Dois processos podem subir juntos no primeiro boot: quem perdeu a
-      // corrida lê o arquivo já criado, em vez de sobrescrever o segredo.
-      if ((writeErr as NodeJS.ErrnoException).code === 'EEXIST') return loadCookieSecret();
-      console.error(`Não foi possível persistir o segredo de sessão ${secretFile}: ${(writeErr as Error).message}`);
+      if (process.env.NODE_ENV === 'production' && !fs.existsSync(dir)) {
+        throw new Error('o volume precisa existir antes do boot de produção');
+      }
+      const existed = fs.existsSync(dir);
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const stat = fs.lstatSync(dir);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('não é diretório regular');
+      if (process.platform !== 'win32') {
+        const mode = stat.mode & 0o777;
+        if (existed && (mode & 0o077) !== 0) {
+          throw new Error(`permissão ${mode.toString(8)} expõe o volume; ajuste para 0700 antes do boot`);
+        }
+        if (!existed) fs.chmodSync(dir, 0o700);
+      }
+    } catch (err) {
+      console.error(`Não foi possível preparar o volume de ${label}: ${(err as Error).message}`);
       process.exit(1);
     }
+  }
+
+  if (
+    process.env.NODE_ENV === 'production' &&
+    !allowLegacySharedState &&
+    (sameFileSystemObject(recordingsDir, stateDir) ||
+      sameFileSystemObject(recordingsDir, authStateDir) ||
+      sameFileSystemObject(stateDir, authStateDir))
+  ) {
+    console.error(
+      'Configuração inválida: RECORDINGS_DIR, STATE_DIR e AUTH_STATE_DIR precisam ser três volumes distintos em produção.',
+    );
+    process.exit(1);
+  }
+
+  const stateMarker = path.join(stateDir, '.layout-v2');
+  if (!fs.existsSync(stateMarker)) {
+    for (const [legacyName, destination] of [
+      ['guildconfig.json', path.join(stateDir, 'guildconfig.json')],
+      ['autorecord.json', path.join(stateDir, 'autorecord.json')],
+      ['.recording-admission.json', path.join(stateDir, 'recording-admission.json')],
+      ['.discord-surface-inventory.json', path.join(stateDir, 'discord-surface-inventory.json')],
+    ] as const) {
+      migratePrivateStateFile(path.join(recordingsDir, legacyName), destination, false);
+    }
+    fs.writeFileSync(stateMarker, '2\n', { mode: 0o600, flag: 'wx' });
+  }
+
+  const cookieFile = path.join(authStateDir, '.cookie-secret');
+  if (process.env.COOKIE_SECRET) {
+    const previous = regularFileValue(cookieFile, 'o segredo de sessão persistido');
+    if (previous !== cookieSecret) {
+      replacePrivateFile(cookieFile, cookieSecret);
+      for (const sessionFile of [
+        path.join(authStateDir, 'web-sessions.json'),
+        path.join(recordingsDir, '.web-sessions.json'),
+      ]) {
+        if (fs.existsSync(sessionFile) && !fs.lstatSync(sessionFile).isSymbolicLink()) fs.unlinkSync(sessionFile);
+      }
+    }
+    const legacyCookie = path.join(recordingsDir, '.cookie-secret');
+    if (fs.existsSync(legacyCookie) && !sameFileSystemObject(legacyCookie, cookieFile)) fs.unlinkSync(legacyCookie);
+  } else {
+    migratePrivateStateFile(path.join(recordingsDir, '.cookie-secret'), cookieFile, true);
+  }
+  for (const [legacyName, destination] of [
+    ['.web-sessions.json', path.join(authStateDir, 'web-sessions.json')],
+    ['.mcp-sessions.json', path.join(authStateDir, 'mcp-sessions.json')],
+  ] as const) {
+    migratePrivateStateFile(path.join(recordingsDir, legacyName), destination, true);
+  }
+  try {
+    persistExact(cookieFile, cookieSecret);
+    persistExact(path.join(authStateDir, '.instance-id'), instanceId);
+  } catch (err) {
+    console.error(`Não foi possível persistir a identidade privada da instância: ${(err as Error).message}`);
+    process.exit(1);
   }
 }
 
@@ -237,7 +858,7 @@ const WEB_BIND_ADDRESSES = new Set(['127.0.0.1', '::1', 'localhost', '0.0.0.0', 
 
 /**
  * O listener bare-node fecha em loopback por padrão. Wildcards continuam
- * disponíveis, mas exigem uma escolha explícita do operador (Compose/Render
+ * disponíveis, mas exigem uma escolha explícita do operador (container
  * usam isso dentro do isolamento do container).
  */
 export function normalizeWebBindAddress(raw: string | undefined): string {
@@ -283,8 +904,30 @@ for (const [name, origin] of Object.entries({
     process.exit(1);
   }
 }
+const allowLocalAppUrl = booleanEnv('ALLOW_LOCAL_APP_URL', false);
+try {
+  for (const origin of [appUrl, publicUrl, docsUrl, mcpUrl]) {
+    validateDeploymentAppOrigin(origin, process.env.NODE_ENV, allowLocalAppUrl);
+  }
+} catch (err) {
+  console.error(`Configuração inválida: ${(err as Error).message}`);
+  process.exit(1);
+}
 if (process.env.BASE_URL?.trim()) {
   console.warn('⚠️  BASE_URL é legado. Migre para APP_URL; quando ambos existem, precisam ser idênticos.');
+}
+
+let operatorPrivacy: OperatorPrivacyConfig;
+try {
+  operatorPrivacy = resolveOperatorPrivacyConfig(
+    process.env,
+    configuredOrigins,
+    process.env.NODE_ENV,
+    allowLocalAppUrl,
+  );
+} catch (err) {
+  console.error(`Configuração inválida: ${(err as Error).message}`);
+  process.exit(1);
 }
 
 let guildPolicy: ReturnType<typeof createGuildPolicy>;
@@ -297,7 +940,20 @@ try {
 
 let sourceUrl: string;
 try {
-  sourceUrl = normalizeSourceUrl(process.env.SOURCE_URL || 'https://github.com/resolvicomai/kassinao');
+  const configuredSourceUrl = process.env.SOURCE_URL?.trim() || '';
+  if (process.env.NODE_ENV === 'production' && !configuredSourceUrl) {
+    throw new Error('SOURCE_URL é obrigatória em produção e precisa apontar para o source desta instalação');
+  }
+  sourceUrl = normalizeSourceUrl(configuredSourceUrl || 'https://github.com/resolvicomai/kassinao');
+} catch (err) {
+  console.error(`Configuração inválida: ${(err as Error).message}`);
+  process.exit(1);
+}
+let releaseDigest: string;
+let deploymentFingerprint: string;
+try {
+  releaseDigest = normalizeReleaseDigest(process.env.KASSINAO_RELEASE_DIGEST);
+  deploymentFingerprint = normalizeDeploymentFingerprint(process.env.KASSINAO_DEPLOYMENT_FINGERPRINT);
 } catch (err) {
   console.error(`Configuração inválida: ${(err as Error).message}`);
   process.exit(1);
@@ -305,6 +961,8 @@ try {
 // Vários módulos e integrações self-hosted ainda leem config.baseUrl. Seu
 // significado permanece sendo a origem do app, agora também exposta como appUrl.
 const baseUrl = appUrl;
+const cookieSecret = prepareCookieSecret();
+const instanceId = prepareInstanceId();
 
 // Aviso de upgrade: quem rodava RETENTION_DAYS curto (privacidade/compliance) e NÃO
 // setou TEXT_RETENTION_DAYS passa a reter transcrição/ata/notas por 90 dias (o default
@@ -317,9 +975,9 @@ if (!process.env.TEXT_RETENTION_DAYS && !audioRetentionUnlimited && textRetentio
   );
 }
 
-// Prompt de contexto do Whisper: o default em pt-BR só vale quando o idioma é pt
-// (um deploy em inglês não pode receber viés de português).
-const transcribeLanguage = process.env.TRANSCRIBE_LANGUAGE || 'pt';
+// O repositório não presume o idioma da instância. Português continua com um
+// prompt útil quando o operador escolhe `pt`; o default genérico é inglês.
+const transcribeLanguage = process.env.TRANSCRIBE_LANGUAGE || 'en';
 const defaultTranscribePrompt = transcribeLanguage.startsWith('pt')
   ? 'Transcrição de uma reunião de trabalho informal em português do Brasil.'
   : '';
@@ -399,17 +1057,75 @@ export const config = {
   baseUrl,
   /** Origem canônica do app privado. APP_URL cai para BASE_URL e depois localhost. */
   appUrl,
+  /** Exceção explícita para executar a imagem de produção somente em localhost. */
+  allowLocalAppUrl,
+  /** Compatibilidade temporária; produção nova mantém dados, estado e autenticação separados. */
+  allowLegacySharedState,
   /** Origem da landing e da demo pública. Cai para appUrl em instalações de origem única. */
   publicUrl,
   /** Origem da documentação. Cai para publicUrl; quando separada, PT vive em / e EN em /en. */
   docsUrl,
   /** Origem da API MCP. Cai para appUrl em instalações de origem única. */
   mcpUrl,
+  /** Identidade pública de quem controla os dados desta instância. */
+  operatorName: operatorPrivacy.operatorName,
+  /** Canal HTTPS público para solicitações de privacidade ao operador. */
+  operatorContactUrl: operatorPrivacy.operatorContactUrl,
+  /** Política específica da instância, cadastrada também no Discord Developer Portal. */
+  privacyPolicyUrl: operatorPrivacy.privacyPolicyUrl,
+  /** Fluxo público de acesso, correção e exclusão de dados. */
+  dataDeletionUrl: operatorPrivacy.dataDeletionUrl,
+  /** Termos próprios do operador; vazio quando ele não os adota. */
+  termsOfServiceUrl: operatorPrivacy.termsOfServiceUrl,
+  /** Data e versão públicas do texto aplicável nesta instância. */
+  privacyEffectiveDate: operatorPrivacy.privacyEffectiveDate,
+  privacyPolicyVersion: operatorPrivacy.privacyPolicyVersion,
+  /** Escopo e justificativa declarados pelo operador; o projeto não infere base legal. */
+  privacyAudience: operatorPrivacy.privacyAudience,
+  privacyPurposes: operatorPrivacy.privacyPurposes,
+  privacyLawfulBasis: operatorPrivacy.privacyLawfulBasis,
+  /** Localização pública em nível de provedor/região, nunca host, IP ou conta. */
+  infrastructureProvider: operatorPrivacy.infrastructureProvider,
+  infrastructureRegion: operatorPrivacy.infrastructureRegion,
+  edgeProvider: operatorPrivacy.edgeProvider,
+  edgeRegion: operatorPrivacy.edgeRegion,
+  /** Política operacional declarada e publicada por esta instalação. */
+  operationalLogRetention: operatorPrivacy.operationalLogRetention,
+  /** Janela máxima para snapshot operacional preservado por deploy image-only que falhou. */
+  rollbackRetentionHours: numberEnv('KASSINAO_ROLLBACK_RETENTION_HOURS', 72, {
+    min: 1,
+    max: 168,
+    integer: true,
+  }),
+  backupEnabled: operatorPrivacy.backupEnabled,
+  backupProvider: operatorPrivacy.backupProvider,
+  backupRegion: operatorPrivacy.backupRegion,
+  backupRetentionDays: operatorPrivacy.backupRetentionDays,
+  dataRequestProcess: operatorPrivacy.dataRequestProcess,
+  dataRequestResponseDays: operatorPrivacy.dataRequestResponseDays,
+  incidentContactUrl: operatorPrivacy.incidentContactUrl,
+  incidentProcess: operatorPrivacy.incidentProcess,
+  /** Identidade local persistida no volume de autenticação; nunca vem do Git. */
+  instanceId,
   /** Repositório-fonte exibido por /sobre e pelas superfícies públicas. Não recebe dados. */
   sourceUrl,
+  /** Digest OCI não secreto usado para provar qual release respondeu ao healthcheck. */
+  releaseDigest,
+  /** Nonce público que prova qual deploy/túnel respondeu, sem identificar o operador. */
+  deploymentFingerprint,
+  /**
+   * Permite landing/docs/demo dentro do processo privado. Conveniente para uma
+   * instalação simples de origem única; a operação separada deve definir false
+   * e publicar as superfícies públicas num processo sem segredos nem volumes.
+   */
+  publicSurfacesEnabled: booleanEnv('PUBLIC_SURFACES_ENABLED', true),
   /** true quando o repo do GitHub está público — libera os links "GitHub"/access.ts e a afirmação "auditável" na landing. Padrão false pra nunca servir link 404. */
   repoPublic: process.env.REPO_PUBLIC === 'true',
   recordingsDir,
+  /** Estado operacional que pode ser restaurado sem restaurar credenciais. */
+  stateDir,
+  /** Cookies, sessões web e sessões MCP. Nunca entra no backup de gravações. */
+  authStateDir,
   /** Dias até o ÁUDIO expirar. 0 = nunca (delete só manual). */
   retentionDays,
   /** true quando RETENTION_DAYS=0 — nada de áudio expira sozinho. */
@@ -441,11 +1157,14 @@ export const config = {
   /** Cooldown do servidor entre inícios manuais de membros comuns; admin ignora. */
   manualRecordGuildCooldownSec: numberEnv('MANUAL_RECORD_GUILD_COOLDOWN_SEC', 15, { min: 0, integer: true }),
   mp3Bitrate: process.env.MP3_BITRATE || '192k',
-  cookieSecret: loadCookieSecret(),
+  cookieSecret,
   /** Fuso para datas no transcript .md e fallback da página (o navegador tem prioridade na web). */
-  timezone: process.env.TZ || 'America/Sao_Paulo',
+  /** O repositório não incorpora o fuso da instância oficial. */
+  timezone: process.env.TZ || 'UTC',
   /** Idioma padrão onde não há locale do usuário (ex.: DM). 'pt' se DEFAULT_LOCALE começar com "pt", senão 'en'. */
   defaultLocale: ((process.env.DEFAULT_LOCALE || '').toLowerCase().startsWith('pt') ? 'pt' : 'en') as 'pt' | 'en',
+  /** Expõe na política se identificadores e mensagens privadas entraram nos logs. */
+  logPiiEnabled: booleanEnv('LOG_PII', false),
 
   /**
    * Motor de transcrição: 'none' | 'assemblyai' | 'openai' | 'groq' | 'gemini' | 'command'.
@@ -490,8 +1209,8 @@ export const config = {
    * 'false' (padrão) desliga. 'true' liga deliberadamente. 'auto' existe apenas
    * para compatibilidade com instalações antigas e liga quando encontra chave.
    * Provider: MINUTES_PROVIDER = openrouter | groq. Padrão: openrouter se houver
-   * OPENROUTER_API_KEY (modelos melhores e sem o TPM apertado do free tier da
-   * Groq, que estoura em call longa — HTTP 413), senão groq.
+   * OPENROUTER_API_KEY, porque o caminho suporta contexto maior antes de recorrer
+   * a truncamento; senão usa groq com o map-reduce conservador do pipeline.
    */
   minutesEnabled: choiceEnv('MINUTES_ENABLED', 'false', ['true', 'false', 'auto'] as const),
   minutesProvider,
@@ -578,4 +1297,22 @@ if (config.minutesWebhookUrl) {
     console.error(`Configuração inválida: ${(err as Error).message}`);
     process.exit(1);
   }
+}
+
+if (allowLegacySharedState) {
+  console.warn(
+    'ALERTA: ALLOW_LEGACY_SHARED_STATE=true reduz o isolamento entre gravações, estado e autenticação; use apenas durante migração supervisionada.',
+  );
+}
+
+let privateStateLayoutCommitted = false;
+
+/**
+ * Persiste a identidade e migra o layout somente quando o entrypoint já
+ * validou também providers e demais configuração de runtime.
+ */
+export function commitPrivateStateLayout(): void {
+  if (privateStateLayoutCommitted) return;
+  persistPrivateStateLayout(config.cookieSecret, config.instanceId);
+  privateStateLayoutCommitted = true;
 }

@@ -1,6 +1,7 @@
 import { config } from './config';
 import { client } from './discord/client';
 import { diskUsedPct, freeMB } from './disk';
+import { operationalPii, operationalWarn } from './operationalLog';
 
 /**
  * Monitoramento leve: em vez de observability corporativa, o próprio bot avisa
@@ -16,12 +17,12 @@ export async function alertOwners(key: string, message: string): Promise<void> {
   const now = Date.now();
   if (now - (lastAlertAt.get(key) ?? 0) < ALERT_COOLDOWN_MS) return;
   lastAlertAt.set(key, now);
-  console.warn(`[alerta:${key}] ${message}`);
+  operationalWarn(`Alerta operacional emitido key=${operationalPii(key)} detail=${operationalPii(message)}.`);
   for (const id of config.ownerIds) {
     try {
       await client.users.send(id, `⚠️ **Kassinão — alerta**\n${message}`);
     } catch {
-      // DM fechada / usuário indisponível — o console.warn acima fica de registro
+      // DM fechada / usuário indisponível — o evento operacional acima fica de registro.
     }
   }
 }

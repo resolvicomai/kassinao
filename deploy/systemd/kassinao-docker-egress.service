@@ -1,0 +1,35 @@
+[Unit]
+Description=Kassinão Docker lateral-egress firewall
+BindsTo=docker.service
+Requires=systemd-tmpfiles-setup.service
+After=docker.service network-online.target systemd-tmpfiles-setup.service
+OnFailure=kassinao-egress-fail-closed.service
+OnFailureJobMode=replace-irreversibly
+StartLimitIntervalSec=30s
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/kassinao-harden-docker-egress
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=3s
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+ReadWritePaths=/run/lock/kassinao
+
+[Install]
+WantedBy=multi-user.target

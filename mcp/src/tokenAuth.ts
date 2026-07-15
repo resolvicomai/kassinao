@@ -21,7 +21,7 @@ export function normalizeKassinaoUrl(raw: string): string {
     throw new Error('KASSINAO_URL cannot contain credentials, a query, or a hash.');
   }
   if (url.pathname !== '/' && url.pathname !== '') throw new Error('KASSINAO_URL cannot contain a path.');
-  if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '::1'].includes(url.hostname)) {
+  if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) {
     throw new Error('KASSINAO_URL must use HTTPS outside localhost because refresh tokens are secrets.');
   }
   return url.origin;

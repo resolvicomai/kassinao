@@ -41,8 +41,11 @@ const P: Record<string, { pt: string; en: string }> = {
   participants: { pt: 'Participantes', en: 'Participants' },
   nobody: { pt: 'Ninguém falou ainda.', en: 'Nobody has spoken yet.' },
   downloads: { pt: 'Downloads', en: 'Downloads' },
-  mp3sub: { pt: 'uma faixa por pessoa (ZIP)', en: 'one track per speaker (ZIP)' },
-  flacsub: { pt: 'lossless, uma faixa por pessoa (ZIP)', en: 'lossless, one track per speaker (ZIP)' },
+  mp3sub: { pt: 'faixas separadas por conta que falou (ZIP)', en: 'separate tracks by speaking account (ZIP)' },
+  flacsub: {
+    pt: 'lossless, faixas separadas por conta que falou (ZIP)',
+    en: 'lossless, separate tracks by speaking account (ZIP)',
+  },
   mixsub: { pt: 'todo mundo junto (MP3)', en: 'everyone together (MP3)' },
   audacitysub: { pt: 'FLAC + projeto alinhado + notas', en: 'FLAC + aligned project + notes' },
   transcript: { pt: 'Transcrição', en: 'Transcript' },
@@ -80,21 +83,21 @@ const P: Record<string, { pt: string; en: string }> = {
     en: 'Click a timestamp to jump to that moment.',
   },
   demoBanner: {
-    pt: '<b>Demo pública com dados fictícios.</b> Veja o que o bot entrega depois de uma call. Gravações reais também incluem áudio completo, downloads e horários clicáveis, tudo protegido por login.',
-    en: '<b>Public demo with fictional data.</b> See what the bot delivers after a call. Real recordings also include full audio, downloads, and clickable timestamps, all behind login.',
+    pt: '<b>Demo pública com dados fictícios e IA habilitada.</b> Numa instância real, faixas, mix, notas e downloads ficam no app privado enquanto forem retidos. Transcrição e ata só aparecem quando o operador habilita esses recursos.',
+    en: '<b>Public demo with fictional data and AI enabled.</b> In a real instance, tracks, mix, notes, and downloads stay in the private app while retained. Transcript and meeting notes appear only when the operator enables those features.',
   },
   sampleAudio: { pt: 'Áudio de amostra', en: 'Sample audio' },
   sampleNote: {
-    pt: 'Trecho curto e fictício, só pra dar o tom. Numa gravação real o áudio tem a duração completa e os horários acima são clicáveis.',
-    en: 'A short, fictional excerpt just to set the tone. On a real recording the audio is full-length and the timestamps are clickable.',
+    pt: 'Trecho curto e fictício. Numa gravação real, o áudio retido pode ser ouvido por inteiro e os horários ficam clicáveis enquanto ele estiver disponível.',
+    en: 'A short, fictional excerpt. In a real recording, retained audio can be played in full and timestamps stay clickable while it is available.',
   },
   cooking: {
     pt: 'O player usa um mix pré-processado; os downloads são gerados na hora (gravações longas podem levar alguns segundos).',
     en: 'The player uses a pre-processed mix; downloads are generated on demand (long recordings may take a few seconds).',
   },
   livenote: {
-    pt: 'Gravação em andamento. O áudio, a transcrição e a ata aparecem aqui depois que a call terminar. Esta página se atualiza sozinha.',
-    en: 'Recording in progress. Audio, transcript, and meeting notes appear here after the call ends. This page refreshes itself automatically.',
+    pt: 'Gravação em andamento. Notas e linha do tempo já ficam registradas; faixas, mix e downloads aparecem depois que a call terminar. Se a instância tiver IA habilitada, a transcrição e a ata entram no mesmo lugar.',
+    en: 'Recording in progress. Notes and timeline events are already being saved; tracks, mix, and downloads appear after the call ends. If this instance has AI enabled, transcript and meeting notes appear here too.',
   },
   timeline: { pt: 'Linha do tempo', en: 'Timeline' },
   del: { pt: 'Apagar gravação', en: 'Delete recording' },
@@ -129,8 +132,8 @@ const P: Record<string, { pt: string; en: string }> = {
   tlLeft: { pt: 'saiu', en: 'left' },
   tlHint: { pt: 'clique pra pular no áudio', en: 'click to jump in the audio' },
   audioExpired: {
-    pt: 'O áudio desta gravação foi liberado (expirou ou alguém liberou o espaço). A transcrição, a ata e as notas continuam aqui.',
-    en: 'The audio of this recording was released (it expired or someone freed the space). Transcript, minutes and notes remain here.',
+    pt: 'O áudio desta gravação foi liberado (expirou ou alguém liberou o espaço). Notas e qualquer conteúdo textual já gerado continuam aqui.',
+    en: 'The audio of this recording was released (it expired or someone freed the space). Notes and any text already generated remain here.',
   },
   audioIncomplete: {
     pt: 'Pelo menos uma faixa não fechou limpa. O áudio disponível foi preservado, mas pode estar parcial.',
@@ -142,8 +145,8 @@ const P: Record<string, { pt: string; en: string }> = {
   },
   keptForever: { pt: 'Guardada até alguém apagar', en: 'Kept until someone deletes it' },
   textKeptForever: {
-    pt: 'Transcrição, ata e notas ficam até alguém apagar (o áudio já foi liberado)',
-    en: 'Transcript, minutes and notes stay until someone deletes them (audio already released)',
+    pt: 'Notas e conteúdo textual existente ficam até alguém apagar (o áudio já foi liberado)',
+    en: 'Notes and existing text stay until someone deletes them (audio already released)',
   },
   // índice /gravacoes v2 (gestão)
   ixOpen: { pt: 'abrir', en: 'open' },
@@ -158,8 +161,8 @@ const P: Record<string, { pt: string; en: string }> = {
   ixNotes: { pt: 'notas', en: 'notes' },
   ixFreeSpace: { pt: 'Liberar áudio', en: 'Release audio' },
   ixFreeSpaceConfirm: {
-    pt: 'Apagar SÓ o áudio desta gravação (faixas e mix)? Transcrição, ata e notas ficam. Não tem volta.',
-    en: 'Delete ONLY the audio of this recording (tracks and mix)? Transcript, minutes and notes stay. No undo.',
+    pt: 'Apagar SÓ o áudio desta gravação (faixas e mix)? Notas e qualquer conteúdo textual já gerado ficam. Não tem volta.',
+    en: 'Delete ONLY the audio of this recording (tracks and mix)? Notes and any text already generated stay. No undo.',
   },
   ixDelete: { pt: 'Apagar tudo', en: 'Delete all' },
   ixAudioFreed: { pt: 'áudio liberado', en: 'audio released' },
@@ -169,12 +172,12 @@ const P: Record<string, { pt: string; en: string }> = {
   dlFold: { pt: 'Baixar áudio', en: 'Download audio' },
   dlShort: { pt: 'Baixar', en: 'Download' },
   freeWhy: {
-    pt: 'apaga só o áudio. Transcrição, ata e notas ficam',
-    en: 'deletes only the audio. Transcript, minutes and notes stay',
+    pt: 'apaga só o áudio. Notas e conteúdo textual existente ficam',
+    en: 'deletes only the audio. Notes and existing text stay',
   },
   delWhy: {
-    pt: 'apaga áudio, transcrição, ata e notas. Não tem volta',
-    en: 'deletes audio, transcript, minutes and notes. There is no undo',
+    pt: 'apaga áudio, notas e qualquer conteúdo textual gerado. Não tem volta',
+    en: 'deletes audio, notes, and any generated text. There is no undo',
   },
   manage: { pt: 'Gerenciar', en: 'Manage' },
 };
@@ -193,7 +196,7 @@ function p(l: Locale, key: string, vars: Record<string, string> = {}): string {
 
 /**
  * Data localizada: renderiza no fuso do SERVIDOR como fallback (config.timezone,
- * default America/Sao_Paulo) e marca o epoch para o script no navegador reescrever
+ * default UTC) e marca o epoch para o script no navegador reescrever
  * no fuso de quem abre a página - como o Discord faz.
  */
 function datetime(ms: number, lang: Locale): string {
@@ -395,13 +398,13 @@ function shell(
   const userbar = `<header class="topbar">${brand}${nav}<span class="topnav-r">${right}</span></header>`;
   const foot = opts.demo
     ? `<footer class="topfoot"><a href="${publicContext.links.home}">Kassinão</a>. <a href="${publicContext.links.docs}">Docs</a>. Open source. Self-hosted. AGPL-3.0.</footer>`
-    : `<footer class="topfoot"><a href="${publicContext.links.docs}">Docs</a>. Kassinão. AGPL-3.0.</footer>`;
-  const privateWorkspace = !!opts.user && !opts.demo;
-  const shellOpen = privateWorkspace
+    : `<footer class="topfoot"><a href="${esc(config.privacyPolicyUrl)}">${pt ? 'Privacidade' : 'Privacy'}</a>. <a href="${esc(config.operatorContactUrl)}" rel="noopener">${pt ? 'Contato do operador' : 'Operator contact'}</a>. <a href="${publicContext.links.docs}">Docs</a>. Kassinão. AGPL-3.0.</footer>`;
+  const privateApp = !!opts.user && !opts.demo;
+  const shellOpen = privateApp
     ? `<div class="app-shell">
       <aside class="app-sidebar">
         <div class="sidebar-brand">${brand}</div>
-        <div class="sidebar-label">${pt ? 'Workspace' : 'Workspace'}</div>
+        <div class="sidebar-label">${pt ? 'App privado' : 'Private app'}</div>
         ${nav}
         <div class="sidebar-spacer"></div>
         <nav class="sidebar-resources" aria-label="${pt ? 'Recursos' : 'Resources'}">
@@ -422,15 +425,15 @@ function shell(
           <span class="app-topbar-actions">${themeBtn}${langToggle}<span class="mobile-logout">${logout}</span></span>
         </header>`
     : `<div class="public-shell">${userbar}`;
-  const shellClose = privateWorkspace ? `${foot}</section></div>` : `${foot}</div>`;
+  const shellClose = privateApp ? `${foot}</section></div>` : `${foot}</div>`;
   const documentTitle = opts.demo
     ? pt
-      ? 'Demo do Kassinão: de call no Discord a ata pronta'
-      : 'Kassinão demo: from Discord call to meeting notes'
+      ? 'Demo do Kassinão: gravação do Discord com IA habilitada'
+      : 'Kassinão demo: Discord recording with AI enabled'
     : `${title} | Kassinão`;
   const demoDescription = pt
-    ? 'Veja uma reunião fictícia processada pelo Kassinão, o bot de Discord que grava, transcreve e organiza calls.'
-    : 'Explore a fictional meeting processed by Kassinão, the Discord bot that records, transcribes, and organizes calls.';
+    ? 'Explore uma reunião fictícia numa instância do Kassinão com transcrição e ata opcionais habilitadas.'
+    : 'Explore a fictional meeting from a Kassinão instance with optional transcription and meeting notes enabled.';
   const publicMeta = opts.demo
     ? `<meta name="description" content="${esc(demoDescription)}">
 <link rel="canonical" href="${publicContext.canonicalUrl}">
@@ -469,7 +472,7 @@ ${publicMeta}
 ${THEME_INIT}
 <style>${APP_CSS}</style>
 </head>
-<body class="${privateWorkspace ? 'workspace-body' : 'public-body'}${opts.wide ? ' wide' : ''}"${opts.restoreHref ? ` data-restore-href="${esc(opts.restoreHref)}"` : ''}>
+<body class="${privateApp ? 'workspace-body' : 'public-body'}${opts.wide ? ' wide' : ''}"${opts.restoreHref ? ` data-restore-href="${esc(opts.restoreHref)}"` : ''}>
 <a class="skip" href="#conteudo">${pt ? 'Pular para o conteúdo' : 'Skip to content'}</a>
 ${shellOpen}
 <main class="app-main" id="conteudo"><div class="page-frame">${body}</div></main>
@@ -563,7 +566,7 @@ export function recordingPage(
       ? `<p class="muted" style="margin-top:8px">${silentLabel}: ${silent.map((pr) => esc(pr.name)).join(', ')}</p>`
       : '';
 
-  // O player real fica estável no workspace. Demo e áudio expirado ficam no fluxo.
+  // O player real fica estável no app privado. Demo e áudio expirado ficam no fluxo.
   const audioGone = !!meta.audioDeleted;
   let playerDock = '';
   let playerFlow = '';
@@ -678,12 +681,12 @@ export function recordingPage(
         }</strong><span>${
           live
             ? l === 'pt'
-              ? 'Assim que a gravação terminar, o Kassinão prepara áudio, transcrição e ata.'
-              : 'As soon as recording ends, Kassinão prepares audio, transcript, and meeting notes.'
+              ? 'Ao encerrar, o Kassinão prepara as faixas e o mix disponíveis. Transcrição e ata entram depois somente se esta instância tiver IA habilitada.'
+              : 'After the call ends, Kassinão prepares the available tracks and mix. Transcript and meeting notes follow only if this instance has AI enabled.'
             : audioGone
               ? l === 'pt'
-                ? 'A memória textual continua disponível nas outras seções.'
-                : 'The text memory remains available in the other sections.'
+                ? 'Notas e qualquer conteúdo textual existente continuam nas outras seções.'
+                : 'Notes and any existing text remain available in the other sections.'
               : l === 'pt'
                 ? 'Esta call não gerou material para baixar.'
                 : 'This call did not generate downloadable material.'
@@ -730,8 +733,8 @@ export function recordingPage(
   const demoCta = demo
     ? `<div class="note" style="border-left-color:var(--accent);margin-top:28px">${
         l === 'pt'
-          ? 'O bot transforma a call em transcrição com nomes, ata, decisões e tarefas. <strong>Rode o seu:</strong> é open source e fica na sua infraestrutura.'
-          : 'The bot turns the call into a named transcript, meeting notes, decisions, and action items. <strong>Deploy your own:</strong> it is open source and runs on your infrastructure.'
+          ? 'Esta demo mostra uma instância com IA habilitada para gerar transcrição, ata, decisões e tarefas. <strong>Rode a sua:</strong> a gravação funciona sem IA, e você escolhe quais integrações ativar.'
+          : 'This demo shows an instance with AI enabled for transcripts, meeting notes, decisions, and action items. <strong>Deploy your own:</strong> recording works without AI, and you choose which integrations to enable.'
       }</div>
      <div class="downloads" style="margin-top:14px">
        <a class="btn" href="${publicSite('docs', l, config).canonicalUrl}">${l === 'pt' ? 'Como instalar' : 'Setup guide'}</a>
@@ -1634,8 +1637,8 @@ export function recordingsIndexPage(
     items.length === 0
       ? `<div class="empty-state library-empty"><span class="empty-kicker">${pt ? 'COMECE NO DISCORD' : 'START IN DISCORD'}</span><strong>${pt ? 'Sua primeira reunião aparece aqui' : 'Your first meeting appears here'}</strong><span class="muted">${
           pt
-            ? 'Entre num canal de voz e use /gravar. Quando a call terminar, o Kassinão organiza áudio, transcrição, ata, decisões e tarefas.'
-            : 'Join a voice channel and use /record. When the call ends, Kassinão organizes audio, transcript, meeting notes, decisions, and tasks.'
+            ? 'Entre num canal de voz e use /gravar. Ao encerrar, o app organiza as faixas, o mix, as notas e a linha do tempo. Transcrição, ata, decisões e tarefas aparecem somente se o operador habilitar IA.'
+            : 'Join a voice channel and use /record. After it ends, the app organizes tracks, mix, notes, and timeline events. Transcript, meeting notes, decisions, and tasks appear only if the operator enables AI.'
         }</span><div class="empty-actions"><code>${pt ? '/gravar' : '/record'}</code><a class="btn secondary" href="${publicSite('docs', l, config).canonicalUrl}">${pt ? 'Ver como funciona' : 'See how it works'}</a></div></div>`
       : `<div class="recording-groups">${groupedCards}</div>
         <div class="empty-state compact" id="channel-filter-empty" role="status" hidden><strong>${pt ? 'Nenhuma gravação nos canais selecionados' : 'No recordings in the selected channels'}</strong><span class="muted">${pt ? 'Ative outro canal no filtro acima.' : 'Enable another channel in the filter above.'}</span></div>
@@ -1679,8 +1682,8 @@ export function recordingsIndexPage(
         <h1>${pt ? 'Minhas gravações' : 'My recordings'}</h1>
         <p class="subline">${
           pt
-            ? 'Encontre o que foi dito, decidido e combinado em todas as reuniões que você pode acessar.'
-            : 'Find what was said, decided, and assigned across every meeting you can access.'
+            ? 'Encontre conteúdo nas reuniões carregadas nesta parte do arquivo; use a paginação para continuar.'
+            : 'Find content in the meetings loaded in this part of the archive; use pagination to continue.'
         }</p>
         ${searchForm}
       </header>
@@ -1810,8 +1813,8 @@ export function connectPage(opts: {
     const body = `<section class="connect-page"><h1>${esc(title)}</h1>
       <p class="connect-intro">${esc(
         T(
-          'Conecte suas reuniões do Kassinão a qualquer assistente de IA com MCP, como Claude Desktop ou Cursor. Entre com o Discord para manter o mesmo acesso que você já tem no site.',
-          'Connect your Kassinão meetings to any MCP-capable AI assistant, such as Claude Desktop or Cursor. Sign in with Discord to keep the same access you already have on the site.',
+          'Conecte suas reuniões do Kassinão a um host MCP local compatível. Entre com o Discord para manter o mesmo acesso que você já tem no site e valide a versão do host escolhido pela documentação dele.',
+          'Connect your Kassinão meetings to a compatible local MCP host. Sign in with Discord to keep the same access you already have on the site, and validate your chosen host version against its documentation.',
         ),
       )}</p>
       <div class="downloads" style="margin-top:18px">
@@ -1821,12 +1824,12 @@ export function connectPage(opts: {
   }
 
   if (opts.exchangeCode) {
-    const command = `npx -y kassinao-mcp@1.0.6 exchange --stdin --url ${config.mcpUrl}`;
+    const command = `npx -y kassinao-mcp@1.0.7 exchange --stdin --url ${config.mcpUrl}`;
     const localhostWarn = config.mcpUrl.startsWith('http://localhost')
       ? `<div class="note" role="alert">${esc(
           T(
-            'Este servidor está com MCP_URL de localhost. O comando gerado não vai funcionar de outra máquina. Defina a URL pública do MCP antes de gerar conexões reais.',
-            'This server has a localhost MCP_URL. The generated command will not work from another machine. Set the public MCP URL before generating real connections.',
+            'Esta instância está com MCP_URL em localhost. O comando gerado não vai funcionar de outra máquina. Defina uma URL HTTPS do MCP acessível pelo dispositivo que vai usar a conexão.',
+            'This instance uses localhost for MCP_URL. The generated command will not work from another machine. Set an HTTPS MCP URL reachable by the device that will use the connection.',
           ),
         )}</div>`
       : '';
@@ -1854,12 +1857,11 @@ export function connectPage(opts: {
         <li>${esc(T('O token vai para um arquivo local protegido (0600 no macOS/Linux; ACL herdada do perfil no Windows) e a configuração impressa não contém segredo.', 'The token goes to a protected local file (0600 on macOS/Linux; inherited profile ACL on Windows), and the printed config contains no secret.'))}</li>
         <li>${esc(T('Cole a configuração impressa no aplicativo, reinicie e faça uma pergunta.', 'Paste the printed config into the application, restart it, and ask a question.'))}</li>
       </ol>
-      <h2>${esc(T('Onde fica o arquivo', 'Where the file lives'))}</h2>
+      <h2>${esc(T('Onde colocar a configuração', 'Where to place the configuration'))}</h2>
       <ul class="connect-steps">
-        <li>Claude Desktop, macOS: <code>~/Library/Application Support/Claude/claude_desktop_config.json</code></li>
-        <li>Claude Desktop, Windows: <code>%APPDATA%\\Claude\\claude_desktop_config.json</code></li>
-        <li>Cursor: <span style="font-family:ui-monospace,monospace">~/.cursor/mcp.json</span></li>
-        <li>${esc(T('Outro assistente com MCP: onde a documentação dele indicar', 'Any other MCP-capable assistant: wherever its docs point'))}</li>
+        <li>${esc(T('Use o arquivo ou a tela de configuração indicada pela documentação da versão do seu host MCP.', 'Use the configuration file or screen documented by your MCP host version.'))}</li>
+        <li>${esc(T('Adicione somente o bloco "kassinao" dentro de "mcpServers"; preserve as outras conexões.', 'Add only the "kassinao" block inside "mcpServers"; preserve your other connections.'))}</li>
+        <li><a href="${esc(config.docsUrl)}#mcp">${esc(T('Ver o contrato e os limites do conector', 'See the connector contract and limits'))}</a></li>
       </ul>
       <div class="downloads" style="margin-top:16px"><button id="kcopycode" class="btn" type="button">${esc(T('Copiar código', 'Copy code'))}</button></div>
       <pre id="kcode" class="tokenbox" tabindex="0" aria-label="${esc(T('Código descartável MCP', 'One-time MCP code'))}">${esc(opts.exchangeCode)}</pre>
@@ -1963,7 +1965,7 @@ export function connectPage(opts: {
     <form class="genform" method="post" action="/app/conectar-ia/gerar">
       <label class="field-label" for="connection-label">${esc(T('Apelido da conexão (opcional)', 'Connection nickname (optional)'))}</label>
       <input id="connection-label" name="label" maxlength="40" autocomplete="off"
-        placeholder="${esc(T('Exemplo: Claude do notebook', 'Example: Claude on my laptop'))}">
+        placeholder="${esc(T('Exemplo: notebook de trabalho', 'Example: work laptop'))}">
       <button class="btn" type="submit">${esc(T('Gerar conexão', 'Generate connection'))}</button>
     </form>
     <p class="muted" style="margin-top:8px">${esc(
@@ -1976,8 +1978,8 @@ export function connectPage(opts: {
     ${revokedMsg}
     <p class="connect-intro">${esc(
       T(
-        'Ligue o Kassinão em qualquer assistente de IA com MCP (Claude, Cursor e outros) para perguntar sobre as suas calls em linguagem natural.',
-        'Plug Kassinão into any MCP-capable AI assistant (Claude, Cursor, and more) to ask about your calls in natural language.',
+        'Ligue o Kassinão a um host MCP local compatível para consultar as suas calls em linguagem natural.',
+        'Connect Kassinão to a compatible local MCP host to query your calls in natural language.',
       ),
     )}</p>
     ${generation}

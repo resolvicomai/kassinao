@@ -4,6 +4,52 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Older entries describe what those releases introduced. Current product claims,
+defaults, security boundaries, and installation instructions are defined by the
+latest README, documentation, configuration template, and tests.
+
+## [Unreleased]
+
+## [1.4.5] — 2026-07-14
+
+### Added
+
+- The release workflow is prepared to publish a multi-architecture GHCR image with SBOM, build provenance, OCI attestation, and a separately attested source-free operations bundle pinned to the exact image digest. These artifacts are not public until the release workflow completes.
+- Split production can run landing/docs/demo in a secretless `kassinao-public` process on a separate Docker network while bot/app/MCP remain in the private core.
+- New installations separate recordings, operational state, and revocable authentication state. A local instance identity binds browser and MCP tokens to the installation and configured origin.
+- Operational logging redacts private identifiers, routes, origins, and error messages unless the operator explicitly enables `LOG_PII=true` for controlled diagnosis.
+- Production health carries both the immutable release digest and a random per-instance deployment fingerprint, preventing a stale tunnel or different VPS from satisfying the release smoke test.
+- The private core now renders an instance-specific public privacy contract with effective date/version, operator identity, purposes, lawful basis, infrastructure/edge, log and backup retention, data-request handling, and incident response.
+- The source-free operations bundle includes a privileged `prepare-storage.sh` gate that proves the configured data root is already on dm-crypt/LUKS before creating only the four non-root runtime directories.
+- `kassinao-mcp@1.0.7` fixes canonical IPv6 localhost URL handling and carries the rewritten read-only, instance-scoped connector documentation.
+
+### Changed
+
+- A public source checkout builds `kassinao-local:dev` explicitly and Compose never pulls a nonexistent release image. The production bundle, once published, runs from a mode-0700 directory outside Git, uses separate Compose/app environments, and accepts only its sealed immutable `image@sha256` reference.
+- `APP_URL` is blank in new templates. Production localhost now requires the explicit `ALLOW_LOCAL_APP_URL=true` exception; internet-facing instances must configure their own HTTPS origin.
+- New production guidance uses the verified source-free operations bundle instead of a platform blueprint or VPS source checkout.
+- Same-instance upgrades start from each new bundle's templates instead of copying the previous release environment wholesale; the new sealed image/digest remain authoritative while reviewed instance fields and private settings are reapplied.
+- The standard release image contains only external transcription-provider runtimes; local `command` transcription is an explicit custom-image flow maintained by the operator.
+- Backups include operational state but refuse to include an overlapping authentication directory. Both legacy and current session/instance filenames are excluded defensively.
+- The verified production bundle accepts only the split public/private topology; single-origin mode remains available for local source development, not for the hardened VPS path.
+- Production documentation now verifies immutable release and asset attestations, pins provenance to the release workflow/tag/commit, maps all four public/private HTTPS routes, and prepares a new root-owned release directory without depending on the operator's shell working directory.
+
+### Security
+
+- Web, OAuth-state, MCP access, and MCP refresh tokens now carry instance and origin claims. Existing browser and MCP sessions must sign in or connect again after this upgrade.
+- The release workflow runs dependency audits, signature verification, lint, formatting, tests, and builds before publishing. GitHub Actions remain pinned to immutable commit SHAs.
+- Final amd64 and arm64 images pass a pinned Trivy gate for fixable high/critical vulnerabilities; anonymous pulls and a non-root, read-only, networkless runtime are proven before promotion.
+- The production deploy gate rejects Git parents, mutable image tags, Docker-socket/source mounts, unsafe ownership/modes, unexpected services, digest mismatches, and partially unhealthy split deployments.
+- Deploys pull and verify the new image before downtime, stop the only writer before a strict metadata scan and operational-state snapshot, exclude all authentication material from rollback archives, and require the exact release digest from every external health endpoint.
+- The public landing/docs network denies egress and host-gateway access. Production gates require Docker Engine 28+ and Compose 2.35+, audit every container binding/host-network mode, and verify the Docker forwarding perimeter instead of relying on UFW alone.
+- A host firewall unit places the Kassinão chains first, rejects host/private/metadata destinations in IPv4 and IPv6, and refuses unexpected endpoints on either application network.
+- Docker now preloads the offline egress policy before the daemon can restore containers. Watchdog, backup, rollback, and deploy starts all revalidate the active unit and exact policy; a failed partial deployment is stopped and proven contained instead of remaining online.
+- Each release reinstalls root-owned firewall/watchdog controls from the verified bundle; the VPS audit rejects stale files, disabled persistence, or inactive units.
+- Deploy, backup, watchdog, firewall, and audit controls reject inherited Docker endpoint/context/config variables and pin operations to the VPS-local rootful socket before private instance material is processed.
+- Public Host routing includes the configured port, all production origins are canonicalized before comparison, SSH auditing rejects host-based/GSSAPI/empty alternatives, and no loopback-only route exposes active-recording metadata behind a local reverse proxy.
+- Production deploys require a technical dm-crypt/LUKS proof for active data; swap must be disabled or covered by the same class of encryption. Plaintext backup staging and rollback snapshots stay inside the encrypted data root instead of `/tmp` or the release directory.
+- Host-wide controls require an explicit dedicated-VPS acknowledgement. Failed-deploy operational snapshots have a bounded persistent cleanup timer, and the verified uninstall path refuses drift, running/restarting containers, or pending snapshots without deleting instance data.
+
 ## [1.4.4] — 2026-07-14
 
 ### Added
@@ -163,6 +209,8 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.5...HEAD
+[1.4.5]: https://github.com/resolvicomai/kassinao/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.4
 [1.4.3]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.3
 [1.4.2]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.2

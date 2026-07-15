@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
 
-/** Configurações por servidor (persistidas em recordings/guildconfig.json). */
+/** Configurações por servidor (persistidas no volume de estado operacional). */
 export interface GuildConfig {
   /** Canal de texto do aviso genérico de processamento; detalhes ficam nas DMs autorizadas. */
   minutesChannelId?: string;
@@ -12,7 +12,7 @@ export interface GuildConfig {
 
 type ConfigFile = Record<string, GuildConfig>; // guildId -> config
 
-const FILE = () => path.join(config.recordingsDir, 'guildconfig.json');
+const FILE = () => path.join(config.stateDir, 'guildconfig.json');
 
 function load(): ConfigFile {
   try {
@@ -23,7 +23,7 @@ function load(): ConfigFile {
 }
 
 function save(all: ConfigFile): void {
-  fs.mkdirSync(config.recordingsDir, { recursive: true });
+  fs.mkdirSync(config.stateDir, { recursive: true });
   const tmp = FILE() + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(all, null, 2));
   fs.renameSync(tmp, FILE());

@@ -467,6 +467,80 @@ describe('RecordingSession.start — transação real de início', () => {
     fs.rmSync(recordingDir(session), { recursive: true, force: true });
   });
 
+  it('adapta painel e DMs aos artefatos habilitados sem prometer download ao vivo ou prazo de IA', async () => {
+    const base = fixture();
+    voice.joinVoiceChannel.mockReturnValue(base.connection);
+    voice.entersState.mockResolvedValue(base.connection);
+    const recordingOnly = new RecordingSession({
+      guild: base.guild as never,
+      voiceChannel: base.channel as never,
+      startedBy: { id: 'starter-base', name: 'Starter' },
+      locale: 'pt',
+      auto: false,
+      capabilities: { transcription: false, minutes: false },
+    });
+
+    await recordingOnly.start();
+    await vi.waitFor(() => expect(base.guild.client.users.send).toHaveBeenCalledTimes(1));
+    const basePanel = JSON.stringify(base.channel.send.mock.calls[0]?.[0]);
+    const baseStartDm = JSON.stringify(base.guild.client.users.send.mock.calls[0]?.[1]);
+    expect(basePanel).not.toContain('transcrição');
+    expect(basePanel).not.toContain('ata');
+    expect(baseStartDm).toContain('transcrição automática está desligada');
+    expect(baseStartDm).not.toContain('durante a call');
+
+    recordingOnly.meta.participants.push({
+      id: 'speaker-base',
+      name: 'Speaker',
+      avatar: null,
+      trackFile: 'speaker.flac',
+      index: 0,
+    });
+    await recordingOnly.stop('manual', { id: 'starter-base', name: 'Starter' });
+    await vi.waitFor(() => expect(base.guild.client.users.send).toHaveBeenCalledTimes(2));
+    const baseStopDm = JSON.stringify(base.guild.client.users.send.mock.calls[1]?.[1]);
+    expect(baseStopDm).not.toContain('transcrição');
+    expect(baseStopDm).not.toContain('ata');
+    expect(baseStopDm).not.toContain('~1 min');
+
+    const ai = fixture();
+    voice.joinVoiceChannel.mockReturnValue(ai.connection);
+    voice.entersState.mockResolvedValue(ai.connection);
+    const withMinutes = new RecordingSession({
+      guild: ai.guild as never,
+      voiceChannel: ai.channel as never,
+      startedBy: { id: 'starter-ai', name: 'Starter' },
+      locale: 'pt',
+      auto: false,
+      capabilities: { transcription: true, minutes: true },
+    });
+
+    await withMinutes.start();
+    await vi.waitFor(() => expect(ai.guild.client.users.send).toHaveBeenCalledTimes(1));
+    const aiPanel = JSON.stringify(ai.channel.send.mock.calls[0]?.[0]);
+    expect(aiPanel).toContain('transcrição entra na fila');
+    expect(aiPanel).toContain('ata é gerada depois');
+    expect(aiPanel).not.toContain('consentimento');
+
+    withMinutes.meta.participants.push({
+      id: 'speaker-ai',
+      name: 'Speaker',
+      avatar: null,
+      trackFile: 'speaker.flac',
+      index: 0,
+    });
+    await withMinutes.stop('manual', { id: 'starter-ai', name: 'Starter' });
+    await vi.waitFor(() => expect(ai.guild.client.users.send).toHaveBeenCalledTimes(2));
+    const aiStopDm = JSON.stringify(ai.guild.client.users.send.mock.calls[1]?.[1]);
+    expect(aiStopDm).toContain('transcrição entrou na fila');
+    expect(aiStopDm).toContain('ata vem depois');
+    expect(aiStopDm).toContain('sem prazo fixo');
+    expect(aiStopDm).not.toContain('~1 min');
+
+    fs.rmSync(recordingDir(recordingOnly), { recursive: true, force: true });
+    fs.rmSync(recordingDir(withMinutes), { recursive: true, force: true });
+  });
+
   it('limita a quantidade de notas persistidas por gravação', () => {
     const f = fixture();
     const session = new RecordingSession({

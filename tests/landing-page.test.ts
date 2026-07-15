@@ -6,12 +6,12 @@ describe('landing page do Kassinão', () => {
     const html = landingPage('pt');
     const order = [
       'Sua call termina. As decisões não somem.',
-      'A identidade não vem de um palpite.',
+      'A voz já chega ligada a uma conta.',
       'Tudo acontece onde a call já está.',
       'Abra uma reunião pronta.',
       'Pergunte depois. Receba a fonte.',
-      'Seu servidor. Seu histórico. Suas regras.',
-      'Instale no seu servidor. Mantenha o controle.',
+      'Sua instância. Seu histórico. Suas regras.',
+      'Rode na sua infraestrutura. Mantenha o controle.',
     ].map((copy) => html.indexOf(copy));
 
     expect(order.every((index) => index >= 0)).toBe(true);
@@ -28,8 +28,8 @@ describe('landing page do Kassinão', () => {
       expect(html).not.toContain('href="/app');
       expect(html).not.toContain('/auth/login');
       expect(html).not.toContain('Entrar');
-      expect(html).not.toContain('app.kassinao.cloud');
-      expect(html).not.toContain('mcp.kassinao.cloud');
+      expect(html).not.toContain('app.example.com');
+      expect(html).not.toContain('mcp.example.com');
     }
   });
 
@@ -55,7 +55,8 @@ describe('landing page do Kassinão', () => {
     expect(pt).toContain('<html lang="pt-BR">');
     expect(pt).toContain('Para equipes que trabalham no Discord');
     expect(pt).toContain('Demo pública');
-    expect(pt).toContain('Não existe workspace hospedado ou cadastro público.');
+    expect(pt).toContain('Não existe serviço hospedado nem cadastro público.');
+    expect(pt).toContain('O operador ativa separadamente transcrição, ata, perguntas e MCP.');
     expect(pt).toContain('/og-pt.png');
     expect(pt).not.toContain('For teams that work on Discord');
 
@@ -63,8 +64,9 @@ describe('landing page do Kassinão', () => {
     expect(en).toContain('For teams that work on Discord');
     expect(en).toContain("Your call ends. The decisions don't disappear.");
     expect(en).toContain('Public demo');
-    expect(en).toContain('There is no hosted workspace or public signup.');
-    expect(en).toContain('Your server. Your history. Your rules.');
+    expect(en).toContain('There is no hosted service or public signup.');
+    expect(en).toContain('The operator enables transcripts, meeting notes, questions, and MCP separately.');
+    expect(en).toContain('Your instance. Your history. Your rules.');
     expect(en).toContain('/og-en.png');
     expect(en).not.toContain('Sua call termina. As decisões não somem.');
   });
@@ -76,5 +78,22 @@ describe('landing page do Kassinão', () => {
     expect(html).toContain('<video class="motion-video" autoplay muted loop playsinline');
     expect(html).not.toContain('.nav-links a:nth-child(2)');
     expect(html).toContain('white-space: nowrap;');
+  });
+
+  it('separa o núcleo garantido dos recursos opcionais de IA em PT e EN', () => {
+    const pt = landingPage('pt');
+    const en = landingPage('en');
+
+    expect(pt).toContain('Gravação, faixas, mix e notas funcionam sem provider.');
+    expect(pt).toContain('Para IA local, crie uma imagem customizada com o transcritor');
+    expect(pt).toContain('1 conta falando = 1 faixa');
+    expect(pt).not.toContain('Cada participante recebe uma faixa');
+    expect(pt).not.toContain('Use processamento local ou configure um provider.');
+
+    expect(en).toContain('Recording, tracks, mix, and notes work without a provider.');
+    expect(en).toContain('For local AI, build a custom image with the transcriber');
+    expect(en).toContain('1 speaking account = 1 track');
+    expect(en).not.toContain('Each participant gets a separate track');
+    expect(en).not.toContain('Use local processing or configure a provider.');
   });
 });

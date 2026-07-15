@@ -37,7 +37,7 @@ describe('gestão individual de sessões MCP', () => {
   it('remove e persiste a remoção ao encontrar uma sessão expirada no uso comum', () => {
     const userId = `u-exp-${crypto.randomUUID()}`;
     const created = createSession(userId, 'Lia');
-    const file = path.join(config.recordingsDir, '.mcp-sessions.json');
+    const file = path.join(config.authStateDir, 'mcp-sessions.json');
 
     vi.useFakeTimers();
     try {

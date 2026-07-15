@@ -12,6 +12,7 @@ import {
   parseConfiguredNumber,
   resolveConfiguredOrigins,
   validateDedicatedSecret,
+  validateDeploymentAppOrigin,
   validateSecret,
 } from '../src/config';
 import {
@@ -49,7 +50,7 @@ function fakeRequest(method: string, headers: Record<string, string> = {}): Requ
 }
 
 function sessionRequest(user: WebUser): Request {
-  return signedSessionRequest(user);
+  return signedSessionRequest({ ...user, iss: config.instanceId, aud: config.appUrl });
 }
 
 function signedSessionRequest(payload: object): Request {
@@ -100,7 +101,7 @@ function callbackRequest(saved: ReturnType<typeof loginState>): Request {
 
 describe('cookies e CSRF da superfície web privada', () => {
   it('usa cookies __Host- em HTTPS sem Domain e com Path=/ + Secure', () => {
-    const settings = webCookieSettings('https://app.kassinao.cloud');
+    const settings = webCookieSettings('https://app.example.com');
     expect(settings).toEqual({
       sessionName: '__Host-kassinao_session',
       stateName: '__Host-kassinao_state',
@@ -108,7 +109,7 @@ describe('cookies e CSRF da superfície web privada', () => {
       statePath: '/',
     });
     const serialized = serializeWebCookie(
-      'https://app.kassinao.cloud',
+      'https://app.example.com',
       settings.sessionName,
       'token',
       60_000,
@@ -260,6 +261,24 @@ describe('cookies e CSRF da superfície web privada', () => {
     expect(getWebUser(req)).toBeUndefined();
   });
 
+  it('cookie assinado não atravessa identidade nem origem da instância', () => {
+    const exp = Date.now() + 60_000;
+    const jti = createWebSession('bound-user', exp);
+    const base = {
+      typ: 'session',
+      id: 'bound-user',
+      name: 'Bound',
+      avatar: null,
+      scope: 'full',
+      exp,
+      jti,
+    };
+    expect(getWebUser(signedSessionRequest({ ...base, iss: crypto.randomUUID(), aud: config.appUrl }))).toBeUndefined();
+    expect(
+      getWebUser(signedSessionRequest({ ...base, iss: config.instanceId, aud: 'https://other.example' })),
+    ).toBeUndefined();
+  });
+
   it('limita sessões web por usuário para a persistência não virar DoS', () => {
     const exp = Date.now() + 60_000;
     const ids = Array.from({ length: 11 }, () => createWebSession('cap-user', exp));
@@ -280,7 +299,7 @@ describe('cookies e CSRF da superfície web privada', () => {
   });
 
   it('prioriza a origem exata mesmo quando Fetch Metadata classifica a navegação como cross-site', () => {
-    const base = 'https://app.kassinao.cloud';
+    const base = 'https://app.example.com';
     expect(isAllowedWebMutation(fakeRequest('POST', { origin: base }), base)).toBe(true);
     expect(isAllowedWebMutation(fakeRequest('POST', { origin: base, 'sec-fetch-site': 'cross-site' }), base)).toBe(
       true,
@@ -288,7 +307,7 @@ describe('cookies e CSRF da superfície web privada', () => {
   });
 
   it('rejeita subdomínio irmão e cross-site sem origem verificável', () => {
-    const base = 'https://app.kassinao.cloud';
+    const base = 'https://app.example.com';
     expect(isAllowedWebMutation(fakeRequest('POST', { origin: 'https://kassinao.cloud' }), base)).toBe(false);
     expect(isAllowedWebMutation(fakeRequest('POST', { origin: 'https://docs.kassinao.cloud' }), base)).toBe(false);
     expect(isAllowedWebMutation(fakeRequest('POST', { origin: 'https://evil.example.com' }), base)).toBe(false);
@@ -333,9 +352,18 @@ describe('configuração fail-fast', () => {
     expect(() => normalizeWebBindAddress('web.internal')).toThrow(/WEB_BIND_ADDRESS/);
   });
 
+  it('recusa localhost na imagem de produção sem opt-in local explícito', () => {
+    expect(() => validateDeploymentAppOrigin('http://localhost:8080', 'production', false)).toThrow(
+      /ALLOW_LOCAL_APP_URL/,
+    );
+    expect(() => validateDeploymentAppOrigin('http://localhost:8080', 'production', true)).not.toThrow();
+    expect(() => validateDeploymentAppOrigin('https://app.example.com', 'production', false)).not.toThrow();
+    expect(() => validateDeploymentAppOrigin('http://localhost:8080', 'test', false)).not.toThrow();
+  });
+
   it('normaliza só origens HTTP(S), sem caminho/credencial/query', () => {
     expect(normalizeBaseUrl('https://kassinao.example.com/')).toBe('https://kassinao.example.com');
-    expect(normalizeOrigin('APP_URL', 'https://app.kassinao.cloud/')).toBe('https://app.kassinao.cloud');
+    expect(normalizeOrigin('APP_URL', 'https://app.example.com/')).toBe('https://app.example.com');
     expect(() => normalizeBaseUrl('javascript:alert(1)')).toThrow(/http/);
     expect(() => normalizeBaseUrl('https://u:p@example.com')).toThrow(/credenciais/);
     expect(() => normalizeBaseUrl('https://example.com/sub')).toThrow(/caminho/);
@@ -357,7 +385,7 @@ describe('configuração fail-fast', () => {
   it('resolve a topologia separada com a precedência documentada', () => {
     expect(() =>
       resolveConfiguredOrigins(
-        { BASE_URL: 'https://fallback.example', APP_URL: 'https://app.kassinao.cloud' },
+        { BASE_URL: 'https://fallback.example', APP_URL: 'https://app.example.com' },
         'http://localhost:8080',
       ),
     ).toThrow(/origens diferentes/);
@@ -365,18 +393,18 @@ describe('configuração fail-fast', () => {
     expect(
       resolveConfiguredOrigins(
         {
-          APP_URL: 'https://app.kassinao.cloud',
+          APP_URL: 'https://app.example.com',
           PUBLIC_URL: 'https://kassinao.cloud',
           DOCS_URL: 'https://docs.kassinao.cloud',
-          MCP_URL: 'https://mcp.kassinao.cloud',
+          MCP_URL: 'https://mcp.example.com',
         },
         'http://localhost:8080',
       ),
     ).toEqual({
-      appUrl: 'https://app.kassinao.cloud',
+      appUrl: 'https://app.example.com',
       publicUrl: 'https://kassinao.cloud',
       docsUrl: 'https://docs.kassinao.cloud',
-      mcpUrl: 'https://mcp.kassinao.cloud',
+      mcpUrl: 'https://mcp.example.com',
     });
 
     expect(
@@ -412,8 +440,13 @@ describe('regressões de privacidade e acessibilidade da web', () => {
   it('backup nunca empacota segredos nem registros de sessão', () => {
     const script = fs.readFileSync(path.join(process.cwd(), 'scripts', 'backup.sh'), 'utf8');
     expect(script).toContain("--exclude='*/.cookie-secret'");
+    expect(script).toContain("--exclude='*/.instance-id'");
     expect(script).toContain("--exclude='*/.web-sessions.json'");
     expect(script).toContain("--exclude='*/.mcp-sessions.json'");
+    expect(script).toContain("--exclude='*/web-sessions.json'");
+    expect(script).toContain("--exclude='*/mcp-sessions.json'");
+    expect(script).toContain('AUTH_STATE_DIR precisa ser exatamente KASSINAO_DATA_ROOT/auth');
+    expect(script).toContain('-C "$DATA_REAL" ./recordings ./state');
   });
 
   it('landing pública expõe apenas destinos públicos e rotula o exemplo', () => {
@@ -422,11 +455,11 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).not.toContain('/app/rec/');
     expect(html).not.toContain('/auth/login');
     expect(html).toContain('href="http://localhost:8080/demo"');
-    expect(html).toContain('Demo pública com dados fictícios, sem login.');
+    expect(html).toContain('Demo pública com dados fictícios e IA habilitada, sem login.');
     expect(html).not.toContain('Entrar');
     expect(html).toContain('href="http://localhost:8080/docs#mcp"');
     expect(html).toContain('https://github.com/resolvicomai/kassinao');
-    expect(html).toContain('/assets/discord-demo-pt.webm');
+    expect(html).toContain('/assets/discord-demo-pt-v2.webm');
     expect(html).toContain('/assets/meeting-demo-pt.png');
     expect(html).toContain('--accent: #5865f2');
     expect(html).not.toContain('#c53f28');
@@ -438,11 +471,11 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     const html = landingPage('en');
     expect(html).toContain('<html lang="en">');
     expect(html).toContain("Your call ends. The decisions don't disappear.");
-    expect(html).toContain('Speaker identity is not a guess.');
+    expect(html).toContain('The voice stream already has an account.');
     expect(html).toContain('Ask later. Get the source.');
-    expect(html).toContain('Your server. Your history. Your rules.');
-    expect(html).toContain('Install it on your server. Keep control.');
-    expect(html).toContain('/assets/discord-demo-en.webm');
+    expect(html).toContain('Your instance. Your history. Your rules.');
+    expect(html).toContain('Run it on your infrastructure. Keep control.');
+    expect(html).toContain('/assets/discord-demo-en-v2.webm');
     expect(html).toContain('/assets/meeting-demo-en.png');
     expect(html).not.toContain('Sua call termina. As decisões não somem.');
     expect(html).not.toContain('href="/app');
@@ -453,17 +486,33 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     const pt = discordDemoPage('pt', 4);
     const en = discordDemoPage('en', 4);
     expect(pt).toContain('/gravar');
+    expect(pt).toContain('/parar');
     expect(pt).toContain('/perguntar');
-    expect(pt).toContain('Produto &amp; IA');
+    expect(pt).toContain('Nebula Lab');
     expect(pt).toContain('demo fictícia');
     expect(en).toContain('/record');
+    expect(en).toContain('/stop');
     expect(en).toContain('/ask');
-    expect(en).toContain('Product &amp; AI');
+    expect(en).toContain('Nebula Lab');
     expect(en).toContain('>general</div>');
     expect(en).toContain('fictional demo');
     expect(en).not.toContain('/gravar');
     expect(en).not.toContain('>geral</div>');
     expect(en).not.toContain('Produto &amp; IA');
+    expect(pt).not.toContain('Mauro');
+    expect(pt).not.toContain('R$ 49');
+    expect(pt).toContain('aviso genérico no canal');
+    expect(pt).toContain('DM autorizada · só você');
+    expect(pt).toContain('pergunta e resposta efêmeras · só você');
+    expect(pt).not.toContain('Kassinão <strong>[GRAVANDO]</strong>');
+    expect(pt).not.toContain('Transcrição com nomes, ata, 3 decisões e 4 tarefas.');
+    expect(pt).not.toContain('Abrir reunião');
+    expect(en).toContain('generic channel notice');
+    expect(en).toContain('authorized DM · only you');
+    expect(en).toContain('ephemeral question and reply · only you');
+    expect(en).not.toContain('Kassinão <strong>[RECORDING]</strong>');
+    expect(en).not.toContain('Named transcript, meeting notes, 3 decisions, and 4 action items.');
+    expect(en).not.toContain('Open meeting');
   });
 
   it('demo pública traduz eventos automáticos e volta para a home do idioma atual', () => {
@@ -492,7 +541,11 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     const html = recordingsIndexPage([], { user, lang: 'en' });
     expect(html).toContain('<html lang="en">');
     expect(html).toContain('<h1>My recordings</h1>');
+    expect(html).toContain('<div class="sidebar-label">Private app</div>');
+    expect(html).not.toContain('<div class="sidebar-label">Workspace</div>');
     expect(html).toContain('Search this part of the archive');
+    expect(html).toContain('the app organizes tracks, mix, notes, and timeline events');
+    expect(html).toContain('appear only if the operator enables AI');
     expect(html).toContain('data-app-locale="en"');
     expect(html).toContain('new URL(location.href)');
     expect(html).not.toContain('<h1>Minhas gravações</h1>');
@@ -610,6 +663,9 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).toContain('id="tab-notas"');
     expect(html).toContain('id="tab-exportar"');
     expect(html).toContain('Arquivos disponíveis ao encerrar');
+    expect(html).toContain('Notas e linha do tempo já ficam registradas');
+    expect(html).toContain('a transcrição e a ata entram no mesmo lugar');
+    expect(html).not.toContain('O áudio, a transcrição e a ata aparecem aqui depois que a call terminar.');
     expect(html).not.toContain('/app/rec/' + meta.id + '/download/');
     expect(html).not.toContain('action="/app/rec/' + meta.id + '/delete"');
     expect(html).toContain('function check()');

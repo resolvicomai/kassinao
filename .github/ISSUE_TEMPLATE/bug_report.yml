@@ -1,43 +1,108 @@
 name: 🐛 Bug report
-description: Something isn't working as expected
+description: Report a reproducible Kassinão problem without exposing private instance data
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository is public. Do not include tokens, secrets, `.env`/`app.env`, private domains or URLs, Discord/user/guild/application/recording IDs, meeting names/content, transcripts, filesystem paths, auth/state files, backups, or data-rights requests.
+
+        Report vulnerabilities through [private vulnerability reporting](https://github.com/resolvicomai/kassinao/security/advisories/new), not this form. Contact the operator named at the affected instance's `/privacy` page for access, correction, or deletion of meeting data.
+
   - type: textarea
     id: what
     attributes:
       label: What happened?
-      description: A clear description of the bug and what you expected instead.
+      description: Describe the observed result and the expected result. Use fictional/sanitized names and URLs.
     validations:
       required: true
+
   - type: textarea
     id: repro
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. Ran /record (shown as /gravar in pt-BR) in ...
+        1. In a test guild with fictional data, ran /record (/gravar in pt-BR) ...
         2. ...
-        3. See error
+        3. Observed ...
     validations:
       required: true
+
   - type: dropdown
     id: how
     attributes:
       label: How are you running Kassinão?
       options:
-        - Docker (docker compose)
-        - Local (npm run dev)
-        - One-click deploy (Render)
+        - Local source build (Docker Compose)
+        - Local source build (npm run dev)
+        - Public verified operations bundle on a VPS
+        - Fork or custom image
         - Other
     validations:
       required: true
-  - type: textarea
-    id: logs
+
+  - type: dropdown
+    id: topology
     attributes:
-      label: Logs
-      description: "Relevant output from `docker compose logs kassinao` (remove any tokens/secrets!)."
-      render: shell
+      label: Topology
+      options:
+        - Local / single-origin development
+        - Split public and private production processes
+        - Not sure
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: capabilities
+    attributes:
+      label: Enabled capabilities involved
+      description: Select only features relevant to the bug. A base install has these optional features off.
+      options:
+        - label: External or custom ASR/transcription
+        - label: AI minutes or /ask
+        - label: Signed minutes webhook
+        - label: MCP connector/API
+        - label: Remote backup
+        - label: None of these / base recording only
+
   - type: input
     id: version
     attributes:
-      label: Version / commit
-      placeholder: "v1.3.0 or commit sha"
+      label: Public release, image digest, or commit
+      description: Do not paste a private registry URL. For a release image, prefer the public sha256 digest.
+      placeholder: "vX.Y.Z, sha256:…, or commit SHA"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Sanitized environment
+      description: Include OS/architecture and Docker, Compose, or Node versions. List feature states/provider type without keys, endpoints, IDs, domains, or organization names.
+      placeholder: |
+        OS/arch: Ubuntu / amd64
+        Docker: ...
+        Compose: ...
+        ASR: disabled | external | custom command
+        Minutes: disabled | enabled
+        MCP: disabled | enabled
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      description: Remove all secrets, origins, IDs, paths, names, and meeting content. Never attach environment, recording, state, auth, snapshot, or backup files.
+      render: shell
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Public-data confirmation
+      options:
+        - label: I removed credentials, private URLs/IDs, personal data, and meeting content from this report.
+          required: true
+        - label: This is not a vulnerability or a request to access, correct, or delete someone's data.
+          required: true

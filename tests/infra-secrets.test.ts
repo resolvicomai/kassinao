@@ -5,12 +5,18 @@ import { describe, expect, it } from 'vitest';
 describe('isolamento de segredos entre containers', () => {
   it('não entrega o token do túnel ao processo principal', () => {
     const compose = fs.readFileSync(path.join(process.cwd(), 'docker-compose.yml'), 'utf8');
-    const appBlock = /^  kassinao:\n([\s\S]*?)^  cloudflared:/m.exec(compose)?.[1];
-    const tunnelBlock = /^  cloudflared:\n([\s\S]*)$/m.exec(compose)?.[1];
+    const serviceBlock = (name: string): string | undefined =>
+      new RegExp(`^  ${name}:\\n((?: {4,}.*\\n|[ \\t]*\\n)*)`, 'm').exec(compose)?.[1];
+    const appBlock = serviceBlock('kassinao');
+    const publicBlock = serviceBlock('kassinao-public');
+    const tunnelBlock = serviceBlock('cloudflared');
 
     expect(appBlock).toBeDefined();
+    expect(publicBlock).toBeDefined();
     expect(appBlock).toContain("TUNNEL_TOKEN: ''");
     expect(appBlock).not.toContain('TUNNEL_TOKEN: ${TUNNEL_TOKEN}');
+    expect(publicBlock).not.toContain('env_file:');
+    expect(publicBlock).not.toContain('TUNNEL_TOKEN');
     expect(tunnelBlock).toContain('TUNNEL_TOKEN: ${TUNNEL_TOKEN}');
   });
 
@@ -20,7 +26,7 @@ describe('isolamento de segredos entre containers', () => {
     expect(compose).toContain("PORT: '8080'");
     expect(compose).toContain("WEB_BIND_ADDRESS: '0.0.0.0'");
     expect(compose).toContain('XDG_CACHE_HOME: /home/node/.cache');
-    expect(compose).toContain('model-cache:/home/node/.cache:rw');
+    expect(compose).toContain('KASSINAO_MODEL_CACHE_DIR:-./cache}:/home/node/.cache:rw');
     expect(compose).not.toContain('XDG_CACHE_HOME: /app/recordings/.cache');
   });
 

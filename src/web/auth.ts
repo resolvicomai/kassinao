@@ -5,6 +5,9 @@ import { createWebSession, revokeWebSession, webSessionScope, type WebSessionSco
 
 export interface WebUser {
   typ: 'session';
+  /** Claims obrigatórias em runtime; opcionais no tipo para páginas/test fixtures. */
+  iss?: string;
+  aud?: string;
   id: string;
   name: string;
   avatar: string | null;
@@ -17,6 +20,8 @@ export interface WebUser {
 
 interface StateToken {
   typ: 'state';
+  iss?: string;
+  aud?: string;
   state: string;
   next: string;
   exp: number;
@@ -43,6 +48,8 @@ export type FinishLoginResult =
 /** Token de acesso do MCP (curto, em memória do conector, viaja em cada request). */
 export interface McpToken {
   typ: 'mcp';
+  iss?: string;
+  aud?: string;
   id: string;
   name: string;
   exp: number;
@@ -52,6 +59,8 @@ export interface McpToken {
 /** Token de refresh do MCP (longo, no cofre do SO do usuário, rotacionado a cada uso). */
 export interface McpRefreshToken {
   typ: 'mcp-refresh';
+  iss?: string;
+  aud?: string;
   id: string;
   name: string;
   exp: number;
@@ -152,6 +161,10 @@ function verify<T>(token: string | undefined, secret: string): T | undefined {
   }
 }
 
+function belongsToThisInstance(token: { iss?: unknown; aud?: unknown }, audience: string): boolean {
+  return token.iss === config.instanceId && token.aud === audience;
+}
+
 // Lê UM cookie por nome, sem montar objeto com chave controlada pelo cliente
 // (mata property/prototype injection: nada de out[nomeDoCookie] = ...).
 function readCookie(req: Request, name: string): string | undefined {
@@ -188,7 +201,7 @@ export function getWebUser(req: Request): WebUser | undefined {
   const user = verify<WebUser>(readCookie(req, SESSION_COOKIE), config.cookieSecret);
   // Checagens estritas: um cookie de state (mesmo segredo HMAC) NÃO pode passar
   // como sessão. Exige typ correto, exp numérico no futuro e id de verdade.
-  if (!user || user.typ !== 'session') return undefined;
+  if (!user || user.typ !== 'session' || !belongsToThisInstance(user, appOrigin())) return undefined;
   if (!Number.isFinite(user.exp) || user.exp < Date.now()) return undefined; // NaN/Infinity não vira token eterno
   if (typeof user.id !== 'string' || !user.id) return undefined;
   if (typeof user.jti !== 'string' || !user.jti) return undefined;
@@ -211,7 +224,13 @@ export function clearStateCookie(res: Response): void {
 export function logoutWeb(req: Request, res: Response): void {
   const token = verify<WebUser>(readCookie(req, SESSION_COOKIE), config.cookieSecret);
   try {
-    if (token?.typ === 'session' && typeof token.jti === 'string' && token.jti) revokeWebSession(token.jti);
+    if (
+      token?.typ === 'session' &&
+      belongsToThisInstance(token, appOrigin()) &&
+      typeof token.jti === 'string' &&
+      token.jti
+    )
+      revokeWebSession(token.jti);
   } finally {
     setCookie(res, SESSION_COOKIE, '', 0, SESSION_PATH);
     setCookie(res, LEGACY_SESSION_COOKIE, '', 0, '/app');
@@ -231,6 +250,7 @@ export function scopeWebSessionToApp(req: Request, res: Response): void {
     !raw ||
     !user ||
     user.typ !== 'session' ||
+    !belongsToThisInstance(user, appOrigin()) ||
     typeof user.id !== 'string' ||
     !user.id ||
     typeof user.jti !== 'string' ||
@@ -302,7 +322,14 @@ export function beginLogin(res: Response, next: string): void {
     Buffer.byteLength(JSON.stringify(next), 'utf8') <= MAX_LOGIN_NEXT_JSON_BYTES
       ? next
       : '/app';
-  const stateToken: StateToken = { typ: 'state', state, next: safeNext, exp: Date.now() + 10 * 60 * 1000 };
+  const stateToken: StateToken = {
+    typ: 'state',
+    iss: config.instanceId,
+    aud: appOrigin(),
+    state,
+    next: safeNext,
+    exp: Date.now() + 10 * 60 * 1000,
+  };
   setCookie(res, STATE_COOKIE, sign(stateToken, config.cookieSecret), 10 * 60 * 1000, STATE_PATH);
   const params = new URLSearchParams({
     client_id: config.applicationId,
@@ -330,6 +357,7 @@ export async function finishLogin(
     !state ||
     !saved ||
     saved.typ !== 'state' ||
+    !belongsToThisInstance(saved, appOrigin()) ||
     saved.state !== state ||
     !Number.isFinite(saved.exp) ||
     saved.exp <= Date.now()
@@ -377,6 +405,8 @@ export async function finishLogin(
   const exp = Date.now() + SESSION_TTL_MS;
   const user: WebUser = {
     typ: 'session',
+    iss: config.instanceId,
+    aud: appOrigin(),
     ...identity,
     scope: authorization,
     exp,
@@ -407,13 +437,13 @@ function bearerToken(req: Request): string | undefined {
 }
 
 /** Assina um access token do MCP (jti/exp definidos por quem emite). */
-export function signMcpAccess(payload: Omit<McpToken, 'typ'>): string {
-  return sign({ typ: 'mcp', ...payload }, config.mcpAccessSecret);
+export function signMcpAccess(payload: Omit<McpToken, 'typ' | 'iss' | 'aud'>): string {
+  return sign({ typ: 'mcp', ...payload, iss: config.instanceId, aud: config.mcpUrl }, config.mcpAccessSecret);
 }
 
 /** Assina um refresh token do MCP. */
-export function signMcpRefresh(payload: Omit<McpRefreshToken, 'typ'>): string {
-  return sign({ typ: 'mcp-refresh', ...payload }, config.mcpRefreshSecret);
+export function signMcpRefresh(payload: Omit<McpRefreshToken, 'typ' | 'iss' | 'aud'>): string {
+  return sign({ typ: 'mcp-refresh', ...payload, iss: config.instanceId, aud: config.mcpUrl }, config.mcpRefreshSecret);
 }
 
 /**
@@ -422,7 +452,7 @@ export function signMcpRefresh(payload: Omit<McpRefreshToken, 'typ'>): string {
  */
 export function verifyMcpRefresh(token: string | undefined): McpRefreshToken | undefined {
   const t = verify<McpRefreshToken>(token, config.mcpRefreshSecret);
-  if (!t || t.typ !== 'mcp-refresh') return undefined;
+  if (!t || t.typ !== 'mcp-refresh' || !belongsToThisInstance(t, config.mcpUrl)) return undefined;
   if (!Number.isFinite(t.exp) || t.exp < Date.now()) return undefined; // NaN/Infinity não vira token eterno
   if (typeof t.id !== 'string' || !t.id) return undefined;
   if (typeof t.jti !== 'string' || !t.jti) return undefined;
@@ -440,7 +470,7 @@ export function verifyMcpRefresh(token: string | undefined): McpRefreshToken | u
 export function getMcpUser(req: Request): McpToken | undefined {
   if (!config.mcpEnabled) return undefined;
   const t = verify<McpToken>(bearerToken(req), config.mcpAccessSecret);
-  if (!t || t.typ !== 'mcp') return undefined;
+  if (!t || t.typ !== 'mcp' || !belongsToThisInstance(t, config.mcpUrl)) return undefined;
   if (!Number.isFinite(t.exp) || t.exp < Date.now()) return undefined; // NaN/Infinity não vira token eterno
   if (typeof t.id !== 'string' || !t.id) return undefined;
   if (typeof t.jti !== 'string' || !t.jti) return undefined;

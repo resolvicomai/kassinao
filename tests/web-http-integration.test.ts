@@ -29,6 +29,8 @@ function signedSession(scope: 'full' | 'revoke-only' = 'full'): { cookie: string
   const body = Buffer.from(
     JSON.stringify({
       typ: 'session',
+      iss: config.instanceId,
+      aud: config.appUrl,
       id: TEST_USER_ID,
       name: 'Pessoa de teste',
       avatar: null,
@@ -177,10 +179,34 @@ describe('app privado por HTTP real', () => {
     expect(details.body).not.toContain('freeMB');
     expect(details.body).not.toContain('activeRecordings');
 
+    const internal = await request('GET', '/health/internal');
+    expect(internal.status).toBe(404);
+    expect(internal.body).not.toContain('activeRecordings');
+
     const badHost = await request('GET', '/app', { host: 'evil.example' });
     expect(badHost.status).toBe(421);
     expect(badHost.headers['x-content-type-options']).toBe('nosniff');
     expect(badHost.headers['content-security-policy']).toContain("default-src 'self'");
+  });
+
+  it('publica a política dinâmica da instância sem login e mantém o app fora de índice', async () => {
+    const policy = await request('GET', '/privacy');
+    expect(policy.status).toBe(200);
+    expect(policy.headers['content-type']).toContain('text/html');
+    expect(policy.headers['content-language']).toBe('pt-BR');
+    expect(policy.headers['x-robots-tag']).toBe('noindex, nofollow, noarchive');
+    expect(policy.body).toContain('Política de privacidade da instância');
+    expect(policy.body).toContain(config.operatorName);
+    expect(policy.body).toContain('O Kassinão não criptografa o volume ativo');
+    expect(policy.body).toContain(`Áudio: ${config.retentionDays} dias.`);
+    expect(policy.body).not.toContain(config.cookieSecret);
+    expect(policy.body).not.toContain(config.mcpSecret);
+
+    const english = await request('GET', '/en/privacy');
+    expect(english.status).toBe(200);
+    expect(english.headers['content-language']).toBe('en');
+    expect(english.body).toContain('Instance Privacy Policy');
+    expect(english.body).toContain('does not encrypt the active volume at the application layer');
   });
 
   it('sanitiza erros do parser em bare-node sem devolver stack ou caminho local', async () => {
