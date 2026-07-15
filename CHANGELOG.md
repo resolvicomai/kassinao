@@ -10,6 +10,14 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.7] — 2026-07-15
+
+### Fixed
+
+- The anonymous multi-architecture release gate now extracts and pulls the exact amd64 and arm64 child manifests instead of asking Moby to overwrite a canonical multiarch-index digest with a platform-specific image ID.
+- The v1.4.6 workflow stopped at that pull gate after publishing only its commit-addressed candidate and OCI attestation. It did not create a `1.4.6` image tag, rolling tags, operations bundle, or GitHub Release.
+- The source runtime template now fails closed with a non-runnable image placeholder; only the verified operations bundle replaces it with the published image digest.
+
 ## [1.4.6] — 2026-07-15
 
 ### Fixed
@@ -218,7 +226,8 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
-[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.6...HEAD
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.7...HEAD
+[1.4.7]: https://github.com/resolvicomai/kassinao/compare/v1.4.6...v1.4.7
 [1.4.6]: https://github.com/resolvicomai/kassinao/compare/v1.4.5...v1.4.6
 [1.4.5]: https://github.com/resolvicomai/kassinao/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/resolvicomai/kassinao/releases/tag/v1.4.4
