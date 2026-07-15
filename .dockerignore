@@ -9,6 +9,9 @@
 !package-lock.json
 !tsconfig.json
 !requirements-whisper.txt
+!native/
+!native/no-dump-exec.c
+!native/no-dump-preload.c
 
 !src/
 !src/**

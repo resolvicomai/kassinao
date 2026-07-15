@@ -1,5 +1,6 @@
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
+import { MCP_NPX_PACKAGE } from '../src/productVersions';
 import { docsPage } from '../src/web/docs';
 
 type Listener = (event?: { key?: string }) => void;
@@ -224,12 +225,12 @@ describe('documentation page', () => {
     expect(html).toContain('TERMS_OF_SERVICE_URL');
     expect(html).toContain('APP_URL/privacy#data-rights');
     expect(html).toContain('opens without login');
-    expect(html).toContain('kassinao-mcp@1.0.7');
+    expect(html).toContain(MCP_NPX_PACKAGE);
     expect(html).toContain('one track per Discord account that speaks');
     expect(html).toContain('nickname change is only an extra indicator and may fail');
     expect(html).toContain('The current five tools are read-only.');
     expect(html).toContain('does not mount or directly read server files');
-    expect(html).toContain('source-free bundle');
+    expect(html).toContain('no Git checkout, application source code, or credentials');
     expect(html).toContain('does not run git clone, npm install, or docker build');
     expect(html).toContain('dm-crypt/LUKS');
     expect(html).toContain('href="http://localhost:8080/en/demo"');
@@ -280,9 +281,57 @@ describe('documentation page', () => {
       expect(html).toContain('http://kassinao-public:8081');
       expect(html).toContain('KASSINAO_HOST_PORT');
       expect(html).toContain('KASSINAO_PUBLIC_HOST_PORT');
+      expect(html).toContain('CHECKSUM=&quot;$ARCHIVE.sha256&quot;');
+      expect(html).toContain('sha256sum -c &quot;$(basename &quot;$CHECKSUM&quot;)&quot;');
     }
     expect(docsPage('pt')).toContain('Audite antes do lançamento');
     expect(docsPage('en')).toContain('Audit before launch');
+  });
+
+  it('documents a fail-closed dedicated or shared transition without restarting neighboring workloads', () => {
+    for (const html of [docsPage('pt'), docsPage('en')]) {
+      expect(html).toContain('DOCKER_PID_BEFORE=');
+      expect(html).toContain('NEIGHBORS_BEFORE=');
+      expect(html).toContain('snapshot_neighbors');
+      expect(html).toContain('DOCKER_CONFIG=&quot;$RELEASE_ROOT/deploy/docker-client&quot;');
+      expect(html).toContain('docker_local compose --project-name kassinao');
+      expect(html).not.toContain('sudo docker');
+      expect(html).toContain('uninstall-host-controls.sh&quot; --confirm-remove-kassinao-host-controls');
+      expect(html).toContain('uninstall-shared-host-controls.sh&quot; --confirm-remove-kassinao-shared-host-controls');
+      expect(html).not.toContain('sudo rmdir -- &quot;$DATA_ROOT/rollback&quot;');
+      expect(html).not.toContain('\nsudo rm -rf');
+      expect(html).toContain(
+        'KASSINAO_ENV_FILE=&quot;$RELEASE_ROOT/.env&quot; &quot;$RELEASE_ROOT/scripts/check-shared-migration-rollback.sh&quot;',
+      );
+    }
+  });
+
+  it('documents the legacy-only shared migration, manual reboot unlock, and capacity guards in the safe order', () => {
+    for (const html of [docsPage('pt'), docsPage('en')]) {
+      expect(html).toContain('validate-legacy-dedicated-installation.sh&quot; &quot;$CURRENT_RELEASE_ROOT&quot;');
+      expect(html).toContain(
+        'remove-legacy-health-watch.sh&quot; &quot;$CURRENT_RELEASE_ROOT&quot; --confirm-remove-exact-legacy-health-watch',
+      );
+      expect(html).toContain('prepare-legacy-shared-layout.sh&quot; &quot;$CURRENT_RELEASE_ROOT&quot;');
+      expect(html).toContain('KASSINAO_MIGRATION_SOURCE_APP_ENV=&quot;$CURRENT_RELEASE_ROOT/.env&quot;');
+      expect(html).toContain('--purge-originals');
+      expect(html).toContain('--confirm-after-app-and-backup-validation');
+      expect(html).toContain('$DATA_ROOT/.legacy-shared-transition');
+      expect(html).toContain('sudo test ! -e &quot;$CURRENT_RELEASE_ROOT/.env&quot;');
+      expect(html.indexOf('--purge-originals')).toBeLessThan(
+        html.indexOf('finalize-shared-migration.sh&quot; --confirm-destroy-plaintext-rollback'),
+      );
+      expect(html).toContain('MIN_FREE_MB_START');
+      expect(html).toContain('MIN_FREE_MB_ABORT');
+      expect(html).toContain('DISK_ALERT_PCT');
+      expect(html).toContain('df -h &quot;$(dirname &quot;$BACKING_DIR&quot;)&quot;');
+      expect(html).toContain('sudo cryptsetup open &quot;$BACKING&quot; &quot;$MAPPER&quot;');
+      expect(html).toContain('verify-shared-luks-storage.sh');
+      expect(html).toContain('E2FSCK_STATUS');
+      expect(html).not.toContain('cryptsetup open --key-file');
+    }
+    expect(docsPage('pt')).toContain('adapter moderno');
+    expect(docsPage('en')).toContain('modern');
   });
 
   it('shows accessible progress and failure feedback when copying code fails', async () => {

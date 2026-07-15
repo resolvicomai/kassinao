@@ -1,6 +1,7 @@
 import { config } from '../config';
 import { CSP_NONCE_ATTR } from './csp';
 import type { Locale } from '../i18n';
+import { MCP_NPX_PACKAGE } from '../productVersions';
 import { PUBLIC_LINKS, publicSite } from './site';
 
 type DocsLang = Locale;
@@ -1340,6 +1341,13 @@ export function docsPage(lang: DocsLang = 'pt'): string {
     'Install and operate your own Discord bot to record calls and organize audio. Transcription, minutes, questions, and MCP are optional features.',
   );
   const copyLabel = T('Copiar', 'Copy');
+  const productionDockerClient = `DOCKER_BIN="$(command -v docker)"
+case "$DOCKER_BIN" in /usr/bin/docker | /usr/local/bin/docker) ;; *) exit 1 ;; esac
+docker_local() {
+  sudo env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/nonexistent \\
+    DOCKER_HOST=unix:///var/run/docker.sock DOCKER_CONFIG="$RELEASE_ROOT/deploy/docker-client" \\
+    "$DOCKER_BIN" "$@"
+}`;
 
   const localBuild = codeBlock(
     'Terminal',
@@ -1359,8 +1367,7 @@ docker compose logs -f kassinao`,
   );
   const localEnv = codeBlock(
     '.env',
-    `NODE_ENV=development
-KASSINAO_IMAGE=kassinao-local:dev
+    `KASSINAO_IMAGE=kassinao-local:dev
 KASSINAO_PULL_POLICY=never
 DISCORD_TOKEN=${T('seu_token', 'your_token')}
 APPLICATION_ID=${T('seu_application_id', 'your_application_id')}
@@ -1404,7 +1411,8 @@ MINUTES_ENABLED=false`,
   );
   const productionVerify = codeBlock(
     T('Máquina confiável', 'Trusted workstation'),
-    `# ${T('Substitua a tag somente por uma release pública e imutável.', 'Replace the tag only with a public immutable release.')}
+    `set -Eeuo pipefail
+# ${T('Substitua a tag somente por uma release pública e imutável.', 'Replace the tag only with a public immutable release.')}
 TAG=vX.Y.Z
 REPO=resolvicomai/kassinao
 ARCHIVE="kassinao-ops-$TAG.tar.gz"
@@ -1416,26 +1424,32 @@ gh release verify-asset "$TAG" "$ARCHIVE" --repo "$REPO"
 gh release verify-asset "$TAG" "$CHECKSUM" --repo "$REPO"
 if command -v sha256sum >/dev/null; then sha256sum -c "$CHECKSUM"; else shasum -a 256 -c "$CHECKSUM"; fi
 SOURCE_SHA="$(gh api "repos/$REPO/commits/$TAG" --jq .sha)"
-gh attestation verify "$ARCHIVE" --repo "$REPO" --signer-workflow "github.com/$REPO/.github/workflows/publish-image.yml" --source-ref "refs/tags/$TAG" --source-digest "$SOURCE_SHA" --deny-self-hosted-runners`,
+SIGNER="github.com/$REPO/.github/workflows/publish-image.yml"
+gh attestation verify "$ARCHIVE" --repo "$REPO" --signer-workflow "$SIGNER" --source-ref "refs/tags/$TAG" --source-digest "$SOURCE_SHA" --deny-self-hosted-runners
+IMAGE="$(tar -xOf "$ARCHIVE" "kassinao-ops-$TAG/compose.env.example" | awk -F= '$1 == "KASSINAO_IMAGE" { count++; value=$2 } END { if (count != 1) exit 2; print value }')"
+EXPECTED_IMAGE="ghcr.io/\${REPO,,}"
+[[ "$IMAGE" =~ ^\${EXPECTED_IMAGE}@sha256:[0-9a-f]{64}$ ]] || exit 1
+gh attestation verify "oci://$IMAGE" --repo "$REPO" --signer-workflow "$SIGNER" --source-ref "refs/tags/$TAG" --source-digest "$SOURCE_SHA" --deny-self-hosted-runners`,
     copyLabel,
   );
-  const productionDeploy = codeBlock(
-    'VPS',
-    `# ${T('Transfira antes o tarball verificado para /tmp por scp ou equivalente.', 'First transfer the verified tarball to /tmp with scp or equivalent.')}
+  const productionDeployDedicated = codeBlock(
+    T('VPS dedicada', 'Dedicated VPS'),
+    `# ${T('Transfira antes o tarball e seu .sha256 verificados para /tmp por scp ou equivalente.', 'First transfer the verified tarball and its .sha256 to /tmp with scp or equivalent.')}
 RELEASE_ROOT=/opt/kassinao/releases/kassinao-ops-vX.Y.Z
 ARCHIVE=/tmp/kassinao-ops-vX.Y.Z.tar.gz
+CHECKSUM="$ARCHIVE.sha256"
+(cd /tmp && sha256sum -c "$(basename "$CHECKSUM")")
 sudo test ! -e "$RELEASE_ROOT"
 sudo install -d -o root -g root -m 0700 /opt/kassinao /opt/kassinao/releases
 sudo install -d -o root -g root -m 0700 "$RELEASE_ROOT"
 sudo tar -xzf "$ARCHIVE" -C "$RELEASE_ROOT" --strip-components=1 --no-same-owner
-sudo chown -R root:root "$RELEASE_ROOT"
-sudo chmod -R go-w "$RELEASE_ROOT"
 sudo chmod 0700 "$RELEASE_ROOT"
 sudo test "$(sudo stat -c '%a:%u:%g' "$RELEASE_ROOT")" = '700:0:0'
 sudo install -o root -g root -m 600 "$RELEASE_ROOT/compose.env.example" "$RELEASE_ROOT/.env"
 sudo install -o root -g root -m 600 "$RELEASE_ROOT/app.env.example" "$RELEASE_ROOT/app.env"
 sudo "$RELEASE_ROOT/scripts/inject-secrets.sh"
 sudoedit "$RELEASE_ROOT/.env"
+# KASSINAO_HOST_SCOPE=dedicated
 # KASSINAO_DEDICATED_DOCKER_HOST_ACK=I_UNDERSTAND_THIS_VPS_MUST_RUN_ONLY_KASSINAO
 sudo "$RELEASE_ROOT/scripts/prepare-storage.sh"
 sudo "$RELEASE_ROOT/scripts/install-host-controls.sh"
@@ -1443,18 +1457,297 @@ sudo env KASSINAO_DEPLOY_DIR="$RELEASE_ROOT" "$RELEASE_ROOT/scripts/deploy-relea
 sudo "$RELEASE_ROOT/scripts/audit-vps-security.sh"`,
     copyLabel,
   );
-  const uninstallHostControls = codeBlock(
-    'VPS',
-    `# ${T('Primeiro remova os containers com Compose; os dados continuam no DATA_ROOT.', 'First remove the containers with Compose; data remains in DATA_ROOT.')}
-sudo docker compose down
-sudo ./scripts/uninstall-host-controls.sh --confirm-remove-kassinao-host-controls`,
+  const productionDeployShared = codeBlock(
+    T('VPS compartilhada: instalação nova', 'Shared VPS: new installation'),
+    `set -Eeuo pipefail
+# ${T('Use a VPS atual. SIZE não tem default: dimensione carga, retenção, temporários, cache e margem dos vizinhos.', 'Use the existing VPS. SIZE has no default: size for workload, retention, temporary files, cache, and neighbor headroom.')}
+RELEASE_ROOT=/opt/kassinao/releases/kassinao-ops-vX.Y.Z
+ARCHIVE=/tmp/kassinao-ops-vX.Y.Z.tar.gz
+CHECKSUM="$ARCHIVE.sha256"
+INSTANCE_ID="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+[[ "$INSTANCE_ID" =~ ^[0-9a-f]{24}$ ]] || exit 1
+BACKING_DIR="/var/lib/.kassinao-storage-$INSTANCE_ID"
+BACKING="$BACKING_DIR/vault.luks"
+DATA_ROOT="/srv/.kassinao-data-$INSTANCE_ID"
+MAPPER="ks-$INSTANCE_ID"
+unset INSTANCE_ID
+# ${T('Registre estes quatro valores no runbook privado antes de continuar; não publique nem reutilize os identificadores de outra instância.', 'Record these four values in the private runbook before continuing; never publish or reuse identifiers from another instance.')}
+SIZE=XXG
+df -h "$(dirname "$BACKING_DIR")"
+# ${T('Registre quanto deve continuar livre para os outros workloads. O backing é pré-alocado e não cresce sozinho.', 'Record how much must remain free for other workloads. The backing file is preallocated and does not grow automatically.')}
+(cd /tmp && sha256sum -c "$(basename "$CHECKSUM")")
+sudo test ! -e "$RELEASE_ROOT"
+sudo install -d -o root -g root -m 0700 /opt/kassinao /opt/kassinao/releases
+sudo install -d -o root -g root -m 0700 "$RELEASE_ROOT"
+sudo tar -xzf "$ARCHIVE" -C "$RELEASE_ROOT" --strip-components=1 --no-same-owner
+sudo chmod 0700 "$RELEASE_ROOT"
+sudo install -o root -g root -m 600 "$RELEASE_ROOT/compose.env.example" "$RELEASE_ROOT/.env"
+sudoedit "$RELEASE_ROOT/.env"
+# KASSINAO_HOST_SCOPE=shared
+# KASSINAO_DEDICATED_DOCKER_HOST_ACK=
+# KASSINAO_DATA_ROOT=$DATA_ROOT
+# KASSINAO_RECORDINGS_DIR=$DATA_ROOT/recordings
+# KASSINAO_STATE_DIR=$DATA_ROOT/state
+# KASSINAO_AUTH_DIR=$DATA_ROOT/auth
+# KASSINAO_MODEL_CACHE_DIR=$DATA_ROOT/cache
+# KASSINAO_SHARED_LUKS_BACKING_FILE=$BACKING
+# KASSINAO_SHARED_LUKS_MAPPER=$MAPPER
+# KASSINAO_SHARED_LUKS_UUID=${T('preencher depois do luksUUID', 'fill after luksUUID')}
+# KASSINAO_SHARED_APP_ENV_FILE=$DATA_ROOT/config/app.env
+# KASSINAO_SHARED_TUNNEL_TOKEN_FILE=$DATA_ROOT/config/cloudflared-token
+# ${T('Antes deste gate, aplique e persista pelo runbook privado kernel.core_pattern=/dev/null e fs.suid_dumpable=0; registre valores anteriores, impacto nos vizinhos e recuperação. O bundle não muda sysctl global.', 'Before this gate, use the private runbook to apply and persist kernel.core_pattern=/dev/null and fs.suid_dumpable=0; record prior values, neighbor impact, and recovery. The bundle does not change global sysctls.')}
+sudo "$RELEASE_ROOT/scripts/audit-shared-vps-security.sh" --neighbors-only
+sudo install -d -o root -g root -m 0700 "$BACKING_DIR"
+sudo test ! -e "$BACKING"
+sudo fallocate -l "$SIZE" "$BACKING"
+sudo chmod 0600 "$BACKING"
+sudo cryptsetup luksFormat --type luks2 "$BACKING"
+sudo cryptsetup open "$BACKING" "$MAPPER"
+sudo mkfs.ext4 -m 0 "/dev/mapper/$MAPPER"
+sudo install -d -o root -g root -m 0700 "$DATA_ROOT"
+sudo mount -o rw,nodev,nosuid,noexec "/dev/mapper/$MAPPER" "$DATA_ROOT"
+sudo chmod 0700 "$DATA_ROOT"
+sudo cryptsetup luksUUID "$BACKING"
+# ${T('Copie o UUID exibido para KASSINAO_SHARED_LUKS_UUID em .env antes de continuar.', 'Copy the displayed UUID into KASSINAO_SHARED_LUKS_UUID in .env before continuing.')}
+sudoedit "$RELEASE_ROOT/.env"
+# ${T('Defina os seis limites CORE/PUBLIC/TUNNEL de memória e CPU; a soma precisa preservar ao menos 25% da capacidade física para os vizinhos. Monitore I/O separadamente.', 'Set the six CORE/PUBLIC/TUNNEL memory and CPU limits; their sum must preserve at least 25% of physical capacity for neighbors. Monitor I/O separately.')}
+sudo "$RELEASE_ROOT/scripts/prepare-shared-storage.sh"
+# ${T('Revise defaults, providers, retenção e os três guards de disco no app.env cifrado.', 'Review defaults, providers, retention, and the three disk guards in the encrypted app.env.')}
+sudoedit "$DATA_ROOT/config/app.env"
+# ${T('MIN_FREE_MB_START, MIN_FREE_MB_ABORT e DISK_ALERT_PCT precisam preservar espaço para processamento e recuperação.', 'MIN_FREE_MB_START, MIN_FREE_MB_ABORT, and DISK_ALERT_PCT must preserve room for processing and recovery.')}
+sudo "$RELEASE_ROOT/scripts/prepare-shared-storage.sh"
+sudo "$RELEASE_ROOT/scripts/inject-secrets.sh"
+sudo "$RELEASE_ROOT/scripts/install-shared-host-controls.sh"
+sudo env KASSINAO_DEPLOY_DIR="$RELEASE_ROOT" "$RELEASE_ROOT/scripts/deploy-release.sh"
+sudo "$RELEASE_ROOT/scripts/audit-shared-vps-security.sh"`,
+    copyLabel,
+  );
+  const productionMigrateShared = codeBlock(
+    T('VPS compartilhada: migrar instalação legada plaintext', 'Shared VPS: migrate a legacy plaintext install'),
+    `set -Eeuo pipefail
+# ${T('Instale primeiro o novo bundle sem checkout Git nem código-fonte da aplicação; ele ainda contém controles operacionais públicos e runtimes nativos. Ainda não pare a release atual.', 'First install the new bundle without a Git checkout or application source code; it still contains public operational controls and native runtimes. Do not stop the current release yet.')}
+CURRENT_RELEASE_ROOT=${T('/CAMINHO/ABSOLUTO/DA/INSTALACAO/ATUAL', '/ABSOLUTE/PATH/TO/CURRENT/INSTALLATION')}
+RELEASE_ROOT=/opt/kassinao/releases/kassinao-ops-vX.Y.Z
+${productionDockerClient}
+ARCHIVE=/tmp/kassinao-ops-vX.Y.Z.tar.gz
+CHECKSUM="$ARCHIVE.sha256"
+INSTANCE_ID="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+[[ "$INSTANCE_ID" =~ ^[0-9a-f]{24}$ ]] || exit 1
+BACKING_DIR="/var/lib/.kassinao-storage-$INSTANCE_ID"
+BACKING="$BACKING_DIR/vault.luks"
+DATA_ROOT="/srv/.kassinao-data-$INSTANCE_ID"
+MAPPER="ks-$INSTANCE_ID"
+unset INSTANCE_ID
+# ${T('Registre estes quatro valores no runbook privado antes de continuar; não publique nem reutilize os identificadores de outra instância.', 'Record these four values in the private runbook before continuing; never publish or reuse identifiers from another instance.')}
+SIZE=XXG
+df -h "$(dirname "$BACKING_DIR")"
+sudo du -sh "$CURRENT_RELEASE_ROOT/recordings" 2>/dev/null || true
+# ${T('SIZE precisa comportar a cópia atual, retenção, pico de faixas, processamento temporário, cache e crescimento, sem consumir a reserva dos vizinhos.', 'SIZE must cover the current copy, retention, peak tracks, temporary processing, cache, and growth without consuming neighbor headroom.')}
+(cd /tmp && sha256sum -c "$(basename "$CHECKSUM")")
+sudo test ! -e "$RELEASE_ROOT"
+sudo install -d -o root -g root -m 0700 /opt/kassinao /opt/kassinao/releases "$RELEASE_ROOT"
+sudo tar -xzf "$ARCHIVE" -C "$RELEASE_ROOT" --strip-components=1 --no-same-owner
+sudo chmod 0700 "$RELEASE_ROOT"
+sudo test "$(sudo stat -c '%a:%u:%g' "$RELEASE_ROOT")" = '700:0:0'
+sudo install -o root -g root -m 600 "$RELEASE_ROOT/compose.env.example" "$RELEASE_ROOT/.env"
+sudoedit "$RELEASE_ROOT/.env"
+# KASSINAO_HOST_SCOPE=shared
+# KASSINAO_DEDICATED_DOCKER_HOST_ACK=
+# KASSINAO_DATA_ROOT=$DATA_ROOT
+# KASSINAO_RECORDINGS_DIR=$DATA_ROOT/recordings
+# KASSINAO_STATE_DIR=$DATA_ROOT/state
+# KASSINAO_AUTH_DIR=$DATA_ROOT/auth
+# KASSINAO_MODEL_CACHE_DIR=$DATA_ROOT/cache
+# KASSINAO_SHARED_LUKS_BACKING_FILE=$BACKING
+# KASSINAO_SHARED_LUKS_MAPPER=$MAPPER
+# KASSINAO_SHARED_LUKS_UUID=${T('preencher depois do luksUUID', 'fill after luksUUID')}
+# KASSINAO_SHARED_APP_ENV_FILE=$DATA_ROOT/config/app.env
+# KASSINAO_SHARED_TUNNEL_TOKEN_FILE=$DATA_ROOT/config/cloudflared-token
+# ${T('Este bloco aceita somente a instalação plaintext anterior a KASSINAO_HOST_SCOPE. DATA_ROOT é uma raiz nova, fora dos mounts atuais.', 'This block accepts only the plaintext installation that predates KASSINAO_HOST_SCOPE. DATA_ROOT is a new root outside current mounts.')}
+sudo "$RELEASE_ROOT/scripts/validate-legacy-dedicated-installation.sh" "$CURRENT_RELEASE_ROOT" >/dev/null
+
+snapshot_neighbors() {
+  docker_local ps -aq --no-trunc | while IFS= read -r id; do
+    project="$(docker_local inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$id")"
+    if [ "$project" != kassinao ]; then
+      docker_local inspect -f '{{.Id}} {{.State.Running}} {{.State.Restarting}} {{.RestartCount}}' "$id"
+    fi
+  done | sort
+}
+
+# ${T('Valide um backup e activeRecordings=0. A partir daqui há downtime apenas do Kassinão.', 'Validate a backup and activeRecordings=0. From this point onward, only Kassinão is offline.')}
+DOCKER_PID_BEFORE="$(sudo systemctl show docker.service -p MainPID --value)"
+NEIGHBORS_BEFORE="$(snapshot_neighbors)"
+# ${T('Remova primeiro somente o watchdog antigo provado por byte-match; isso impede que ele religue o core durante a transição.', 'First remove only the old watchdog proven by byte match; this prevents it from restarting the core during the transition.')}
+sudo "$RELEASE_ROOT/scripts/remove-legacy-health-watch.sh" "$CURRENT_RELEASE_ROOT" --confirm-remove-exact-legacy-health-watch
+docker_local compose --project-name kassinao --project-directory "$CURRENT_RELEASE_ROOT" --env-file "$CURRENT_RELEASE_ROOT/.env" -f "$CURRENT_RELEASE_ROOT/docker-compose.yml" --profile tunnel --profile split-public stop
+# ${T('O container core precisa continuar existente e parado para provar mounts e isolamento dos sources antes da consolidação.', 'The core container must remain present and stopped to prove mounts and source isolation before consolidation.')}
+sudo "$RELEASE_ROOT/scripts/prepare-legacy-shared-layout.sh" "$CURRENT_RELEASE_ROOT"
+docker_local compose --project-name kassinao --project-directory "$CURRENT_RELEASE_ROOT" --env-file "$CURRENT_RELEASE_ROOT/.env" -f "$CURRENT_RELEASE_ROOT/docker-compose.yml" --profile tunnel --profile split-public down
+test "$(sudo systemctl show docker.service -p MainPID --value)" = "$DOCKER_PID_BEFORE"
+test "$(snapshot_neighbors)" = "$NEIGHBORS_BEFORE"
+
+# ${T('Antes do gate público, aplique e persista pelo runbook privado kernel.core_pattern=/dev/null e fs.suid_dumpable=0, com rollback e impacto nos vizinhos documentados. Somente então audite o perímetro shared e crie o mapper novo ainda desmontado.', 'Before the public gate, use the private runbook to apply and persist kernel.core_pattern=/dev/null and fs.suid_dumpable=0, with rollback and neighbor impact documented. Only then audit the shared boundary and create the new mapper while it remains unmounted.')}
+sudo "$RELEASE_ROOT/scripts/audit-shared-vps-security.sh" --neighbors-only
+sudo install -d -o root -g root -m 0700 "$BACKING_DIR"
+sudo test ! -e "$BACKING"
+sudo fallocate -l "$SIZE" "$BACKING"
+sudo chmod 0600 "$BACKING"
+sudo cryptsetup luksFormat --type luks2 "$BACKING"
+sudo cryptsetup open "$BACKING" "$MAPPER"
+sudo mkfs.ext4 -m 0 "/dev/mapper/$MAPPER"
+sudo cryptsetup luksUUID "$BACKING"
+# ${T('Copie o UUID exibido para KASSINAO_SHARED_LUKS_UUID em .env. Não monte o mapper.', 'Copy the displayed UUID into KASSINAO_SHARED_LUKS_UUID in .env. Do not mount the mapper.')}
+sudoedit "$RELEASE_ROOT/.env"
+sudo env KASSINAO_MIGRATION_SOURCE_APP_ENV="$CURRENT_RELEASE_ROOT/.env" "$RELEASE_ROOT/scripts/migrate-shared-storage.sh"
+# ${T('O script ativa o mount LUKS e cria um marker pending com prazo; não apaga o rollback plaintext.', 'The script activates the LUKS mount and creates a deadline-bound pending marker; it does not delete the plaintext rollback.')}
+# ${T('Revise o app.env cifrado. O import legado só preserva chaves operacionais presentes no template; nunca importa host, Compose ou token do túnel.', 'Review encrypted app.env. Legacy import preserves only operational keys present in the template; it never imports host, Compose, or tunnel-token settings.')}
+sudoedit "$DATA_ROOT/config/app.env"
+# ${T('TRANSCRIBE_*, chaves de provider, MINUTES_*, MCP_*, RETENTION_*, limites de gravação, MIN_FREE_MB_* e DISK_ALERT_PCT', 'TRANSCRIBE_*, provider keys, MINUTES_*, MCP_*, RETENTION_*, recording limits, MIN_FREE_MB_*, and DISK_ALERT_PCT')}
+sudo "$RELEASE_ROOT/scripts/prepare-shared-storage.sh"
+sudo "$RELEASE_ROOT/scripts/inject-secrets.sh"
+sudo "$RELEASE_ROOT/scripts/install-shared-host-controls.sh"
+sudo env KASSINAO_DEPLOY_DIR="$RELEASE_ROOT" "$RELEASE_ROOT/scripts/deploy-release.sh"
+sudo "$RELEASE_ROOT/scripts/audit-shared-vps-security.sh"`,
+    copyLabel,
+  );
+  const finalizeSharedMigration = codeBlock(
+    T('Finalizar rollback plaintext shared', 'Finalize the shared plaintext rollback'),
+    `CURRENT_RELEASE_ROOT=${T('/MESMO/CAMINHO/USADO/NO/PREPARO/LEGADO', '/SAME/PATH/USED/FOR/LEGACY/PREPARATION')}
+RELEASE_ROOT=/opt/kassinao/releases/kassinao-ops-vX.Y.Z
+${productionDockerClient}
+env_value() {
+  sudo awk -v key="$1" 'index($0, key "=") == 1 { count++; value=substr($0,length(key)+2) } END { if (count != 1) exit 2; print value }' "$RELEASE_ROOT/.env"
+}
+DATA_ROOT="$(env_value KASSINAO_DATA_ROOT)"
+case "$DATA_ROOT" in /*) ;; *) exit 1 ;; esac
+sudo env KASSINAO_ENV_FILE="$RELEASE_ROOT/.env" "$RELEASE_ROOT/scripts/check-shared-migration-rollback.sh"
+# ${T('Antes do prazo, valide login, ACL, gravação real, transcrição configurada e restauração do backup.', 'Before the deadline, validate login, ACL, a real recording, configured transcription, and backup restoration.')}
+docker_local compose --project-name kassinao --project-directory "$RELEASE_ROOT" --env-file "$RELEASE_ROOT/.env" -f "$RELEASE_ROOT/docker-compose.yml" -f "$RELEASE_ROOT/docker-compose.shared.yml" --profile tunnel --profile split-public stop
+# ${T('Se houve consolidação legada, expurgue os sources originais primeiro. O rollback consolidado ainda é necessário para provar essa etapa.', 'If legacy consolidation was used, purge original sources first. The consolidated rollback is still required to prove this step.')}
+if sudo test -e "$DATA_ROOT/.legacy-shared-transition" || sudo test -L "$DATA_ROOT/.legacy-shared-transition"; then
+  sudo "$RELEASE_ROOT/scripts/prepare-legacy-shared-layout.sh" --purge-originals "$CURRENT_RELEASE_ROOT" --confirm-after-app-and-backup-validation
+  sudo test ! -e "$CURRENT_RELEASE_ROOT/.env"
+  sudo test ! -L "$CURRENT_RELEASE_ROOT/.env"
+fi
+sudo "$RELEASE_ROOT/scripts/finalize-shared-migration.sh" --confirm-destroy-plaintext-rollback
+sudo env KASSINAO_DEPLOY_DIR="$RELEASE_ROOT" "$RELEASE_ROOT/scripts/deploy-release.sh"
+sudo "$RELEASE_ROOT/scripts/audit-shared-vps-security.sh"`,
+    copyLabel,
+  );
+  const rebootSharedStorage = codeBlock(
+    T(
+      'Reboot shared: unlock manual e start somente do Kassinão',
+      'Shared reboot: manual unlock and Kassinão-only start',
+    ),
+    `set -Eeuo pipefail
+RELEASE_ROOT=/opt/kassinao/releases/kassinao-ops-vX.Y.Z
+${productionDockerClient}
+env_value() {
+  sudo awk -v key="$1" 'index($0, key "=") == 1 { count++; value=substr($0,length(key)+2) } END { if (count != 1) exit 2; print value }' "$RELEASE_ROOT/.env"
+}
+BACKING="$(env_value KASSINAO_SHARED_LUKS_BACKING_FILE)"
+DATA_ROOT="$(env_value KASSINAO_DATA_ROOT)"
+MAPPER="$(env_value KASSINAO_SHARED_LUKS_MAPPER)"
+
+snapshot_neighbors() {
+  docker_local ps -aq --no-trunc | while IFS= read -r id; do
+    project="$(docker_local inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$id")"
+    if [ "$project" != kassinao ]; then
+      docker_local inspect -f '{{.Id}} {{.State.Running}} {{.State.Restarting}} {{.RestartCount}}' "$id"
+    fi
+  done | sort
+}
+
+DOCKER_PID_BEFORE="$(sudo systemctl show docker.service -p MainPID --value)"
+NEIGHBORS_BEFORE="$(snapshot_neighbors)"
+# ${T('Confirme pelo runbook privado que kernel.core_pattern=/dev/null e fs.suid_dumpable=0 continuam efetivos após o reboot.', 'Use the private runbook to confirm kernel.core_pattern=/dev/null and fs.suid_dumpable=0 remain effective after reboot.')}
+sudo "$RELEASE_ROOT/scripts/audit-shared-vps-security.sh" --neighbors-only
+sudo test ! -e "/dev/mapper/$MAPPER"
+sudo test ! -e "$DATA_ROOT/.kassinao-mounted"
+# ${T('Digite a passphrase somente no prompt do cryptsetup. Não use keyfile, env, cloud-init, unit ou histórico na VPS.', 'Enter the passphrase only at the cryptsetup prompt. Do not use a VPS keyfile, environment variable, cloud-init, unit, or shell history.')}
+sudo cryptsetup open "$BACKING" "$MAPPER"
+sudo mount -o rw,nodev,nosuid,noexec "/dev/mapper/$MAPPER" "$DATA_ROOT"
+sudo env KASSINAO_ENV_FILE="$RELEASE_ROOT/.env" "$RELEASE_ROOT/scripts/verify-shared-luks-storage.sh"
+sudo env KASSINAO_DEPLOY_DIR="$RELEASE_ROOT" "$RELEASE_ROOT/scripts/deploy-release.sh"
+sudo "$RELEASE_ROOT/scripts/audit-shared-vps-security.sh"
+test "$(sudo systemctl show docker.service -p MainPID --value)" = "$DOCKER_PID_BEFORE"
+test "$(snapshot_neighbors)" = "$NEIGHBORS_BEFORE"`,
+    copyLabel,
+  );
+  const growSharedStorage = codeBlock(
+    T('Expandir o file-container shared com downtime', 'Grow the shared file container with downtime'),
+    `set -Eeuo pipefail
+RELEASE_ROOT=/opt/kassinao/releases/kassinao-ops-vX.Y.Z
+${productionDockerClient}
+NEW_SIZE=XXG
+RESERVED_NEIGHBOR_FREE=XXG
+env_value() {
+  sudo awk -v key="$1" 'index($0, key "=") == 1 { count++; value=substr($0,length(key)+2) } END { if (count != 1) exit 2; print value }' "$RELEASE_ROOT/.env"
+}
+BACKING="$(env_value KASSINAO_SHARED_LUKS_BACKING_FILE)"
+DATA_ROOT="$(env_value KASSINAO_DATA_ROOT)"
+MAPPER="$(env_value KASSINAO_SHARED_LUKS_MAPPER)"
+snapshot_neighbors() {
+  docker_local ps -aq --no-trunc | while IFS= read -r id; do
+    project="$(docker_local inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$id")"
+    if [ "$project" != kassinao ]; then
+      docker_local inspect -f '{{.Id}} {{.State.Running}} {{.State.Restarting}} {{.RestartCount}}' "$id"
+    fi
+  done | sort
+}
+CURRENT_BYTES="$(sudo stat -c %s "$BACKING")"
+TARGET_BYTES="$(numfmt --from=iec "$NEW_SIZE")"
+RESERVED_BYTES="$(numfmt --from=iec "$RESERVED_NEIGHBOR_FREE")"
+HOST_FREE_BYTES="$(df -B1 --output=avail "$(dirname "$BACKING")" | tail -n 1 | tr -d ' ')"
+GROW_BYTES="$((TARGET_BYTES - CURRENT_BYTES))"
+test "$GROW_BYTES" -gt 0
+test "$HOST_FREE_BYTES" -ge "$((GROW_BYTES + RESERVED_BYTES))"
+# ${T('Faça e restaure um backup de teste antes. Confirme activeRecordings=0 e mantenha a passphrase fora da VPS.', 'Create and test-restore a backup first. Confirm activeRecordings=0 and keep the passphrase off the VPS.')}
+DOCKER_PID_BEFORE="$(sudo systemctl show docker.service -p MainPID --value)"
+NEIGHBORS_BEFORE="$(snapshot_neighbors)"
+sudo "$RELEASE_ROOT/scripts/audit-shared-vps-security.sh"
+docker_local compose --project-name kassinao --project-directory "$RELEASE_ROOT" --env-file "$RELEASE_ROOT/.env" -f "$RELEASE_ROOT/docker-compose.yml" -f "$RELEASE_ROOT/docker-compose.shared.yml" --profile tunnel --profile split-public stop
+sudo umount "$DATA_ROOT"
+sudo cryptsetup close "$MAPPER"
+sudo fallocate -l "$NEW_SIZE" "$BACKING"
+# ${T('Digite a passphrase somente no prompt. A expansão não possui rollback automático após o backing crescer.', 'Enter the passphrase only at the prompt. Expansion has no automatic rollback after the backing file grows.')}
+sudo cryptsetup open "$BACKING" "$MAPPER"
+set +e
+sudo e2fsck -f "/dev/mapper/$MAPPER"
+E2FSCK_STATUS="$?"
+set -e
+case "$E2FSCK_STATUS" in 0 | 1) ;; *) exit "$E2FSCK_STATUS" ;; esac
+sudo resize2fs "/dev/mapper/$MAPPER"
+sudo mount -o rw,nodev,nosuid,noexec "/dev/mapper/$MAPPER" "$DATA_ROOT"
+sudo env KASSINAO_ENV_FILE="$RELEASE_ROOT/.env" "$RELEASE_ROOT/scripts/verify-shared-luks-storage.sh"
+sudo env KASSINAO_DEPLOY_DIR="$RELEASE_ROOT" "$RELEASE_ROOT/scripts/deploy-release.sh"
+sudo "$RELEASE_ROOT/scripts/audit-shared-vps-security.sh"
+test "$(sudo systemctl show docker.service -p MainPID --value)" = "$DOCKER_PID_BEFORE"
+test "$(snapshot_neighbors)" = "$NEIGHBORS_BEFORE"`,
+    copyLabel,
+  );
+  const uninstallDedicatedHostControls = codeBlock(
+    T('Remover controles: VPS dedicada', 'Remove controls: dedicated VPS'),
+    `RELEASE_ROOT=/opt/kassinao/releases/kassinao-ops-vX.Y.Z
+${productionDockerClient}
+docker_local compose --project-name kassinao --project-directory "$RELEASE_ROOT" --env-file "$RELEASE_ROOT/.env" -f "$RELEASE_ROOT/docker-compose.yml" --profile tunnel --profile split-public down
+sudo "$RELEASE_ROOT/scripts/uninstall-host-controls.sh" --confirm-remove-kassinao-host-controls`,
+    copyLabel,
+  );
+  const uninstallSharedHostControls = codeBlock(
+    T('Remover controles: VPS compartilhada', 'Remove controls: shared VPS'),
+    `RELEASE_ROOT=/opt/kassinao/releases/kassinao-ops-vX.Y.Z
+${productionDockerClient}
+docker_local compose --project-name kassinao --project-directory "$RELEASE_ROOT" --env-file "$RELEASE_ROOT/.env" -f "$RELEASE_ROOT/docker-compose.yml" -f "$RELEASE_ROOT/docker-compose.shared.yml" --profile tunnel --profile split-public down
+sudo "$RELEASE_ROOT/scripts/uninstall-shared-host-controls.sh" --confirm-remove-kassinao-shared-host-controls`,
     copyLabel,
   );
   const mcpSetup = codeBlock(
     'Terminal',
     T(
-      'npx -y kassinao-mcp@1.0.7 exchange --stdin --url https://MCP-DA-SUA-INSTANCIA',
-      'npx -y kassinao-mcp@1.0.7 exchange --stdin --url https://YOUR-INSTANCE-MCP',
+      `npx -y ${MCP_NPX_PACKAGE} exchange --stdin --url https://MCP-DA-SUA-INSTANCIA`,
+      `npx -y ${MCP_NPX_PACKAGE} exchange --stdin --url https://YOUR-INSTANCE-MCP`,
     ),
     copyLabel,
   );
@@ -1838,11 +2131,27 @@ sudo ./scripts/uninstall-host-controls.sh --confirm-remove-kassinao-host-control
           },
         },
         {
-          name: 'KASSINAO_DEDICATED_DOCKER_HOST_ACK',
-          fallback: { pt: 'aceite manual obrigatório no bundle', en: 'manual bundle acknowledgement required' },
+          name: 'KASSINAO_HOST_SCOPE',
+          fallback: 'dedicated',
           description: {
-            pt: 'Confirma que o daemon Docker inteiro pertence somente ao Kassinão.',
-            en: 'Confirms that the entire Docker daemon is dedicated to Kassinão.',
+            pt: 'Escolhe exatamente um adapter operacional: dedicated ou shared.',
+            en: 'Selects exactly one operations adapter: dedicated or shared.',
+          },
+        },
+        {
+          name: 'KASSINAO_DEDICATED_DOCKER_HOST_ACK',
+          fallback: { pt: 'vazio', en: 'empty' },
+          description: {
+            pt: 'Obrigatório somente no adapter dedicated; precisa ficar vazio no shared.',
+            en: 'Required only by the dedicated adapter; must remain empty in shared mode.',
+          },
+        },
+        {
+          name: 'KASSINAO_SHARED_LUKS_*',
+          fallback: { pt: 'vazios', en: 'empty' },
+          description: {
+            pt: 'Backing file, mapper e UUID privados do file-container LUKS2 usado no adapter shared.',
+            en: 'Private backing file, mapper, and UUID for the shared adapter LUKS2 file container.',
           },
         },
       ],
@@ -1965,18 +2274,20 @@ sudo ./scripts/uninstall-host-controls.sh --confirm-remove-kassinao-host-control
       <div class="callout"><strong>${esc(T('O quickstart local não valida a operação de uma VPS.', 'The local quickstart does not validate VPS operations.'))}</strong><p>${esc(T('Produção exige domínio HTTPS próprio, política do operador, storage criptografado, bundle verificado, processo público separado e auditoria do host.', 'Production requires your own HTTPS domain, an operator policy, encrypted storage, a verified bundle, a separate public process, and a host audit.'))}</p></div>
     </section>
 
-    <section class="doc-section" id="producao" data-doc-section data-keywords="production release bundle ghcr digest attestation split public luks vps">
+    <section class="doc-section" id="producao" data-doc-section data-keywords="production release bundle ghcr digest attestation split public luks vps dedicated shared">
       <div class="section-head"><h2>${esc(T('Produção só começa numa release pública verificável.', 'Production starts only from a verifiable public release.'))}</h2><p>${esc(T('O pipeline do repositório está preparado para imagem multiarch, digest, SBOM, attestations e bundle operacional. Isso só existe para uma tag quando os artefatos aparecem publicamente na release e no registry.', 'The repository pipeline is prepared for a multi-architecture image, digest, SBOM, attestations, and an operations bundle. These exist for a tag only when the artifacts are publicly available in the release and registry.'))}</p></div>
       <div class="callout danger"><strong>${esc(T('Não invente uma versão nem use um artefato só porque o workflow existe no source.', 'Never invent a version or use an artifact merely because its workflow exists in source.'))}</strong><p>${esc(T('Antes do deploy, confirme release imutável, checksum, attestation, digest OCI e o commit de origem. Se qualquer peça estiver ausente, o caminho de produção ainda não foi publicado.', 'Before deployment, confirm an immutable release, checksum, attestation, OCI digest, and source commit. If any piece is missing, the production path has not been published yet.'))}</p></div>
       ${productionVerify}
+      <div class="callout"><strong>${esc(T('Use a VPS que você já controla escolhendo o adapter correto.', 'Use the VPS you already control by selecting the correct adapter.'))}</strong><p>${esc(T('Dedicated governa o daemon Docker inteiro e exige host exclusivo. Shared preserva os outros workloads do mesmo operador, não reinicia o daemon global e isola o Kassinão com file-container LUKS2, regras de egress escopadas e limites sem swap por container. Shared não é isolamento contra root, administradores Docker ou tenants hostis.', 'Dedicated governs the entire Docker daemon and requires an exclusive host. Shared preserves other workloads owned by the same operator, does not restart the global daemon, and isolates Kassinão with a LUKS2 file container, scoped egress rules, and per-container no-swap limits. Shared is not isolation from root, Docker administrators, or hostile tenants.'))}</p></div>
       <div class="install-steps">
-        <article class="install-step"><h3>${esc(T('1. Prepare um host dedicado', '1. Prepare a dedicated host'))}</h3><div><p>${esc(T('Use uma VPS Linux exclusiva e atualizada, sem workloads Docker alheios, com systemd 249 ou superior, Docker Engine com Compose v2, iptables/ip6tables, util-linux (flock, findmnt e lsblk), curl, Python 3, tar/gzip, SSH por chave e firewall. Os ExecStartPre do kit governam o docker.service inteiro e o audit exige somente os containers esperados. Monte /var/lib/kassinao num volume dm-crypt/LUKS e deixe a raiz 0700 root:root; o helper prepara somente os quatro filhos depois de provar o mount. O deploy também exige swap desabilitado ou coberto por dm-crypt/LUKS.', 'Use an exclusive, updated Linux VPS with no unrelated Docker workloads, systemd 249 or newer, Docker Engine with Compose v2, iptables/ip6tables, util-linux (flock, findmnt, and lsblk), curl, Python 3, tar/gzip, key-based SSH, and a firewall. The bundle ExecStartPre hooks govern the entire docker.service and the audit requires only expected containers. Mount /var/lib/kassinao on a dm-crypt/LUKS volume and leave its root as 0700 root:root; the helper prepares only the four children after proving the mount. Deployment also requires swap to be disabled or covered by dm-crypt/LUKS.'))}</p></div></article>
-        <article class="install-step"><h3>${esc(T('2. Instale o bundle sem source', '2. Install the source-free bundle'))}</h3><div><p>${esc(T('Depois de verificar o tarball numa máquina confiável, transfira-o para /tmp e extraia uma única vez no diretório novo mostrado abaixo. O bloco cria pais root-owned, fixa a raiz em 0700, remove escrita de grupo/outros, confirma 700:0:0 e usa caminhos absolutos. Não extraia por cima de release antiga nem dentro de Git. A VPS puxa a imagem por image@sha256 e não executa git clone, npm install ou docker build.', 'After verifying the tarball on a trusted workstation, transfer it to /tmp and extract it once into the new directory shown below. The block creates root-owned parents, fixes the root at 0700, removes group/other write access, confirms 700:0:0, and uses absolute paths. Never extract over an older release or inside Git. The VPS pulls the image by image@sha256 and does not run git clone, npm install, or docker build.'))}</p></div></article>
-        <article class="install-step"><h3>${esc(T('3. Separe público e privado', '3. Separate public and private'))}</h3><div><p>${esc(T('O kit aceita somente topologia split: landing/docs/demo num processo sem segredos; bot, app privado e API MCP no core privado. Landing e docs usam hosts diferentes de app e MCP. No Cloudflare Tunnel do Compose, aponte APP_URL e MCP_URL para http://kassinao:8080; PUBLIC_URL e DOCS_URL para http://kassinao-public:8081. Num proxy instalado no host, use respectivamente http://127.0.0.1:${KASSINAO_HOST_PORT} e http://127.0.0.1:${KASSINAO_PUBLIC_HOST_PORT}. Prepare DNS, certificados e essas quatro rotas HTTPS antes do deploy, porque o gate testa os hosts por fora. Nunca abra 8080/8081 na internet. Ainda não anuncie a instância nem distribua o invite do bot.', 'The bundle accepts split topology only: landing/docs/demo in a secretless process; bot, private app, and MCP API in the private core. Landing and docs use hosts different from app and MCP. In the Compose Cloudflare Tunnel, route APP_URL and MCP_URL to http://kassinao:8080; route PUBLIC_URL and DOCS_URL to http://kassinao-public:8081. With a proxy installed on the host, use http://127.0.0.1:${KASSINAO_HOST_PORT} and http://127.0.0.1:${KASSINAO_PUBLIC_HOST_PORT}, respectively. Prepare DNS, certificates, and these four HTTPS routes before deployment because the gate tests the hosts externally. Never expose 8080/8081 to the internet. Do not announce the instance or distribute the bot invite yet.'))}</p></div></article>
-        <article class="install-step"><h3>${esc(T('4. Configure a instância e o storage', '4. Configure the instance and storage'))}</h3><div><p>${esc(T('Copie os dois templates, preencha URLs, guilds, credenciais e o contrato público de privacidade pelo injector. Depois, confirme manualmente no .env que a VPS é dedicada usando a frase KASSINAO_DEDICATED_DOCKER_HOST_ACK mostrada no bloco abaixo. Com o mount LUKS já ativo e a raiz 0700 root:root, prepare-storage.sh valida o bundle e a configuração, prova a criptografia antes de qualquer criação e materializa somente recordings, state, auth e cache como 0700 no UID/GID configurado. Esses valores e diretórios nunca entram na imagem ou no bundle público.', 'Copy both templates, then fill URLs, guilds, credentials, and the public privacy contract through the injector. Next, manually acknowledge in .env that the VPS is dedicated using the KASSINAO_DEDICATED_DOCKER_HOST_ACK phrase shown below. With the LUKS mount already active and its root at 0700 root:root, prepare-storage.sh validates the bundle and configuration, proves encryption before creating anything, and materializes only recordings, state, auth, and cache as 0700 under the configured UID/GID. These values and directories never enter the image or public bundle.'))}</p><p>${esc(T('KASSINAO_ROLLBACK_RETENTION_HOURS precisa existir e coincidir nos dois arquivos. O padrão é 72 horas e a faixa aceita é 1..168.', 'KASSINAO_ROLLBACK_RETENTION_HOURS must exist and match in both files. The default is 72 hours and the accepted range is 1..168.'))}</p></div></article>
-        <article class="install-step"><h3>${esc(T('5. Audite antes do lançamento', '5. Audit before launch'))}</h3><div><p>${esc(T('Com DNS e HTTPS já propagados, o deploy valida por fora os quatro hosts, a identidade da release, a política PT/EN, a separação de superfícies e a negação de rotas privadas. O audit também verifica layout, rede, containers, firewall, storage, permissões, listeners e headers. Só depois anuncie as URLs, distribua o invite ou habilite uso real.', 'With DNS and HTTPS already propagated, deployment externally validates all four hosts, release identity, the PT/EN policy, surface separation, and denial of private routes. The audit also verifies layout, networking, containers, firewall, storage, permissions, listeners, and headers. Only then announce the URLs, distribute the invite, or enable real use.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('1. Escolha o perímetro do host', '1. Choose the host boundary'))}</h3><div><p>${esc(T('Ambos exigem Linux amd64 ou arm64 atualizado, systemd 249+, Docker Engine 28.0.0+, Docker Compose 2.35.0+, GNU coreutils, iptables/ip6tables, iproute2, util-linux, cryptsetup, e2fsprogs, curl, Python 3, tar/gzip, SSH por chave e firewall. Confira arquitetura e versões antes de criar ou montar storage: o bundle nativo, deploy e audit recusam hosts incompatíveis. Use KASSINAO_HOST_SCOPE=dedicated somente numa VPS exclusiva; ele exige o aceite literal e usa prepare-storage.sh, install-host-controls.sh e audit-vps-security.sh. Na VPS com outros sistemas confiáveis do mesmo operador, use shared, deixe o aceite dedicado vazio e use os scripts shared. Shared exige UID/GID explícitos e livres em 61000..61183, sem criar conta/grupo Linux, e o runbook privado precisa aplicar e persistir kernel.core_pattern=/dev/null e fs.suid_dumpable=0 antes do primeiro gate público, com impacto global, valores anteriores e recuperação documentados. Nunca misture os caminhos.', 'Both require an up-to-date amd64 or arm64 Linux host, systemd 249+, Docker Engine 28.0.0+, Docker Compose 2.35.0+, GNU coreutils, iptables/ip6tables, iproute2, util-linux, cryptsetup, e2fsprogs, curl, Python 3, tar/gzip, key-based SSH, and a firewall. Check architecture and versions before creating or mounting storage: the native bundle, deploy, and audit reject incompatible hosts. Use KASSINAO_HOST_SCOPE=dedicated only on an exclusive VPS; it requires the literal acknowledgement and uses prepare-storage.sh, install-host-controls.sh, and audit-vps-security.sh. On a VPS with other trusted systems owned by the same operator, use shared, leave the dedicated acknowledgement empty, and use the shared scripts. Shared requires explicit unused UID/GID values in 61000..61183 without creating a Linux account/group, and the private runbook must apply and persist kernel.core_pattern=/dev/null and fs.suid_dumpable=0 before the first public gate, with global impact, prior values, and recovery documented. Never mix the paths.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('2. Instale o bundle operacional', '2. Install the operations bundle'))}</h3><div><p>${esc(T('O bundle não leva checkout Git, código-fonte da aplicação nem credenciais, mas contém controles operacionais públicos em Shell/Python, templates sem segredos e runtimes nativos. Depois de verificar tarball e .sha256 numa máquina confiável, transfira os dois para /tmp e repita o checksum na VPS antes de extrair uma única vez no diretório novo. O bloco cria pais root-owned, fixa a raiz em 0700, confirma 700:0:0 e usa caminhos absolutos. Não extraia por cima de release antiga nem dentro de Git. A VPS puxa a imagem por image@sha256 e não executa git clone, npm install ou docker build.', 'The bundle carries no Git checkout, application source code, or credentials, but it does contain public Shell/Python operational controls, secret-free templates, and native runtimes. After verifying the tarball and .sha256 on a trusted workstation, transfer both to /tmp and repeat the checksum on the VPS before extracting once into the new directory. The block creates root-owned parents, fixes the root at 0700, confirms 700:0:0, and uses absolute paths. Never extract over an older release or inside Git. The VPS pulls the image by image@sha256 and does not run git clone, npm install, or docker build.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('3. Separe público e privado', '3. Separate public and private'))}</h3><div><p>${esc(T('O kit aceita somente topologia split: landing/docs/demo num processo sem segredos; bot, app privado e API MCP no core privado. APP_URL, MCP_URL, PUBLIC_URL e DOCS_URL permanecem origens HTTPS externas; MCP_URL pode repetir APP_URL, então são três ou quatro hostnames. Nas regras de ingress do Cloudflare Tunnel, roteie os hostnames de app/MCP para http://kassinao:8080 e os de landing/docs para http://kassinao-public:8081. Num proxy do host, use respectivamente as portas loopback KASSINAO_HOST_PORT e KASSINAO_PUBLIC_HOST_PORT. Prepare DNS, certificados e as quatro origens antes do deploy, porque o gate testa tudo por fora. Nunca abra 8080/8081 na internet. Ainda não anuncie a instância nem distribua o invite do bot.', 'The bundle accepts split topology only: landing/docs/demo in a secretless process; bot, private app, and MCP API in the private core. APP_URL, MCP_URL, PUBLIC_URL, and DOCS_URL remain external HTTPS origins; MCP_URL may repeat APP_URL, so they use three or four hostnames. In Cloudflare Tunnel ingress rules, route the app/MCP hostnames to http://kassinao:8080 and the landing/docs hostnames to http://kassinao-public:8081. With a host proxy, use the KASSINAO_HOST_PORT and KASSINAO_PUBLIC_HOST_PORT loopback ports, respectively. Prepare DNS, certificates, and all four origins before deployment because the gate tests them externally. Never expose 8080/8081 to the internet. Do not announce the instance or distribute the bot invite yet.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('4. Configure a instância e o storage', '4. Configure the instance and storage'))}</h3><div><p>${esc(T('Dedicated copia os dois templates. Shared copia somente compose.env.example: app.env e o token do túnel são criados dentro do mount LUKS, nunca na release nem no metadata do Docker. O injector preenche URLs, guilds, credenciais e política depois que o storage escolhido foi provado. Shared cria no disco existente um backing file root-only, abre um mapper LUKS2 e monta DATA_ROOT com rw,nodev,nosuid,noexec; backing path, mapper, UUID, chave e procedimento de unlock ficam somente no runbook privado. Nunca guarde a chave de unlock no mesmo disco da VPS.', 'Dedicated copies both templates. Shared copies only compose.env.example: app.env and the tunnel token are created inside the LUKS mount, never in the release or Docker metadata. The injector fills URLs, guilds, credentials, and policy only after the selected storage has been proved. Shared creates a root-only backing file on the existing disk, opens a LUKS2 mapper, and mounts DATA_ROOT with rw,nodev,nosuid,noexec; the backing path, mapper, UUID, key, and unlock procedure stay only in the private runbook. Never store the unlock key on the same VPS disk.'))}</p><p>${esc(T('Não existe SIZE universal. Meça dados atuais, retenção, máximo de duração e concorrência, faixas temporárias do processamento, cache e crescimento; some margem de recuperação e preserve uma reserva explícita para cada workload vizinho. O file-container é pré-alocado e não cresce sozinho. Configure MIN_FREE_MB_START, MIN_FREE_MB_ABORT e DISK_ALERT_PCT dentro dele para alertar e interromper trabalho antes da exaustão, sem tratar esses guards como substituto para o headroom do host.', 'There is no universal SIZE. Measure current data, retention, maximum duration and concurrency, temporary processing tracks, cache, and growth; add recovery margin and preserve explicit capacity for every neighboring workload. The file container is preallocated and does not grow automatically. Configure MIN_FREE_MB_START, MIN_FREE_MB_ABORT, and DISK_ALERT_PCT inside it to alert and stop work before exhaustion, without treating those guards as a substitute for host headroom.'))}</p><p>${esc(T('Ao migrar o layout legado v1.4.9 sem KASSINAO_HOST_SCOPE, o fluxo prova a instalação, remove somente o watchdog antigo por byte-match e para os containers sem removê-los. O preparo aceita apenas os sete arquivos root conhecidos em recordings, mantém esses arquivos co-located na origem e no rollback plaintext e cria state/auth vazios quando não havia mounts próprios. Só no staging cifrado o migrador distribui os arquivos em state/auth, grava state/.layout-v2 e deixa auth/.instance-id para o primeiro boot novo; arquivo desconhecido ou conflito falha fechado. Depois ele preserva DATA_ROOT.plaintext-before-shared-luks e cria um marker pending cifrado com prazo de 1 a 168 horas. Após validar app, ACL, uma gravação real e restauração do backup, o purge legado vem antes do finalizer, porque ainda depende do rollback consolidado. Não há promessa de secure erase em SSD ou snapshot.', 'When migrating the v1.4.9 legacy layout without KASSINAO_HOST_SCOPE, the flow proves the installation, removes only the old byte-matched watchdog, and stops containers without removing them. Preparation accepts only the seven known root files in recordings, keeps those files co-located in the source and plaintext rollback, and creates empty state/auth directories when no separate mounts existed. Only encrypted staging maps the files into state/auth, writes state/.layout-v2, and leaves auth/.instance-id for the first new boot; an unknown file or conflict fails closed. It then preserves DATA_ROOT.plaintext-before-shared-luks and creates an encrypted pending marker with a 1-168 hour deadline. After validating app, ACL, a real recording, and backup restoration, legacy source purge comes before the finalizer because it still depends on the consolidated rollback. It does not claim secure erasure on SSDs or snapshots.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('5. Audite antes do lançamento', '5. Audit before launch'))}</h3><div><p>${esc(T('Com DNS e HTTPS propagados, o deploy valida as quatro origens configuradas, release, política PT/EN e separação de superfícies. O audit do adapter precisa passar depois. No shared, ele também recusa colisão de projeto, nome ou bridge, capabilities, devices, volumes-from, namespaces de container/host, mounts sobre dados protegidos ou Docker e vizinhos numa rede Kassinão. Só depois anuncie URLs, distribua o invite ou habilite uso real.', 'With DNS and HTTPS propagated, deployment validates all four configured origins, the release, PT/EN policy, and surface separation. The matching adapter audit must pass afterward. In shared mode it also rejects project, name, or bridge collisions, capabilities, devices, volumes-from, container or host namespaces, mounts over protected data or Docker, and neighbors on a Kassinão network. Only then announce URLs, distribute the invite, or enable real use.'))}</p></div></article>
       </div>
-      ${productionDeploy}
+      <div class="callout"><strong>${esc(T('O migrador plaintext não converte um adapter moderno.', 'The plaintext migrator does not convert a modern adapter.'))}</strong><p>${esc(T('Dedicated e shared modernos já usam DATA_ROOT montado e exigem outro procedimento auditado. O bloco de migração abaixo falha fechado e aceita somente o legado anterior a KASSINAO_HOST_SCOPE.', 'Modern dedicated and shared adapters already use a mounted DATA_ROOT and require a separate audited procedure. The migration block below fails closed and accepts only the legacy layout that predates KASSINAO_HOST_SCOPE.'))}</p></div>
+      <div class="code-stack">${productionDeployDedicated}${productionDeployShared}${productionMigrateShared}${rebootSharedStorage}</div>
       <div class="callout"><strong>${esc(T('Rollback não é backup.', 'Rollback is not a backup.'))}</strong><p>${esc(T('Um deploy saudável apaga o snapshot imediatamente. Se falhar, o snapshot contém somente estado operacional e metadados de gravações, sem auth nem faixas de áudio, e o timer persistente do host o remove dentro da janela declarada mesmo sem outro deploy.', 'A healthy deployment deletes its snapshot immediately. If it fails, the snapshot contains only operational state and recording metadata, without auth or audio tracks, and the persistent host timer removes it within the declared window even if no later deployment runs.'))}</p></div>
     </section>
 
@@ -2006,7 +2317,7 @@ sudo ./scripts/uninstall-host-controls.sh --confirm-remove-kassinao-host-control
         <article class="privacy-rule"><h3>${esc(T('ACL histórica da reunião', 'Historical meeting ACL'))}</h3><p>${esc(T('Abre para quem iniciou, esteve na call ou tem Gerenciar Servidor agora. Ganhar acesso ao canal depois não abre o passado. OWNER_IDS não concede acesso universal às gravações.', 'Access is granted to the starter, call participants, or someone with Manage Server now. Later channel access does not unlock history. OWNER_IDS does not grant universal recording access.'))}</p></article>
         <article class="privacy-rule"><h3>${esc(T('Falha fechada', 'Fail closed'))}</h3><p>${esc(T('Se o Discord não confirma membership ou permissão, web e bot negam; a API MCP responde indisponibilidade temporária quando a checagem falha transitoriamente.', 'If Discord cannot confirm membership or permission, web and bot deny access; the MCP API returns temporary unavailability when the check fails transiently.'))}</p></article>
         <article class="privacy-rule"><h3>${esc(T('Busca limitada e paginada', 'Bounded and paginated search'))}</h3><p>${esc(T('A busca no app opera sobre a página carregada e seus limites. Ela não promete indexação global ilimitada do acervo.', 'Private-app search operates over the loaded page and its limits. It does not promise unlimited global indexing of the archive.'))}</p></article>
-        <article class="privacy-rule"><h3>${esc(T('Storage ativo e backup são controles diferentes', 'Active storage and backup are separate controls'))}</h3><p>${esc(T('O kit exige dados ativos, auth e cache em dm-crypt/LUKS, com swap desabilitado ou também criptografado. O backup inclui recordings e state, exclui auth e usa um remote rclone crypt. Um backup criptografado não substitui a criptografia do volume ativo.', 'The bundle requires active data, auth, and cache on dm-crypt/LUKS, with swap disabled or encrypted as well. Backups include recordings and state, exclude auth, and use an rclone crypt remote. An encrypted backup does not replace active-volume encryption.'))}</p></article>
+        <article class="privacy-rule"><h3>${esc(T('Storage ativo e backup são controles diferentes', 'Active storage and backup are separate controls'))}</h3><p>${esc(T('O kit exige dados ativos, auth e cache em dm-crypt/LUKS. Dedicated também prova o swap do host; shared impede swap separadamente em cada container com limite positivo, MemorySwap=Memory e swappiness 0. O backup inclui recordings e state, exclui auth e usa remote rclone crypt. Backup criptografado não substitui o volume ativo.', 'The bundle requires active data, auth, and cache on dm-crypt/LUKS. Dedicated also proves host swap; shared prevents swap separately in each container using a positive limit, MemorySwap=Memory, and swappiness 0. Backups include recordings and state, exclude auth, and use an rclone crypt remote. An encrypted backup does not replace active-volume encryption.'))}</p></article>
         <article class="privacy-rule"><h3>${esc(T('Direitos sobre dados', 'Data rights'))}</h3><p>${esc(T('A política identifica o operador e oferece um canal para pedir acesso, correção ou exclusão. Solicitações reais nunca devem ser abertas em issue pública do projeto.', 'The policy identifies the operator and offers a channel for access, correction, or deletion requests. Real requests must never be opened in a public project issue.'))}</p></article>
       </div><aside class="permission-box"><h3>${esc(T('Defaults de uma instalação nova', 'New-install defaults'))}</h3><ul><li><code>TRANSCRIBE_PROVIDER=none</code></li><li><code>TRANSCRIBE_FALLBACK_PROVIDER=none</code></li><li><code>MINUTES_ENABLED=false</code></li><li><code>MCP_SECRET</code> ${esc(T('vazio', 'empty'))}</li><li><code>RETENTION_DAYS=7</code></li><li><code>TEXT_RETENTION_DAYS=90</code></li></ul></aside></div>
       <h3>${esc(T('Configuração essencial', 'Essential configuration'))}</h3><p>${esc(T('A lista completa, com limites e providers, fica no .env.example. Aqui estão apenas os controles que mudam a fronteira de produto e segurança.', 'The complete list, including limits and providers, lives in .env.example. These are only the controls that change the product and security boundary.'))}</p><div class="env-groups">${envCards}</div>
@@ -2025,24 +2336,24 @@ sudo ./scripts/uninstall-host-controls.sh --confirm-remove-kassinao-host-control
       <div class="section-head"><h2>${esc(T('Opere mudanças como mudanças de segurança.', 'Operate changes as security changes.'))}</h2><p>${esc(T('Upgrade, restauração, troca de domínio e encerramento alteram dados, OAuth ou fronteiras de rede. Faça cada um com janela, backup e validação.', 'Upgrade, restore, domain migration, and shutdown change data, OAuth, or network boundaries. Perform each with a maintenance window, backup, and validation.'))}</p></div>
       <div class="install-steps">
         <article class="install-step"><h3>${esc(T('Upgrade', 'Upgrade'))}</h3><div><p>${esc(T('Verifique a nova release e o bundle numa máquina confiável. Faça backup coerente, instale em novo diretório root-owned, preserve os diretórios de dados, rode deploy e audit, valide /health e um fluxo real, e só então troque o current. Nunca faça build na VPS.', 'Verify the new release and bundle on a trusted workstation. Create a consistent backup, install in a new root-owned directory, preserve data directories, run deploy and audit, validate /health and a real flow, and only then switch current. Never build on the VPS.'))}</p></div></article>
-        <article class="install-step"><h3>${esc(T('Backup', 'Backup'))}</h3><div><p>${esc(T('scripts/backup.sh exige o writer parado ou BACKUP_STOP_CONTAINER=true, prova dm-crypt/LUKS e remote rclone crypt. O arquivo contém somente recordings e state; auth, sessões, cache e segredos ficam de fora por construção.', 'scripts/backup.sh requires a stopped writer or BACKUP_STOP_CONTAINER=true, proves dm-crypt/LUKS, and requires an rclone crypt remote. The archive contains only recordings and state; auth, sessions, cache, and secrets are excluded by construction.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('Backup', 'Backup'))}</h3><div><p>${esc(T('scripts/backup.sh exige o writer parado ou BACKUP_STOP_CONTAINER=true, prova dm-crypt/LUKS e remote rclone crypt. Antes do upload, recusa links, hardlinks, arquivos especiais e filesystems aninhados, repete o inventário e compara tipo, tamanho e hash de cada membro do tar. No shared, upload e retenção usam credenciais distintas dentro de DATA_ROOT/config no mount LUKS.', 'scripts/backup.sh requires a stopped writer or BACKUP_STOP_CONTAINER=true, proves dm-crypt/LUKS, and requires an rclone crypt remote. Before upload it rejects links, hardlinks, special files, and nested filesystems, repeats the inventory, and compares every tar member type, size, and hash. In shared mode, upload and retention use distinct credentials under DATA_ROOT/config in the LUKS mount.'))}</p></div></article>
         <article class="install-step"><h3>${esc(T('Restauração', 'Restore'))}</h3><div><p>${esc(T('Restaure somente um archive com manifesto kassinao-backup-v2 em storage LUKS vazio, com o core parado. Recrie auth e credenciais em vez de copiar de outra instância, ajuste owner/mode, suba o mesmo release verificado, audite e faça teste de acesso antes de reabrir.', 'Restore only an archive with a kassinao-backup-v2 manifest into empty LUKS storage with the core stopped. Recreate auth and credentials instead of copying them from another instance, fix ownership and modes, start the same verified release, audit, and test access before reopening.'))}</p></div></article>
-        <article class="install-step"><h3>${esc(T('Troca de domínio', 'Domain migration'))}</h3><div><p>${esc(T('Escolha as quatro origens novas, configure DNS/túnel e certificados, atualize APP_URL, MCP_URL, PUBLIC_URL, DOCS_URL, política e contato. No Discord Portal, troque OAuth Redirect para APP_URL/auth/callback e Privacy Policy para APP_URL/privacy. Reinicie, invalide sessões/conectores quando necessário, valide POSTs e só depois remova os hosts antigos.', 'Choose the four new origins, configure DNS or tunnel and certificates, then update APP_URL, MCP_URL, PUBLIC_URL, DOCS_URL, policy, and contact. In the Discord Portal, change OAuth Redirect to APP_URL/auth/callback and Privacy Policy to APP_URL/privacy. Restart, invalidate sessions and connectors when needed, validate POST requests, and only then remove old hosts.'))}</p></div></article>
-        <article class="install-step"><h3>${esc(T('Remover controles do host', 'Remove host controls'))}</h3><div><p>${esc(T('Faça isso somente ao mover ou encerrar a instância. Primeiro use docker compose down; alternativamente, todos os containers Kassinão precisam estar parados e com restart=no. O uninstall recusa snapshots pendentes e drift, remove somente os artefatos exatos instalados, não para containers, não reinicia o Docker e nunca apaga KASSINAO_DATA_ROOT. Um snapshot de deploy falho precisa expirar pelo timer ou ser resolvido por um deploy saudável antes da remoção.', 'Do this only when moving or shutting down the instance. First run docker compose down; alternatively, every Kassinão container must be stopped with restart=no. The uninstall rejects pending snapshots and drift, removes only the exact installed artifacts, does not stop containers, does not restart Docker, and never deletes KASSINAO_DATA_ROOT. A failed-deploy snapshot must expire through the timer or be resolved by a healthy deployment before removal.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('Troca de domínio', 'Domain migration'))}</h3><div><p>${esc(T('Escolha as quatro origens novas, em três ou quatro hostnames, configure DNS/túnel e certificados, atualize APP_URL, MCP_URL, PUBLIC_URL, DOCS_URL, política e contato. No Discord Portal, troque OAuth Redirect para APP_URL/auth/callback e Privacy Policy para APP_URL/privacy. Reinicie, invalide todas as sessões web e exija nova conexão MCP, valide login e POSTs nas origens novas e só depois remova os hosts antigos.', 'Choose the four new origins across three or four hostnames, configure DNS or tunnel and certificates, then update APP_URL, MCP_URL, PUBLIC_URL, DOCS_URL, policy, and contact. In the Discord Portal, change OAuth Redirect to APP_URL/auth/callback and Privacy Policy to APP_URL/privacy. Restart, invalidate every web session, require a new MCP connection, validate login and POSTs on the new origins, and only then remove the old hosts.'))}</p></div></article>
+        <article class="install-step"><h3>${esc(T('Remover controles do host', 'Remove host controls'))}</h3><div><p>${esc(T('Faça isso somente ao mover ou encerrar a instância. Use o comando Compose completo do adapter e o uninstaller correspondente; nunca use docker compose down sem project, env e arquivos explícitos numa VPS compartilhada. Os dois uninstallers recusam containers em execução, restart automático, snapshots pendentes e drift. Eles removem somente os controles exatos instalados, não reiniciam o Docker e não apagam release, DATA_ROOT, backing LUKS ou segredos.', 'Do this only when moving or shutting down the instance. Use the complete adapter-specific Compose command and the matching uninstaller; never run docker compose down without explicit project, env, and files on a shared VPS. Both uninstallers reject running containers, automatic restart, pending snapshots, and drift. They remove only the exact installed controls, do not restart Docker, and do not delete the release, DATA_ROOT, LUKS backing file, or secrets.'))}</p></div></article>
         <article class="install-step"><h3>${esc(T('Desativação', 'Decommission'))}</h3><div><p>${esc(T('Pare bot e túnel, confirme zero gravações ativas, revogue token e Client Secret do Discord, MCP, providers, webhook e túnel, remova callbacks e DNS, aplique a política de retenção ao backup e destrua com segurança volumes, snapshots e envs. Preserve apenas o que a política e a obrigação legal exigirem.', 'Stop the bot and tunnel, confirm zero active recordings, revoke Discord token and Client Secret, MCP, providers, webhook, and tunnel credentials, remove callbacks and DNS, apply retention policy to backups, and securely destroy volumes, snapshots, and env files. Preserve only what policy and legal obligations require.'))}</p></div></article>
       </div>
-      ${uninstallHostControls}
+      <div class="code-stack">${finalizeSharedMigration}${growSharedStorage}${uninstallDedicatedHostControls}${uninstallSharedHostControls}</div>
     </section>
 
     <section class="doc-section" id="problemas" data-doc-section data-keywords="troubleshooting boot commands oauth origin policy transcript minutes mcp access disk audit">
       <div class="section-head"><h2>${esc(T('Diagnóstico começa pelo gate que falhou.', 'Troubleshooting starts at the failed gate.'))}</h2><p>${esc(T('Não afrouxe firewall, proxy, ACL ou validação de origem para fazer um erro desaparecer.', 'Do not weaken firewall, proxy, ACL, or origin validation to make an error disappear.'))}</p></div>
       <div class="troubleshooting">
-        <details class="trouble"><summary>${esc(T('O container não inicia', 'The container does not start'))}</summary><div class="trouble-body"><p>${esc(T('Leia docker compose logs --tail=200 kassinao. Confirme credenciais, APP_URL, allowlist e os campos públicos do operador. Em produção, URLs exigidas usam HTTPS e host público.', 'Read docker compose logs --tail=200 kassinao. Confirm credentials, APP_URL, allowlist, and public operator fields. In production, required URLs use HTTPS and a public host.'))}</p></div></details>
+        <details class="trouble"><summary>${esc(T('O container não inicia', 'The container does not start'))}</summary><div class="trouble-body"><p>${esc(T('Use docker compose com --project-name kassinao, --project-directory, --env-file e os mesmos arquivos do adapter para ler logs --tail=200 kassinao. Confirme credenciais, APP_URL, allowlist, storage e os campos públicos do operador. Nunca rode um Compose genérico na VPS compartilhada.', 'Use docker compose with --project-name kassinao, --project-directory, --env-file, and the same adapter files to read logs --tail=200 kassinao. Confirm credentials, APP_URL, allowlist, storage, and public operator fields. Never run generic Compose commands on the shared VPS.'))}</p></div></details>
         <details class="trouble"><summary>${esc(T('Os comandos não aparecem', 'Commands do not appear'))}</summary><div class="trouble-body"><p>${esc(T('Confirme Guild Install, scopes bot e applications.commands, guild na allowlist e registro concluído. /perguntar e /mcp dependem das respectivas capacidades.', 'Confirm Guild Install, bot and applications.commands scopes, the guild allowlist, and completed registration. /ask and /mcp depend on their respective capabilities.'))}</p></div></details>
         <details class="trouble"><summary>${esc(T('OAuth retorna origem inválida', 'OAuth returns invalid origin'))}</summary><div class="trouble-body"><p>${esc(T('APP_URL é uma origem sem caminho. O Redirect cadastrado é exatamente APP_URL/auth/callback. Depois de trocar domínio, atualize Portal, env e processo antes de testar novamente.', 'APP_URL is a pathless origin. The registered Redirect is exactly APP_URL/auth/callback. After a domain change, update the Portal, env, and process before testing again.'))}</p></div></details>
         <details class="trouble"><summary>${esc(T('Há áudio, mas não transcrição ou ata', 'Audio exists, but transcript or minutes do not'))}</summary><div class="trouble-body"><p>${esc(T('Isso é normal com os defaults. Transcrição exige provider explícito; ata exige alguma transcrição disponível, MINUTES_ENABLED=true, provider e chave. Uma transcrição parcial pode gerar uma ata incompleta. Consulte a fila sem habilitar LOG_PII fora de uma janela controlada.', 'This is normal with defaults. Transcription requires an explicit provider; minutes require some available transcript, MINUTES_ENABLED=true, a provider, and a key. A partial transcript can produce incomplete minutes. Inspect the queue without enabling LOG_PII outside a controlled window.'))}</p></div></details>
         <details class="trouble"><summary>${esc(T('MCP retorna 404 ou 503', 'MCP returns 404 or 503'))}</summary><div class="trouble-body"><p>${esc(T('404 é esperado quando MCP_SECRET está vazio ou a rota não pertence ao host MCP. 503 indica que o Discord não confirmou membership de forma transitória; não transforme isso em allow.', '404 is expected when MCP_SECRET is empty or the route is not on the MCP host. 503 means Discord did not confirm membership transiently; never turn it into allow.'))}</p></div></details>
-        <details class="trouble"><summary>${esc(T('O audit da VPS falha', 'The VPS audit fails'))}</summary><div class="trouble-body"><p>${esc(T('Corrija o item relatado. O audit reprova, entre outros, checkout Git, imagem sem digest, storage sem LUKS, topologia não split, portas externas, permissões frouxas e segredos no processo público.', 'Fix the reported item. The audit rejects, among other issues, a Git checkout, an image without a digest, storage without LUKS, non-split topology, external ports, loose permissions, and secrets in the public process.'))}</p></div></details>
+        <details class="trouble"><summary>${esc(T('O audit da VPS falha', 'The VPS audit fails'))}</summary><div class="trouble-body"><p>${esc(T('Corrija o item relatado; não afrouxe o gate. Além das regras comuns, o audit shared reserva projeto, nomes, bridges e redes do Kassinão, valida mounts e Config.Env e recusa qualquer vizinho com acesso privilegiado, device, Docker ou storage protegido.', 'Fix the reported item; do not weaken the gate. In addition to common rules, the shared audit reserves the Kassinão project, names, bridges, and networks, validates mounts and Config.Env, and rejects any neighbor with privileged, device, Docker, or protected-storage access.'))}</p></div></details>
       </div>
     </section>
 

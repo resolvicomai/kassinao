@@ -1,6 +1,7 @@
 import { config } from '../config';
 import { localizeEvent, Locale } from '../i18n';
 import { msToClock } from '../processing/transcribe';
+import { MCP_NPX_PACKAGE } from '../productVersions';
 import { formatDuration, formatOffset } from '../recorder/RecordingSession';
 import { MAX_NOTES_PER_RECORDING, MAX_PRESENCE_IDENTITIES_PER_RESPONSE } from '../securityLimits';
 import {
@@ -1824,7 +1825,7 @@ export function connectPage(opts: {
   }
 
   if (opts.exchangeCode) {
-    const command = `npx -y kassinao-mcp@1.0.7 exchange --stdin --url ${config.mcpUrl}`;
+    const command = `npx -y ${MCP_NPX_PACKAGE} exchange --stdin --url ${config.mcpUrl}`;
     const localhostWarn = config.mcpUrl.startsWith('http://localhost')
       ? `<div class="note" role="alert">${esc(
           T(

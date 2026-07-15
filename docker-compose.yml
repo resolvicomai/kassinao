@@ -6,8 +6,8 @@ services:
     pull_policy: ${KASSINAO_PULL_POLICY:-never}
     container_name: kassinao
     restart: unless-stopped
-    # O processo roda sem root. Em instalação antiga, ajuste o volume uma vez:
-    #   sudo chown -R ${KASSINAO_UID:-1000}:${KASSINAO_GID:-1000} recordings
+    # O processo roda sem root. Migrações de ownership usam os scripts selados;
+    # nunca aplique chown -R manual em dados ou mounts de produção.
     user: '${KASSINAO_UID:-1000}:${KASSINAO_GID:-1000}'
     read_only: true
     security_opt:
@@ -15,6 +15,10 @@ services:
     cap_drop:
       - ALL
     pids_limit: 256
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
     mem_limit: ${KASSINAO_MEMORY_LIMIT:-3g}
     cpus: ${KASSINAO_CPUS:-2.0}
     stop_grace_period: 45s # > soma dos tetos internos do shutdown (20s FLAC + 15s REST + margem)
@@ -68,7 +72,11 @@ services:
       test:
         [
           'CMD',
-          'node',
+          '/usr/local/bin/kassinao-no-dump',
+          '--preload',
+          '/usr/local/lib/libkassinao-no-dump.so',
+          '--',
+          '/usr/local/bin/node',
           '-e',
           "fetch('http://localhost:8080/health').then((r)=>process.exit(r.ok?0:1),()=>process.exit(1))",
         ]
@@ -86,7 +94,7 @@ services:
     pull_policy: ${KASSINAO_PULL_POLICY:-never}
     container_name: kassinao-public
     profiles: ['split-public']
-    command: ['node', 'dist/public.js']
+    command: ['/usr/local/bin/node', 'dist/public.js']
     restart: unless-stopped
     user: '${KASSINAO_UID:-1000}:${KASSINAO_GID:-1000}'
     read_only: true
@@ -95,6 +103,10 @@ services:
     cap_drop:
       - ALL
     pids_limit: 128
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
     mem_limit: 512m
     cpus: 0.50
     logging:
@@ -125,7 +137,11 @@ services:
       test:
         [
           'CMD',
-          'node',
+          '/usr/local/bin/kassinao-no-dump',
+          '--preload',
+          '/usr/local/lib/libkassinao-no-dump.so',
+          '--',
+          '/usr/local/bin/node',
           '-e',
           "fetch('http://localhost:8081/health',{redirect:'manual'}).then((r)=>process.exit(r.ok?0:1),()=>process.exit(1))",
         ]
@@ -148,6 +164,10 @@ services:
     cap_drop:
       - ALL
     pids_limit: 64
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
     mem_limit: 256m
     cpus: 0.50
     tmpfs:

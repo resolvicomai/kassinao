@@ -82,6 +82,58 @@ jobs:
             printf 'stable=true\nminor=%s\n' "${version%.*}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Require the reviewed MCP release before publishing the app
+        env:
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+        run: |
+          set -euo pipefail
+          package="$(node -p "require('./mcp/package.json').name")"
+          version="$(node -p "require('./mcp/package.json').version")"
+          mcp_ref="refs/tags/mcp-v$version"
+          release_commit="${{ steps.release.outputs.release_commit }}"
+          local_tag_oid="$(git rev-parse "$mcp_ref")"
+          test "$(git cat-file -t "$local_tag_oid")" = tag || {
+            echo "$mcp_ref must be an annotated release tag" >&2
+            exit 1
+          }
+          test "$(git rev-parse "$mcp_ref^{commit}")" = "$release_commit" || {
+            echo "$mcp_ref does not point to the reviewed app release commit" >&2
+            exit 1
+          }
+          remote_tag_oids="$(git ls-remote --refs origin "$mcp_ref" | awk '{print $1}')"
+          test "$(wc -w <<< "$remote_tag_oids")" -eq 1 \
+            && test "$remote_tag_oids" = "$local_tag_oid" || {
+              echo "Remote $mcp_ref does not match the immutable local tag" >&2
+              exit 1
+            }
+
+          metadata="$RUNNER_TEMP/$package-$version.metadata.json"
+          attestations="$RUNNER_TEMP/$package-$version.attestations.json"
+          audit_root="$(mktemp -d)"
+          trap 'rm -rf -- "$audit_root" "$metadata" "$attestations"' EXIT
+          umask 077
+
+          for attempt in 1 2 3 4 5; do
+            if npm view "$package@$version" version dist --json >"$metadata" 2>/dev/null \
+              && curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+                "https://registry.npmjs.org/-/npm/v1/attestations/$package@$version" >"$attestations"; then
+              break
+            fi
+            rm -f -- "$metadata" "$attestations"
+            sleep "$((attempt * 3))"
+          done
+
+          test -s "$metadata" && test -s "$attestations" || {
+            echo "$package@$version is not yet available with npm attestations; publish mcp-v$version first" >&2
+            exit 1
+          }
+          npm install --ignore-scripts --no-audit --no-fund --prefix "$audit_root" "$package@$version"
+          npm audit signatures --prefix "$audit_root"
+          node scripts/verify-npm-release-attestation.cjs \
+            "$metadata" "$attestations" "$package" "$version" \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" '.github/workflows/publish-mcp.yml' \
+            "$mcp_ref" "$release_commit"
+
       - name: Gate the release on the audited source tree
         run: |
           # /tmp é deliberadamente recusado pelos controles com PrivateTmp=true.
@@ -286,6 +338,40 @@ jobs:
             '
           DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/arm64 "$arm64_image" >/dev/null
 
+          prove_no_dump_runtime() {
+            local platform="$1" reference="$2"
+            docker run --rm --platform "$platform" --network none --read-only --user 1000:1000 \
+              --cap-drop ALL --security-opt no-new-privileges \
+              --entrypoint /usr/local/bin/kassinao-no-dump "$reference" \
+              --preload /usr/local/lib/libkassinao-no-dump.so -- /usr/local/bin/node -e '
+                const fs = require("node:fs");
+                if (process.env.KASSINAO_NO_DUMP_ACTIVE !== `prctl-v1:${process.pid}`) process.exit(21);
+                if (parseInt(fs.readFileSync("/proc/self/coredump_filter", "utf8"), 16) !== 0) process.exit(22);
+              '
+          }
+          prove_no_dump_runtime linux/amd64 "$amd64_image"
+          prove_no_dump_runtime linux/arm64 "$arm64_image"
+
+          extract_no_dump_runtime() {
+            local platform="$1" architecture="$2" reference="$3" destination="dist/native-runtime/linux-$2"
+            local container
+            mkdir -p "$destination"
+            container="$(docker create --platform "$platform" --entrypoint /usr/local/bin/kassinao-no-dump "$reference" --check-current)"
+            docker cp "$container:/usr/local/bin/kassinao-no-dump" "$destination/kassinao-no-dump" || {
+              docker rm -f "$container" >/dev/null 2>&1 || true
+              return 1
+            }
+            docker cp "$container:/usr/local/lib/libkassinao-no-dump.so" "$destination/libkassinao-no-dump.so" || {
+              docker rm -f "$container" >/dev/null 2>&1 || true
+              return 1
+            }
+            docker rm "$container" >/dev/null
+            chmod 0555 "$destination/kassinao-no-dump"
+            chmod 0444 "$destination/libkassinao-no-dump.so"
+          }
+          extract_no_dump_runtime linux/amd64 amd64 "$amd64_image"
+          extract_no_dump_runtime linux/arm64 arm64 "$arm64_image"
+
       - name: Prepare image-security reports
         run: mkdir -p dist/release
 
@@ -320,12 +406,13 @@ jobs:
           version: v0.70.0
           skip-setup-trivy: true
 
-      - name: Build the source-free operations bundle with the exact image digest
+      - name: Build the operations-only bundle without application source code
         run: |
           ./scripts/package-ops-bundle.sh \
             "$GITHUB_REF_NAME" \
             dist/release \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}"
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.image.outputs.digest }}" \
+            dist/native-runtime
 
       - name: Check whether this exact operations bundle is already attested
         id: bundle
@@ -445,7 +532,7 @@ jobs:
           printf '\n---\n\nImagem OCI multiarch por digest: `%s@%s`.\n\n%s\n' \
             "$REGISTRY/$IMAGE_NAME" \
             "$digest" \
-            'O kit operacional não contém source nem credenciais. Verifique checksum e attestations antes do deploy. A imagem final passou pelo gate Trivy atual em amd64 e arm64.' \
+            'O kit operacional não contém checkout Git, código-fonte da aplicação nem credenciais; ele contém controles operacionais públicos selados, templates sem segredos e runtimes nativos. Verifique checksum e attestations antes do deploy. A imagem final passou pelo gate Trivy atual em amd64 e arm64.' \
             >> "$notes_file"
 
           remote_tag_oids="$(git ls-remote --refs origin "$GITHUB_REF" | awk '{print $1}')"

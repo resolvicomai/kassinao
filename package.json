@@ -1,6 +1,6 @@
 {
   "name": "kassinao",
-  "version": "1.4.9",
+  "version": "1.4.10",
   "private": true,
   "description": "Open-source, self-hosted Discord bot for recording calls with separate Discord-account audio tracks and optional transcripts, minutes, and MCP access.",
   "license": "AGPL-3.0-or-later",

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # Remove somente os controles de host instalados pelo kit atual. Não para
 # containers, não apaga dados da instância e recusa qualquer arquivo divergente.
 set -Eeuo pipefail
@@ -9,21 +9,56 @@ CONFIRMATION=--confirm-remove-kassinao-host-controls
   echo "ERRO: uso: uninstall-host-controls.sh $CONFIRMATION" >&2
   exit 1
 }
+die() { printf 'ERRO: %s\n' "$*" >&2; exit 1; }
+_saved_no_dump_marker="${KASSINAO_NO_DUMP_ACTIVE-}"
+_saved_no_dump_preload="${LD_PRELOAD-}"
+_forbidden_docker_environment=''
+for _name in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION; do
+  if declare -p "$_name" >/dev/null 2>&1; then _forbidden_docker_environment="$_name"; break; fi
+done
+[ -r "/proc/$$/environ" ] || die '/proc é obrigatório para limpar o ambiente do uninstall dedicated'
+while IFS='=' read -r -d '' _name _value; do unset "$_name" 2>/dev/null || true; done < "/proc/$$/environ"
+unset _name _value
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C
+[ -z "$_forbidden_docker_environment" ] || die "$_forbidden_docker_environment não pode vir do ambiente"
+
+_script_path="${BASH_SOURCE[0]}"
+case "$_script_path" in /*) ;; ./*) _script_path="$PWD/${_script_path#./}" ;; *) _script_path="$PWD/$_script_path" ;; esac
+case "$_script_path" in *//* | */./* | */../* | */. | */.. | */) die 'caminho do uninstall dedicated não é canônico' ;; esac
+_script_dir="${_script_path%/*}"
+case "$_script_dir" in */scripts) PROJECT_DIR="${_script_dir%/scripts}" ;; *) die 'uninstall dedicated precisa executar do kit selado' ;; esac
+case "${MACHTYPE%%-*}" in x86_64) _no_dump_arch=amd64 ;; aarch64 | arm64) _no_dump_arch=arm64 ;; *) die 'arquitetura sem runtime no-dump' ;; esac
+_no_dump_preload="$PROJECT_DIR/runtime/linux-$_no_dump_arch/libkassinao-no-dump.so"
+# KASSINAO_HOST_NO_DUMP_BEGIN
+if [ "$_saved_no_dump_marker" != "prctl-v1:$$" ] || [ "$_saved_no_dump_preload" != "$_no_dump_preload" ]; then
+  exec /usr/bin/python3 "$PROJECT_DIR/scripts/no-dump-exec.py" \
+    --bundle-root "$PROJECT_DIR" --script-relative scripts/uninstall-host-controls.sh --arch "$_no_dump_arch" -- \
+    "$_script_path" "$@"
+fi
+LD_PRELOAD="$_no_dump_preload"
+export LD_PRELOAD
+[ "$(ulimit -Sc)" = 0 ] && [ "$(ulimit -Hc)" = 0 ] || die 'core limit do uninstall dedicated não ficou selado'
+IFS= read -r _no_dump_filter < "/proc/$$/coredump_filter" || _no_dump_filter=''
+[ "$_no_dump_filter" = 0 ] || die 'coredump_filter do uninstall dedicated não ficou selado'
+# KASSINAO_HOST_NO_DUMP_END
+unset _saved_no_dump_marker _saved_no_dump_preload _no_dump_filter _no_dump_arch _no_dump_preload _script_path _script_dir
 [ "$(id -u)" -eq 0 ] || { echo 'ERRO: execute como root' >&2; exit 1; }
-for command in cmp docker flock systemctl stat; do
+for command in cmp docker flock sha256sum systemctl stat; do
   command -v "$command" >/dev/null 2>&1 || { echo "ERRO: $command não encontrado" >&2; exit 1; }
 done
-for name in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION; do
-  if declare -p "$name" >/dev/null 2>&1; then
-    echo "ERRO: $name não pode vir do ambiente" >&2
-    exit 1
-  fi
-done
 export DOCKER_HOST=unix:///var/run/docker.sock
-unset DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION
+unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+[ "$ROOT" = "$PROJECT_DIR" ] || die 'raiz canônica divergiu do kit selado'
+DOCKER_CONFIG="$ROOT/deploy/docker-client"
+DOCKER_CONFIG_FILE="$DOCKER_CONFIG/config.json"
+[ -d "$DOCKER_CONFIG" ] && [ ! -L "$DOCKER_CONFIG" ] && [ -f "$DOCKER_CONFIG_FILE" ] && [ ! -L "$DOCKER_CONFIG_FILE" ] ||
+  die 'configuração isolada do cliente Docker está ausente ou irregular'
+[ "$(sha256sum -- "$DOCKER_CONFIG_FILE" | awk '{print $1}')" = ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356 ] ||
+  die 'configuração isolada do cliente Docker diverge do objeto vazio selado'
+export DOCKER_CONFIG
 cursor="$ROOT"
 while :; do
   [ ! -e "$cursor/.git" ] || { echo 'ERRO: uninstall de produção exige o kit fora de Git' >&2; exit 1; }
@@ -191,7 +226,7 @@ expected_storage_paths="$(for key in KASSINAO_DATA_ROOT KASSINAO_RECORDINGS_DIR 
   echo 'ERRO: allowlist instalada de storage divergiu' >&2
   exit 1
 }
-expected_host_controls="$(printf 'KASSINAO_DATA_ROOT=%s\nKASSINAO_ROLLBACK_RETENTION_HOURS=%s' "$data_root" "$retention_hours")"
+expected_host_controls="$(printf 'KASSINAO_DEPLOY_DIR=%s\nKASSINAO_DATA_ROOT=%s\nKASSINAO_ROLLBACK_RETENTION_HOURS=%s' "$ROOT" "$data_root" "$retention_hours")"
 [ -f /etc/kassinao/host-controls.env ] && [ ! -L /etc/kassinao/host-controls.env ] && \
   [ "$(cat /etc/kassinao/host-controls.env)" = "$expected_host_controls" ] || {
   echo 'ERRO: registro instalado dos controles do host divergiu' >&2

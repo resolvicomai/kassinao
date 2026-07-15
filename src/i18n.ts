@@ -1,3 +1,5 @@
+import { MCP_NPX_PACKAGE } from './productVersions';
+
 /**
  * Textos do bot em pt-BR e inglês.
  * O idioma é escolhido pelo locale do cliente Discord de quem interage
@@ -551,12 +553,8 @@ const STRINGS: Strings = {
     en: "I'm a recording bot — use me via the **commands inside the server**. Here's the quick guide:",
   },
   'help.dm-command': {
-    pt: 'O `{cmd}` funciona **dentro do servidor** — é lá que eu consigo checar o que você pode ver. Aqui na DM eu não executo comandos.{connector}',
-    en: "`{cmd}` works **inside the server** — that's where I can check what you're allowed to see. I don't run commands here in DMs.{connector}",
-  },
-  'help.dm-connector': {
-    pt: '\n\n🔌 Clientes MCP compatíveis podem consultar suas reuniões: {url}/app/conectar-ia',
-    en: '\n\n🔌 Compatible MCP clients can query your meetings: {url}/app/conectar-ia',
+    pt: 'O `{cmd}` funciona **dentro do servidor** — é lá que eu consigo checar o que você pode ver. Aqui na DM eu não executo comandos.',
+    en: "`{cmd}` works **inside the server** — that's where I can check what you're allowed to see. I don't run commands here in DMs.",
   },
   'help.dm-ask-disabled': {
     pt: 'O **/perguntar** não está habilitado nesta instância. Use **/gravacoes** dentro do servidor para abrir seus arquivos e notas.',
@@ -663,8 +661,8 @@ const STRINGS: Strings = {
     en: '`/mcp new` is restricted to authorized bot operators. To connect your account, open {url}/app/conectar-ia and sign in with Discord; access remains limited to your meetings. 👉',
   },
   'mcp.new': {
-    pt: '🔌 **Conectar cliente MCP** (código válido ~5 min, uso único).\n\n**Código:** `{code}`\n\nNo terminal:\n```\nnpx -y kassinao-mcp@1.0.7 exchange --stdin --url {mcpUrl}\n```\nCole o código quando o comando pedir. Ele salva o token fora da configuração e imprime o bloco para um cliente MCP compatível. O fluxo self-service também está em {appUrl}/app/conectar-ia.',
-    en: '🔌 **Connect an MCP client** (code valid ~5 min, single use).\n\n**Code:** `{code}`\n\nIn a terminal:\n```\nnpx -y kassinao-mcp@1.0.7 exchange --stdin --url {mcpUrl}\n```\nPaste the code when prompted. It stores the token outside the config and prints the block for a compatible MCP client. The self-service flow is also available at {appUrl}/app/conectar-ia.',
+    pt: `🔌 **Conectar cliente MCP** (código válido ~5 min, uso único).\n\n**Código:** \`{code}\`\n\nNo terminal:\n\`\`\`\nnpx -y ${MCP_NPX_PACKAGE} exchange --stdin --url {mcpUrl}\n\`\`\`\nCole o código quando o comando pedir. Ele salva o token fora da configuração e imprime o bloco para um cliente MCP compatível. O fluxo self-service também está em {appUrl}/app/conectar-ia.`,
+    en: `🔌 **Connect an MCP client** (code valid ~5 min, single use).\n\n**Code:** \`{code}\`\n\nIn a terminal:\n\`\`\`\nnpx -y ${MCP_NPX_PACKAGE} exchange --stdin --url {mcpUrl}\n\`\`\`\nPaste the code when prompted. It stores the token outside the config and prints the block for a compatible MCP client. The self-service flow is also available at {appUrl}/app/conectar-ia.`,
   },
   'privacy.command': {
     pt: '🔒 **Privacidade nesta instância**\n**Operador:** {operator}\n**Política:** {privacyUrl}\n**Contato:** {contactUrl}\n**Acesso, correção ou exclusão:** {deletionUrl}',

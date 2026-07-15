@@ -10,6 +10,36 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.10] — 2026-07-15
+
+### Added
+
+- A separate `shared` production host adapter supports trusted same-operator workloads on one VPS without installing a Docker service drop-in or restarting the global Docker daemon. It uses `docker-compose.shared.yml`, a LUKS2 file container mounted at the private data root, Kassinão-scoped host controls, the existing release deployer, and a read-only shared-host audit.
+- `migrate-shared-storage.sh` copies an idle, exact plaintext runtime tree into a newly opened LUKS mapper, checks content and metadata before and after the mount switch, and preserves the original tree for explicit rollback and later private destruction.
+- `check-shared-migration-rollback.sh` validates fresh, pending, and purged migration states before deploy, backup, health, full audit, and host-control removal. `finalize-shared-migration.sh` verifies the preserved tree against the encrypted manifest, removes the logical plaintext copy only under explicit confirmation, and publishes a sealed purged receipt without claiming forensic erasure.
+- `uninstall-shared-host-controls.sh` removes only the verified shared-host controls after explicit confirmation, without stopping containers, restarting Docker, or deleting the release, encrypted storage, backing file, or secrets.
+
+### Changed
+
+- Production configuration now selects `KASSINAO_HOST_SCOPE=dedicated|shared`. The dedicated adapter remains the default and keeps its explicit dedicated-host acknowledgement; the shared adapter requires that acknowledgement to remain empty. Both adapters keep Git checkout and application source code off Kassinão's VPS paths and consume the verified operations bundle plus digest-pinned OCI image rather than cloning or building the project from Git. The bundle still contains public sealed Shell/Python controls, secret-free templates, and native runtimes; the shared adapter makes no source-layout claim about trusted neighboring workloads outside its boundary.
+- In shared mode, `app.env` and the optional Cloudflare Tunnel token now live under the encrypted data root and reach only their intended container through read-only bind mounts. They are absent from the release environment and Docker `Config.Env`.
+- README, security guidance, and bilingual product documentation now distinguish four configured HTTPS origins from their three-or-four hostnames, keep external origins separate from internal tunnel targets, and provide complete new-install, migration, finalization, and adapter-specific removal flows for an existing trusted shared VPS.
+- `kassinao-mcp@1.0.8` keeps the macOS process-identity probe on an exact, non-secret environment while preserving the existing fail-closed credential lock.
+
+### Security
+
+- Official app containers now start through a multi-architecture static no-dump launcher. A constructor reapplies `PR_SET_DUMPABLE=0` after each dynamic `execve`; every service keeps a hard core limit, while app processes and the shared tunnel launcher also enforce a zero coredump filter. Local media/transcription children no longer inherit application credentials or operator-controlled loader/TLS configuration, and the macOS MCP credential lock no longer forwards the client environment to `ps`.
+- Privileged operations scripts self-reexec through the architecture-matched runtime sealed in the operations-only bundle before reading secrets. The helper verifies the root-owned bundle, complete manifest, hashes, metadata, target script, and native ELF architecture before accepting its preload.
+- The shared-host audit requires the privately managed, reboot-persistent host-global pair `kernel.core_pattern=/dev/null` and `fs.suid_dumpable=0` before runtime. The repository verifies but does not mutate these settings; prior values, neighbor impact, and recovery remain in the private instance runbook.
+- Shared-host containers use positive memory limits with `MemorySwap=Memory`, swappiness `0`, and restart policy `no`, so they cannot silently restart before encrypted storage and scoped egress gates pass after a reboot.
+- The shared storage verifier proves the configured backing file, loop device, LUKS2 mapper/UUID, exact mount, safe mount flags, private runtime directories, and mount sentinel. Backing paths, mapper/UUID values, unlock material, secrets, and organization runbooks remain private instance configuration.
+- A shared plaintext migration creates an encrypted pending marker with a bounded 1-168 hour deadline. An inconsistent or expired pending state fails closed; after independent application and backup validation, explicit finalization publishes the purged receipt. Logical deletion does not imply secure erase from SSDs, journals, snapshots, backups, or provider storage.
+- The shared-host preflight reserves Kassinão's project, names, Linux bridges, Docker networks, protected paths, mounts, and environment allowlists before mutation. It rejects foreign privileged/device/Docker access, all added capabilities, host or container namespaces, `volumes-from`, protected-storage overlap, or Kassinão-network membership. This adapter does not claim protection against host root, Docker administrators, or the infrastructure/hypervisor operator.
+- Privileged controls resolve each expected container to its immutable Docker ID, validate the exact Compose project and service labels, revalidate immediately before mutation, and then act only on that ID. A foreign container squatting on a reserved name fails closed before firewall or lifecycle changes.
+- Full shared-host audits now require all three containers to be running, both application surfaces to be healthy, and their process limits and bounded `json-file` rotation to match the release exactly. Host-control removal re-runs an ownership preflight immediately before its first mutation and refuses partial or foreign topology.
+- Health-watch failures trigger the fail-closed egress containment unit instead of leaving a failed shared instance reachable until the next timer run.
+- Generic bot DMs no longer disclose the private app or MCP connection origin. Recording-specific DMs still revalidate current membership and ACL before sending a private link.
+
 ## [1.4.9] — 2026-07-15
 
 ### Security
@@ -46,20 +76,20 @@ latest README, documentation, configuration template, and tests.
 
 ### Added
 
-- The release workflow is prepared to publish a multi-architecture GHCR image with SBOM, build provenance, OCI attestation, and a separately attested source-free operations bundle pinned to the exact image digest. These artifacts are not public until the release workflow completes.
+- The release workflow is prepared to publish a multi-architecture GHCR image with SBOM, build provenance, OCI attestation, and a separately attested operations-only bundle pinned to the exact image digest. The bundle excludes Git checkout and application source code but includes public operational controls, templates, and native runtimes. These artifacts are not public until the release workflow completes.
 - Split production can run landing/docs/demo in a secretless `kassinao-public` process on a separate Docker network while bot/app/MCP remain in the private core.
 - New installations separate recordings, operational state, and revocable authentication state. A local instance identity binds browser and MCP tokens to the installation and configured origin.
 - Operational logging redacts private identifiers, routes, origins, and error messages unless the operator explicitly enables `LOG_PII=true` for controlled diagnosis.
 - Production health carries both the immutable release digest and a random per-instance deployment fingerprint, preventing a stale tunnel or different VPS from satisfying the release smoke test.
 - The private core now renders an instance-specific public privacy contract with effective date/version, operator identity, purposes, lawful basis, infrastructure/edge, log and backup retention, data-request handling, and incident response.
-- The source-free operations bundle includes a privileged `prepare-storage.sh` gate that proves the configured data root is already on dm-crypt/LUKS before creating only the four non-root runtime directories.
+- The operations-only bundle includes a privileged `prepare-storage.sh` gate that proves the configured data root is already on dm-crypt/LUKS before creating only the four non-root runtime directories.
 - `kassinao-mcp@1.0.7` fixes canonical IPv6 localhost URL handling and carries the rewritten read-only, instance-scoped connector documentation.
 
 ### Changed
 
 - A public source checkout builds `kassinao-local:dev` explicitly and Compose never pulls a nonexistent release image. The production bundle, once published, runs from a mode-0700 directory outside Git, uses separate Compose/app environments, and accepts only its sealed immutable `image@sha256` reference.
 - `APP_URL` is blank in new templates. Production localhost now requires the explicit `ALLOW_LOCAL_APP_URL=true` exception; internet-facing instances must configure their own HTTPS origin.
-- New production guidance uses the verified source-free operations bundle instead of a platform blueprint or VPS source checkout.
+- New production guidance uses the verified operations-only bundle, without a Git checkout or application source code on the VPS, instead of a platform blueprint or VPS source checkout.
 - Same-instance upgrades start from each new bundle's templates instead of copying the previous release environment wholesale; the new sealed image/digest remain authoritative while reviewed instance fields and private settings are reapplied.
 - The standard release image contains only external transcription-provider runtimes; local `command` transcription is an explicit custom-image flow maintained by the operator.
 - Backups include operational state but refuse to include an overlapping authentication directory. Both legacy and current session/instance filenames are excluded defensively.
@@ -241,7 +271,9 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
-[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.8...HEAD
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.10...HEAD
+[1.4.10]: https://github.com/resolvicomai/kassinao/compare/v1.4.9...v1.4.10
+[1.4.9]: https://github.com/resolvicomai/kassinao/compare/v1.4.8...v1.4.9
 [1.4.8]: https://github.com/resolvicomai/kassinao/compare/v1.4.7...v1.4.8
 [1.4.7]: https://github.com/resolvicomai/kassinao/compare/v1.4.6...v1.4.7
 [1.4.6]: https://github.com/resolvicomai/kassinao/compare/v1.4.5...v1.4.6

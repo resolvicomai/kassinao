@@ -2670,6 +2670,7 @@ export async function handleDirectMessage(
   message: Message,
   limiter: Pick<DmMessageLimiter, 'admit'> = directMessageLimiter,
   canReceivePrivateHelp: (userId: string) => Promise<boolean> = userSharesOperationalGuild,
+  capabilities: DiscordCapabilities = currentDiscordCapabilities(),
 ): Promise<void> {
   if (message.author.bot || message.guildId) return; // só DMs de pessoas
   // Antes de ler conteúdo, logar ou responder. Excesso é descartado em silêncio.
@@ -2684,7 +2685,6 @@ export async function handleDirectMessage(
   // registrados por servidor, onde dá pra checar o que a pessoa pode ver).
   // Responder o guia genérico confundia — explica o motivo + o caminho de fora.
   const cmd = /^\s*\/([\p{L}\w-]{1,32})/u.exec(message.content ?? '');
-  const capabilities = currentDiscordCapabilities();
   console.log(
     `DM recebida user=${operationalPii(message.author.id)} — respondendo ${cmd ? 'dica de comando' : 'o guia'}.`,
   );
@@ -2698,15 +2698,16 @@ export async function handleDirectMessage(
         await message.channel.send(t(l, 'help.dm-ask-disabled'));
         return;
       }
-      await message.channel.send(
-        t(l, 'help.dm-command', {
-          cmd: `/${cmd[1]}`,
-          connector: capabilities.mcp ? t(l, 'help.dm-connector', { url: config.appUrl }) : '',
-        }),
-      );
+      await message.channel.send(t(l, 'help.dm-command', { cmd: `/${cmd[1]}` }));
       return;
     }
-    await message.channel.send({ content: t(l, 'help.dm-hint'), ...buildHelpPayload(l, capabilities) });
+    // Uma DM genérica orienta a voltar ao servidor, mas nunca funciona como
+    // diretório da origem privada. Links de gravação continuam apenas nas DMs
+    // específicas que revalidam a ACL e nas interações efêmeras da guild.
+    await message.channel.send({
+      content: t(l, 'help.dm-hint'),
+      embeds: [buildHelpEmbed(l, { ...capabilities, mcp: false })],
+    });
   } catch (err) {
     console.error(`Falha ao responder DM user=${operationalPii(message.author.id)}: ${operationalError(err)}`);
   }

@@ -1,0 +1,64 @@
+services:
+  # Shared-host adapter: lifecycle stays with the release script. No container
+  # may restart behind a missing storage/network preflight after a host reboot.
+  kassinao:
+    user: '${KASSINAO_UID:?Defina um UID privado do adapter shared}:${KASSINAO_GID:?Defina um GID privado do adapter shared}'
+    # No host compartilhado, nenhum segredo entra em Config.Env nem no banco
+    # de metadados do Docker. O dotenv lê o arquivo cifrado pelo bind abaixo.
+    env_file: !reset []
+    environment:
+      DOTENV_CONFIG_PATH: /run/secrets/kassinao-app.env
+    restart: 'no'
+    mem_limit: ${KASSINAO_CORE_MEMORY_LIMIT:?Defina KASSINAO_CORE_MEMORY_LIMIT no compose.env}
+    memswap_limit: ${KASSINAO_CORE_MEMORY_LIMIT:?Defina KASSINAO_CORE_MEMORY_LIMIT no compose.env}
+    mem_swappiness: 0
+    cpus: ${KASSINAO_CORE_CPUS:?Defina KASSINAO_CORE_CPUS no compose.env}
+    volumes:
+      - type: bind
+        source: ${KASSINAO_SHARED_APP_ENV_FILE}
+        target: /run/secrets/kassinao-app.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${KASSINAO_DATA_ROOT}/.kassinao-mounted
+        target: /run/kassinao/storage-mounted
+        read_only: true
+        bind:
+          create_host_path: false
+
+  kassinao-public:
+    user: '${KASSINAO_UID:?Defina um UID privado do adapter shared}:${KASSINAO_GID:?Defina um GID privado do adapter shared}'
+    restart: 'no'
+    mem_limit: ${KASSINAO_PUBLIC_MEMORY_LIMIT:?Defina KASSINAO_PUBLIC_MEMORY_LIMIT no compose.env}
+    memswap_limit: ${KASSINAO_PUBLIC_MEMORY_LIMIT:?Defina KASSINAO_PUBLIC_MEMORY_LIMIT no compose.env}
+    mem_swappiness: 0
+    cpus: ${KASSINAO_PUBLIC_CPUS:?Defina KASSINAO_PUBLIC_CPUS no compose.env}
+
+  cloudflared:
+    user: '65532:65532'
+    # O binário estático selecionado do kit multiarch sela coredump_filter=0 e
+    # RLIMIT_CORE antes de o cloudflared estático ler o token do arquivo.
+    entrypoint: ['/usr/local/bin/kassinao-no-dump', '--', '/usr/local/bin/cloudflared']
+    command: ['tunnel', '--no-autoupdate', 'run', '--token-file', '/run/secrets/kassinao-tunnel-token']
+    # O serviço base recebe o token por environment no adapter dedicated. O
+    # reset garante que nem o nome nem o valor sobrevivam em Config.Env shared.
+    environment: !reset {}
+    restart: 'no'
+    mem_limit: ${KASSINAO_TUNNEL_MEMORY_LIMIT:?Defina KASSINAO_TUNNEL_MEMORY_LIMIT no compose.env}
+    memswap_limit: ${KASSINAO_TUNNEL_MEMORY_LIMIT:?Defina KASSINAO_TUNNEL_MEMORY_LIMIT no compose.env}
+    mem_swappiness: 0
+    cpus: ${KASSINAO_TUNNEL_CPUS:?Defina KASSINAO_TUNNEL_CPUS no compose.env}
+    volumes:
+      - type: bind
+        source: /usr/local/libexec/kassinao/kassinao-no-dump
+        target: /usr/local/bin/kassinao-no-dump
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${KASSINAO_SHARED_TUNNEL_TOKEN_FILE}
+        target: /run/secrets/kassinao-tunnel-token
+        read_only: true
+        bind:
+          create_host_path: false

@@ -1,14 +1,50 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # Atualiza os controles root do host a partir do kit operacional verificado.
 # Rode antes de cada deploy: a bridge estável já fica protegida no primeiro start.
 set -Eeuo pipefail
 umask 077
+
+die() { printf 'ERRO: %s\n' "$*" >&2; exit 1; }
+
+_saved_no_dump_marker="${KASSINAO_NO_DUMP_ACTIVE-}"
+_saved_no_dump_preload="${LD_PRELOAD-}"
+_forbidden_docker_environment=''
+for _name in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION; do
+  if declare -p "$_name" >/dev/null 2>&1; then _forbidden_docker_environment="$_name"; break; fi
+done
+[ -r "/proc/$$/environ" ] || die '/proc é obrigatório para limpar o ambiente do installer dedicated'
+while IFS='=' read -r -d '' _name _value; do unset "$_name" 2>/dev/null || true; done < "/proc/$$/environ"
+unset _name _value
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C
+[ -z "$_forbidden_docker_environment" ] || die "$_forbidden_docker_environment não pode vir do ambiente"
+
+_script_path="${BASH_SOURCE[0]}"
+case "$_script_path" in /*) ;; ./*) _script_path="$PWD/${_script_path#./}" ;; *) _script_path="$PWD/$_script_path" ;; esac
+case "$_script_path" in *//* | */./* | */../* | */. | */.. | */) die 'caminho do installer dedicated não é canônico' ;; esac
+_script_dir="${_script_path%/*}"
+case "$_script_dir" in */scripts) PROJECT_DIR="${_script_dir%/scripts}" ;; *) die 'installer dedicated precisa executar do kit selado' ;; esac
+case "${MACHTYPE%%-*}" in x86_64) _no_dump_arch=amd64 ;; aarch64 | arm64) _no_dump_arch=arm64 ;; *) die 'arquitetura sem runtime no-dump' ;; esac
+_no_dump_preload="$PROJECT_DIR/runtime/linux-$_no_dump_arch/libkassinao-no-dump.so"
+# KASSINAO_HOST_NO_DUMP_BEGIN
+if [ "$_saved_no_dump_marker" != "prctl-v1:$$" ] || [ "$_saved_no_dump_preload" != "$_no_dump_preload" ]; then
+  exec /usr/bin/python3 "$PROJECT_DIR/scripts/no-dump-exec.py" \
+    --bundle-root "$PROJECT_DIR" --script-relative scripts/install-host-controls.sh --arch "$_no_dump_arch" -- \
+    "$_script_path" "$@"
+fi
+LD_PRELOAD="$_no_dump_preload"
+export LD_PRELOAD
+[ "$(ulimit -Sc)" = 0 ] && [ "$(ulimit -Hc)" = 0 ] || die 'core limit do installer dedicated não ficou selado'
+IFS= read -r _no_dump_filter < "/proc/$$/coredump_filter" || _no_dump_filter=''
+[ "$_no_dump_filter" = 0 ] || die 'coredump_filter do installer dedicated não ficou selado'
+# KASSINAO_HOST_NO_DUMP_END
+unset _saved_no_dump_marker _saved_no_dump_preload _no_dump_filter _no_dump_arch _no_dump_preload _script_path _script_dir
 
 [ "$(id -u)" -eq 0 ] || { echo 'ERRO: execute como root' >&2; exit 1; }
 command -v systemctl >/dev/null 2>&1 || { echo 'ERRO: systemd não encontrado' >&2; exit 1; }
 command -v systemd-tmpfiles >/dev/null 2>&1 || { echo 'ERRO: systemd-tmpfiles não encontrado' >&2; exit 1; }
 command -v flock >/dev/null 2>&1 || { echo 'ERRO: flock não encontrado' >&2; exit 1; }
 command -v stat >/dev/null 2>&1 || { echo 'ERRO: stat não encontrado' >&2; exit 1; }
+command -v sha256sum >/dev/null 2>&1 || { echo 'ERRO: sha256sum não encontrado' >&2; exit 1; }
 systemd_version="$(systemctl --version 2>/dev/null | awk 'NR == 1 && $1 == "systemd" { print $2 }')"
 [[ "$systemd_version" =~ ^[0-9]+$ ]] && [ "$systemd_version" -ge 249 ] || {
   echo 'ERRO: controles de retenção exigem systemd >= 249' >&2
@@ -17,6 +53,16 @@ systemd_version="$(systemctl --version 2>/dev/null | awk 'NR == 1 && $1 == "syst
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+[ "$ROOT" = "$PROJECT_DIR" ] || die 'raiz canônica divergiu do kit selado'
+export DOCKER_HOST=unix:///var/run/docker.sock
+unset DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION
+DOCKER_CONFIG="$ROOT/deploy/docker-client"
+DOCKER_CONFIG_FILE="$DOCKER_CONFIG/config.json"
+[ -d "$DOCKER_CONFIG" ] && [ ! -L "$DOCKER_CONFIG" ] && [ -f "$DOCKER_CONFIG_FILE" ] && [ ! -L "$DOCKER_CONFIG_FILE" ] ||
+  die 'configuração isolada do cliente Docker está ausente ou irregular'
+[ "$(sha256sum -- "$DOCKER_CONFIG_FILE" | awk '{print $1}')" = ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356 ] ||
+  die 'configuração isolada do cliente Docker diverge do objeto vazio selado'
+export DOCKER_CONFIG
 cursor="$ROOT"
 while :; do
   [ ! -e "$cursor/.git" ] || { echo 'ERRO: controles de produção exigem o kit fora de qualquer Git' >&2; exit 1; }
@@ -167,6 +213,11 @@ env_value() {
 
 ENV_FILE="$ROOT/.env"
 [ -f "$ENV_FILE" ] && [ ! -L "$ENV_FILE" ] || { echo 'ERRO: .env privado ausente no kit' >&2; exit 1; }
+host_scope="$(env_value KASSINAO_HOST_SCOPE "$ENV_FILE")"
+[ "$host_scope" = dedicated ] || {
+  echo 'ERRO: install-host-controls.sh pertence somente ao adapter dedicated; use install-shared-host-controls.sh no adapter shared' >&2
+  exit 1
+}
 dedicated_host_ack="$(env_value KASSINAO_DEDICATED_DOCKER_HOST_ACK "$ENV_FILE")"
 [ "$dedicated_host_ack" = I_UNDERSTAND_THIS_VPS_MUST_RUN_ONLY_KASSINAO ] || {
   echo 'ERRO: o drop-in afeta o docker.service inteiro; use VPS dedicada e defina KASSINAO_DEDICATED_DOCKER_HOST_ACK=I_UNDERSTAND_THIS_VPS_MUST_RUN_ONLY_KASSINAO' >&2
@@ -231,8 +282,8 @@ trap 'rm -f -- "${STORAGE_PATHS_TMP:-}" "${ROLLBACK_TMPFILES_TMP:-}" "${ROLLBACK
 printf '%s\n' "${STORAGE_PATHS[@]}" > "$STORAGE_PATHS_TMP"
 install -o root -g root -m 0600 "$STORAGE_PATHS_TMP" /etc/kassinao/storage-paths
 rm -f -- "$STORAGE_PATHS_TMP"; STORAGE_PATHS_TMP=''
-printf 'KASSINAO_DATA_ROOT=%s\nKASSINAO_ROLLBACK_RETENTION_HOURS=%s\n' \
-  "$data_root" "$rollback_retention_hours" > "$HOST_CONTROLS_TMP"
+printf 'KASSINAO_DEPLOY_DIR=%s\nKASSINAO_DATA_ROOT=%s\nKASSINAO_ROLLBACK_RETENTION_HOURS=%s\n' \
+  "$ROOT" "$data_root" "$rollback_retention_hours" > "$HOST_CONTROLS_TMP"
 install -o root -g root -m 0600 "$HOST_CONTROLS_TMP" /etc/kassinao/host-controls.env
 rm -f -- "$HOST_CONTROLS_TMP"; HOST_CONTROLS_TMP=''
 sed -e "s|@ROLLBACK_DIR@|$rollback_dir|g" \

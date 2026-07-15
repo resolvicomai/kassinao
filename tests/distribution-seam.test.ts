@@ -1,6 +1,7 @@
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -54,6 +55,32 @@ function makeTempDir(): string {
   return directory;
 }
 
+function makeNativeRuntimeFixture(): string {
+  const root = makeTempDir();
+  for (const [architecture, machine] of [
+    ['amd64', 62],
+    ['arm64', 183],
+  ] as const) {
+    const directory = path.join(root, `linux-${architecture}`);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    for (const [name, elfType, mode] of [
+      ['kassinao-no-dump', 2, 0o555],
+      ['libkassinao-no-dump.so', 3, 0o444],
+    ] as const) {
+      const elf = Buffer.alloc(64);
+      elf.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1]);
+      elf.writeUInt16LE(elfType, 16);
+      elf.writeUInt16LE(machine, 18);
+      elf.writeUInt32LE(1, 20);
+      elf.writeUInt16LE(64, 52);
+      elf.writeUInt16LE(56, 54);
+      writeFileSync(path.join(directory, name), elf, { mode });
+      chmodSync(path.join(directory, name), mode);
+    }
+  }
+  return root;
+}
+
 function makeStorageTempDir(): string {
   // Linux usa /tmp por padrão, mas esse caminho precisa continuar inválido para
   // os serviços de produção protegidos por PrivateTmp.
@@ -99,9 +126,30 @@ function storagePreparationFixture(
   chmodSync(directory, 0o700);
   const scripts = path.join(directory, 'scripts');
   mkdirSync(scripts, { mode: 0o700 });
+  const bin = path.join(directory, 'bin');
+  mkdirSync(bin, { mode: 0o700 });
   const script = path.join(scripts, 'prepare-storage.sh');
   const verifier = path.join(scripts, 'verify-storage-encryption.sh');
-  writeFileSync(script, repositoryFile('scripts/prepare-storage.sh'), { mode: 0o755 });
+  const inheritedEnvironment = path.join(directory, 'inherited-storage-environment.bin');
+  writeFileSync(
+    inheritedEnvironment,
+    Buffer.from(
+      Object.keys(process.env)
+        .map((name) => `${name}=fixture\0`)
+        .join(''),
+    ),
+  );
+  const prepareSource = repositoryFile('scripts/prepare-storage.sh')
+    .replaceAll('/proc/$$/environ', inheritedEnvironment)
+    .replace(
+      'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C',
+      `export PATH=${bin}:/usr/local/bin:/usr/bin:/bin HOME=/root LC_ALL=C`,
+    )
+    .replace(
+      /# KASSINAO_HOST_NO_DUMP_BEGIN[\s\S]*?# KASSINAO_HOST_NO_DUMP_END/,
+      '# KASSINAO_HOST_NO_DUMP_BEGIN\nunset LD_PRELOAD\n# KASSINAO_HOST_NO_DUMP_END',
+    );
+  writeFileSync(script, prepareSource, { mode: 0o755 });
   chmodSync(script, 0o755);
 
   const verifierLog = path.join(directory, 'verifier.log');
@@ -142,8 +190,6 @@ exit ${options.verifierFails ? '1' : '0'}
     ].join('\n'),
   );
 
-  const bin = path.join(directory, 'bin');
-  mkdirSync(bin, { mode: 0o700 });
   const mutationLog = path.join(directory, 'mutations.log');
   writeFileSync(
     path.join(bin, 'id'),
@@ -194,7 +240,26 @@ function bootstrapFixture(): { directory: string; script: string; appEnv: string
   const scripts = path.join(directory, 'scripts');
   mkdirSync(scripts, { mode: 0o700 });
   const script = path.join(scripts, 'inject-secrets.sh');
-  writeFileSync(script, repositoryFile('scripts/inject-secrets.sh'), { mode: 0o700 });
+  const inheritedEnvironment = path.join(directory, 'inherited-environment.bin');
+  writeFileSync(
+    inheritedEnvironment,
+    Buffer.from(
+      [...new Set([...Object.keys(process.env), 'PATH', 'HOME', 'KASSINAO_APP_ENV_FILE', 'KASSINAO_COMPOSE_ENV_FILE'])]
+        .map((name) => `${name}=fixture\0`)
+        .join(''),
+    ),
+  );
+  const injectorSource = repositoryFile('scripts/inject-secrets.sh')
+    .replaceAll('/proc/$$/environ', inheritedEnvironment)
+    .replace(
+      'SAFE_SYSTEM_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      'SAFE_SYSTEM_PATH=/usr/local/bin:/usr/bin:/bin',
+    )
+    .replace(
+      /# KASSINAO_HOST_NO_DUMP_BEGIN[\s\S]*?# KASSINAO_HOST_NO_DUMP_END/,
+      '# KASSINAO_HOST_NO_DUMP_BEGIN\nunset LD_PRELOAD\n# KASSINAO_HOST_NO_DUMP_END',
+    );
+  writeFileSync(script, injectorSource, { mode: 0o700 });
   chmodSync(script, 0o700);
   const appEnv = path.join(directory, 'app.env');
   const composeEnv = path.join(directory, '.env');
@@ -228,6 +293,7 @@ function bootstrapFixture(): { directory: string; script: string; appEnv: string
       'KASSINAO_IMAGE=ghcr.io/example/kassinao@sha256:' + 'f'.repeat(64),
       'KASSINAO_APP_ENV_FILE=app.env',
       'KASSINAO_DEPLOYMENT_MODE=split',
+      'KASSINAO_HOST_SCOPE=dedicated',
       'KASSINAO_DEDICATED_DOCKER_HOST_ACK=I_UNDERSTAND_THIS_VPS_MUST_RUN_ONLY_KASSINAO',
       'KASSINAO_ROLLBACK_RETENTION_HOURS=72',
       'APP_URL=',
@@ -247,11 +313,20 @@ interface DeploymentFixtureOptions {
   mutateNormalizedConfig?: (config: Record<string, unknown>) => void;
   initiallyRunning?: boolean;
   mode?: 'single' | 'split';
+  hostScope?: 'dedicated' | 'shared';
   egressActive?: boolean;
   hardenerCheckFails?: boolean;
   hardenerPreloadFails?: boolean;
+  sharedAuditPreflightFails?: boolean;
+  sharedAuditFullFails?: boolean;
+  sharedAuditRejectsStoppedContainer?: boolean;
+  rollbackCheckerFails?: boolean;
+  snapshotNestedMount?: boolean;
+  snapshotTarFails?: boolean;
   storageVerifierFails?: boolean;
+  staleDisabledTunnel?: 'safe' | 'running' | 'restart-policy' | 'foreign-project';
   upFails?: boolean;
+  failureNameSquatter?: boolean;
 }
 
 function shellLiteral(value: string): string {
@@ -266,18 +341,37 @@ function fakeRuntime(
   initiallyRunning = false,
   egressActive = true,
   upFails = false,
+  staleDisabledTunnel?: DeploymentFixtureOptions['staleDisabledTunnel'],
+  failureNameSquatter = false,
+  snapshotNestedMount = false,
+  snapshotFailsAfterStop = false,
 ): { bin: string; log: string } {
   const bin = path.join(directory, 'bin');
   const log = path.join(directory, 'docker.log');
   const running = path.join(directory, '.fake-running');
+  const stopped = path.join(directory, '.fake-stopped');
+  const foreignSquatter = path.join(directory, '.fake-foreign-squatter');
+  const staleTunnel = path.join(directory, '.fake-stale-tunnel');
+  const coreId = 'a'.repeat(64);
+  const publicId = 'b'.repeat(64);
+  const tunnelId = 'c'.repeat(64);
+  const foreignId = 'f'.repeat(64);
+  const staleTunnelId = 'd'.repeat(64);
   if (initiallyRunning) writeFileSync(running, 'running');
+  if (failureNameSquatter) writeFileSync(foreignSquatter, 'foreign');
+  if (staleDisabledTunnel) writeFileSync(staleTunnel, staleDisabledTunnel);
   mkdirSync(bin);
   const executable = path.join(bin, 'docker');
   const serializedConfig = JSON.stringify(normalizedConfig);
   const servicesOutput = `${Object.keys(normalizedConfig.services as Record<string, unknown>).join('\n')}\n`;
-  // Inclui também um túnel legado para provar que a contenção não confia no
-  // profile atual e desliga qualquer componente privado conhecido que exista.
-  const containerNamesOutput = 'kassinao\nkassinao-public\nkassinao-tunnel\n';
+  const staleTunnelIdentity = [
+    staleTunnelId,
+    '/kassinao-tunnel',
+    staleDisabledTunnel === 'foreign-project' ? 'company' : 'kassinao',
+    'cloudflared',
+    staleDisabledTunnel === 'running' ? 'true' : 'false',
+    staleDisabledTunnel === 'restart-policy' ? 'unless-stopped' : 'no',
+  ].join('|');
   const imagesOutput = `${Object.keys(normalizedConfig.services as Record<string, unknown>)
     .map(() => image)
     .join('\n')}\n`;
@@ -315,8 +409,69 @@ if [ "\${1:-}" = compose ] && [ "\${2:-}" = version ]; then
   printf '2.35.1\n'
   exit 0
 fi
-if [ "\${1:-}" = ps ] && [ "\${2:-}" = -a ]; then
-  [ ! -f ${shellLiteral(running)} ] || printf '%s' ${shellLiteral(containerNamesOutput)}
+resolve_container() {
+  reference="$1"
+  case "$reference" in
+    kassinao)
+      if [ -f ${shellLiteral(foreignSquatter)} ]; then
+        cid=${shellLiteral(foreignId)}; name=kassinao; project=company; service=kassinao
+      else
+        [ -f ${shellLiteral(running)} ] || return 1
+        cid=${shellLiteral(coreId)}; name=kassinao; project=kassinao; service=kassinao
+      fi
+      ;;
+    ${coreId})
+      [ -f ${shellLiteral(running)} ] || return 1
+      cid=${shellLiteral(coreId)}; name=kassinao; project=kassinao; service=kassinao
+      ;;
+    ${foreignId})
+      [ -f ${shellLiteral(foreignSquatter)} ] || return 1
+      cid=${shellLiteral(foreignId)}; name=kassinao; project=company; service=kassinao
+      ;;
+    kassinao-public|${publicId})
+      [ -f ${shellLiteral(running)} ] || return 1
+      cid=${shellLiteral(publicId)}; name=kassinao-public; project=kassinao; service=kassinao-public
+      ;;
+    kassinao-tunnel)
+      if [ -f ${shellLiteral(staleTunnel)} ]; then
+        cid=${shellLiteral(staleTunnelId)}; name=kassinao-tunnel; project=kassinao; service=cloudflared
+      else
+        [ -f ${shellLiteral(running)} ] || return 1
+        cid=${shellLiteral(tunnelId)}; name=kassinao-tunnel; project=kassinao; service=cloudflared
+      fi
+      ;;
+    ${tunnelId})
+      [ -f ${shellLiteral(running)} ] || return 1
+      cid=${shellLiteral(tunnelId)}; name=kassinao-tunnel; project=kassinao; service=cloudflared
+      ;;
+    ${staleTunnelId})
+      [ -f ${shellLiteral(staleTunnel)} ] || return 1
+      cid=${shellLiteral(staleTunnelId)}; name=kassinao-tunnel; project=kassinao; service=cloudflared
+      ;;
+    *) return 1 ;;
+  esac
+}
+if [ "\${1:-}" = inspect ] && [ "\${2:-}" = --format ]; then
+  template="\${3:-}"
+  reference="\${4:-}"
+  resolve_container "$reference" || exit 1
+  if [ "$template" = '{{.Id}}' ]; then
+    printf '%s\n' "$cid"
+  elif [ "$cid" = ${shellLiteral(staleTunnelId)} ] && [[ "$template" == *com.docker.compose.project* ]] && \
+       [[ "$template" == *HostConfig.RestartPolicy* ]]; then
+    printf '%s\n' ${shellLiteral(staleTunnelIdentity)}
+  elif [[ "$template" == *com.docker.compose.project* ]]; then
+    printf '%s|/%s|%s|%s\n' "$cid" "$name" "$project" "$service"
+  elif [[ "$template" == *HostConfig.Memory* ]]; then
+    printf '536870912|536870912|0|no\n'
+  else
+    printf 'healthy\n'
+  fi
+  exit 0
+fi
+if [ "\${1:-}" = rm ]; then
+  [ "\${2:-}" = ${shellLiteral(staleTunnelId)} ] && [ -f ${shellLiteral(staleTunnel)} ] || exit 1
+  rm -f ${shellLiteral(staleTunnel)}
   exit 0
 fi
 case " $* " in
@@ -324,20 +479,44 @@ case " $* " in
   *" config --quiet "*) exit 0 ;;
   *" config --services "*) printf '%s' ${shellLiteral(servicesOutput)}; exit 0 ;;
   *" config --images "*) printf '%s' ${shellLiteral(imagesOutput)}; exit 0 ;;
-  *" ps -q "*) [ ! -f ${shellLiteral(running)} ] || printf 'fake-%s-id\n' "\${!#}"; exit 0 ;;
+  *" ps -q "*)
+    service="\${!#}"
+    case "$service" in
+      kassinao) cid=${shellLiteral(coreId)} ;;
+      kassinao-public) cid=${shellLiteral(publicId)} ;;
+      cloudflared) cid=${shellLiteral(tunnelId)} ;;
+      *) exit 1 ;;
+    esac
+    if [ -f ${shellLiteral(running)} ] && ! grep -Fqx "$cid" ${shellLiteral(stopped)} 2>/dev/null; then
+      printf '%s\n' "$cid"
+    fi
+    exit 0
+    ;;
   *" pull "*) exit 0 ;;
-  *" up -d --no-build --remove-orphans "*)
+  *" up -d --no-build "*)
     [ ${upFails ? 'true' : 'false'} = false ] || exit 1
     : > ${shellLiteral(running)}
+    rm -f ${shellLiteral(stopped)}
     exit 0
     ;;
 esac
 if [ "\${1:-}" = stop ]; then
-  rm -f ${shellLiteral(running)}
+  target="\${!#}"
+  resolve_container "$target" || exit 1
+  printf '%s\n' "$cid" >> ${shellLiteral(stopped)}
+  if [ ${snapshotFailsAfterStop ? 'true' : 'false'} = true ]; then
+    ln -s ../auth ${shellLiteral(path.join(directory, 'data', 'state', '.unsafe-after-stop'))}
+  fi
   exit 0
 fi
 if [ "\${1:-}" = start ]; then
-  : > ${shellLiteral(running)}
+  resolve_container "\${2:-}" || exit 1
+  rm -f ${shellLiteral(stopped)}
+  exit 0
+fi
+if [ "\${1:-}" = kill ]; then
+  resolve_container "\${2:-}" || exit 1
+  printf '%s\n' "$cid" >> ${shellLiteral(stopped)}
   exit 0
 fi
 if [ "\${1:-}" = image ] && [ "\${2:-}" = inspect ]; then
@@ -345,9 +524,15 @@ if [ "\${1:-}" = image ] && [ "\${2:-}" = inspect ]; then
   exit 0
 fi
 if [ "\${1:-}" = inspect ]; then
+  reference="\${!#}"
+  resolve_container "$reference" || exit 1
   case " $* " in
+    *".HostConfig.Memory"*) printf '536870912|536870912|0|no\\n' ;;
     *".Config.Image"*) printf '%s\\n' ${shellLiteral(image)} ;;
-    *".State.Running"*) [ -f ${shellLiteral(running)} ] && printf 'true\\n' || printf 'false\\n' ;;
+    *".State.Running"*)
+      [ -f ${shellLiteral(running)} ] && ! grep -Fqx "$cid" ${shellLiteral(stopped)} 2>/dev/null && \
+        printf 'true\\n' || printf 'false\\n'
+      ;;
     *) printf 'healthy\\n' ;;
   esac
   exit 0
@@ -419,6 +604,20 @@ printf '200'
     writeFileSync(file, script, { mode: 0o700 });
     chmodSync(file, 0o700);
   }
+  const nestedMountTarget = path.join(directory, 'data', 'state', 'nested-mount');
+  writeFileSync(
+    path.join(bin, 'findmnt'),
+    `#!/usr/bin/env bash
+set -eu
+printf '%s\n' ${shellLiteral(
+      JSON.stringify({
+        filesystems: snapshotNestedMount ? [{ target: nestedMountTarget }] : [],
+      }),
+    )}
+`,
+    { mode: 0o700 },
+  );
+  chmodSync(path.join(bin, 'findmnt'), 0o700);
   return { bin, log };
 }
 
@@ -428,6 +627,7 @@ function deploymentFixture(
 ): {
   directory: string;
   digest: string;
+  script: string;
   runtimeDirectory: string;
   runtime: ReturnType<typeof fakeRuntime>;
 } {
@@ -440,14 +640,18 @@ function deploymentFixture(
   const state = path.join(dataRoot, 'state');
   const auth = path.join(dataRoot, 'auth');
   const cache = path.join(dataRoot, 'cache');
+  const configDirectory = path.join(dataRoot, 'config');
+  const sharedAppEnv = path.join(configDirectory, 'app.env');
+  const sharedTunnelToken = path.join(configDirectory, 'cloudflared-token');
   const runtimeDirectory = path.join(directory, 'runtime');
-  for (const dataDirectory of [dataRoot, recordings, state, auth, cache, runtimeDirectory]) {
+  for (const dataDirectory of [dataRoot, recordings, state, auth, cache, configDirectory, runtimeDirectory]) {
     mkdirSync(dataDirectory, { mode: 0o700 });
     chmodSync(dataDirectory, 0o700);
   }
-  const uid = process.getuid?.() ?? 1000;
-  const gid = process.getgid?.() ?? 1000;
   const mode = options.mode ?? 'split';
+  const hostScope = options.hostScope ?? 'dedicated';
+  const uid = hostScope === 'shared' ? 61050 : (process.getuid?.() ?? 1000);
+  const gid = hostScope === 'shared' ? 61050 : (process.getgid?.() ?? 1000);
   const appUrl = 'https://app.example.com';
   const publicUrl = mode === 'split' ? 'https://www.example.com' : appUrl;
   const docsUrl = mode === 'split' ? 'https://docs.example.com' : appUrl;
@@ -457,8 +661,15 @@ function deploymentFixture(
     `KASSINAO_DEPLOYMENT_FINGERPRINT=${deploymentFingerprint}`,
     'KASSINAO_APP_ENV_FILE=app.env',
     `KASSINAO_DEPLOYMENT_MODE=${mode}`,
-    'KASSINAO_DEDICATED_DOCKER_HOST_ACK=I_UNDERSTAND_THIS_VPS_MUST_RUN_ONLY_KASSINAO',
+    `KASSINAO_HOST_SCOPE=${hostScope}`,
+    `KASSINAO_DEDICATED_DOCKER_HOST_ACK=${hostScope === 'dedicated' ? 'I_UNDERSTAND_THIS_VPS_MUST_RUN_ONLY_KASSINAO' : ''}`,
     'KASSINAO_ROLLBACK_RETENTION_HOURS=72',
+    'KASSINAO_CORE_MEMORY_LIMIT=2g',
+    'KASSINAO_CORE_CPUS=1.0',
+    'KASSINAO_PUBLIC_MEMORY_LIMIT=384m',
+    'KASSINAO_PUBLIC_CPUS=0.2',
+    'KASSINAO_TUNNEL_MEMORY_LIMIT=192m',
+    'KASSINAO_TUNNEL_CPUS=0.2',
     `COMPOSE_PROFILES=${mode === 'split' ? 'split-public' : ''}`,
     'TUNNEL_TOKEN=',
     `KASSINAO_DATA_ROOT=${dataRoot}`,
@@ -468,6 +679,11 @@ function deploymentFixture(
     `KASSINAO_MODEL_CACHE_DIR=${cache}`,
     `KASSINAO_UID=${uid}`,
     `KASSINAO_GID=${gid}`,
+    `KASSINAO_SHARED_LUKS_BACKING_FILE=${directory}/kassinao.luks`,
+    'KASSINAO_SHARED_LUKS_MAPPER=kassinao-shared-test',
+    'KASSINAO_SHARED_LUKS_UUID=12345678-1234-4abc-8def-1234567890ab',
+    `KASSINAO_SHARED_APP_ENV_FILE=${sharedAppEnv}`,
+    `KASSINAO_SHARED_TUNNEL_TOKEN_FILE=${sharedTunnelToken}`,
     `APP_URL=${appUrl}`,
     `MCP_URL=${appUrl}`,
     `PUBLIC_URL=${publicUrl}`,
@@ -476,8 +692,9 @@ function deploymentFixture(
     '',
   ].join('\n');
   writePrivateFile(path.join(directory, '.env'), environment);
+  const appEnvironmentFile = hostScope === 'shared' ? sharedAppEnv : path.join(directory, 'app.env');
   writePrivateFile(
-    path.join(directory, 'app.env'),
+    appEnvironmentFile,
     [
       'DISCORD_TOKEN=test-discord-token',
       'APPLICATION_ID=123456789012345678',
@@ -519,13 +736,22 @@ function deploymentFixture(
       '',
     ].join('\n'),
   );
+  if (hostScope === 'shared') chmodSync(appEnvironmentFile, 0o440);
+  writeFileSync(sharedTunnelToken, '', { mode: 0o444 });
+  chmodSync(sharedTunnelToken, 0o444);
   writeFileSync(
     path.join(directory, 'compose.env.example'),
     `KASSINAO_IMAGE=${image}\nKASSINAO_RELEASE_DIGEST=${digest}\nKASSINAO_DEPLOYMENT_FINGERPRINT=\n`,
   );
-  writeFileSync(path.join(directory, 'docker-compose.yml'), 'services:\n  kassinao:\n    image: ${KASSINAO_IMAGE}\n');
+  writeFileSync(
+    path.join(directory, 'docker-compose.yml'),
+    `services:\n  kassinao:\n    image: \${KASSINAO_IMAGE}\n  cloudflared:\n    image: cloudflare/cloudflared:2026.7.1@sha256:${'b'.repeat(64)}\n`,
+  );
+  writeFileSync(path.join(directory, 'docker-compose.shared.yml'), 'services:\n  kassinao:\n    restart: "no"\n');
   mkdirSync(path.join(directory, 'scripts'));
   mkdirSync(path.join(directory, 'deploy'));
+  mkdirSync(path.join(directory, 'deploy', 'docker-client'));
+  writeFileSync(path.join(directory, 'deploy', 'docker-client', 'config.json'), '{}\n', { mode: 0o444 });
   const hardenerLog = path.join(directory, 'hardener.log');
   writeFileSync(
     path.join(directory, 'scripts', 'harden-docker-egress.sh'),
@@ -547,11 +773,50 @@ exit ${options.storageVerifierFails ? '1' : '0'}
 `,
     { mode: 0o700 },
   );
+  writeFileSync(
+    path.join(directory, 'scripts', 'verify-shared-luks-storage.sh'),
+    `#!/usr/bin/env bash
+printf 'shared-storage:%s:%s\\n' "\${KASSINAO_ENV_FILE:-unset}" "$*" >> ${shellLiteral(hardenerLog)}
+exit ${options.storageVerifierFails ? '1' : '0'}
+`,
+    { mode: 0o700 },
+  );
+  writeFileSync(
+    path.join(directory, 'scripts', 'audit-shared-vps-security.sh'),
+    `#!/usr/bin/env bash
+printf 'shared-audit:%s\n' "\${1:-}" >> ${shellLiteral(hardenerLog)}
+case "\${1:-}" in
+  --preflight)
+    if [ ${options.sharedAuditRejectsStoppedContainer ? 'true' : 'false'} = true ] && \
+       [ -s ${shellLiteral(path.join(directory, '.fake-stopped'))} ]; then
+      exit 1
+    fi
+    exit ${options.sharedAuditPreflightFails ? '1' : '0'}
+    ;;
+  '') exit ${options.sharedAuditFullFails ? '1' : '0'} ;;
+  *) exit 2 ;;
+esac
+`,
+    { mode: 0o700 },
+  );
+  writeFileSync(
+    path.join(directory, 'scripts', 'check-shared-migration-rollback.sh'),
+    `#!/usr/bin/env bash
+printf 'rollback-check:%s:%s\n' "\${KASSINAO_ENV_FILE:-unset}" "$*" >> ${shellLiteral(hardenerLog)}
+exit ${options.rollbackCheckerFails ? '1' : '0'}
+`,
+    { mode: 0o700 },
+  );
   const manifestEntries = [
     'compose.env.example',
     'docker-compose.yml',
+    'docker-compose.shared.yml',
+    'deploy/docker-client/config.json',
     'scripts/harden-docker-egress.sh',
     'scripts/verify-storage-encryption.sh',
+    'scripts/verify-shared-luks-storage.sh',
+    'scripts/audit-shared-vps-security.sh',
+    'scripts/check-shared-migration-rollback.sh',
   ].map((name) => {
     const bytes = readFileSync(path.join(directory, name));
     return `${createHash('sha256').update(bytes).digest('hex')}  ${name}`;
@@ -567,18 +832,59 @@ exit ${options.storageVerifierFails ? '1' : '0'}
         cap_drop: ['ALL'],
         security_opt: ['no-new-privileges:true'],
         networks: { private: null },
-        environment: {
-          KASSINAO_RELEASE_DIGEST: digest,
-          KASSINAO_DEPLOYMENT_FINGERPRINT: deploymentFingerprint,
-        },
-        env_file: [{ path: path.join(directory, 'app.env'), required: true }],
+        environment:
+          hostScope === 'shared'
+            ? {
+                PORT: '8080',
+                WEB_BIND_ADDRESS: '0.0.0.0',
+                RECORDINGS_DIR: '/app/recordings',
+                STATE_DIR: '/app/state',
+                AUTH_STATE_DIR: '/app/auth',
+                KASSINAO_RELEASE_DIGEST: digest,
+                KASSINAO_DEPLOYMENT_FINGERPRINT: deploymentFingerprint,
+                TUNNEL_TOKEN: '',
+                XDG_CACHE_HOME: '/home/node/.cache',
+                DOTENV_CONFIG_PATH: '/run/secrets/kassinao-app.env',
+              }
+            : {
+                KASSINAO_RELEASE_DIGEST: digest,
+                KASSINAO_DEPLOYMENT_FINGERPRINT: deploymentFingerprint,
+              },
+        ...(hostScope === 'shared' ? {} : { env_file: [{ path: path.join(directory, 'app.env'), required: true }] }),
         ports: [{ host_ip: '127.0.0.1', target: 8080, published: '8080' }],
         volumes: [
           { type: 'bind', source: recordings, target: '/app/recordings' },
           { type: 'bind', source: state, target: '/app/state' },
           { type: 'bind', source: auth, target: '/app/auth' },
           { type: 'bind', source: cache, target: '/home/node/.cache' },
+          ...(hostScope === 'shared'
+            ? [
+                {
+                  type: 'bind',
+                  source: path.join(dataRoot, '.kassinao-mounted'),
+                  target: '/run/kassinao/storage-mounted',
+                  read_only: true,
+                  bind: { create_host_path: false },
+                },
+                {
+                  type: 'bind',
+                  source: sharedAppEnv,
+                  target: '/run/secrets/kassinao-app.env',
+                  read_only: true,
+                  bind: { create_host_path: false },
+                },
+              ]
+            : []),
         ],
+        ...(hostScope === 'shared'
+          ? {
+              restart: 'no',
+              mem_limit: 2_147_483_648,
+              memswap_limit: 2_147_483_648,
+              mem_swappiness: 0,
+              cpus: 1,
+            }
+          : {}),
       },
     },
     networks: {
@@ -619,22 +925,116 @@ exit ${options.storageVerifierFails ? '1' : '0'}
         REPO_PUBLIC: 'true',
       },
       ports: [{ host_ip: '127.0.0.1', target: 8081, published: '8081' }],
+      ...(hostScope === 'shared'
+        ? {
+            restart: 'no',
+            mem_limit: 402_653_184,
+            memswap_limit: 402_653_184,
+            mem_swappiness: 0,
+            cpus: 0.2,
+          }
+        : {}),
     };
   }
   options.mutateNormalizedConfig?.(normalizedConfig);
+  const runtime = fakeRuntime(
+    directory,
+    image,
+    digest,
+    normalizedConfig,
+    options.initiallyRunning,
+    options.egressActive,
+    options.upFails,
+    options.staleDisabledTunnel,
+    options.failureNameSquatter,
+    options.snapshotNestedMount,
+    options.snapshotTarFails,
+  );
+  if (hostScope === 'shared') {
+    const callerUid = process.getuid?.() ?? 1000;
+    const callerGid = process.getgid?.() ?? 1000;
+    const statFixture = path.join(runtime.bin, 'stat');
+    writeFileSync(
+      statFixture,
+      `#!/usr/bin/env bash
+if [ "\${1:-}" = -c ] && [ "\${2:-}" = '%u:%g' ]; then
+  case "\${3:-}" in
+    ${shellLiteral(recordings)}|${shellLiteral(state)}|${shellLiteral(auth)}|${shellLiteral(cache)})
+      printf '${uid}:${gid}\n'; exit 0 ;;
+    ${shellLiteral(sharedAppEnv)}) printf '${callerUid}:${gid}\n'; exit 0 ;;
+    ${shellLiteral(sharedTunnelToken)}) printf '${callerUid}:${callerGid}\n'; exit 0 ;;
+  esac
+fi
+exec /usr/bin/stat "$@"
+`,
+      { mode: 0o700 },
+    );
+    chmodSync(statFixture, 0o700);
+  }
+  const inheritedEnvironment = path.join(directory, 'inherited-deploy-environment.bin');
+  writeFileSync(
+    inheritedEnvironment,
+    Buffer.from(
+      [...new Set([...Object.keys(process.env), 'PATH', 'HOME', 'KASSINAO_DEPLOY_DIR'])]
+        .map((name) => `${name}=fixture\0`)
+        .join(''),
+    ),
+  );
+  const script = path.join(directory, 'scripts', 'deploy-release.sh');
+  const lockHarness = `cursor="$ROOT"
+while :; do
+  [ ! -e "$cursor/.git" ] || die "deploy precisa ficar fora de qualquer Git ($cursor/.git)"
+  parent="$(dirname "$cursor")"
+  [ "$parent" != "$cursor" ] || break
+  cursor="$parent"
+done
+LOCK_FILE="$ROOT/.deploy.lock"
+[ -e "$LOCK_FILE" ] || : > "$LOCK_FILE"
+chmod 600 "$LOCK_FILE"
+exec 9<>"$LOCK_FILE"
+flock -n 9 || die 'já existe outro deploy em andamento'
+DOCKER_CONFIG="$ROOT/deploy/docker-client"
+DOCKER_CONFIG_FILE="$DOCKER_CONFIG/config.json"
+[ -d "$DOCKER_CONFIG" ] && [ ! -L "$DOCKER_CONFIG" ] && \
+  [ -f "$DOCKER_CONFIG_FILE" ] && [ ! -L "$DOCKER_CONFIG_FILE" ] || \
+  die 'configuração isolada do cliente Docker está ausente ou irregular'
+export DOCKER_CONFIG
+RUNTIME_DIR=${shellLiteral(runtimeDirectory)}
+MAINTENANCE_LOCK_FILE="$RUNTIME_DIR/maintenance.lock"
+exec 8<>"$MAINTENANCE_LOCK_FILE"
+flock -w 120 8 || die 'outra manutenção não liberou a instância em 120 segundos'
+`;
+  const deploySource = repositoryFile('scripts/deploy-release.sh')
+    .replaceAll('/proc/$$/environ', inheritedEnvironment)
+    .replace(
+      'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      `PATH=${runtime.bin}:/usr/local/bin:/usr/bin:/bin`,
+    )
+    .replace(
+      /# KASSINAO_HOST_NO_DUMP_BEGIN[\s\S]*?# KASSINAO_HOST_NO_DUMP_END/,
+      '# KASSINAO_HOST_NO_DUMP_BEGIN\nunset LD_PRELOAD\n# KASSINAO_HOST_NO_DUMP_END',
+    )
+    .replace(
+      /cursor="\$ROOT"\nwhile :; do[\s\S]*?flock -w 120 8 \|\| die 'outra manutenção não liberou a instância em 120 segundos'\n/,
+      lockHarness,
+    );
+  expect(deploySource).toContain(`RUNTIME_DIR=${shellLiteral(runtimeDirectory)}`);
+  expect(deploySource).not.toContain('stat -Lc \'%a:%u:%g:%h\' "/proc/$$/fd/8"');
+  writeFileSync(script, deploySource, { mode: 0o700 });
+  chmodSync(script, 0o700);
+  writeFileSync(path.join(runtimeDirectory, 'maintenance.lock'), 'maintenance-sentinel\n', { mode: 0o600 });
+  chmodSync(path.join(runtimeDirectory, 'maintenance.lock'), 0o600);
+  const deployBytes = readFileSync(script);
+  writeFileSync(
+    path.join(directory, 'MANIFEST.sha256'),
+    `${readFileSync(path.join(directory, 'MANIFEST.sha256'), 'utf8')}${createHash('sha256').update(deployBytes).digest('hex')}  scripts/deploy-release.sh\n`,
+  );
   return {
     directory,
     digest,
+    script,
     runtimeDirectory,
-    runtime: fakeRuntime(
-      directory,
-      image,
-      digest,
-      normalizedConfig,
-      options.initiallyRunning,
-      options.egressActive,
-      options.upFails,
-    ),
+    runtime,
   };
 }
 
@@ -754,7 +1154,7 @@ describe('artefatos de distribuição', () => {
     expect(compose).not.toMatch(/^\s*build:\s*/m);
     expect(privateProcess).toMatch(/^\s*image:\s*\$\{KASSINAO_IMAGE/m);
     expect(publicProcess).toMatch(/^\s*image:\s*\$\{KASSINAO_IMAGE/m);
-    expect(publicProcess).toContain("command: ['node', 'dist/public.js']");
+    expect(publicProcess).toContain("command: ['/usr/local/bin/node', 'dist/public.js']");
     expect(privateProcess).toMatch(/^\s*networks:\s*\[private\]\s*$/m);
     expect(publicProcess).toMatch(/^\s*networks:\s*\[public\]\s*$/m);
     expect(privateProcess).not.toMatch(/^\s*networks:\s*\[[^\]]*public/m);
@@ -802,6 +1202,15 @@ describe('artefatos de distribuição', () => {
     expect(workflow).toContain('vars.IMMUTABLE_RELEASES_ENABLED');
     expect(workflow).toContain('vars.RELEASE_TAG_RULESET_ENABLED');
     expect(workflow).toContain('test "$release_commit" = "$main_commit"');
+    expect(workflow).toContain('Require the reviewed MCP release before publishing the app');
+    expect(workflow).toContain('https://registry.npmjs.org/-/npm/v1/attestations/$package@$version');
+    expect(workflow).toContain('test "$(git rev-parse "$mcp_ref^{commit}")" = "$release_commit"');
+    expect(workflow).toContain('npm audit signatures --prefix "$audit_root"');
+    expect(workflow).toContain('node scripts/verify-npm-release-attestation.cjs');
+    expect(workflow).toContain('publish mcp-v$version first');
+    expect(workflow.indexOf('Require the reviewed MCP release')).toBeLessThan(
+      workflow.indexOf('Gate the release on the audited source tree'),
+    );
     expect(workflow).toContain('git ls-remote --refs origin "$GITHUB_REF"');
     expect(workflow).toContain('gh release edit "$tag" --draft');
     expect(workflow).toContain('amd64_image="$repository@$(platform_digest amd64)"');
@@ -816,6 +1225,11 @@ describe('artefatos de distribuição', () => {
     expect(workflow).toContain('"/usr/local/lib/node_modules/corepack"');
     expect(workflow).toContain('fs.lstatSync(path); process.exit(12);');
     expect(workflow).toContain('entry.startsWith("yarn-")');
+    expect(workflow).toContain('prove_no_dump_runtime linux/amd64 "$amd64_image"');
+    expect(workflow).toContain('prove_no_dump_runtime linux/arm64 "$arm64_image"');
+    expect(workflow).toContain('extract_no_dump_runtime linux/amd64 amd64 "$amd64_image"');
+    expect(workflow).toContain('extract_no_dump_runtime linux/arm64 arm64 "$arm64_image"');
+    expect(workflow).toContain('dist/native-runtime');
     expect(workflow.indexOf('docker run --rm --platform linux/amd64')).toBeLessThan(
       workflow.indexOf('docker pull --platform linux/arm64'),
     );
@@ -847,7 +1261,9 @@ describe('artefatos de distribuição', () => {
     const rollbackTimer = repositoryFile('deploy/systemd/kassinao-rollback-clean.timer');
     const rollbackTmpfiles = repositoryFile('deploy/tmpfiles.d/kassinao-rollback.conf.in');
 
-    expect(harden).toContain("docker network inspect -f '{{range .Containers}}{{println .Name}}{{end}}'");
+    expect(harden).toContain('{{range $id, $member := .Containers}}{{printf "%s|%s\\n" $id $member.Name}}{{end}}');
+    expect(harden).toContain('managed_container_id()');
+    expect(harden).toContain('ocupa nome reservado sem identidade Compose aprovada');
     expect(harden).toContain('BRIDGE_NAME=kas-private0');
     expect(harden).toContain('PRELOAD=true');
     expect(harden).toContain('--preload)');
@@ -855,6 +1271,7 @@ describe('artefatos de distribuição', () => {
     expect(harden).toContain('--offline-preload)');
     expect(harden).toContain('--remove)');
     expect(harden).toContain('LOCK_DIR=/run/lock/kassinao');
+    expect(harden).not.toContain('KASSINAO_RUNTIME_DIR:-/run/lock/kassinao');
     expect(harden).toContain("= '700:0:0'");
     expect(harden).not.toContain('core não apareceu em 120 segundos');
     expect(harden).toContain('iptables -w 10');
@@ -884,8 +1301,8 @@ describe('artefatos de distribuição', () => {
     expect(egressUnit).not.toContain('kassinao-health-watch.service');
     expect(failClosedUnit).toContain('ExecStart=/usr/local/sbin/kassinao-egress-fail-closed');
     expect(failClosedUnit).not.toContain('ExecStart=-');
-    expect(failClosedScript).toContain('docker stop --time 30 "$container"');
-    expect(failClosedScript).toContain('docker kill "$container"');
+    expect(failClosedScript).toContain('docker stop --time 30 "$cid"');
+    expect(failClosedScript).toContain('docker kill "$cid"');
     expect(failClosedScript).toContain("'{{.State.Running}}'");
     expect(dockerDropIn).toContain('Wants=kassinao-docker-egress.service');
     expect(dockerDropIn).toContain('ExecStartPre=/usr/local/sbin/kassinao-harden-docker-egress --offline-preload');
@@ -929,7 +1346,7 @@ describe('artefatos de distribuição', () => {
     expect(audit).toContain('systemctl is-enabled --quiet kassinao-docker-egress.service');
     expect(audit).toContain('systemctl is-enabled --quiet kassinao-rollback-clean.timer');
     expect(audit).toContain('container alheio, privilégio global, device, docker.sock ou bind sensível detectado');
-    expect(audit).toContain('host.get("DeviceRequests")');
+    expect(audit).toContain('host.get("HasDeviceRequests")');
     expect(audit).toContain('actual != expected');
     expect(audit).toContain('unit_property_is "$unit" FragmentPath');
     expect(audit).toContain('unit_property_is "$unit" DropInPaths \'\'');
@@ -965,7 +1382,7 @@ describe('artefatos de distribuição', () => {
     expect(audit).toContain("docker info --format '{{.LiveRestoreEnabled}}'");
     expect(audit).toContain("'{{.HostConfig.RestartPolicy.Name}}'");
     expect(audit).toContain('DATA_ROOT_MODE" = 700');
-    expect(audit).toContain('[ "$(id -u)" -eq 0 ] || fatal \'execute o audit como root\'');
+    expect(audit).toContain('[ "$EUID" -eq 0 ] || fatal \'execute o audit como root\'');
     expect(audit).toContain('arquivos de ambiente pertencem somente a root:root');
     expect(audit).toContain('DATA_ROOT pertence a root:root');
     expect(audit).toContain("key == 'permitrootlogin' and value != 'no'");
@@ -998,7 +1415,15 @@ describe('artefatos de distribuição', () => {
       'health-watch',
       'harden-docker-egress',
       'install-host-controls',
+      'install-shared-host-controls',
+      'check-shared-migration-rollback',
+      'finalize-shared-migration',
+      'migrate-shared-storage',
+      'prepare-legacy-shared-layout',
+      'remove-legacy-health-watch',
+      'validate-legacy-dedicated-installation',
       'uninstall-host-controls',
+      'uninstall-shared-host-controls',
       'inject-secrets',
       'preview-web',
     ]) {
@@ -1037,14 +1462,19 @@ describe('artefatos de distribuição', () => {
     expect(example).not.toContain('SOURCE_URL=https://github.com/resolvicomai/kassinao');
   });
 
-  it('gera kit operacional sem source, segredos ou tag mutável e com checksum portátil', () => {
+  it('gera kit operacional sem checkout/app source, segredos ou tag mutável e com checksum portátil', () => {
     const output = makeTempDir();
     const digest = `sha256:${'b'.repeat(64)}`;
     const image = `ghcr.io/example/kassinao@${digest}`;
-    const result = spawnSync('bash', [path.join(ROOT, 'scripts', 'package-ops-bundle.sh'), 'v1.4.5', output, image], {
-      cwd: ROOT,
-      encoding: 'utf8',
-    });
+    const nativeRuntime = makeNativeRuntimeFixture();
+    const result = spawnSync(
+      'bash',
+      [path.join(ROOT, 'scripts', 'package-ops-bundle.sh'), 'v1.4.5', output, image, nativeRuntime],
+      {
+        cwd: ROOT,
+        encoding: 'utf8',
+      },
+    );
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const archive = path.join(output, 'kassinao-ops-v1.4.5.tar.gz');
     const listing = spawnSync('tar', ['-tzf', archive], { encoding: 'utf8' });
@@ -1054,10 +1484,19 @@ describe('artefatos de distribuição', () => {
     expect(listing.stdout).toContain('app.env.example');
     expect(listing.stdout).toContain('scripts/deploy-release.sh');
     expect(listing.stdout).toContain('scripts/prepare-storage.sh');
+    expect(listing.stdout).toContain('scripts/prepare-shared-storage.sh');
+    expect(listing.stdout).toContain('scripts/validate-legacy-dedicated-installation.sh');
+    expect(listing.stdout).toContain('scripts/remove-legacy-health-watch.sh');
+    expect(listing.stdout).toContain('scripts/prepare-legacy-shared-layout.sh');
+    expect(listing.stdout).toContain('scripts/migrate-shared-storage.sh');
+    expect(listing.stdout).toContain('scripts/check-shared-migration-rollback.sh');
+    expect(listing.stdout).toContain('scripts/finalize-shared-migration.sh');
     expect(listing.stdout).toContain('scripts/harden-docker-egress.sh');
     expect(listing.stdout).toContain('scripts/egress-fail-closed.sh');
     expect(listing.stdout).toContain('scripts/install-host-controls.sh');
     expect(listing.stdout).toContain('scripts/uninstall-host-controls.sh');
+    expect(listing.stdout).toContain('scripts/uninstall-shared-host-controls.sh');
+    expect(listing.stdout).toContain('scripts/audit-shared-vps-security.sh');
     expect(listing.stdout).toContain('deploy/systemd/kassinao-docker-egress.service');
     expect(listing.stdout).toContain('deploy/systemd/kassinao-egress-fail-closed.service');
     expect(listing.stdout).toContain('deploy/systemd/kassinao-rollback-clean.service.in');
@@ -1065,6 +1504,10 @@ describe('artefatos de distribuição', () => {
     expect(listing.stdout).toContain('deploy/systemd/docker.service.d/kassinao-egress.conf');
     expect(listing.stdout).toContain('deploy/tmpfiles.d/kassinao.conf');
     expect(listing.stdout).toContain('deploy/tmpfiles.d/kassinao-rollback.conf.in');
+    expect(listing.stdout).toContain('runtime/linux-amd64/kassinao-no-dump');
+    expect(listing.stdout).toContain('runtime/linux-amd64/libkassinao-no-dump.so');
+    expect(listing.stdout).toContain('runtime/linux-arm64/kassinao-no-dump');
+    expect(listing.stdout).toContain('runtime/linux-arm64/libkassinao-no-dump.so');
     expect(listing.stdout).not.toMatch(/(?:^|\/)src\//m);
     expect(listing.stdout).not.toMatch(/(?:^|\/)\.git(?:\/|$)/m);
     const env = spawnSync('tar', ['-xOf', archive, 'kassinao-ops-v1.4.5/compose.env.example'], { encoding: 'utf8' });
@@ -1083,6 +1526,13 @@ describe('artefatos de distribuição', () => {
     });
     expect(manifest.status, manifest.stderr).toBe(0);
     expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/prepare-storage\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/validate-legacy-dedicated-installation\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/remove-legacy-health-watch\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/prepare-legacy-shared-layout\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/check-shared-migration-rollback\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/finalize-shared-migration\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/runtime\/linux-amd64\/kassinao-no-dump/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/runtime\/linux-arm64\/libkassinao-no-dump\.so/);
   });
 
   it('prepara somente os quatro filhos depois de provar o DATA_ROOT criptografado', () => {
@@ -1182,6 +1632,7 @@ describe('artefatos de distribuição', () => {
     expect(actions.length).toBeGreaterThanOrEqual(2);
     expect(actions.every((action) => /@[0-9a-f]{40}$/.test(action))).toBe(true);
     expect(workflow).toContain('vars.MCP_RELEASE_TAG_RULESET_ENABLED');
+    expect(workflow).toContain('test "$(git cat-file -t "$tag_oid")" = tag');
     expect(workflow).toContain('test "$release_commit" = "$main_commit"');
     expect(workflow).toContain('git ls-remote --refs origin "$GITHUB_REF"');
     expect(workflow).toContain('npm publish "$RUNNER_TEMP/kassinao-mcp-$version.tgz" --access public --provenance');
@@ -1196,7 +1647,8 @@ describe('artefatos de distribuição', () => {
     const watchdog = repositoryFile('scripts/health-watch.sh');
 
     for (const script of [deploy, backup, watchdog]) {
-      expect(script).toContain('KASSINAO_RUNTIME_DIR:-/run/lock/kassinao');
+      expect(script).toContain('RUNTIME_DIR=/run/lock/kassinao');
+      expect(script).not.toContain('KASSINAO_RUNTIME_DIR:-/run/lock/kassinao');
       expect(script).toContain('$RUNTIME_DIR/maintenance.lock');
       expect(script).not.toContain('kassinao-maintenance.lock');
     }
@@ -1217,7 +1669,9 @@ describe('artefatos de distribuição', () => {
       const script = repositoryFile(file);
       expect(script, file).toContain('DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY');
       expect(script, file).toContain('export DOCKER_HOST=unix:///var/run/docker.sock');
-      expect(script, file).toContain('unset DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY');
+      expect(script, file).toContain('unset DOCKER_CONTEXT DOCKER_TLS_VERIFY');
+      expect(script, file).toMatch(/DOCKER_CONFIG="?\$[^\n]*deploy\/docker-client/);
+      expect(script, file).toContain('export DOCKER_CONFIG');
     }
     const deploy = repositoryFile('scripts/deploy-release.sh');
     expect(deploy.indexOf('seal_local_docker')).toBeLessThan(deploy.indexOf('require_private_file'));
@@ -1499,15 +1953,14 @@ describe('bootstrap da identidade privada', () => {
 });
 
 describe('deploy image-only', () => {
-  const deployScript = path.join(ROOT, 'scripts', 'deploy-release.sh');
-
   it('recusa endpoint Docker herdado antes de tocar o kit privado', () => {
-    const directory = makeTempDir();
-    const result = spawnSync('bash', [deployScript], {
-      cwd: directory,
+    const fixture = deploymentFixture(`ghcr.io/example/kassinao@sha256:${'1'.repeat(64)}`);
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
       env: {
-        PATH: process.env.PATH,
-        KASSINAO_DEPLOY_DIR: directory,
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
         DOCKER_HOST: 'tcp://attacker.invalid:2375',
       },
       encoding: 'utf8',
@@ -1525,7 +1978,7 @@ describe('deploy image-only', () => {
       replaceEnvironmentValue(file, 'DOCS_URL', 'https://SHARED.Example.com.:0443');
     }
 
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1549,7 +2002,7 @@ describe('deploy image-only', () => {
     replaceEnvironmentValue(path.join(fixture.directory, 'app.env'), 'PUBLIC_URL', 'https://WWW.Example.com.:0443');
     replaceEnvironmentValue(path.join(fixture.directory, 'app.env'), 'DOCS_URL', 'https://DOCS.Example.com.:0443');
 
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1584,7 +2037,7 @@ describe('deploy image-only', () => {
     ] as const) {
       const fixture = deploymentFixture(image);
       replaceEnvironmentValue(path.join(fixture.directory, 'app.env'), key, value);
-      const result = spawnSync('bash', [deployScript], {
+      const result = spawnSync('bash', [fixture.script], {
         cwd: fixture.directory,
         env: {
           ...process.env,
@@ -1609,7 +2062,7 @@ describe('deploy image-only', () => {
     ] as const) {
       const fixture = deploymentFixture(image);
       replaceEnvironmentValue(path.join(fixture.directory, file), key, value);
-      const result = spawnSync('bash', [deployScript], {
+      const result = spawnSync('bash', [fixture.script], {
         cwd: fixture.directory,
         env: {
           ...process.env,
@@ -1626,13 +2079,229 @@ describe('deploy image-only', () => {
     }
   });
 
+  it('usa o adapter shared sem aceite dedicado, com overlay e verifier vinculados ao .env privado', () => {
+    const digest = `sha256:${'b'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { hostScope: 'shared' });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    const storageCalls = readFileSync(path.join(fixture.directory, 'hardener.log'), 'utf8');
+    expect(storageCalls).toContain(`shared-storage:${path.join(fixture.directory, '.env')}:\n`);
+    expect(storageCalls).not.toMatch(/^storage:/m);
+    expect(storageCalls).toContain('shared-audit:--preflight\n');
+    expect(storageCalls).toContain(`rollback-check:${path.join(fixture.directory, '.env')}:\n`);
+    expect(storageCalls).toContain('shared-audit:\n');
+    const dockerCalls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(dockerCalls).toContain(`-f ${path.join(fixture.directory, 'docker-compose.shared.yml')}`);
+    expect(dockerCalls).toContain('.HostConfig.Memory');
+    expect(dockerCalls).toContain('up -d --no-build');
+    expect(dockerCalls).toContain('--force-recreate');
+    expect(dockerCalls).not.toContain('up -d --no-build --remove-orphans');
+  });
+
+  it('mantém o core parado quando o checker shared reprova o rollback plaintext', () => {
+    const digest = `sha256:${'6'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, {
+      hostScope: 'shared',
+      initiallyRunning: true,
+      rollbackCheckerFails: true,
+    });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('rollback plaintext inválido ou expirado; core continuará parado');
+    expect(result.stderr).not.toContain(fixture.directory);
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).not.toContain('up -d --no-build');
+    expect(calls).not.toMatch(/^start /m);
+    expect(result.stderr).toContain('gates fail-closed não foram aprovados');
+  });
+
+  it('remove somente pelo ID imutável o túnel oficial parado de um profile desabilitado', () => {
+    const digest = `sha256:${'3'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { hostScope: 'shared', staleDisabledTunnel: 'safe' });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    const immutableId = 'd'.repeat(64);
+    const removeAt = calls.indexOf(`rm ${immutableId}\n`);
+    const upAt = calls.indexOf('up -d --no-build');
+    expect(calls).toContain('inspect --format {{.Id}} kassinao-tunnel');
+    expect(calls).toContain(`inspect --format {{.Id}}|{{.Name}}|`);
+    expect(removeAt).toBeGreaterThanOrEqual(0);
+    expect(upAt).toBeGreaterThan(removeAt);
+    expect(calls).not.toMatch(/^rm kassinao-tunnel$/m);
+    expect(calls).not.toContain('--remove-orphans');
+  });
+
+  it.each(['running', 'restart-policy', 'foreign-project'] as const)(
+    'recusa remover túnel desabilitado cuja identidade ficou insegura: %s',
+    (staleDisabledTunnel) => {
+      const digest = `sha256:${'4'.repeat(64)}`;
+      const image = `ghcr.io/example/kassinao@${digest}`;
+      const fixture = deploymentFixture(image, { hostScope: 'shared', staleDisabledTunnel });
+
+      const result = spawnSync('bash', [fixture.script], {
+        cwd: fixture.directory,
+        env: {
+          ...process.env,
+          PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+          KASSINAO_DEPLOY_DIR: fixture.directory,
+          KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('falhou na revalidação de identidade');
+      const calls = readFileSync(fixture.runtime.log, 'utf8');
+      expect(calls).not.toMatch(/^rm /m);
+      expect(calls).not.toContain('up -d --no-build');
+    },
+  );
+
+  it('recusa workload vizinho inseguro antes de pull ou start no adapter shared', () => {
+    const digest = `sha256:${'1'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { hostScope: 'shared', sharedAuditPreflightFails: true });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('preflight shared recusou');
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).not.toMatch(/\bpull\b/);
+    expect(calls).not.toMatch(/\bup -d\b/);
+  });
+
+  it('contém a tentativa shared quando o audit completo recusa o runtime novo', () => {
+    const digest = `sha256:${'0'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { hostScope: 'shared', sharedAuditFullFails: true });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('audit final shared recusou');
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).toContain('up -d --no-build');
+    expect(calls).toContain(`stop --time 30 ${'a'.repeat(64)}`);
+    expect(calls).not.toContain('curl https://app.example.com/health');
+    expect(existsSync(path.join(fixture.directory, '.deployed-image'))).toBe(false);
+  });
+
+  it('não contém por nome um container alheio que ocupou kassinao durante uma falha', () => {
+    const digest = `sha256:${'8'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { upFails: true, failureNameSquatter: true });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('nome reservado ocupado por container alheio');
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    const foreignId = 'f'.repeat(64);
+    expect(calls).toContain(`inspect --format {{.Id}} kassinao`);
+    expect(calls).toContain(`inspect --format {{.Id}}|{{.Name}}|`);
+    expect(calls).not.toContain(`stop --time 30 ${foreignId}`);
+    expect(calls).not.toContain('stop --time 30 kassinao\n');
+  });
+
+  it('recusa misturar o aceite do daemon dedicado com KASSINAO_HOST_SCOPE=shared', () => {
+    const digest = `sha256:${'c'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { hostScope: 'shared' });
+    replaceEnvironmentValue(
+      path.join(fixture.directory, '.env'),
+      'KASSINAO_DEDICATED_DOCKER_HOST_ACK',
+      'I_UNDERSTAND_THIS_VPS_MUST_RUN_ONLY_KASSINAO',
+    );
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('adapter shared exige KASSINAO_DEDICATED_DOCKER_HOST_ACK vazio');
+    const calls = existsSync(fixture.runtime.log) ? readFileSync(fixture.runtime.log, 'utf8') : '';
+    expect(calls).not.toMatch(/\bpull\b/);
+  });
+
   it('recusa DATA_ROOT invisível ao sandbox persistente de limpeza', () => {
     const digest = `sha256:${'2'.repeat(64)}`;
     const image = `ghcr.io/example/kassinao@${digest}`;
     const fixture = deploymentFixture(image);
     replaceEnvironmentValue(path.join(fixture.directory, '.env'), 'KASSINAO_DATA_ROOT', '/home/kassinao');
 
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1656,7 +2325,7 @@ describe('deploy image-only', () => {
     replaceEnvironmentValue(path.join(fixture.directory, '.env'), 'COMPOSE_PROFILES', 'tunnel,split-public');
     replaceEnvironmentValue(path.join(fixture.directory, '.env'), 'TUNNEL_TOKEN', 'test-tunnel-token');
 
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1678,7 +2347,7 @@ describe('deploy image-only', () => {
     const image = `ghcr.io/example/kassinao@${digest}`;
     const fixture = deploymentFixture(image, { mode: 'single' });
 
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1694,12 +2363,12 @@ describe('deploy image-only', () => {
   });
 
   it('recusa executar dentro de qualquer checkout Git antes de ler segredos ou chamar Docker', () => {
-    const directory = makeTempDir();
-    mkdirSync(path.join(directory, '.git'));
+    const fixture = deploymentFixture(`ghcr.io/example/kassinao@sha256:${'2'.repeat(64)}`);
+    mkdirSync(path.join(fixture.directory, '.git'));
 
-    const result = spawnSync('bash', [deployScript], {
-      cwd: directory,
-      env: { ...process.env, KASSINAO_DEPLOY_DIR: directory },
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: { ...process.env, KASSINAO_DEPLOY_DIR: fixture.directory },
       encoding: 'utf8',
     });
 
@@ -1708,22 +2377,22 @@ describe('deploy image-only', () => {
   });
 
   it('recusa também um subdiretório aparentemente privado dentro de um checkout Git', () => {
-    const parent = makeTempDir();
-    mkdirSync(path.join(parent, '.git'));
-    const directory = path.join(parent, 'private-runtime');
+    const fixture = deploymentFixture(`ghcr.io/example/kassinao@sha256:${'3'.repeat(64)}`);
+    mkdirSync(path.join(fixture.directory, '.git'));
+    const directory = path.join(fixture.directory, 'private-runtime');
     mkdirSync(directory, { mode: 0o700 });
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: directory,
       env: { ...process.env, KASSINAO_DEPLOY_DIR: directory },
       encoding: 'utf8',
     });
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('fora de qualquer Git');
+    expect(result.stderr).toMatch(/fora de qualquer Git|exatamente a raiz do kit selado/);
   });
 
   it('recusa tag mutável e exige image@sha256', () => {
     const fixture = deploymentFixture('ghcr.io/example/kassinao:latest');
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1742,7 +2411,7 @@ describe('deploy image-only', () => {
     const digest = `sha256:${'2'.repeat(64)}`;
     const image = `ghcr.io/example/kassinao@${digest}`;
     const fixture = deploymentFixture(image, { storageVerifierFails: true });
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1762,7 +2431,7 @@ describe('deploy image-only', () => {
     const digest = `sha256:${'a'.repeat(64)}`;
     const image = `ghcr.io/example/kassinao@${digest}`;
     const fixture = deploymentFixture(image);
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1776,12 +2445,53 @@ describe('deploy image-only', () => {
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const calls = readFileSync(fixture.runtime.log, 'utf8');
     expect(calls).toMatch(/\bpull\b/);
-    expect(calls).toContain('up -d --no-build --remove-orphans');
+    expect(calls).toContain('up -d --no-build --force-recreate --remove-orphans');
     expect(calls).not.toMatch(/(^|\s)build(\s|$)/);
     expect(result.stdout).toContain(`digest=${digest}`);
     expect(readFileSync(path.join(fixture.directory, '.deployed-image'), 'utf8').trim()).toBe(image);
     const rollbackDirectory = path.join(fixture.directory, 'data', 'rollback');
     expect(readdirSync(rollbackDirectory).filter((name) => name.startsWith('operational-state-'))).toHaveLength(0);
+  });
+
+  it('mantém deploy validado e snapshot retido quando o cleanup final fica inseguro', () => {
+    const digest = `sha256:${'b'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image);
+    const findmntCalls = path.join(fixture.directory, '.cleanup-findmnt-calls');
+    const rollbackGlob = `${path.join(fixture.directory, 'data', 'rollback')}/operational-state-*`;
+    writeFileSync(
+      path.join(fixture.runtime.bin, 'findmnt'),
+      `#!/usr/bin/env bash
+set -eu
+count=0
+[ ! -f ${shellLiteral(findmntCalls)} ] || count="$(cat ${shellLiteral(findmntCalls)})"
+count=$((count + 1))
+printf '%s\n' "$count" > ${shellLiteral(findmntCalls)}
+if [ "$count" -eq 6 ]; then
+  chmod 0644 ${rollbackGlob}
+fi
+printf '%s\n' '{"filesystems":[]}'
+`,
+      { mode: 0o700 },
+    );
+    chmodSync(path.join(fixture.runtime.bin, 'findmnt'), 0o700);
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stderr).toContain('snapshot não foi removido');
+    expect(readFileSync(path.join(fixture.directory, '.deployed-image'), 'utf8').trim()).toBe(image);
+    const rollbackDirectory = path.join(fixture.directory, 'data', 'rollback');
+    expect(readdirSync(rollbackDirectory).filter((name) => name.startsWith('operational-state-'))).toHaveLength(1);
   });
 
   it('preserva por tempo limitado um snapshot operacional sem autenticação quando a troca falha', () => {
@@ -1790,8 +2500,12 @@ describe('deploy image-only', () => {
     const fixture = deploymentFixture(image, { initiallyRunning: true, upFails: true });
     writeFileSync(path.join(fixture.directory, 'data', 'state', 'guildconfig.json'), '{}');
     writeFileSync(path.join(fixture.directory, 'data', 'auth', '.cookie-secret'), 'private-secret');
+    const recording = path.join(fixture.directory, 'data', 'recordings', 'meeting-1');
+    mkdirSync(recording, { mode: 0o700 });
+    writeFileSync(path.join(recording, 'meta.json'), '{"status":"completed"}', { mode: 0o600 });
+    writeFileSync(path.join(recording, 'audio.mp3'), 'audio-must-not-enter-rollback', { mode: 0o600 });
 
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1812,9 +2526,257 @@ describe('deploy image-only', () => {
       encoding: 'utf8',
     });
     expect(listing.status, listing.stderr).toBe(0);
-    expect(listing.stdout).toContain('./state/guildconfig.json');
+    expect(listing.stdout).toContain('state/guildconfig.json');
+    expect(listing.stdout).toContain('recording-meta/meeting-1/meta.json');
+    expect(listing.stdout).not.toContain('audio.mp3');
     expect(listing.stdout).not.toContain('auth');
     expect(listing.stdout).not.toContain('cookie-secret');
+  });
+
+  it('recusa hardlink de auth para state antes de parar qualquer container', () => {
+    const digest = `sha256:${'1'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { initiallyRunning: true });
+    const authFile = path.join(fixture.directory, 'data', 'auth', '.cookie-secret');
+    writeFileSync(authFile, 'private-secret', { mode: 0o600 });
+    linkSync(authFile, path.join(fixture.directory, 'data', 'state', 'leaked-auth.json'));
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('hardlink');
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).not.toContain('stop --time 60');
+    expect(calls).not.toContain('up -d --no-build');
+  });
+
+  it.each(['symlink', 'fifo'] as const)('recusa %s dentro de state antes de parar qualquer container', (entryType) => {
+    const digest = `sha256:${'2'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { initiallyRunning: true });
+    const unsafe = path.join(fixture.directory, 'data', 'state', `unsafe-${entryType}`);
+    if (entryType === 'symlink') {
+      const authFile = path.join(fixture.directory, 'data', 'auth', '.cookie-secret');
+      writeFileSync(authFile, 'private-secret', { mode: 0o600 });
+      symlinkSync(authFile, unsafe);
+    } else {
+      const fifo = spawnSync('mkfifo', [unsafe], { encoding: 'utf8' });
+      expect(fifo.status, fifo.stderr).toBe(0);
+    }
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/symlink|FIFO|especial/);
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).not.toContain('stop --time 60');
+    expect(calls).not.toContain('up -d --no-build');
+  });
+
+  it('recusa nested mount em state antes de parar qualquer container', () => {
+    const digest = `sha256:${'3'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { initiallyRunning: true, snapshotNestedMount: true });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('nested mount');
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).not.toContain('stop --time 60');
+    expect(calls).not.toContain('up -d --no-build');
+  });
+
+  it('detecta TOCTOU da fonte durante a geração e não troca para a release nova', () => {
+    const digest = `sha256:${'4'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { initiallyRunning: true });
+    const stateFile = path.join(fixture.directory, 'data', 'state', 'guildconfig.json');
+    writeFileSync(stateFile, '{"before":true}\n', { mode: 0o600 });
+    const findmntCalls = path.join(fixture.directory, '.snapshot-findmnt-calls');
+    writeFileSync(
+      path.join(fixture.runtime.bin, 'findmnt'),
+      `#!/usr/bin/env bash
+set -eu
+count=0
+[ ! -f ${shellLiteral(findmntCalls)} ] || count="$(cat ${shellLiteral(findmntCalls)})"
+count=$((count + 1))
+printf '%s\n' "$count" > ${shellLiteral(findmntCalls)}
+if [ "$count" -eq 3 ]; then
+  printf '{"after":true}\\n' > ${shellLiteral(stateFile)}
+fi
+printf '%s\n' '{"filesystems":[]}'
+`,
+      { mode: 0o700 },
+    );
+    chmodSync(path.join(fixture.runtime.bin, 'findmnt'), 0o700);
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/mudou durante a geracao|inventario mudou durante a geracao/);
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).toContain(`stop --time 60 ${'a'.repeat(64)}`);
+    expect(calls).not.toContain('up -d --no-build');
+    const rollbackDirectory = path.join(fixture.directory, 'data', 'rollback');
+    expect(readdirSync(rollbackDirectory).filter((name) => name.startsWith('operational-state-'))).toHaveLength(0);
+  });
+
+  it('não executa tar do PATH e publica somente o archive canônico privado', () => {
+    const digest = `sha256:${'5'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { initiallyRunning: true, upFails: true });
+    const tarWasCalled = path.join(fixture.directory, '.attacker-tar-called');
+    writeFileSync(
+      path.join(fixture.runtime.bin, 'tar'),
+      `#!/usr/bin/env bash
+set -eu
+touch ${shellLiteral(tarWasCalled)}
+exit 73
+`,
+      { mode: 0o700 },
+    );
+    chmodSync(path.join(fixture.runtime.bin, 'tar'), 0o700);
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(existsSync(tarWasCalled)).toBe(false);
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).toContain('up -d --no-build');
+    const rollbackDirectory = path.join(fixture.directory, 'data', 'rollback');
+    const archives = readdirSync(rollbackDirectory).filter((name) => name.startsWith('operational-state-'));
+    expect(archives).toHaveLength(1);
+    const archivePath = path.join(rollbackDirectory, archives[0]!);
+    const archiveStat = statSync(archivePath);
+    expect(archiveStat.mode & 0o777).toBe(0o600);
+    expect(archiveStat.nlink).toBe(1);
+    expect(archiveStat.uid).toBe(process.geteuid?.() ?? process.getuid?.());
+    expect(archiveStat.gid).toBe(process.getegid?.() ?? process.getgid?.());
+    const canonical = spawnSync(
+      'python3',
+      [
+        '-c',
+        `import json,sys,tarfile,zlib
+raw=open(sys.argv[1],'rb').read()
+decoder=zlib.decompressobj(16+zlib.MAX_WBITS)
+plain=decoder.decompress(raw)+decoder.flush()
+with tarfile.open(sys.argv[1], 'r:gz') as archive:
+  members=archive.getmembers()
+print(json.dumps({
+  'gzip_header': list(raw[:8]),
+  'eof': decoder.eof,
+  'unused': len(decoder.unused_data),
+  'tar_zeros': plain[-1024:] == bytes(1024),
+  'hidden_metadata': any(
+    member.uname or member.gname or member.linkname or
+    set(member.pax_headers).difference({'path'})
+    for member in members
+  ),
+  'bad_directory': any(
+    member.isdir() and (member.mode != 0o700 or member.size != 0 or int(member.mtime) != 0)
+    for member in members
+  ),
+}))`,
+        archivePath,
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(canonical.status, canonical.stderr).toBe(0);
+    expect(JSON.parse(canonical.stdout)).toEqual({
+      gzip_header: [31, 139, 8, 0, 0, 0, 0, 0],
+      eof: true,
+      unused: 0,
+      tar_zeros: true,
+      hidden_metadata: false,
+      bad_directory: false,
+    });
+  });
+
+  it.each(['chmod', 'trailing-bytes'] as const)('recusa adulteração pós-geração do archive: %s', (mutation) => {
+    const digest = `sha256:${'6'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { initiallyRunning: true });
+    const findmntCalls = path.join(fixture.directory, `.archive-${mutation}-findmnt-calls`);
+    const rollbackGlob = `${path.join(fixture.directory, 'data', 'rollback')}/.operational-state-*`;
+    const mutate = mutation === 'chmod' ? `chmod 0644 ${rollbackGlob}` : `printf 'trailing-payload' >> ${rollbackGlob}`;
+    writeFileSync(
+      path.join(fixture.runtime.bin, 'findmnt'),
+      `#!/usr/bin/env bash
+set -eu
+count=0
+[ ! -f ${shellLiteral(findmntCalls)} ] || count="$(cat ${shellLiteral(findmntCalls)})"
+count=$((count + 1))
+printf '%s\n' "$count" > ${shellLiteral(findmntCalls)}
+if [ "$count" -eq 3 ]; then
+  ${mutate}
+fi
+printf '%s\n' '{"filesystems":[]}'
+`,
+      { mode: 0o700 },
+    );
+    chmodSync(path.join(fixture.runtime.bin, 'findmnt'), 0o700);
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/archive nao permaneceu privado|fluxo canonico|mudou durante/);
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).not.toContain('up -d --no-build');
   });
 
   it('não religa o core anterior no rollback quando o serviço de egress está inativo', () => {
@@ -1822,11 +2784,10 @@ describe('deploy image-only', () => {
     const image = `ghcr.io/example/kassinao@${digest}`;
     const fixture = deploymentFixture(image, {
       initiallyRunning: true,
-      hardenerPreloadFails: true,
       egressActive: false,
     });
 
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1849,11 +2810,10 @@ describe('deploy image-only', () => {
     const image = `ghcr.io/example/kassinao@${digest}`;
     const fixture = deploymentFixture(image, {
       initiallyRunning: true,
-      hardenerPreloadFails: true,
       hardenerCheckFails: true,
     });
 
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1871,11 +2831,41 @@ describe('deploy image-only', () => {
     expect(calls).not.toMatch(/^start /m);
   });
 
+  it('não religa o core anterior shared quando o contrato estático do container parado foi adulterado', () => {
+    const digest = `sha256:${'6'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, {
+      hostScope: 'shared',
+      initiallyRunning: true,
+      snapshotTarFails: true,
+      sharedAuditRejectsStoppedContainer: true,
+    });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    const gates = readFileSync(path.join(fixture.directory, 'hardener.log'), 'utf8');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('contrato estático shared divergiu');
+    expect(gates.match(/shared-audit:--preflight/g)).toHaveLength(2);
+    expect(calls).toContain(`stop --time 60 ${'a'.repeat(64)}`);
+    expect(calls).not.toMatch(/^start /m);
+  });
+
   it('recusa split quando app ou MCP chegam ao processo público', () => {
     const digest = `sha256:${'f'.repeat(64)}`;
     const image = `ghcr.io/example/kassinao@${digest}`;
     const fixture = deploymentFixture(image, { mode: 'split' });
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1890,8 +2880,12 @@ describe('deploy image-only', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('fingerprint/roteamento externo diverge');
     const calls = readFileSync(fixture.runtime.log, 'utf8');
-    for (const container of ['kassinao', 'kassinao-tunnel', 'kassinao-public']) {
-      expect(calls).toContain(`stop --time 30 ${container}`);
+    for (const [container, id] of [
+      ['kassinao', 'a'.repeat(64)],
+      ['kassinao-tunnel', 'c'.repeat(64)],
+      ['kassinao-public', 'b'.repeat(64)],
+    ] as const) {
+      expect(calls).toContain(`stop --time 30 ${id}`);
       expect(result.stderr).toContain(`Container da tentativa falha contido: ${container}`);
     }
   });
@@ -1900,7 +2894,7 @@ describe('deploy image-only', () => {
     const digest = `sha256:${'9'.repeat(64)}`;
     const image = `ghcr.io/example/kassinao@${digest}`;
     const fixture = deploymentFixture(image, { mode: 'split' });
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1926,7 +2920,7 @@ describe('deploy image-only', () => {
     const digest = `sha256:${'8'.repeat(64)}`;
     const image = `ghcr.io/example/kassinao@${digest}`;
     const fixture = deploymentFixture(image, { mode: 'split' });
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1951,7 +2945,7 @@ describe('deploy image-only', () => {
         services.kassinao.privileged = true;
       },
     });
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
@@ -1978,7 +2972,7 @@ describe('deploy image-only', () => {
         }
       },
     });
-    const result = spawnSync('bash', [deployScript], {
+    const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
       env: {
         ...process.env,
