@@ -189,15 +189,16 @@ esac
     .readFileSync(HEALTH_WATCH_SCRIPT, 'utf8')
     .replace(
       /# KASSINAO_HOST_ENV_SCRUB_BEGIN[\s\S]*?# KASSINAO_HOST_ENV_SCRUB_END/,
-      '# KASSINAO_HOST_ENV_SCRUB_BEGIN\n_saved_no_dump_marker=""\n_saved_no_dump_preload=""\n_forbidden_override=""\n# KASSINAO_HOST_ENV_SCRUB_END',
+      `# KASSINAO_HOST_ENV_SCRUB_BEGIN
+_saved_no_dump_marker=""
+_saved_no_dump_preload=""
+_forbidden_override=""
+export PATH=${dir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C
+# KASSINAO_HOST_ENV_SCRUB_END`,
     )
     .replace(
       /# KASSINAO_HOST_NO_DUMP_BEGIN[\s\S]*?# KASSINAO_HOST_NO_DUMP_END/,
       '# KASSINAO_HOST_NO_DUMP_BEGIN\nunset LD_PRELOAD\n# KASSINAO_HOST_NO_DUMP_END',
-    )
-    .replace(
-      'export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C',
-      `export PATH=${dir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C`,
     )
     .replace('RUNTIME_DIR=/run/lock/kassinao', `RUNTIME_DIR=${runtime}`)
     .replaceAll('700:0:0', `700:${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}`)
@@ -212,6 +213,7 @@ esac
     encoding: 'utf8',
     env: {
       ...process.env,
+      LC_ALL: undefined,
       PATH: `${dir}:${process.env.PATH ?? ''}`,
       DOCKER_BIN: docker,
       DOCKER_LOG: log,

@@ -216,16 +216,18 @@ loop_identity="$(losetup --noheadings --output BACK-INO,BACK-MAJ:MIN "$loop_devi
   die 'não foi possível provar device e inode do backing file aberto pelo loop'
 [ "$loop_identity" = "$backing_inode:$backing_device" ] ||
   die 'device/inode do backing file aberto pelo loop diverge do arquivo configurado'
-lsblk -s -n -o TYPE -- "$mapper_path" 2>/dev/null | grep -Fxq crypt ||
-  die 'cadeia do mapper não contém um target dm-crypt'
+mapper_types="$(lsblk -s -n -o TYPE -- "$mapper_path" 2>/dev/null)" ||
+  die 'não foi possível inventariar a cadeia do mapper'
+grep -Fxq crypt <<<"$mapper_types" || die 'cadeia do mapper não contém um target dm-crypt'
 
 active_swaps="$(swapon --show --noheadings --raw --output NAME 2>/dev/null)" ||
   die 'não foi possível inventariar swaps ativos'
 while IFS= read -r swap_source; do
   [ -n "$swap_source" ] || continue
   case "$swap_source" in /dev/*) ;; *) die 'swap ativo plaintext ou não-device foi recusado' ;; esac
-  lsblk -s -n -o TYPE -- "$swap_source" 2>/dev/null | grep -Fxq crypt ||
-    die 'todo swap ativo precisa estar sobre dm-crypt'
+  swap_types="$(lsblk -s -n -o TYPE -- "$swap_source" 2>/dev/null)" ||
+    die 'não foi possível inventariar a cadeia do swap ativo'
+  grep -Fxq crypt <<<"$swap_types" || die 'todo swap ativo precisa estar sobre dm-crypt'
 done <<<"$active_swaps"
 
 if [ "$root_only" = true ]; then

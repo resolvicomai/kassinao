@@ -923,7 +923,7 @@ describe('shared VPS read-only audit', () => {
     expect(calls).not.toMatch(/docker:(?:start|stop|restart|kill|rm|run|create|update)/);
   });
 
-  it('aprova host sem swap ativo e também device swap cuja cadeia contém dm-crypt', () => {
+  it('aprova host sem swap ativo e device swap com cadeia dm-crypt extensa sem falso SIGPIPE', () => {
     const noSwapFixture = fixture();
     const noSwap = run(noSwapFixture);
     expect(noSwap.status, `${noSwap.stderr}\n${noSwap.stdout}`).toBe(0);
@@ -932,6 +932,11 @@ describe('shared VPS read-only audit', () => {
     writeFileSync(
       encryptedSwapFixture.swaps,
       'Filename\tType\tSize\tUsed\tPriority\n/dev/dm-9\tpartition\t1048572\t0\t-2\n',
+    );
+    writeFileSync(
+      path.join(encryptedSwapFixture.bin, 'lsblk'),
+      "#!/usr/bin/env bash\nprintf 'crypt\\n'\nprintf 'loop\\n%.0s' {1..20000}\n",
+      { mode: 0o755 },
     );
     const encryptedSwap = run(encryptedSwapFixture);
     expect(encryptedSwap.status, `${encryptedSwap.stderr}\n${encryptedSwap.stdout}`).toBe(0);

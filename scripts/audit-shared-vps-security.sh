@@ -327,8 +327,9 @@ if [ -n "$swap_entries" ]; then
     canonical_swap="$(readlink -f -- "$swap_source" 2>/dev/null || true)"
     [[ "$canonical_swap" =~ ^/dev/[A-Za-z0-9._/+:-]+$ ]] ||
       die 'device de swap ativo não possui caminho canônico seguro'
-    lsblk -s -n -o TYPE -- "$canonical_swap" 2>/dev/null | grep -Fxq crypt ||
-      die 'host shared possui swap ativo fora de dm-crypt'
+    swap_types="$(lsblk -s -n -o TYPE -- "$canonical_swap" 2>/dev/null)" ||
+      die 'não foi possível inventariar a cadeia do swap ativo'
+    grep -Fxq crypt <<<"$swap_types" || die 'host shared possui swap ativo fora de dm-crypt'
   done <<<"$swap_entries"
 fi
 

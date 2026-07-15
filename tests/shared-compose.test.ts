@@ -100,7 +100,9 @@ describe('shared-host Compose adapter', () => {
       expect(service.cap_add, serviceName).toBeUndefined();
       expect(service.devices, serviceName).toBeUndefined();
       expect(service.mem_limit, serviceName).toBe(service.memswap_limit);
-      expect(service.mem_swappiness, serviceName).toBe(0);
+      // Compose implementations may omit an explicit zero from normalized JSON.
+      // The source assertion above still requires mem_swappiness: 0 for all services.
+      expect(service.mem_swappiness ?? 0, serviceName).toBe(0);
     }
 
     const core = config.services.kassinao;
@@ -108,7 +110,7 @@ describe('shared-host Compose adapter', () => {
     expect(core.cap_drop).toEqual(['ALL']);
     expect(core.security_opt).toContain('no-new-privileges:true');
     expect(core.mem_limit).toBe(core.memswap_limit);
-    expect(core.mem_swappiness).toBe(0);
+    expect(core.mem_swappiness ?? 0).toBe(0);
     expect(JSON.stringify(core)).not.toContain('docker.sock');
     expect(core.env_file).toBeUndefined();
     const coreEnvironment = core.environment as Record<string, string>;

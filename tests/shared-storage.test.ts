@@ -507,6 +507,18 @@ describe('storage LUKS escopado para host compartilhado', () => {
     expect(rejected.stderr).toContain('todo swap ativo precisa estar sobre dm-crypt');
   });
 
+  it('aceita cadeia dm-crypt extensa sem transformar o SIGPIPE do grep em falha', () => {
+    const value = fixture();
+    writeFileSync(
+      path.join(value.bin, 'lsblk'),
+      "#!/usr/bin/env bash\nprintf 'crypt\\n'\nprintf 'loop\\n%.0s' {1..20000}\n",
+      { mode: 0o755 },
+    );
+
+    const result = run(value.verifier, value, ['--root-only']);
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it('recusa hardlink do backing file LUKS', () => {
     const value = fixture();
     writeFileSync(value.hardlinkFlag, value.backingFile);
