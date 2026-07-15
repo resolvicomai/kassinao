@@ -1420,6 +1420,7 @@ describe('artefatos de distribuição', () => {
       'finalize-shared-migration',
       'migrate-shared-storage',
       'prepare-legacy-shared-layout',
+      'remove-legacy-dedicated-host-controls',
       'remove-legacy-health-watch',
       'validate-legacy-dedicated-installation',
       'uninstall-host-controls',
@@ -1487,6 +1488,7 @@ describe('artefatos de distribuição', () => {
     expect(listing.stdout).toContain('scripts/prepare-shared-storage.sh');
     expect(listing.stdout).toContain('scripts/validate-legacy-dedicated-installation.sh');
     expect(listing.stdout).toContain('scripts/remove-legacy-health-watch.sh');
+    expect(listing.stdout).toContain('scripts/remove-legacy-dedicated-host-controls.sh');
     expect(listing.stdout).toContain('scripts/prepare-legacy-shared-layout.sh');
     expect(listing.stdout).toContain('scripts/migrate-shared-storage.sh');
     expect(listing.stdout).toContain('scripts/check-shared-migration-rollback.sh');
@@ -1528,6 +1530,7 @@ describe('artefatos de distribuição', () => {
     expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/prepare-storage\.sh/);
     expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/validate-legacy-dedicated-installation\.sh/);
     expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/remove-legacy-health-watch\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/remove-legacy-dedicated-host-controls\.sh/);
     expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/prepare-legacy-shared-layout\.sh/);
     expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/check-shared-migration-rollback\.sh/);
     expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/finalize-shared-migration\.sh/);

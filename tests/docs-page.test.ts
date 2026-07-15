@@ -312,6 +312,9 @@ describe('documentation page', () => {
       expect(html).toContain(
         'remove-legacy-health-watch.sh&quot; &quot;$CURRENT_RELEASE_ROOT&quot; --confirm-remove-exact-legacy-health-watch',
       );
+      expect(html).toContain(
+        'remove-legacy-dedicated-host-controls.sh&quot; &quot;$CURRENT_RELEASE_ROOT&quot; --confirm-remove-exact-legacy-dedicated-host-controls',
+      );
       expect(html).toContain('prepare-legacy-shared-layout.sh&quot; &quot;$CURRENT_RELEASE_ROOT&quot;');
       expect(html).toContain('KASSINAO_MIGRATION_SOURCE_APP_ENV=&quot;$CURRENT_RELEASE_ROOT/.env&quot;');
       expect(html).toContain('--purge-originals');
@@ -329,6 +332,20 @@ describe('documentation page', () => {
       expect(html).toContain('verify-shared-luks-storage.sh');
       expect(html).toContain('E2FSCK_STATUS');
       expect(html).not.toContain('cryptsetup open --key-file');
+      const migrationStart = html.indexOf('CURRENT_RELEASE_ROOT=');
+      const sysctlPrerequisite = html.indexOf('kernel.core_pattern=/dev/null', migrationStart);
+      const validate = html.indexOf('validate-legacy-dedicated-installation.sh', migrationStart);
+      const removeHealth = html.indexOf('remove-legacy-health-watch.sh', migrationStart);
+      const prepare = html.indexOf('prepare-legacy-shared-layout.sh', migrationStart);
+      const composeDown = html.indexOf('profile split-public down', migrationStart);
+      const removeDedicated = html.indexOf('remove-legacy-dedicated-host-controls.sh', migrationStart);
+      const neighborAudit = html.indexOf('audit-shared-vps-security.sh&quot; --neighbors-only', validate);
+      expect(sysctlPrerequisite).toBeLessThan(validate);
+      expect(validate).toBeLessThan(removeHealth);
+      expect(removeHealth).toBeLessThan(prepare);
+      expect(prepare).toBeLessThan(composeDown);
+      expect(composeDown).toBeLessThan(removeDedicated);
+      expect(removeDedicated).toBeLessThan(neighborAudit);
     }
     expect(docsPage('pt')).toContain('adapter moderno');
     expect(docsPage('en')).toContain('modern');

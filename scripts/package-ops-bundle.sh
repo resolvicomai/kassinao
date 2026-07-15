@@ -96,6 +96,7 @@ install -m 0755 \
   "$ROOT/scripts/prepare-shared-storage.sh" \
   "$ROOT/scripts/validate-legacy-dedicated-installation.sh" \
   "$ROOT/scripts/remove-legacy-health-watch.sh" \
+  "$ROOT/scripts/remove-legacy-dedicated-host-controls.sh" \
   "$ROOT/scripts/prepare-legacy-shared-layout.sh" \
   "$ROOT/scripts/migrate-shared-storage.sh" \
   "$ROOT/scripts/check-shared-migration-rollback.sh" \

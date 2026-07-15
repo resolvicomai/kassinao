@@ -1564,6 +1564,7 @@ sudoedit "$RELEASE_ROOT/.env"
 # KASSINAO_SHARED_APP_ENV_FILE=$DATA_ROOT/config/app.env
 # KASSINAO_SHARED_TUNNEL_TOKEN_FILE=$DATA_ROOT/config/cloudflared-token
 # ${T('Este bloco aceita somente a instalação plaintext anterior a KASSINAO_HOST_SCOPE. DATA_ROOT é uma raiz nova, fora dos mounts atuais.', 'This block accepts only the plaintext installation that predates KASSINAO_HOST_SCOPE. DATA_ROOT is a new root outside current mounts.')}
+# ${T('Antes do primeiro helper público, aplique e persista pelo runbook privado kernel.core_pattern=/dev/null e fs.suid_dumpable=0, com valores anteriores, impacto global e recuperação documentados. O bundle verifica, mas nunca muda esses sysctls.', 'Before the first public helper, use the private runbook to apply and persist kernel.core_pattern=/dev/null and fs.suid_dumpable=0, documenting prior values, global impact, and recovery. The bundle verifies but never changes these sysctls.')}
 sudo "$RELEASE_ROOT/scripts/validate-legacy-dedicated-installation.sh" "$CURRENT_RELEASE_ROOT" >/dev/null
 
 snapshot_neighbors() {
@@ -1584,10 +1585,12 @@ docker_local compose --project-name kassinao --project-directory "$CURRENT_RELEA
 # ${T('O container core precisa continuar existente e parado para provar mounts e isolamento dos sources antes da consolidação.', 'The core container must remain present and stopped to prove mounts and source isolation before consolidation.')}
 sudo "$RELEASE_ROOT/scripts/prepare-legacy-shared-layout.sh" "$CURRENT_RELEASE_ROOT"
 docker_local compose --project-name kassinao --project-directory "$CURRENT_RELEASE_ROOT" --env-file "$CURRENT_RELEASE_ROOT/.env" -f "$CURRENT_RELEASE_ROOT/docker-compose.yml" --profile tunnel --profile split-public down
+# ${T('Agora remova somente o restante do conjunto dedicated v1.4.9 provado pelo marker preparado. Se nenhum desses artefatos existir, o helper termina em no-op; estado parcial ou divergente falha antes de mutar.', 'Now remove only the remaining v1.4.9 dedicated set proven by the prepared marker. If none of those artifacts exist, the helper exits as a no-op; a partial or divergent state fails before mutation.')}
+sudo "$RELEASE_ROOT/scripts/remove-legacy-dedicated-host-controls.sh" "$CURRENT_RELEASE_ROOT" --confirm-remove-exact-legacy-dedicated-host-controls
 test "$(sudo systemctl show docker.service -p MainPID --value)" = "$DOCKER_PID_BEFORE"
 test "$(snapshot_neighbors)" = "$NEIGHBORS_BEFORE"
 
-# ${T('Antes do gate público, aplique e persista pelo runbook privado kernel.core_pattern=/dev/null e fs.suid_dumpable=0, com rollback e impacto nos vizinhos documentados. Somente então audite o perímetro shared e crie o mapper novo ainda desmontado.', 'Before the public gate, use the private runbook to apply and persist kernel.core_pattern=/dev/null and fs.suid_dumpable=0, with rollback and neighbor impact documented. Only then audit the shared boundary and create the new mapper while it remains unmounted.')}
+# ${T('Reconfirme que os dois sysctls privados continuam efetivos. Só então audite o perímetro shared e crie o mapper novo ainda desmontado.', 'Reconfirm that both privately managed sysctls remain effective. Only then audit the shared boundary and create the new mapper while it remains unmounted.')}
 sudo "$RELEASE_ROOT/scripts/audit-shared-vps-security.sh" --neighbors-only
 sudo install -d -o root -g root -m 0700 "$BACKING_DIR"
 sudo test ! -e "$BACKING"
