@@ -106,11 +106,11 @@ for pair in kassinao:kassinao kassinao-tunnel:cloudflared; do
     status=1
     continue
   fi
-  if ! docker stop --time 30 "$cid" >/dev/null 2>&1; then
+  if ! docker stop --timeout 30 "$cid" >/dev/null 2>&1; then
     docker kill "$cid" >/dev/null 2>&1 || status=1
     # docker kill pode acionar a restart policy. Um segundo stop registra uma
     # parada administrativa e mantém o container desligado até ação explícita.
-    docker stop --time 10 "$cid" >/dev/null 2>&1 || true
+    docker stop --timeout 10 "$cid" >/dev/null 2>&1 || true
   fi
   running="$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || true)"
   if [ "$running" = true ] || [ -z "$running" ]; then

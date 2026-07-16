@@ -327,6 +327,9 @@ interface DeploymentFixtureOptions {
   staleDisabledTunnel?: 'safe' | 'running' | 'restart-policy' | 'foreign-project';
   upFails?: boolean;
   failureNameSquatter?: boolean;
+  runtimeMemory?: number;
+  runtimeMemorySwap?: number;
+  runtimeMemorySwappiness?: number | null;
 }
 
 function shellLiteral(value: string): string {
@@ -345,6 +348,9 @@ function fakeRuntime(
   failureNameSquatter = false,
   snapshotNestedMount = false,
   snapshotFailsAfterStop = false,
+  runtimeMemory = 536_870_912,
+  runtimeMemorySwap = runtimeMemory,
+  runtimeMemorySwappiness: number | null = 0,
 ): { bin: string; log: string } {
   const bin = path.join(directory, 'bin');
   const log = path.join(directory, 'docker.log');
@@ -375,6 +381,7 @@ function fakeRuntime(
   const imagesOutput = `${Object.keys(normalizedConfig.services as Record<string, unknown>)
     .map(() => image)
     .join('\n')}\n`;
+  const runtimeResourceContract = `${runtimeMemory}|${runtimeMemorySwap}|${runtimeMemorySwappiness === null ? 'null' : runtimeMemorySwappiness}|no`;
   const privacyDetails = [
     'Example Operator',
     'https://privacy.example.com/contact',
@@ -463,7 +470,7 @@ if [ "\${1:-}" = inspect ] && [ "\${2:-}" = --format ]; then
   elif [[ "$template" == *com.docker.compose.project* ]]; then
     printf '%s|/%s|%s|%s\n' "$cid" "$name" "$project" "$service"
   elif [[ "$template" == *HostConfig.Memory* ]]; then
-    printf '536870912|536870912|0|no\n'
+    printf '%s\n' ${shellLiteral(runtimeResourceContract)}
   else
     printf 'healthy\n'
   fi
@@ -527,7 +534,7 @@ if [ "\${1:-}" = inspect ]; then
   reference="\${!#}"
   resolve_container "$reference" || exit 1
   case " $* " in
-    *".HostConfig.Memory"*) printf '536870912|536870912|0|no\\n' ;;
+    *".HostConfig.Memory"*) printf '%s\\n' ${shellLiteral(runtimeResourceContract)} ;;
     *".Config.Image"*) printf '%s\\n' ${shellLiteral(image)} ;;
     *".State.Running"*)
       [ -f ${shellLiteral(running)} ] && ! grep -Fqx "$cid" ${shellLiteral(stopped)} 2>/dev/null && \
@@ -949,6 +956,9 @@ exit ${options.rollbackCheckerFails ? '1' : '0'}
     options.failureNameSquatter,
     options.snapshotNestedMount,
     options.snapshotTarFails,
+    options.runtimeMemory,
+    options.runtimeMemorySwap,
+    options.runtimeMemorySwappiness,
   );
   if (hostScope === 'shared') {
     const callerUid = process.getuid?.() ?? 1000;
@@ -1301,7 +1311,9 @@ describe('artefatos de distribuição', () => {
     expect(egressUnit).not.toContain('kassinao-health-watch.service');
     expect(failClosedUnit).toContain('ExecStart=/usr/local/sbin/kassinao-egress-fail-closed');
     expect(failClosedUnit).not.toContain('ExecStart=-');
-    expect(failClosedScript).toContain('docker stop --time 30 "$cid"');
+    expect(failClosedScript).toContain('docker stop --timeout 30 "$cid"');
+    expect(failClosedScript).not.toContain('docker stop --time ');
+    expect(deploy).not.toContain('docker stop --time ');
     expect(failClosedScript).toContain('docker kill "$cid"');
     expect(failClosedScript).toContain("'{{.State.Running}}'");
     expect(dockerDropIn).toContain('Wants=kassinao-docker-egress.service');
@@ -2113,6 +2125,51 @@ describe('deploy image-only', () => {
     expect(dockerCalls).not.toContain('up -d --no-build --remove-orphans');
   });
 
+  it('aceita MemorySwappiness null do Docker 29 quando MemorySwap iguala Memory', () => {
+    const digest = `sha256:${'c'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, {
+      hostScope: 'shared',
+      runtimeMemorySwappiness: null,
+    });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+  });
+
+  it.each([
+    ['swappiness explícita permissiva', { runtimeMemorySwappiness: 60 }],
+    ['swap disponível apesar de swappiness null', { runtimeMemorySwap: 1_073_741_824, runtimeMemorySwappiness: null }],
+  ])('mantém o gate shared fechado para %s', (_scenario, runtime) => {
+    const digest = `sha256:${'d'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { hostScope: 'shared', ...runtime });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('gate shared de memória sem swap/restart fail-closed');
+  });
+
   it('mantém o core parado quando o checker shared reprova o rollback plaintext', () => {
     const digest = `sha256:${'6'.repeat(64)}`;
     const image = `ghcr.io/example/kassinao@${digest}`;
@@ -2240,7 +2297,7 @@ describe('deploy image-only', () => {
     expect(result.stderr).toContain('audit final shared recusou');
     const calls = readFileSync(fixture.runtime.log, 'utf8');
     expect(calls).toContain('up -d --no-build');
-    expect(calls).toContain(`stop --time 30 ${'a'.repeat(64)}`);
+    expect(calls).toContain(`stop --timeout 30 ${'a'.repeat(64)}`);
     expect(calls).not.toContain('curl https://app.example.com/health');
     expect(existsSync(path.join(fixture.directory, '.deployed-image'))).toBe(false);
   });
@@ -2267,8 +2324,8 @@ describe('deploy image-only', () => {
     const foreignId = 'f'.repeat(64);
     expect(calls).toContain(`inspect --format {{.Id}} kassinao`);
     expect(calls).toContain(`inspect --format {{.Id}}|{{.Name}}|`);
-    expect(calls).not.toContain(`stop --time 30 ${foreignId}`);
-    expect(calls).not.toContain('stop --time 30 kassinao\n');
+    expect(calls).not.toContain(`stop --timeout 30 ${foreignId}`);
+    expect(calls).not.toContain('stop --timeout 30 kassinao\n');
   });
 
   it('recusa misturar o aceite do daemon dedicado com KASSINAO_HOST_SCOPE=shared', () => {
@@ -2521,7 +2578,7 @@ printf '%s\n' '{"filesystems":[]}'
 
     expect(result.status).not.toBe(0);
     const calls = readFileSync(fixture.runtime.log, 'utf8');
-    expect(calls.indexOf(' pull')).toBeLessThan(calls.indexOf('stop --time 60'));
+    expect(calls.indexOf(' pull')).toBeLessThan(calls.indexOf('stop --timeout 60'));
     const rollbackDirectory = path.join(fixture.directory, 'data', 'rollback');
     const archives = readdirSync(rollbackDirectory).filter((name) => name.startsWith('operational-state-'));
     expect(archives).toHaveLength(1);
@@ -2558,7 +2615,7 @@ printf '%s\n' '{"filesystems":[]}'
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('hardlink');
     const calls = readFileSync(fixture.runtime.log, 'utf8');
-    expect(calls).not.toContain('stop --time 60');
+    expect(calls).not.toContain('stop --timeout 60');
     expect(calls).not.toContain('up -d --no-build');
   });
 
@@ -2590,7 +2647,7 @@ printf '%s\n' '{"filesystems":[]}'
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/symlink|FIFO|especial/);
     const calls = readFileSync(fixture.runtime.log, 'utf8');
-    expect(calls).not.toContain('stop --time 60');
+    expect(calls).not.toContain('stop --timeout 60');
     expect(calls).not.toContain('up -d --no-build');
   });
 
@@ -2613,7 +2670,7 @@ printf '%s\n' '{"filesystems":[]}'
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('nested mount');
     const calls = readFileSync(fixture.runtime.log, 'utf8');
-    expect(calls).not.toContain('stop --time 60');
+    expect(calls).not.toContain('stop --timeout 60');
     expect(calls).not.toContain('up -d --no-build');
   });
 
@@ -2655,7 +2712,7 @@ printf '%s\n' '{"filesystems":[]}'
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/mudou durante a geracao|inventario mudou durante a geracao/);
     const calls = readFileSync(fixture.runtime.log, 'utf8');
-    expect(calls).toContain(`stop --time 60 ${'a'.repeat(64)}`);
+    expect(calls).toContain(`stop --timeout 60 ${'a'.repeat(64)}`);
     expect(calls).not.toContain('up -d --no-build');
     const rollbackDirectory = path.join(fixture.directory, 'data', 'rollback');
     expect(readdirSync(rollbackDirectory).filter((name) => name.startsWith('operational-state-'))).toHaveLength(0);
@@ -2860,7 +2917,7 @@ printf '%s\n' '{"filesystems":[]}'
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('contrato estático shared divergiu');
     expect(gates.match(/shared-audit:--preflight/g)).toHaveLength(2);
-    expect(calls).toContain(`stop --time 60 ${'a'.repeat(64)}`);
+    expect(calls).toContain(`stop --timeout 60 ${'a'.repeat(64)}`);
     expect(calls).not.toMatch(/^start /m);
   });
 
@@ -2888,7 +2945,7 @@ printf '%s\n' '{"filesystems":[]}'
       ['kassinao-tunnel', 'c'.repeat(64)],
       ['kassinao-public', 'b'.repeat(64)],
     ] as const) {
-      expect(calls).toContain(`stop --time 30 ${id}`);
+      expect(calls).toContain(`stop --timeout 30 ${id}`);
       expect(result.stderr).toContain(`Container da tentativa falha contido: ${container}`);
     }
   });

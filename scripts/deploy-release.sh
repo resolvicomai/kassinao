@@ -123,12 +123,12 @@ stop_failed_deploy_containers() {
       printf 'ERRO CRÍTICO: identidade mudou antes da contenção; nenhuma mutação: %s\n' "$container" >&2
       continue
     fi
-    if ! docker stop --time 30 "$cid" >/dev/null 2>&1; then
+    if ! docker stop --timeout 30 "$cid" >/dev/null 2>&1; then
       # O kill interrompe um processo que não respeitou o timeout; um segundo
       # stop marca a parada como administrativa e impede a restart policy de
       # religá-lo imediatamente.
       docker kill "$cid" >/dev/null 2>&1 || true
-      docker stop --time 10 "$cid" >/dev/null 2>&1 || true
+      docker stop --timeout 10 "$cid" >/dev/null 2>&1 || true
     fi
     running="$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || true)"
     if [ "$running" = false ]; then
@@ -1873,7 +1873,7 @@ if [ -n "$current_cid" ]; then
   [ "$(managed_container_id "$current_cid" kassinao kassinao 2>/dev/null || true)" = "$current_cid" ] || \
     die 'identidade do core mudou antes do stop; nenhuma mutação executada'
   RESTART_PREVIOUS_CORE=true
-  docker stop --time 60 "$current_cid" >/dev/null || die 'não foi possível parar o core anterior com segurança'
+  docker stop --timeout 60 "$current_cid" >/dev/null || die 'não foi possível parar o core anterior com segurança'
   [ "$(docker inspect -f '{{.State.Running}}' "$current_cid" 2>/dev/null || true)" = false ] || \
     die 'o core anterior continuou rodando após o stop'
 fi
@@ -1959,11 +1959,15 @@ while [ "$SECONDS" -lt "$deadline" ]; do
     summary+=("$service=${status:-ausente}")
     if [ "$host_scope" = shared ]; then
       IFS='|' read -r runtime_memory runtime_memory_swap runtime_swappiness runtime_restart < <(
-        docker inspect --format '{{.HostConfig.Memory}}|{{.HostConfig.MemorySwap}}|{{.HostConfig.MemorySwappiness}}|{{.HostConfig.RestartPolicy.Name}}' "$cid"
+        docker inspect --format '{{.HostConfig.Memory}}|{{.HostConfig.MemorySwap}}|{{json .HostConfig.MemorySwappiness}}|{{.HostConfig.RestartPolicy.Name}}' "$cid"
       )
+      runtime_swappiness_safe=false
+      case "$runtime_swappiness" in
+        0 | null) runtime_swappiness_safe=true ;;
+      esac
       [[ "$runtime_memory" =~ ^[1-9][0-9]*$ ]] && \
         [ "$runtime_memory_swap" = "$runtime_memory" ] && \
-        [ "$runtime_swappiness" = 0 ] && \
+        [ "$runtime_swappiness_safe" = true ] && \
         [ "$runtime_restart" = no ] || \
         die "$service violou o gate shared de memória sem swap/restart fail-closed"
     fi

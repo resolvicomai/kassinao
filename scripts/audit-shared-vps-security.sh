@@ -1023,8 +1023,13 @@ def assert_namespace_isolated(name, host):
     memory = host.get('Memory')
     if type(memory) is not int or memory != resources['memory'] or host.get('MemorySwap') != memory:
         fail(f'{name}: Memory/MemorySwap divergem do limite explícito do compose.env')
-    if host.get('MemorySwappiness') != 0:
-        fail(f'{name}: MemorySwappiness precisa ser zero')
+    # Docker Engine pode serializar o zero solicitado como null. Isso só é
+    # equivalente aqui porque a igualdade positiva acima deixa capacidade de
+    # swap igual a MemorySwap - Memory = 0. Um valor permissivo continua sendo
+    # recusado, assim como null com MemorySwap aberto falha no gate anterior.
+    memory_swappiness = host.get('MemorySwappiness')
+    if memory_swappiness is not None and (type(memory_swappiness) is not int or memory_swappiness != 0):
+        fail(f'{name}: MemorySwappiness precisa ser zero ou null sob MemorySwap=Memory')
     nano_cpus = host.get('NanoCpus')
     if type(nano_cpus) is not int or nano_cpus != resources['nano_cpus']:
         fail(f'{name}: NanoCpus diverge do limite explícito do compose.env')
