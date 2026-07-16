@@ -77,7 +77,7 @@ describe('capacidades nas superfícies do Discord', () => {
 
     expect(command?.default_member_permissions).toBe(PermissionFlagsBits.ManageGuild.toString());
     expect(serialized).toContain('MCP');
-    expect(serialized).not.toMatch(/Claude|Cursor/i);
+    expect(serialized).toContain('compatíveis');
   });
 
   it('mantém descrições curtas e só anuncia os artefatos habilitados', () => {

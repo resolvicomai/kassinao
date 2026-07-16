@@ -18,8 +18,6 @@ credentials*.json
 service-account*.json
 *.log
 .DS_Store
-.claude/launch.json
-.claude/settings.local.json
 .scratch/
 
 # Configuração/estado de instância nunca pertence ao repositório público.

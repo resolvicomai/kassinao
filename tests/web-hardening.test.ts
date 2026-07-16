@@ -1075,7 +1075,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
       lang: 'pt',
       user,
       exchangeCode: 'preview-one-time-code',
-      label: 'Claude',
+      label: 'Assistente local',
     });
     expect(html).toContain('Use este código agora.');
     expect(html).toContain('preview-one-time-code');

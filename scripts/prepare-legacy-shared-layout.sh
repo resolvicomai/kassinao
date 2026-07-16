@@ -278,8 +278,9 @@ def docker_inventory():
         '"HostConfig":{"RestartPolicy":{"Name":{{json .HostConfig.RestartPolicy.Name}}},'
         '"VolumesFrom":{{json .HostConfig.VolumesFrom}}},'
         '"Mounts":[{{range $index, $mount := .Mounts}}{{if $index}},{{end}}'
-        '{"Type":{{json $mount.Type}},"Name":{{json $mount.Name}},"Source":{{json $mount.Source}},'
-        '"Destination":{{json $mount.Destination}},"RW":{{json $mount.RW}}}{{end}}]}'
+        '{"Type":{{json $mount.Type}},"Name":{{json (index $mount "Name")}},'
+        '"Source":{{json $mount.Source}},"Destination":{{json $mount.Destination}},'
+        '"RW":{{json $mount.RW}}}{{end}}]}'
     )
     output = subprocess.run(
         ['docker', 'inspect', '--format', projection, *ids], check=True, text=True, capture_output=True,
@@ -290,6 +291,26 @@ def docker_inventory():
         fail('projeção mínima do inventário Docker é inválida')
     if len(inventory) != len(ids) or {item.get('Id') for item in inventory} != set(ids):
         fail('inventário Docker mudou durante a projeção mínima')
+    for item in inventory:
+        mounts = item.get('Mounts')
+        if not isinstance(mounts, list):
+            fail('inventário Docker retornou lista de mounts inválida')
+        for mount in mounts:
+            if not isinstance(mount, dict):
+                fail('inventário Docker retornou mount inválido')
+            mount_type = mount.get('Type')
+            source = mount.get('Source')
+            destination = mount.get('Destination')
+            if mount_type not in ('bind', 'volume', 'tmpfs'):
+                fail('inventário Docker retornou tipo de mount inválido')
+            if not isinstance(destination, str) or not os.path.isabs(destination):
+                fail('inventário Docker retornou destino de mount inválido')
+            if type(mount.get('RW')) is not bool:
+                fail('inventário Docker retornou permissão de mount inválida')
+            if mount_type in ('bind', 'volume') and (not isinstance(source, str) or not os.path.isabs(source)):
+                fail('inventário Docker retornou source de mount inválido')
+            if mount_type == 'volume' and (not isinstance(mount.get('Name'), str) or not mount.get('Name')):
+                fail('inventário Docker retornou volume sem nome')
     return inventory
 
 def inspect_named_volume(name, expected_mountpoint):

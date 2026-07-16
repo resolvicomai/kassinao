@@ -143,7 +143,7 @@ describe.sequential('preview web interativo', () => {
     expect(replay.status).toBe(303);
     expect(replay.headers.get('location')).toBe('/app/conectar-ia');
 
-    const revokeOne = await fetch(`${baseUrl}/app/conectar-ia/revogar/preview-claude-desktop`, {
+    const revokeOne = await fetch(`${baseUrl}/app/conectar-ia/revogar/preview-work-notebook`, {
       method: 'POST',
       redirect: 'manual',
     });
@@ -153,8 +153,8 @@ describe.sequential('preview web interativo', () => {
     const oneLeft = await fetch(`${baseUrl}/app/conectar-ia?revoked=one`).then((response) => response.text());
     expect(oneLeft).toContain('Conexão revogada. O token parou de funcionar imediatamente.');
     expect(oneLeft).toContain('Suas conexões (1)');
-    expect(oneLeft).not.toContain('preview-claude');
-    expect(oneLeft).toContain('preview-cursor');
+    expect(oneLeft).not.toContain('preview-work-notebook');
+    expect(oneLeft).toContain('preview-personal-desktop');
 
     const revokeAll = await fetch(`${baseUrl}/app/conectar-ia/revogar`, {
       method: 'POST',
