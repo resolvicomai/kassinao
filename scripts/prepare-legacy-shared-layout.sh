@@ -1,6 +1,6 @@
 #!/bin/bash -p
 # Consolida mounts de instalações anteriores no layout plaintext exato exigido
-# pela migração shared. Originais permanecem como rollback até o purge explícito.
+# pela migração shared. Originais permanecem como rollback de dados até o purge explícito.
 set -Eeuo pipefail
 umask 077
 
@@ -905,7 +905,7 @@ if mode == 'prepare':
     layout_file, _ = state_paths(private_state_dir)
     atomic_json(layout_file, layout)
     validate_control_state(private_state_dir)
-    print('Layout legado consolidado e verificado; sources originais permanecem como rollback.')
+    print('Layout legado consolidado e verificado; sources originais permanecem como rollback de dados.')
     raise SystemExit(0)
 
 if not os.path.isdir(private_state_dir) or os.path.islink(private_state_dir):
@@ -999,5 +999,5 @@ layout['purged_at'] = int(time.time())
 layout_file, _ = state_paths(private_state_dir)
 atomic_json(layout_file, layout)
 validate_control_state(private_state_dir)
-print('Sources e .env legados expurgados logicamente; rollback consolidado permaneceu intacto. Rotacione os segredos legados para reduzir vestígios forenses em backups/snapshots anteriores.')
+print('Sources e .env legados expurgados logicamente; rollback de dados consolidado permaneceu intacto. Rotacione os segredos legados para reduzir vestígios forenses em backups/snapshots anteriores.')
 PY

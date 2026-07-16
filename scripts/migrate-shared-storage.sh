@@ -1364,5 +1364,6 @@ sync -f "$data_root" 2>/dev/null || die 'não foi possível tornar marker pendin
 
 migration_succeeded=true
 printf 'Migração shared concluída; storage cifrado ativo em %s.\n' "$data_root"
-printf 'Rollback plaintext preservado integralmente em %s; este script nunca o apaga.\n' "$rollback_path"
-printf 'A remoção futura do rollback exige decisão e runbook privado após validar app/backup e rotacionar auth/credenciais expostas em plaintext.\n'
+printf 'Rollback de dados plaintext preservado integralmente em %s; este script nunca o apaga.\n' "$rollback_path"
+printf 'Este não é um rollback operacional: não religue o Compose legado nem reinstale controles dedicated; a recuperação do serviço é fix-forward pelo adapter shared.\n'
+printf 'A remoção futura do rollback de dados exige decisão e runbook privado após validar app/backup e rotacionar auth/credenciais expostas em plaintext.\n'

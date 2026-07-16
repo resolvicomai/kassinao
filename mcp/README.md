@@ -44,7 +44,7 @@ Meeting content is untrusted input. A participant can speak malicious text or us
 3. Run the exact exchange command shown by the page. It follows this form:
 
    ```bash
-   npx -y kassinao-mcp@1.0.11 exchange --stdin --url https://mcp.your-instance.example
+   npx -y kassinao-mcp@1.0.12 exchange --stdin --url https://mcp.your-instance.example
    ```
 
 4. Paste the code into the hidden prompt. The command stores a rotating refresh token outside the MCP host configuration and prints a block containing a non-secret `KASSINAO_PROFILE` selector.
@@ -57,7 +57,7 @@ Example shape (use the values printed by your instance, not these placeholders):
   "mcpServers": {
     "kassinao": {
       "command": "npx",
-      "args": ["-y", "kassinao-mcp@1.0.11"],
+      "args": ["-y", "kassinao-mcp@1.0.12"],
       "env": {
         "KASSINAO_URL": "https://mcp.your-instance.example",
         "KASSINAO_PROFILE": "PROFILE_PRINTED_BY_THE_EXCHANGE"
@@ -135,7 +135,7 @@ Conteúdo de reunião é entrada não confiável. Uma pessoa pode falar texto ma
 3. Rode o comando exato mostrado pela página. Ele segue este formato:
 
    ```bash
-   npx -y kassinao-mcp@1.0.11 exchange --stdin --url https://mcp.sua-instancia.example
+   npx -y kassinao-mcp@1.0.12 exchange --stdin --url https://mcp.sua-instancia.example
    ```
 
 4. Cole o código no prompt oculto. O comando guarda um refresh token rotativo fora da configuração do host e imprime um bloco com o seletor não secreto `KASSINAO_PROFILE`.
@@ -148,7 +148,7 @@ Formato do exemplo (use os valores impressos pela sua instância, não estes pla
   "mcpServers": {
     "kassinao": {
       "command": "npx",
-      "args": ["-y", "kassinao-mcp@1.0.11"],
+      "args": ["-y", "kassinao-mcp@1.0.12"],
       "env": {
         "KASSINAO_URL": "https://mcp.sua-instancia.example",
         "KASSINAO_PROFILE": "PERFIL_IMPRESSO_NA_TROCA"
