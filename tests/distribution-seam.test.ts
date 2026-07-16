@@ -1214,7 +1214,17 @@ describe('artefatos de distribuição', () => {
     expect(workflow).toContain('test "$release_commit" = "$main_commit"');
     expect(workflow).toContain('Require the reviewed MCP release before publishing the app');
     expect(workflow).toContain('https://registry.npmjs.org/-/npm/v1/attestations/$package@$version');
-    expect(workflow).toContain('test "$(git rev-parse "$mcp_ref^{commit}")" = "$release_commit"');
+    expect(workflow).toMatch(
+      /^\s*mcp_commit="\$\(node scripts\/verify-app-release-mcp\.cjs "\$mcp_ref" "\$release_commit"\)"\s*$/m,
+    );
+    expect(workflow).toMatch(/^\s*"\$mcp_ref" "\$mcp_commit"\s*$/m);
+    expect(workflow).not.toContain('test "$(git rev-parse "$mcp_ref^{commit}")" = "$release_commit"');
+    expect(repositoryFile('scripts/verify-app-release-mcp.cjs')).toContain(
+      "git(['merge-base', '--is-ancestor', mcpCommit, releaseCommit]",
+    );
+    expect(repositoryFile('scripts/verify-app-release-mcp.cjs')).toContain(
+      "git(['diff', '--quiet', mcpCommit, releaseCommit, '--', 'mcp']",
+    );
     expect(workflow).toContain('npm audit signatures --prefix "$audit_root"');
     expect(workflow).toContain('node scripts/verify-npm-release-attestation.cjs');
     expect(workflow).toContain('publish mcp-v$version first');

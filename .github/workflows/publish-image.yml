@@ -96,10 +96,7 @@ jobs:
             echo "$mcp_ref must be an annotated release tag" >&2
             exit 1
           }
-          test "$(git rev-parse "$mcp_ref^{commit}")" = "$release_commit" || {
-            echo "$mcp_ref does not point to the reviewed app release commit" >&2
-            exit 1
-          }
+          mcp_commit="$(node scripts/verify-app-release-mcp.cjs "$mcp_ref" "$release_commit")"
           remote_tag_oids="$(git ls-remote --refs origin "$mcp_ref" | awk '{print $1}')"
           test "$(wc -w <<< "$remote_tag_oids")" -eq 1 \
             && test "$remote_tag_oids" = "$local_tag_oid" || {
@@ -132,7 +129,7 @@ jobs:
           node scripts/verify-npm-release-attestation.cjs \
             "$metadata" "$attestations" "$package" "$version" \
             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" '.github/workflows/publish-mcp.yml' \
-            "$mcp_ref" "$release_commit"
+            "$mcp_ref" "$mcp_commit"
 
       - name: Gate the release on the audited source tree
         run: |

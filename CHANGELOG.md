@@ -10,6 +10,21 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.15] — 2026-07-16
+
+### Added
+
+- The public landing now includes a local, bilingual Product Hunt launch badge with no third-party embed or tracking script.
+
+### Changed
+
+- Navigation, language controls, footer links, and keyboard focus states have larger and clearer interaction targets across desktop and narrow mobile layouts.
+- App releases may reuse the existing immutable MCP package when its annotated tag is an ancestor of the reviewed app release and `mcp/` is byte-for-byte unchanged. An executable, behavior-tested gate enforces both conditions before the workflow verifies the remote tag, npm signatures, and package attestation against the exact MCP commit; any MCP change requires a new MCP release first.
+
+### Fixed
+
+- Product Hunt launch documentation now records the verified public listing instead of retaining a placeholder URL or claiming the private production gates are complete.
+
 ## [1.4.14] — 2026-07-16
 
 ### Changed
@@ -314,7 +329,8 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
-[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.14...HEAD
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.15...HEAD
+[1.4.15]: https://github.com/resolvicomai/kassinao/compare/v1.4.14...v1.4.15
 [1.4.14]: https://github.com/resolvicomai/kassinao/compare/v1.4.13...v1.4.14
 [1.4.13]: https://github.com/resolvicomai/kassinao/compare/v1.4.12...v1.4.13
 [1.4.12]: https://github.com/resolvicomai/kassinao/compare/v1.4.11...v1.4.12
