@@ -10,6 +10,17 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.16] — 2026-07-16
+
+### Security
+
+- The isolated public process now accepts the image's no-dump marker and preload only as an exact, atomic runtime-owned pair tied to its current PID. Partial, altered, or operator-injected loader configuration still fails closed without logging the supplied values.
+- Dedicated and shared VPS audits now reject application containers whose sealed no-dump entrypoint or command was overridden.
+
+### Fixed
+
+- The split landing/docs container now starts correctly through the production image entrypoint. Release verification runs the real public process and health check on both amd64 and arm64 so this container/runtime mismatch cannot ship again.
+
 ## [1.4.15] — 2026-07-16
 
 ### Added
@@ -329,7 +340,8 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
-[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.15...HEAD
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.16...HEAD
+[1.4.16]: https://github.com/resolvicomai/kassinao/compare/v1.4.15...v1.4.16
 [1.4.15]: https://github.com/resolvicomai/kassinao/compare/v1.4.14...v1.4.15
 [1.4.14]: https://github.com/resolvicomai/kassinao/compare/v1.4.13...v1.4.14
 [1.4.13]: https://github.com/resolvicomai/kassinao/compare/v1.4.12...v1.4.13

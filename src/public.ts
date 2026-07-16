@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { assertPublicRuntimeEnvironment } from './publicRuntime';
+import { assertPublicRuntimeEnvironment, consumePublicNoDumpRuntimeEnvironment } from './publicRuntime';
 
 // macOS injeta esta chave de locale mesmo quando o processo recebe um ambiente
 // vazio. Ela não é configuração do Kassinão; removê-la mantém a allowlist
@@ -8,6 +8,7 @@ import { assertPublicRuntimeEnvironment } from './publicRuntime';
 if (process.platform === 'darwin') delete process.env.__CF_USER_TEXT_ENCODING;
 
 try {
+  consumePublicNoDumpRuntimeEnvironment(process.env);
   assertPublicRuntimeEnvironment(process.env);
 } catch (err) {
   console.error(`Configuração pública inválida: ${(err as Error).message}`);

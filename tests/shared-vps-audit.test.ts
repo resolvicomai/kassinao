@@ -152,7 +152,20 @@ function projectContainer(
             Entrypoint: ['/usr/local/bin/kassinao-no-dump', '--', '/usr/local/bin/cloudflared'],
             Cmd: ['tunnel', '--no-autoupdate', 'run', '--token-file', '/run/secrets/kassinao-tunnel-token'],
           }
-        : {}),
+        : {
+            Entrypoint: [
+              '/usr/local/bin/kassinao-no-dump',
+              '--preload',
+              '/usr/local/lib/libkassinao-no-dump.so',
+              '--',
+              '/usr/bin/tini',
+              '--',
+            ],
+            Cmd:
+              service === 'kassinao'
+                ? ['/usr/local/bin/node', 'dist/index.js']
+                : ['/usr/local/bin/node', 'dist/public.js'],
+          }),
     },
     HostConfig: {
       Privileged: false,
@@ -1718,6 +1731,8 @@ describe('shared VPS read-only audit', () => {
     ['privileged', (item: DockerItem) => (item.HostConfig.Privileged = true)],
     ['capability adicionada', (item: DockerItem) => (item.HostConfig.CapAdd = ['SYS_ADMIN'])],
     ['ulimit core removido', (item: DockerItem) => (item.HostConfig.Ulimits = [])],
+    ['entrypoint substituído', (item: DockerItem) => (item.Config.Entrypoint = ['/bin/sh'])],
+    ['command substituído', (item: DockerItem) => (item.Config.Cmd = ['/bin/sh'])],
     [
       'imagem divergente',
       (item: DockerItem) => (item.Config.Image = `ghcr.io/resolvicomai/kassinao@sha256:${'f'.repeat(64)}`),

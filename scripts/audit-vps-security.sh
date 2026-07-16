@@ -1127,6 +1127,8 @@ else
   IPC_MODE="$(docker inspect -f '{{.HostConfig.IpcMode}}' "$CORE_CONTAINER" 2>/dev/null || true)"
   UTS_MODE="$(docker inspect -f '{{.HostConfig.UtsMode}}' "$CORE_CONTAINER" 2>/dev/null || true)"
   CONFIGURED_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$CORE_CONTAINER" 2>/dev/null || true)"
+  CORE_ENTRYPOINT="$(docker inspect -f '{{json .Config.Entrypoint}}' "$CORE_CONTAINER" 2>/dev/null || true)"
+  CORE_COMMAND="$(docker inspect -f '{{json .Config.Cmd}}' "$CORE_CONTAINER" 2>/dev/null || true)"
   CORE_STATE_HEALTH="$(docker inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CORE_CONTAINER" 2>/dev/null || true)"
   CORE_RESTART_POLICY="$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$CORE_CONTAINER" 2>/dev/null || true)"
 
@@ -1155,6 +1157,10 @@ else
     [ "$CONFIGURED_IMAGE" = "$EXPECTED_IMAGE" ] \
     && pass 'core usa o digest exato configurado' \
     || fail 'core não usa o digest exato configurado'
+  [ "$CORE_ENTRYPOINT" = '["/usr/local/bin/kassinao-no-dump","--preload","/usr/local/lib/libkassinao-no-dump.so","--","/usr/bin/tini","--"]' ] \
+    && [ "$CORE_COMMAND" = '["/usr/local/bin/node","dist/index.js"]' ] \
+    && pass 'core preserva entrypoint no-dump e command selados' \
+    || fail 'core possui entrypoint ou command divergente'
   CORE_RELEASE="$(container_env_value "$CORE_CONTAINER" KASSINAO_RELEASE_DIGEST)"
   CORE_DEPLOYMENT="$(container_env_value "$CORE_CONTAINER" KASSINAO_DEPLOYMENT_FINGERPRINT)"
   [ "$CORE_RELEASE" = "$EXPECTED_RELEASE" ] && [ "$CORE_DEPLOYMENT" = "$EXPECTED_DEPLOYMENT" ] \
@@ -1343,6 +1349,8 @@ if profile_enabled split-public; then
     PUBLIC_UTS_MODE="$(docker inspect -f '{{.HostConfig.UtsMode}}' "$PUBLIC_CONTAINER" 2>/dev/null || true)"
     PUBLIC_MOUNTS="$(docker inspect -f '{{json .Mounts}}' "$PUBLIC_CONTAINER" 2>/dev/null || true)"
     PUBLIC_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$PUBLIC_CONTAINER" 2>/dev/null || true)"
+    PUBLIC_ENTRYPOINT="$(docker inspect -f '{{json .Config.Entrypoint}}' "$PUBLIC_CONTAINER" 2>/dev/null || true)"
+    PUBLIC_COMMAND="$(docker inspect -f '{{json .Config.Cmd}}' "$PUBLIC_CONTAINER" 2>/dev/null || true)"
     PUBLIC_STATE_HEALTH="$(docker inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$PUBLIC_CONTAINER" 2>/dev/null || true)"
     PUBLIC_RESTART_POLICY="$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$PUBLIC_CONTAINER" 2>/dev/null || true)"
     case "$PUBLIC_USER" in '' | 0 | root | 0:0 | root:root) fail 'processo público roda como root' ;; *) pass 'processo público roda como não-root' ;; esac
@@ -1370,6 +1378,10 @@ if profile_enabled split-public; then
     BAD_PUBLIC_PORTS="$(docker port "$PUBLIC_CONTAINER" 2>/dev/null | awk '$3 !~ /^127\.0\.0\.1:/ && $3 !~ /^\[::1\]:/ {count++} END {print count+0}')"
     [ "$BAD_PUBLIC_PORTS" -eq 0 ] && pass 'portas públicas do container estão presas a loopback' || fail 'processo público publica porta fora de loopback'
     [ "$PUBLIC_IMAGE" = "$CONFIGURED_IMAGE" ] && pass 'core e público usam o mesmo digest' || fail 'core e público usam imagens diferentes'
+    [ "$PUBLIC_ENTRYPOINT" = '["/usr/local/bin/kassinao-no-dump","--preload","/usr/local/lib/libkassinao-no-dump.so","--","/usr/bin/tini","--"]' ] \
+      && [ "$PUBLIC_COMMAND" = '["/usr/local/bin/node","dist/public.js"]' ] \
+      && pass 'processo público preserva entrypoint no-dump e command selados' \
+      || fail 'processo público possui entrypoint ou command divergente'
     PUBLIC_RELEASE="$(container_env_value "$PUBLIC_CONTAINER" KASSINAO_RELEASE_DIGEST)"
     PUBLIC_DEPLOYMENT="$(container_env_value "$PUBLIC_CONTAINER" KASSINAO_DEPLOYMENT_FINGERPRINT)"
     [ "$PUBLIC_RELEASE" = "$EXPECTED_RELEASE" ] && [ "$PUBLIC_DEPLOYMENT" = "$EXPECTED_DEPLOYMENT" ] \

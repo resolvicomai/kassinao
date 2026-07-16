@@ -349,6 +349,9 @@ jobs:
           prove_no_dump_runtime linux/amd64 "$amd64_image"
           prove_no_dump_runtime linux/arm64 "$arm64_image"
 
+          bash scripts/smoke-public-image.sh "$amd64_image" "${image#*@}" linux/amd64
+          bash scripts/smoke-public-image.sh "$arm64_image" "${image#*@}" linux/arm64
+
           extract_no_dump_runtime() {
             local platform="$1" architecture="$2" reference="$3" destination="dist/native-runtime/linux-$2"
             local container

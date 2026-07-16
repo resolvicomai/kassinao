@@ -19,6 +19,7 @@ import { spawnSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertPublicRuntimeEnvironment,
+  consumePublicNoDumpRuntimeEnvironment,
   privateRuntimeEnvironmentKeys,
   PUBLIC_RUNTIME_ENV,
 } from '../src/publicRuntime';
@@ -1053,6 +1054,7 @@ afterEach(() => {
 });
 
 describe('fronteira do processo público', () => {
+  const NO_DUMP_PATH = '/usr/local/lib/libkassinao-no-dump.so';
   const safePublicEnvironment = {
     NODE_ENV: 'production',
     PATH: '/usr/local/bin:/usr/bin:/bin',
@@ -1074,6 +1076,68 @@ describe('fronteira do processo público', () => {
     ).toEqual([]);
   });
 
+  it('consome somente o contrato no-dump exato injetado pelo entrypoint da imagem', () => {
+    expect(PUBLIC_RUNTIME_ENV.has('KASSINAO_NO_DUMP_ACTIVE')).toBe(false);
+    expect(PUBLIC_RUNTIME_ENV.has('LD_PRELOAD')).toBe(false);
+    const environment = {
+      ...safePublicEnvironment,
+      KASSINAO_NO_DUMP_ACTIVE: 'prctl-v1:4242',
+      LD_PRELOAD: '/usr/local/lib/libkassinao-no-dump.so',
+    };
+    expect(() => consumePublicNoDumpRuntimeEnvironment(environment, 4242)).not.toThrow();
+    expect(environment).not.toHaveProperty('KASSINAO_NO_DUMP_ACTIVE');
+    expect(environment).not.toHaveProperty('LD_PRELOAD');
+    expect(() => assertPublicRuntimeEnvironment(environment)).not.toThrow();
+  });
+
+  it('recusa contrato no-dump parcial, adulterado ou pertencente a outro processo', () => {
+    for (const [environment, privateValue] of [
+      [{ ...safePublicEnvironment, KASSINAO_NO_DUMP_ACTIVE: 'prctl-v1:4242' }, 'prctl-v1:4242'],
+      [{ ...safePublicEnvironment, LD_PRELOAD: '/usr/local/lib/libkassinao-no-dump.so' }, NO_DUMP_PATH],
+      [
+        {
+          ...safePublicEnvironment,
+          KASSINAO_NO_DUMP_ACTIVE: 'prctl-v1:7',
+          LD_PRELOAD: NO_DUMP_PATH,
+        },
+        'prctl-v1:7',
+      ],
+      [
+        {
+          ...safePublicEnvironment,
+          KASSINAO_NO_DUMP_ACTIVE: 'prctl-v1:4242',
+          LD_PRELOAD: '/tmp/foreign.so',
+        },
+        '/tmp/foreign.so',
+      ],
+      [
+        {
+          ...safePublicEnvironment,
+          KASSINAO_NO_DUMP_ACTIVE: ' prctl-v1:4242',
+          LD_PRELOAD: NO_DUMP_PATH,
+        },
+        ' prctl-v1:4242',
+      ],
+      [
+        {
+          ...safePublicEnvironment,
+          KASSINAO_NO_DUMP_ACTIVE: 'prctl-v1:4242',
+          LD_PRELOAD: `${NO_DUMP_PATH} `,
+        },
+        `${NO_DUMP_PATH} `,
+      ],
+      [{ ...safePublicEnvironment, KASSINAO_NO_DUMP_ACTIVE: '', LD_PRELOAD: '' }, ''],
+    ] as const) {
+      try {
+        consumePublicNoDumpRuntimeEnvironment(environment, 4242);
+        throw new Error('deveria falhar');
+      } catch (error) {
+        expect((error as Error).message).toContain('no-dump');
+        if (privateValue) expect((error as Error).message).not.toContain(privateValue);
+      }
+    }
+  });
+
   it('falha fechado para qualquer chave não aprovada, incluindo segredo, tenancy e caminho', () => {
     for (const name of [
       'DISCORD_TOKEN',
@@ -1081,6 +1145,7 @@ describe('fronteira do processo público', () => {
       'RECORDINGS_DIR',
       'AWS_SECRET_ACCESS_KEY',
       'DATABASE_URL',
+      'LD_AUDIT',
     ]) {
       const value = `valor-privado-${name}`;
       expect(() => assertPublicRuntimeEnvironment({ ...safePublicEnvironment, [name]: value })).toThrow(name);
@@ -1089,6 +1154,14 @@ describe('fronteira do processo público', () => {
       } catch (error) {
         expect((error as Error).message).not.toContain(value);
       }
+    }
+  });
+
+  it('recusa qualquer loader desconhecido mesmo vazio ou composto apenas por espaços', () => {
+    for (const value of ['', '   ', '/tmp/foreign-audit.so']) {
+      const environment = { ...safePublicEnvironment, LD_AUDIT: value };
+      expect(privateRuntimeEnvironmentKeys(environment)).toContain('LD_AUDIT');
+      expect(() => assertPublicRuntimeEnvironment(environment)).toThrow('LD_AUDIT');
     }
   });
 
@@ -1180,6 +1253,7 @@ describe('artefatos de distribuição', () => {
 
   it('publica no GHCR com actions pinadas, SBOM, provenance e attestation do digest', () => {
     const workflow = repositoryFile('.github/workflows/publish-image.yml');
+    const ciWorkflow = repositoryFile('.github/workflows/ci.yml');
     const runtimeTemplate = repositoryFile('deploy/runtime/compose.env.example');
     const actions = [...workflow.matchAll(/^\s*-?\s*uses:\s*([^\s#]+)/gm)].map((match) => match[1]);
 
@@ -1247,6 +1321,13 @@ describe('artefatos de distribuição', () => {
     expect(workflow).toContain('entry.startsWith("yarn-")');
     expect(workflow).toContain('prove_no_dump_runtime linux/amd64 "$amd64_image"');
     expect(workflow).toContain('prove_no_dump_runtime linux/arm64 "$arm64_image"');
+    expect(workflow).toContain('bash scripts/smoke-public-image.sh "$amd64_image" "${image#*@}" linux/amd64');
+    expect(workflow).toContain('bash scripts/smoke-public-image.sh "$arm64_image" "${image#*@}" linux/arm64');
+    expect(ciWorkflow).toContain('Smoke-test public process through the default image entrypoint');
+    expect(ciWorkflow).toContain('bash scripts/smoke-public-image.sh kassinao:ci sha256:');
+    const publicSmoke = repositoryFile('scripts/smoke-public-image.sh');
+    expect(publicSmoke).toContain('"$image" /usr/local/bin/node dist/public.js');
+    expect(publicSmoke).toContain("body.surface === 'public'");
     expect(workflow).toContain('extract_no_dump_runtime linux/amd64 amd64 "$amd64_image"');
     expect(workflow).toContain('extract_no_dump_runtime linux/arm64 arm64 "$arm64_image"');
     expect(workflow).toContain('dist/native-runtime');
@@ -1280,6 +1361,11 @@ describe('artefatos de distribuição', () => {
     const rollbackServiceTemplate = repositoryFile('deploy/systemd/kassinao-rollback-clean.service.in');
     const rollbackTimer = repositoryFile('deploy/systemd/kassinao-rollback-clean.timer');
     const rollbackTmpfiles = repositoryFile('deploy/tmpfiles.d/kassinao-rollback.conf.in');
+
+    expect(audit).toContain('CORE_ENTRYPOINT=');
+    expect(audit).toContain('PUBLIC_ENTRYPOINT=');
+    expect(audit).toContain('core preserva entrypoint no-dump e command selados');
+    expect(audit).toContain('processo público preserva entrypoint no-dump e command selados');
 
     expect(harden).toContain('{{range $id, $member := .Containers}}{{printf "%s|%s\\n" $id $member.Name}}{{end}}');
     expect(harden).toContain('managed_container_id()');
