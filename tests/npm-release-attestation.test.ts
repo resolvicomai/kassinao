@@ -7,10 +7,10 @@ const { verifyRelease } = require('../scripts/verify-npm-release-attestation.cjs
 };
 
 const packageName = 'kassinao-mcp';
-const version = '1.0.9';
+const version = '1.0.10';
 const repository = 'https://github.com/resolvicomai/kassinao';
 const workflowPath = '.github/workflows/publish-mcp.yml';
-const tag = 'refs/tags/mcp-v1.0.9';
+const tag = 'refs/tags/mcp-v1.0.10';
 const commit = 'a'.repeat(40);
 const digest = Buffer.alloc(64, 7);
 const integrity = `sha512-${digest.toString('base64')}`;

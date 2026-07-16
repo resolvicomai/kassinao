@@ -10,6 +10,17 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.12] — 2026-07-15
+
+### Changed
+
+- `kassinao-mcp@1.0.10` carries the unchanged 1.0.9 connector runtime under a fresh immutable package and tag, allowing MCP and app release provenance to bind to the exact reviewed 1.4.12 commit.
+- Docker stop operations use the canonical `--timeout` option instead of the deprecated `--time` alias while preserving the same bounded fail-closed containment behavior.
+
+### Fixed
+
+- Shared-host deploy and audit gates accept Docker Engine 29 serializing a requested zero `MemorySwappiness` as `null` only when the positive configured memory limit is exact and `MemorySwap=Memory`. Positive swappiness and any configuration that leaves effective swap available remain rejected.
+
 ## [1.4.11] — 2026-07-15
 
 ### Changed
@@ -283,7 +294,8 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
-[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.11...HEAD
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.12...HEAD
+[1.4.12]: https://github.com/resolvicomai/kassinao/compare/v1.4.11...v1.4.12
 [1.4.11]: https://github.com/resolvicomai/kassinao/compare/v1.4.10...v1.4.11
 [1.4.10]: https://github.com/resolvicomai/kassinao/compare/v1.4.9...v1.4.10
 [1.4.9]: https://github.com/resolvicomai/kassinao/compare/v1.4.8...v1.4.9
