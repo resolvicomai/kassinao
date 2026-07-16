@@ -25,6 +25,7 @@ describe('landing page do Kassinão', () => {
       expect(html).toMatch(/href="http:\/\/localhost:8080\/(?:en\/)?docs#mcp"/);
       expect(html).toMatch(/href="http:\/\/localhost:8080\/(?:en\/)?docs"/);
       expect(html).toMatch(/href="http:\/\/localhost:8080\/(?:en\/)?demo"/);
+      expect(html).toContain('https://www.producthunt.com/products/kassinao?embed=true&amp;utm_source=badge-featured');
       expect(html).not.toContain('href="/app');
       expect(html).not.toContain('/auth/login');
       expect(html).not.toContain('Entrar');
@@ -40,6 +41,7 @@ describe('landing page do Kassinão', () => {
       expect(html).toContain("url('/assets/space-grotesk.woff2')");
       expect(html).toContain('/assets/discord-demo-');
       expect(html).toContain('/assets/meeting-demo-');
+      expect(html).toContain('/assets/producthunt.svg');
       expect(html).toContain('prefers-reduced-motion: reduce');
       expect(html).toContain('IntersectionObserver');
       expect(html).not.toContain('#c53f28');
@@ -78,6 +80,26 @@ describe('landing page do Kassinão', () => {
     expect(html).toContain('<video class="motion-video" autoplay muted loop playsinline');
     expect(html).not.toContain('.nav-links a:nth-child(2)');
     expect(html).toContain('white-space: nowrap;');
+    expect(html).toContain('min-width: 44px;');
+  });
+
+  it('leva ao lançamento no Product Hunt com badge local em PT e EN', () => {
+    const pt = landingPage('pt');
+    const en = landingPage('en');
+    const trackedUrl =
+      'https://www.producthunt.com/products/kassinao?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-kassinao';
+
+    for (const html of [pt, en]) {
+      expect(html).toContain(`href="${trackedUrl}"`);
+      expect(html).toContain('class="product-hunt-badge"');
+      expect(html).toContain('<img src="/assets/producthunt.svg" width="36" height="36" alt="" aria-hidden="true">');
+      expect(html).toContain('target="_blank" rel="noopener noreferrer"');
+    }
+
+    expect(pt).toContain('Lançamento no Product Hunt');
+    expect(pt).toContain('Apoiar o Kassinão');
+    expect(en).toContain('Live on Product Hunt');
+    expect(en).toContain('Support Kassinão');
   });
 
   it('separa o núcleo garantido dos recursos opcionais de IA em PT e EN', () => {

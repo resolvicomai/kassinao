@@ -67,6 +67,11 @@ a {
   color: inherit;
 }
 
+a:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 3px;
+}
+
 button,
 a {
   -webkit-tap-highlight-color: transparent;
@@ -83,6 +88,7 @@ video {
   top: 10px;
   left: 10px;
   z-index: 100;
+  min-height: 44px;
   padding: 9px 13px;
   border-radius: var(--radius-control);
   background: var(--text);
@@ -121,6 +127,8 @@ video {
   align-items: center;
   gap: 10px;
   flex: none;
+  min-width: 44px;
+  min-height: 44px;
   color: var(--text);
   font-size: 17px;
   font-weight: 700;
@@ -147,6 +155,15 @@ video {
   margin-left: auto;
 }
 
+.nav-links a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding-inline: 4px;
+}
+
 .nav-links a,
 .footer-links a {
   color: var(--muted);
@@ -154,6 +171,14 @@ video {
   font-weight: 650;
   text-decoration: none;
   transition: color 150ms ease;
+}
+
+.footer-links a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
 }
 
 .nav-links a:hover,
@@ -173,8 +198,8 @@ video {
 .language a {
   display: grid;
   place-items: center;
-  min-width: 34px;
-  min-height: 30px;
+  min-width: 44px;
+  min-height: 44px;
   border-radius: 6px;
   color: var(--dim);
   font-size: 11px;
@@ -241,6 +266,60 @@ video {
   color: var(--dim);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.product-hunt-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  width: min(100%, 250px);
+  min-height: 54px;
+  margin-top: 18px;
+  padding: 8px 14px 8px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    transform 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.product-hunt-badge img {
+  width: 36px;
+  height: 36px;
+  flex: none;
+}
+
+.product-hunt-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.product-hunt-copy span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.product-hunt-copy strong {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.product-hunt-badge:hover {
+  transform: translateY(-2px);
+  border-color: rgb(218 85 47 / .8);
+  background: var(--surface-2);
+}
+
+.product-hunt-badge:active,
+.button:active {
+  transform: scale(.98);
 }
 
 .button {
@@ -951,15 +1030,11 @@ video {
   }
 
   .nav-links {
-    gap: 12px;
+    gap: 2px;
   }
 
   .nav-links a {
     font-size: 12px;
-  }
-
-  .language a {
-    min-width: 30px;
   }
 
   .hero {
@@ -1055,6 +1130,10 @@ video {
     width: 100%;
   }
 
+  .product-hunt-badge {
+    width: 100%;
+  }
+
   .meeting-frame {
     margin-inline: -8px;
   }
@@ -1066,6 +1145,27 @@ video {
 
   .answer-stage {
     margin-inline: -4px;
+  }
+}
+
+@media (max-width: 360px) {
+  .nav {
+    gap: 8px;
+  }
+
+  .nav-links {
+    gap: 0;
+  }
+
+  .nav-links a {
+    min-width: 40px;
+    min-height: 40px;
+    padding-inline: 2px;
+  }
+
+  .language a {
+    min-width: 38px;
+    min-height: 38px;
   }
 }
 
@@ -1106,6 +1206,8 @@ export function landingPage(lang: Locale = 'pt'): string {
   const site = publicSite('home', lang, config);
   const ptHome = publicSite('home', 'pt', config).canonicalUrl;
   const enHome = publicSite('home', 'en', config).canonicalUrl;
+  const productHuntUrl =
+    'https://www.producthunt.com/products/kassinao?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-kassinao';
   const pt = lang === 'pt';
   const T = (portuguese: string, english: string): string => (pt ? portuguese : english);
   const discordVideo = `/assets/discord-demo-${lang}-v2.webm`;
@@ -1212,6 +1314,10 @@ export function landingPage(lang: Locale = 'pt'): string {
         <a class="button button-secondary" href="${site.links.docs}">${esc(T('Fazer self-host do Kassinão', 'Self-host Kassinão'))}</a>
       </div>
       <p class="hero-note">${esc(T('Demo pública com dados fictícios e IA habilitada, sem login. Para avaliar localmente, basta Docker e um app Discord de teste; produção pública exige HTTPS, domínio e app próprios.', 'Public demo with fictional data and AI enabled, with no login. Local evaluation needs Docker and a test Discord app; public production requires HTTPS, a domain, and its own app.'))}</p>
+      <a class="product-hunt-badge" href="${esc(productHuntUrl)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(T('Abrir o lançamento do Kassinão no Product Hunt', 'Open the Kassinão launch on Product Hunt'))}">
+        <img src="/assets/producthunt.svg" width="36" height="36" alt="" aria-hidden="true">
+        <span class="product-hunt-copy"><span>${esc(T('Lançamento no Product Hunt', 'Live on Product Hunt'))}</span><strong>${esc(T('Apoiar o Kassinão', 'Support Kassinão'))}</strong></span>
+      </a>
     </div>
     <div class="hero-proof">
       <div class="media-frame">

@@ -1,6 +1,11 @@
-# Product Hunt launch draft
+# Product Hunt launch record
 
-**Pre-launch only.** Do not mark Kassinão as launched or paste the post-launch copy until the public release, site, docs, demo, privacy flow, GHCR image, operations bundle, npm package, and external-account security checks all pass.
+The Product Hunt product page is public at
+<https://www.producthunt.com/products/kassinao>. The repository release, site,
+docs, demo, npm package and public artifacts are live. Promotion beyond the
+site badge remains blocked until every unchecked launch gate below is actually
+verified; a public listing does not prove the private production instance is
+ready.
 
 The public demo is fictional and has optional AI features enabled to show the full flow. It is not a hosted workspace and must never contain a real meeting, private app hostname, guild/application ID, or operator data.
 
@@ -72,11 +77,11 @@ Recommended order: cover, Discord capture, separate speaking-account tracks, opt
 >
 > I would value feedback on the Discord recording flow, the self-hosting boundary, and which read-only meeting query should come next.
 
-## Post-launch copy (locked until verification)
+## Post-launch copy
 
-Use only after the Product Hunt listing and every target URL are actually public and verified:
+Use only after every linked target is public and verified:
 
-> Kassinão is now on Product Hunt. It is an AGPL, self-hosted Discord bot that records separate tracks for the accounts that speak, plus a mix and timestamped notes. Operators can opt into transcription, AI minutes, sourced answers, and read-only MCP. Explore the fictional demo and tell me what you would query first: [verified launch URL]
+> Kassinão is now on Product Hunt. It is an AGPL, self-hosted Discord bot that records separate tracks for the accounts that speak, plus a mix and timestamped notes. Operators can opt into transcription, AI minutes, sourced answers, and read-only MCP. Explore the fictional demo and tell me what you would query first: https://www.producthunt.com/products/kassinao
 
 ## 35-second demo script
 

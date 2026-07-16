@@ -461,6 +461,10 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).toContain('https://github.com/resolvicomai/kassinao');
     expect(html).toContain('/assets/discord-demo-pt-v2.webm');
     expect(html).toContain('/assets/meeting-demo-pt.png');
+    expect(html).toContain('/assets/producthunt.svg');
+    expect(html).toContain(
+      'href="https://www.producthunt.com/products/kassinao?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-kassinao"',
+    );
     expect(html).toContain('--accent: #5865f2');
     expect(html).not.toContain('#c53f28');
     expect(html).toContain('href="http://localhost:8080/en"');
