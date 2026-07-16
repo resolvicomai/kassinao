@@ -2080,6 +2080,28 @@ describe('shared VPS read-only audit', () => {
     expect(result.stderr).toContain('inventário Docker viola');
   });
 
+  it('aceita MemorySwappiness null do Docker 29 sob limite efetivo sem swap', () => {
+    const aFixture = fixture();
+    for (const item of aFixture.items.slice(0, 3)) item.HostConfig.MemorySwappiness = null;
+    writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
+
+    const result = run(aFixture);
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+  });
+
+  it('recusa MemorySwappiness null quando MemorySwap deixa swap disponível', () => {
+    const aFixture = fixture();
+    aFixture.items[0].HostConfig.MemorySwappiness = null;
+    aFixture.items[0].HostConfig.MemorySwap *= 2;
+    writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
+
+    const result = run(aFixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Memory/MemorySwap divergem');
+  });
+
   it.each([
     ['memória ilimitada', 'unlimited', 'unlimited é proibido'],
     ['memória 100G', '100g', 'reservam menos de 25% da memória física'],

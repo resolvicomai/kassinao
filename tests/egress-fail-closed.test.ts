@@ -136,8 +136,8 @@ describe('contenção fail-closed do egress', () => {
     const { result, calls } = runFailClosed();
 
     expect(result.status, result.stderr).toBe(0);
-    expect(calls).toContain(`stop --time 30 ${CORE_ID}`);
-    expect(calls).toContain(`stop --time 30 ${TUNNEL_ID}`);
+    expect(calls).toContain(`stop --timeout 30 ${CORE_ID}`);
+    expect(calls).toContain(`stop --timeout 30 ${TUNNEL_ID}`);
     expect(calls).not.toContain('kill');
     expect(calls.match(/inspect -f \{\{\.State\.Running\}\}/g)).toHaveLength(2);
   });
@@ -148,8 +148,8 @@ describe('contenção fail-closed do egress', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(calls).toContain(`kill ${CORE_ID}`);
     expect(calls).toContain(`kill ${TUNNEL_ID}`);
-    expect(calls).toContain(`stop --time 10 ${CORE_ID}`);
-    expect(calls).toContain(`stop --time 10 ${TUNNEL_ID}`);
+    expect(calls).toContain(`stop --timeout 10 ${CORE_ID}`);
+    expect(calls).toContain(`stop --timeout 10 ${TUNNEL_ID}`);
   });
 
   it('falha quando stop/kill não contêm ou o estado final continua running', () => {
@@ -166,8 +166,8 @@ describe('contenção fail-closed do egress', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('não pertence ao projeto/serviço esperado');
-    expect(calls).not.toContain(`stop --time 30 ${CORE_ID}`);
+    expect(calls).not.toContain(`stop --timeout 30 ${CORE_ID}`);
     expect(calls).not.toContain(`kill ${CORE_ID}`);
-    expect(calls).toContain(`stop --time 30 ${TUNNEL_ID}`);
+    expect(calls).toContain(`stop --timeout 30 ${TUNNEL_ID}`);
   });
 });
