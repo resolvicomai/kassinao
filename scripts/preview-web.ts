@@ -434,6 +434,7 @@ async function main(): Promise<void> {
     ['discord-demo-en-v2.gif', 'image/gif'],
     ['meeting-demo-pt.png', 'image/png'],
     ['meeting-demo-en.png', 'image/png'],
+    ['producthunt.svg', 'image/svg+xml'],
   ]);
   app.get('/assets/:visual', (req, res, next) => {
     const contentType = publicVisuals.get(req.params.visual);
