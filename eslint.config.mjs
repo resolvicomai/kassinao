@@ -5,17 +5,7 @@ import prettier from 'eslint-config-prettier';
 
 export default tseslint.config(
   {
-    ignores: [
-      'dist',
-      'node_modules',
-      'recordings',
-      'scratchpad',
-      'tests',
-      'mcp',
-      // Checkouts efêmeros do Claude têm tsconfig próprio e não pertencem a
-      // este checkout; atravessá-los quebra a descoberta do projeto do parser.
-      '.claude/worktrees',
-    ],
+    ignores: ['dist', 'node_modules', 'recordings', 'scratchpad', 'tests', 'mcp'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

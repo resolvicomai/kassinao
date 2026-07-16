@@ -418,6 +418,18 @@ function simulateEncryptedMigration(value: ReturnType<typeof fixture>): string {
 }
 
 describe('preparo transacional do layout shared legado', () => {
+  it('mantém sintaxe válida e projeta chaves opcionais de mounts sem exigir presença no Docker 29', () => {
+    const syntax = spawnSync('bash', ['-n', path.join(ROOT, 'scripts', 'prepare-legacy-shared-layout.sh')], {
+      encoding: 'utf8',
+    });
+    expect(syntax.status, syntax.stderr).toBe(0);
+    expect(HELPER_SOURCE).toContain('{{json (index $mount "Name")}}');
+    expect(HELPER_SOURCE).toContain('{{json $mount.Source}}');
+    expect(HELPER_SOURCE).not.toContain('{{json $mount.Name}}');
+    expect(HELPER_SOURCE).toContain("mount_type in ('bind', 'volume')");
+    expect(HELPER_SOURCE).toContain("not isinstance(mount.get('Name'), str) or not mount.get('Name')");
+  });
+
   it('consolida recordings e named-volume cache, preservando estado/auth legados e originais', () => {
     const value = fixture();
     const prepared = value.run([value.current]);

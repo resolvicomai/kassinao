@@ -204,8 +204,8 @@ describe('registro de sessões (revogação + rotação-com-reuso)', () => {
 
   it('código de troca é de uso único', () => {
     const userId = `u-code-${crypto.randomUUID()}`;
-    const code = createExchangeCode(userId, 'D', 'Claude do notebook');
-    expect(consumeExchangeCode(code)).toMatchObject({ userId, label: 'Claude do notebook' });
+    const code = createExchangeCode(userId, 'D', 'Assistente do notebook');
+    expect(consumeExchangeCode(code)).toMatchObject({ userId, label: 'Assistente do notebook' });
     expect(consumeExchangeCode(code)).toBeUndefined(); // segunda vez não vale
   });
 

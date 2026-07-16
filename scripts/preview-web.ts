@@ -584,14 +584,14 @@ async function main(): Promise<void> {
 
   const previewConnections = [
     {
-      sid: 'preview-claude-desktop',
+      sid: 'preview-work-notebook',
       label: 'Notebook de trabalho',
       createdAt: now - 8 * DAY,
       lastSeenAt: now - 35 * MINUTE,
       exp: now + 82 * DAY,
     },
     {
-      sid: 'preview-cursor-work',
+      sid: 'preview-personal-desktop',
       label: 'Desktop pessoal',
       createdAt: now - 3 * DAY,
       exp: now + 87 * DAY,

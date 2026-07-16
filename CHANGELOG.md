@@ -10,6 +10,16 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.13] — 2026-07-16
+
+### Changed
+
+- `kassinao-mcp@1.0.11` carries the unchanged 1.0.10 connector runtime under a fresh immutable package and tag, allowing MCP and app release provenance to bind to the exact reviewed 1.4.13 commit.
+
+### Fixed
+
+- Shared-host inventory, legacy-layout preparation, and encrypted-storage migration now read optional Docker mount and network fields through map-safe Go-template lookups. Docker Engine 29 may omit `Name` and `Driver` from bind-mount objects instead of returning empty strings; the release now preserves `null` for those optional values while continuing to reject missing required fields and unsafe neighboring mounts.
+
 ## [1.4.12] — 2026-07-15
 
 ### Changed
@@ -185,7 +195,7 @@ latest README, documentation, configuration template, and tests.
 
 ### Fixed
 
-- Multiple local connector processes sharing one Claude Desktop profile now serialize refresh-token rotation and reread the latest protected credential before contacting the server, preventing one process from invalidating the other as token reuse.
+- Multiple local connector processes sharing one local client profile now serialize refresh-token rotation and reread the latest protected credential before contacting the server, preventing one process from invalidating the other as token reuse.
 - Refresh rotation now persists an idempotency marker before the network request, so a dropped response, client crash, or interrupted local write can safely retry the same generation instead of revoking the connection.
 
 ## [1.4.1] — 2026-07-13
@@ -294,7 +304,8 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
-[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.12...HEAD
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.13...HEAD
+[1.4.13]: https://github.com/resolvicomai/kassinao/compare/v1.4.12...v1.4.13
 [1.4.12]: https://github.com/resolvicomai/kassinao/compare/v1.4.11...v1.4.12
 [1.4.11]: https://github.com/resolvicomai/kassinao/compare/v1.4.10...v1.4.11
 [1.4.10]: https://github.com/resolvicomai/kassinao/compare/v1.4.9...v1.4.10

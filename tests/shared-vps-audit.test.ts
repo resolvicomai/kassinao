@@ -905,6 +905,15 @@ describe('shared VPS read-only audit', () => {
     expect(source).toContain('ip -j -details link show');
     expect(source).toContain('iptables-save -t filter');
     expect(source).toContain('ip6tables-save -t filter');
+    expect(source).toContain('{{json (index $mount "Name")}}');
+    expect(source).toContain('{{json (index $mount "Driver")}}');
+    expect(source).toContain('{{json (index $network "GlobalIPv6Address")}}');
+    expect(source).toContain('{{json $mount.Type}}');
+    expect(source).toContain('{{json $mount.Source}}');
+    expect(source).not.toContain('{{json $mount.Name}}');
+    expect(source).not.toContain('{{json $mount.Driver}}');
+    expect(source).toContain("type(mount.get('RW')) is not bool");
+    expect(source).toContain("mount_type in ('bind', 'volume')");
     expect(source).not.toMatch(/\bdocker\s+(?:start|stop|restart|kill|rm|run|create|update|compose)\b/);
     expect(source).not.toMatch(/\b(?:iptables|ip6tables|nft|systemctl)\s/);
   });
@@ -921,6 +930,41 @@ describe('shared VPS read-only audit', () => {
     expect(calls).toContain('docker:ps -aq --no-trunc');
     expect(calls).toContain('docker:network ls -q --no-trunc');
     expect(calls).not.toMatch(/docker:(?:start|stop|restart|kill|rm|run|create|update)/);
+  });
+
+  it('aceita Name e Driver ausentes como null quando não são obrigatórios no mount', () => {
+    const aFixture = fixture();
+    const projectBind = aFixture.items[0].Mounts[0];
+    expect(projectBind).not.toHaveProperty('Name');
+    expect(projectBind).not.toHaveProperty('Driver');
+    aFixture.items[3].Mounts.push({
+      Type: 'volume',
+      Name: 'company-data',
+      Source: '/var/lib/docker/volumes/company-data/_data',
+      Destination: '/data',
+      RW: true,
+    });
+    writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
+
+    const result = run(aFixture);
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+  });
+
+  it.each([
+    ['Type', 'tipo de mount do container é inválido'],
+    ['Source', 'source de mount do container é inválido'],
+    ['Destination', 'destino de mount do container é inválido'],
+    ['RW', 'permissão de mount do container é inválida'],
+  ])('falha fechado quando o campo obrigatório %s está ausente no mount', (field, message) => {
+    const aFixture = fixture();
+    delete aFixture.items[0].Mounts[0][field];
+    writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
+
+    const result = run(aFixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
   });
 
   it('aprova host sem swap ativo e device swap com cadeia dm-crypt extensa sem falso SIGPIPE', () => {

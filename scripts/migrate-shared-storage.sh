@@ -567,7 +567,7 @@ assert_containers_stopped() {
   docker info --format '{{.ServerVersion}}' >/dev/null 2>&1 || die 'daemon Docker local indisponível'
   local ids_raw projection
   ids_raw="$(docker ps -aq --no-trunc)" || die 'não foi possível enumerar containers'
-  projection='{"Id":{{json .Id}},"Name":{{json .Name}},"Config":{"Labels":{"com.docker.compose.project":{{json (index .Config.Labels "com.docker.compose.project")}},"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}}}},"State":{"Running":{{json .State.Running}}},"HostConfig":{"RestartPolicy":{"Name":{{json .HostConfig.RestartPolicy.Name}}},"HasDevices":{{if .HostConfig.Devices}}true{{else}}false{{end}},"HasDeviceCgroupRules":{{if .HostConfig.DeviceCgroupRules}}true{{else}}false{{end}},"HasDeviceRequests":{{if .HostConfig.DeviceRequests}}true{{else}}false{{end}},"HasVolumesFrom":{{if .HostConfig.VolumesFrom}}true{{else}}false{{end}}},"Mounts":[{{range $index, $mount := .Mounts}}{{if $index}},{{end}}{"Type":{{json $mount.Type}},"Name":{{json $mount.Name}},"Source":{{json $mount.Source}},"Destination":{{json $mount.Destination}},"RW":{{json $mount.RW}}}{{end}}]}'
+  projection='{"Id":{{json .Id}},"Name":{{json .Name}},"Config":{"Labels":{"com.docker.compose.project":{{json (index .Config.Labels "com.docker.compose.project")}},"com.docker.compose.service":{{json (index .Config.Labels "com.docker.compose.service")}}}},"State":{"Running":{{json .State.Running}}},"HostConfig":{"RestartPolicy":{"Name":{{json .HostConfig.RestartPolicy.Name}}},"HasDevices":{{if .HostConfig.Devices}}true{{else}}false{{end}},"HasDeviceCgroupRules":{{if .HostConfig.DeviceCgroupRules}}true{{else}}false{{end}},"HasDeviceRequests":{{if .HostConfig.DeviceRequests}}true{{else}}false{{end}},"HasVolumesFrom":{{if .HostConfig.VolumesFrom}}true{{else}}false{{end}}},"Mounts":[{{range $index, $mount := .Mounts}}{{if $index}},{{end}}{"Type":{{json $mount.Type}},"Name":{{json (index $mount "Name")}},"Source":{{json $mount.Source}},"Destination":{{json $mount.Destination}},"RW":{{json $mount.RW}}}{{end}}]}'
   if [ -n "$ids_raw" ]; then
     mapfile -t ids <<<"$ids_raw"
   fi
@@ -611,6 +611,25 @@ def overlaps_protected(raw):
     return False
 
 for item in items:
+    mounts = item.get('Mounts')
+    if not isinstance(mounts, list):
+        raise SystemExit(1)
+    for mount in mounts:
+        if not isinstance(mount, dict):
+            raise SystemExit(1)
+        mount_type = mount.get('Type')
+        source = mount.get('Source')
+        destination = mount.get('Destination')
+        if mount_type not in ('bind', 'volume', 'tmpfs'):
+            raise SystemExit(1)
+        if not isinstance(destination, str) or not os.path.isabs(destination):
+            raise SystemExit(1)
+        if type(mount.get('RW')) is not bool:
+            raise SystemExit(1)
+        if mount_type in ('bind', 'volume') and (not isinstance(source, str) or not os.path.isabs(source)):
+            raise SystemExit(1)
+        if mount_type == 'volume' and (not isinstance(mount.get('Name'), str) or not mount.get('Name')):
+            raise SystemExit(1)
     labels = (item.get('Config') or {}).get('Labels') or {}
     project = labels.get('com.docker.compose.project')
     service = labels.get('com.docker.compose.service')
@@ -621,7 +640,7 @@ for item in items:
         if (host.get('HasDevices') or host.get('HasDeviceCgroupRules') or
                 host.get('HasDeviceRequests') or host.get('HasVolumesFrom')):
             raise SystemExit(1)
-        for mount in item.get('Mounts') or []:
+        for mount in mounts:
             if overlaps_protected(mount.get('Source')):
                 raise SystemExit(1)
         continue

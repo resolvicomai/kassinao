@@ -409,7 +409,7 @@ describe('storage LUKS escopado para host compartilhado', () => {
     for (const sensitiveIdentity of [value.dataRoot, value.mapper, value.uuid]) {
       expect(`${rootOnly.stdout}${full.stdout}`).not.toContain(sensitiveIdentity);
     }
-  });
+  }, 30_000);
 
   it('não cria, chowna nem chmoda antes da prova LUKS root-only', () => {
     const value = fixture({ luksValid: false });

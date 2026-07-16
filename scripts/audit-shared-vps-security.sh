@@ -588,15 +588,17 @@ container_projection = (
     r'"CapAdd":{{json .HostConfig.CapAdd}},'
     r'"HasVolumesFrom":{{if .HostConfig.VolumesFrom}}true{{else}}false{{end}}},'
     r'"Mounts":[{{range $index, $mount := .Mounts}}{{if $index}},{{end}}{'
-    r'"Type":{{json $mount.Type}},"Name":{{json $mount.Name}},"Driver":{{json $mount.Driver}},'
-    r'"Source":{{json $mount.Source}},"Destination":{{json $mount.Destination}},'
-    r'"RW":{{json $mount.RW}},"Propagation":{{json $mount.Propagation}}}{{end}}],'
+    r'"Type":{{json $mount.Type}},"Name":{{json (index $mount "Name")}},'
+    r'"Driver":{{json (index $mount "Driver")}},"Source":{{json $mount.Source}},'
+    r'"Destination":{{json $mount.Destination}},"RW":{{json $mount.RW}},'
+    r'"Propagation":{{json $mount.Propagation}}}{{end}}],'
     r'"State":{"Running":{{json .State.Running}},"Pid":{{json .State.Pid}}},"NetworkAttachments":['
     r'{{$first := true}}{{range $name, $network := .NetworkSettings.Networks}}'
     r'{{if not $first}},{{end}}{{$first = false}}{'
-    r'"Name":{{json $name}},"NetworkID":{{json $network.NetworkID}},'
-    r'"EndpointID":{{json $network.EndpointID}},"Gateway":{{json $network.Gateway}},'
-    r'"IPAddress":{{json $network.IPAddress}},"GlobalIPv6Address":{{json $network.GlobalIPv6Address}}}'
+    r'"Name":{{json $name}},"NetworkID":{{json (index $network "NetworkID")}},'
+    r'"EndpointID":{{json (index $network "EndpointID")}},"Gateway":{{json (index $network "Gateway")}},'
+    r'"IPAddress":{{json (index $network "IPAddress")}},'
+    r'"GlobalIPv6Address":{{json (index $network "GlobalIPv6Address")}}}'
     r'{{end}}]}'
 )
 items = docker_json_lines(
@@ -618,6 +620,25 @@ for item in items:
     item_id = item.get('Id')
     if not isinstance(item_id, str) or item_id not in container_ids_set:
         fail('projeção de container retornou ID ausente ou inesperado')
+    mounts = item.get('Mounts')
+    if not isinstance(mounts, list):
+        fail('projeção de mounts do container é inválida')
+    for mount in mounts:
+        if not isinstance(mount, dict):
+            fail('entrada de mount do container é inválida')
+        mount_type = mount.get('Type')
+        source = mount.get('Source')
+        destination = mount.get('Destination')
+        if mount_type not in ('bind', 'volume', 'tmpfs'):
+            fail('tipo de mount do container é inválido')
+        if not isinstance(destination, str) or not os.path.isabs(destination):
+            fail('destino de mount do container é inválido')
+        if type(mount.get('RW')) is not bool:
+            fail('permissão de mount do container é inválida')
+        if mount_type in ('bind', 'volume') and (not isinstance(source, str) or not os.path.isabs(source)):
+            fail('source de mount do container é inválido')
+        if mount_type == 'volume' and (not isinstance(mount.get('Name'), str) or not mount.get('Name')):
+            fail('volume do container não possui nome verificável')
     attachments = item.pop('NetworkAttachments', None)
     if not isinstance(attachments, list):
         fail('projeção de redes do container é inválida')

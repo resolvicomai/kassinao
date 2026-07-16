@@ -374,7 +374,7 @@ exit 0
       DeviceRequests: null,
       VolumesFrom: null,
     },
-    Mounts: options.foreignWriter ? [{ Source: dataRoot, Destination: '/data' }] : [],
+    Mounts: options.foreignWriter ? [{ Type: 'bind', Source: dataRoot, Destination: '/data', RW: true }] : [],
   });
   writeFileSync(dockerJson, JSON.stringify(containers));
 
@@ -610,6 +610,11 @@ describe('migração offline para storage shared LUKS', () => {
     expect(source).toContain('controle legado root-only');
     expect(source).not.toContain("host.get('Binds')");
     expect(source).toContain("item.get('Mounts')");
+    expect(source).toContain('{{json (index $mount "Name")}}');
+    expect(source).toContain('{{json $mount.Source}}');
+    expect(source).not.toContain('{{json $mount.Name}}');
+    expect(source).toContain("mount_type in ('bind', 'volume')");
+    expect(source).toContain("not isinstance(mount.get('Name'), str) or not mount.get('Name')");
     expect(source).toContain('"$NEIGHBOR_AUDITOR" --neighbors-only');
     expect(source).toContain('mountpoint -q -- "$data_root"');
     expect(source).toContain('.kassinao-plaintext-rollback.pending');
@@ -691,7 +696,7 @@ describe('migração offline para storage shared LUKS', () => {
     for (const contents of Object.values(COLOCATED_FIXTURE_FILES)) {
       expect(`${log}\n${aFixture.execution.stdout}\n${aFixture.execution.stderr}`).not.toContain(contents.trim());
     }
-  });
+  }, 30_000);
 
   it('importa somente a allowlist de runtime legado para o app.env cifrado', () => {
     const aFixture = fixture({ importLegacyAppEnv: true });

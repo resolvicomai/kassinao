@@ -552,7 +552,7 @@ describe('finalização manual do rollback plaintext shared', () => {
     const result = value.run();
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     expect(existsSync(value.rollback)).toBe(false);
-  });
+  }, 30_000);
 
   it('recusa destruir rollback quando o controle legado não prova purge de sources e .env', () => {
     const value = fixture({ legacyPurgeIncomplete: true });

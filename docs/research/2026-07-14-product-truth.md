@@ -329,7 +329,7 @@ Use somente quando a condição estiver explícita e comprovada:
 - **“Dados criptografados em repouso”** → somente para uma instância cujo storage ativo foi verificado; nunca como claim universal do projeto. ([Developer Terms, §5(c)](https://support-dev.discord.com/hc/en-us/articles/8562894815383-Discord-Developer-Terms-of-Service))
 - **“Imagem oficial por digest com provenance/SBOM/attestation”** → somente depois que o workflow, pacote GHCR e artefatos estiverem públicos e a instalação documentada for testada. ([GitHub attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations))
 - **“Release imutável”** → somente quando o GitHub mostrar `Immutable` e `gh release verify` passar. ([integridade de release](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/verify-release-integrity))
-- **“Compatível com Claude/Cursor/etc.”** → somente para clientes e versões realmente testados; fora disso, “clientes MCP compatíveis”.
+- **“Compatível com clientes MCP testados”** → sempre nomear os clientes e versões realmente validados.
 - **“Em conformidade com LGPD/GDPR”** → não usar como claim do software. No máximo, dizer que o projeto oferece controles que ajudam o operador, cuja conformidade depende de configuração, política, base legal e operação. ([Developer Terms, §5](https://support-dev.discord.com/hc/en-us/articles/8562894815383-Discord-Developer-Terms-of-Service))
 
 ## 13. Claims proibidos
