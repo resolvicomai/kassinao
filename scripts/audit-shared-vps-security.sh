@@ -1155,6 +1155,21 @@ for service, item in contract_by_service.items():
     if audit_mode == 'full':
         assert_liveness_contract(service, item)
 
+    if service in {'kassinao', 'kassinao-public'}:
+        expected_entrypoint = [
+            '/usr/local/bin/kassinao-no-dump', '--preload',
+            '/usr/local/lib/libkassinao-no-dump.so', '--', '/usr/bin/tini', '--',
+        ]
+        if config.get('Entrypoint') != expected_entrypoint:
+            fail(f'{service}: entrypoint no-dump divergente')
+        expected_command = (
+            ['/usr/local/bin/node', 'dist/index.js']
+            if service == 'kassinao'
+            else ['/usr/local/bin/node', 'dist/public.js']
+        )
+        if config.get('Cmd') != expected_command:
+            fail(f'{service}: command divergente')
+
     environment = container_environment(config, service)
     image_environment = image_environment_map.get(image)
     if image_environment is None:

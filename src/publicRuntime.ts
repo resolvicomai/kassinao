@@ -29,9 +29,32 @@ export const PUBLIC_RUNTIME_ENV = new Set([
   'FORCE_COLOR',
 ]);
 
+const NO_DUMP_PRELOAD = '/usr/local/lib/libkassinao-no-dump.so';
+
+/**
+ * The production image entrypoint adds these two values after Docker has
+ * created the container environment. Accept only the exact launcher contract,
+ * then remove both names before applying the public-process allowlist.
+ */
+export function consumePublicNoDumpRuntimeEnvironment(env: NodeJS.ProcessEnv, pid: number = process.pid): void {
+  const hasMarker = Object.prototype.hasOwnProperty.call(env, 'KASSINAO_NO_DUMP_ACTIVE');
+  const hasPreload = Object.prototype.hasOwnProperty.call(env, 'LD_PRELOAD');
+  if (!hasMarker && !hasPreload) return;
+  if (
+    !hasMarker ||
+    !hasPreload ||
+    env.KASSINAO_NO_DUMP_ACTIVE !== `prctl-v1:${pid}` ||
+    env.LD_PRELOAD !== NO_DUMP_PRELOAD
+  ) {
+    throw new Error('A proteção no-dump do processo público está ausente ou inválida');
+  }
+  delete env.KASSINAO_NO_DUMP_ACTIVE;
+  delete env.LD_PRELOAD;
+}
+
 export function privateRuntimeEnvironmentKeys(env: NodeJS.ProcessEnv): string[] {
   return Object.entries(env)
-    .filter(([name, value]) => Boolean(value?.trim()) && !PUBLIC_RUNTIME_ENV.has(name))
+    .filter(([name, value]) => (name.startsWith('LD_') || Boolean(value?.trim())) && !PUBLIC_RUNTIME_ENV.has(name))
     .map(([name]) => name)
     .sort();
 }
