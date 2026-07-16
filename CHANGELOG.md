@@ -10,6 +10,16 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.14] — 2026-07-16
+
+### Changed
+
+- `kassinao-mcp@1.0.12` carries the unchanged 1.0.11 connector runtime under a fresh immutable package and tag, allowing MCP and app release provenance to bind to the exact reviewed 1.4.14 commit.
+
+### Fixed
+
+- Shared legacy migration guidance, security policy, operator messages, and bilingual documentation now state the exact recovery boundary: the preserved plaintext is a data rollback, not an operational path back to the legacy Compose stack. After a successful cutover, service recovery is fix-forward through the shared adapter unless the operator has separately built and host-tested a reversal adapter before migration.
+
 ## [1.4.13] — 2026-07-16
 
 ### Changed
@@ -48,7 +58,7 @@ latest README, documentation, configuration template, and tests.
 ### Added
 
 - A separate `shared` production host adapter supports trusted same-operator workloads on one VPS without installing a Docker service drop-in or restarting the global Docker daemon. It uses `docker-compose.shared.yml`, a LUKS2 file container mounted at the private data root, Kassinão-scoped host controls, the existing release deployer, and a read-only shared-host audit.
-- `migrate-shared-storage.sh` copies an idle, exact plaintext runtime tree into a newly opened LUKS mapper, checks content and metadata before and after the mount switch, and preserves the original tree for explicit rollback and later private destruction.
+- `migrate-shared-storage.sh` copies an idle, exact plaintext runtime tree into a newly opened LUKS mapper, checks content and metadata before and after the mount switch, and preserves the original tree for explicit data rollback and later private destruction. After the cutover succeeds, service recovery is fix-forward through the shared adapter; the preserved tree is not an operational path back to the legacy stack.
 - `check-shared-migration-rollback.sh` validates fresh, pending, and purged migration states before deploy, backup, health, full audit, and host-control removal. `finalize-shared-migration.sh` verifies the preserved tree against the encrypted manifest, removes the logical plaintext copy only under explicit confirmation, and publishes a sealed purged receipt without claiming forensic erasure.
 - `uninstall-shared-host-controls.sh` removes only the verified shared-host controls after explicit confirmation, without stopping containers, restarting Docker, or deleting the release, encrypted storage, backing file, or secrets.
 
@@ -304,7 +314,8 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
-[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.13...HEAD
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.14...HEAD
+[1.4.14]: https://github.com/resolvicomai/kassinao/compare/v1.4.13...v1.4.14
 [1.4.13]: https://github.com/resolvicomai/kassinao/compare/v1.4.12...v1.4.13
 [1.4.12]: https://github.com/resolvicomai/kassinao/compare/v1.4.11...v1.4.12
 [1.4.11]: https://github.com/resolvicomai/kassinao/compare/v1.4.10...v1.4.11

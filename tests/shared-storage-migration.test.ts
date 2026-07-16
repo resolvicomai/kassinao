@@ -631,10 +631,13 @@ describe('migração offline para storage shared LUKS', () => {
     }
   });
 
-  it('migra em staging, preserva bytes/metadados e mantém plaintext para rollback', () => {
+  it('migra em staging, preserva bytes/metadados e mantém plaintext para rollback de dados', () => {
     const aFixture = fixture();
     expect(aFixture.execution.status, `${aFixture.execution.stderr}\n${aFixture.execution.stdout}`).toBe(0);
     expect(aFixture.execution.stdout).toContain('Migração shared concluída');
+    expect(aFixture.execution.stdout).toContain('Rollback de dados plaintext preservado');
+    expect(aFixture.execution.stdout).toContain('não é um rollback operacional');
+    expect(aFixture.execution.stdout).toContain('recuperação do serviço é fix-forward');
     expect(existsSync(aFixture.rollback)).toBe(true);
     expect(existsSync(path.join(aFixture.dataRoot, '.legacy-shared-transition', 'layout.json'))).toBe(true);
     expect(existsSync(path.join(aFixture.rollback, '.legacy-shared-transition', 'layout.json'))).toBe(true);

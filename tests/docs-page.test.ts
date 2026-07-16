@@ -348,7 +348,11 @@ describe('documentation page', () => {
       expect(removeDedicated).toBeLessThan(neighborAudit);
     }
     expect(docsPage('pt')).toContain('adapter moderno');
+    expect(docsPage('pt')).toContain('rollback de dados, não rollback operacional');
+    expect(docsPage('pt')).toContain('recuperação do serviço é fix-forward');
     expect(docsPage('en')).toContain('modern');
+    expect(docsPage('en')).toContain('data rollback, not an operational rollback');
+    expect(docsPage('en')).toContain('service recovery is fix-forward');
   });
 
   it('shows accessible progress and failure feedback when copying code fails', async () => {

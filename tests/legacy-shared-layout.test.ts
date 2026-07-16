@@ -549,7 +549,7 @@ describe('preparo transacional do layout shared legado', () => {
     const rollback = simulateEncryptedMigration(value);
     const purge = value.run(['--purge-originals', value.current, '--confirm-after-app-and-backup-validation']);
     expect(purge.status, `${purge.stderr}\n${purge.stdout}`).toBe(0);
-    expect(purge.stdout).toContain('rollback consolidado permaneceu intacto');
+    expect(purge.stdout).toContain('rollback de dados consolidado permaneceu intacto');
     expect(readdirSync(value.recordingsSource)).toEqual([]);
     expect(readdirSync(value.cacheVolume)).toEqual([]);
     expect(readFileSync(path.join(rollback, 'recordings', 'meeting-1', 'audio.pcm'), 'utf8')).toBe('private audio\n');

@@ -1,6 +1,6 @@
 {
   "name": "kassinao-mcp",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "Read-only local MCP connector for meeting data authorized by your self-hosted Kassinão instance.",
   "author": "Mauro Marques",
   "homepage": "https://docs.kassinao.cloud/en#mcp",
