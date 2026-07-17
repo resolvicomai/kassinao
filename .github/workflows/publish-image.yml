@@ -341,7 +341,38 @@ jobs:
           anonymous_config="$(mktemp -d)"
           trap 'rm -rf -- "$anonymous_config"' EXIT
 
-          manifest="$(DOCKER_CONFIG="$anonymous_config" docker buildx imagetools inspect "$image" --format '{{json .Manifest}}')"
+          # DOCKER_CONFIG carries both registry credentials and the selected
+          # context. Pointing it at an empty directory without preserving the
+          # endpoint silently falls back to the runner's preinstalled daemon,
+          # while setup-docker-action uses a separate daemon. Keep every
+          # anonymous pull and runtime proof on the audited daemon explicitly.
+          runtime_docker_context="$(docker context show)"
+          test "$runtime_docker_context" = setup-docker-action || {
+            echo "The audited setup-docker-action context is not selected" >&2
+            exit 1
+          }
+          runtime_docker_id="$(docker info --format '{{ .ID }}')"
+          test -n "$runtime_docker_id"
+          runtime_docker_host="$(docker context inspect "$runtime_docker_context" --format '{{ .Endpoints.docker.Host }}')"
+          case "$runtime_docker_host" in
+            unix:///*) ;;
+            *)
+              echo "The audited Docker context must use a Unix socket" >&2
+              exit 1
+              ;;
+          esac
+          test -S "${runtime_docker_host#unix://}" || {
+            echo "The audited Docker socket is unavailable" >&2
+            exit 1
+          }
+          export DOCKER_CONFIG="$anonymous_config"
+          export DOCKER_HOST="$runtime_docker_host"
+          test "$(docker info --format '{{ .ID }}')" = "$runtime_docker_id" || {
+            echo "The anonymous runtime proof switched Docker daemons" >&2
+            exit 1
+          }
+
+          manifest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}')"
           platform_digest() {
             local architecture="$1"
             jq -er --arg architecture "$architecture" '
@@ -356,7 +387,7 @@ jobs:
           amd64_image="$repository@$(platform_digest amd64)"
           arm64_image="$repository@$(platform_digest arm64)"
 
-          DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/amd64 "$amd64_image" >/dev/null
+          docker pull --platform linux/amd64 "$amd64_image" >/dev/null
 
           docker run --rm --platform linux/amd64 --network none --read-only --user 1000:1000 \
             --cap-drop ALL --security-opt no-new-privileges \
@@ -384,7 +415,7 @@ jobs:
               catch (error) { if (error?.code !== "EROFS") throw error; }
               fs.writeFileSync("/tmp/runtime-write", "ok");
             '
-          DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/arm64 "$arm64_image" >/dev/null
+          docker pull --platform linux/arm64 "$arm64_image" >/dev/null
 
           prove_no_dump_runtime() {
             local platform="$1" reference="$2"
@@ -402,10 +433,8 @@ jobs:
 
           bash scripts/smoke-public-image.sh "$amd64_image" "${image#*@}" linux/amd64
           bash scripts/smoke-public-image.sh "$arm64_image" "${image#*@}" linux/arm64
-          DOCKER_CONFIG="$anonymous_config" \
-            bash scripts/smoke-router-image.sh "$amd64_image" "${image#*@}" linux/amd64
-          DOCKER_CONFIG="$anonymous_config" \
-            bash scripts/smoke-router-image.sh "$arm64_image" "${image#*@}" linux/arm64
+          bash scripts/smoke-router-image.sh "$amd64_image" "${image#*@}" linux/amd64
+          bash scripts/smoke-router-image.sh "$arm64_image" "${image#*@}" linux/arm64
 
           extract_no_dump_runtime() {
             local platform="$1" architecture="$2" reference="$3" destination="dist/native-runtime/linux-$2"

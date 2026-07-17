@@ -10,6 +10,10 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+### Fixed
+
+- Anonymous release pulls and runtime proofs now stay on the exact Docker daemon audited by the workflow instead of falling back to the runner's preinstalled daemon when the credential store is emptied.
+
 ## [1.4.17] — 2026-07-16
 
 ### Added
