@@ -22,6 +22,19 @@ esac
 root="$(mktemp -d)"
 project="kassinao-router-smoke-$$"
 compose="$root/compose.yml"
+SMOKE_ROUTER_HOST_PORT="$(python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+    listener.bind(('127.0.0.1', 0))
+    print(listener.getsockname()[1])
+PY
+)"
+[[ "$SMOKE_ROUTER_HOST_PORT" =~ ^[1-9][0-9]*$ ]] || {
+  printf 'could not reserve a candidate loopback port\n' >&2
+  exit 1
+}
+export SMOKE_ROUTER_HOST_PORT
 
 cleanup() {
   docker compose --project-name "$project" -f "$compose" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -110,7 +123,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
-    ports: ['127.0.0.1::8080']
+    ports: ['127.0.0.1:${SMOKE_ROUTER_HOST_PORT}:8080']
     environment:
       NODE_ENV: production
       PORT: '8080'
@@ -180,7 +193,8 @@ for _attempt in $(seq 1 30); do
 done
 
 router_endpoint="$("${dc[@]}" port router 8080)"
-[[ "$router_endpoint" =~ ^127\.0\.0\.1:[1-9][0-9]*$ ]] || {
+expected_router_endpoint="127.0.0.1:$SMOKE_ROUTER_HOST_PORT"
+[ "$router_endpoint" = "$expected_router_endpoint" ] || {
   printf 'router host publish is not an exclusive IPv4 loopback port: %s\n' "$router_endpoint" >&2
   exit 1
 }

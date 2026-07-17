@@ -1511,7 +1511,9 @@ describe('artefatos de distribuição', () => {
     expect(routerSmoke).toContain('interface_name: edge0');
     expect(routerSmoke).toContain('interface_name: core0');
     expect(routerSmoke).toContain('interface_name: public0');
-    expect(routerSmoke).toContain("ports: ['127.0.0.1::8080']");
+    expect(routerSmoke).toContain("ports: ['127.0.0.1:${SMOKE_ROUTER_HOST_PORT}:8080']");
+    expect(routerSmoke).toContain("listener.bind(('127.0.0.1', 0))");
+    expect(routerSmoke).toContain('expected_router_endpoint="127.0.0.1:$SMOKE_ROUTER_HOST_PORT"');
     expect(routerSmoke).toContain('port router 8080');
     expect(routerSmoke).toContain("const http = require('node:http');");
     expect(routerSmoke).toContain('headers: { host, ...(init.headers || {}) }');
