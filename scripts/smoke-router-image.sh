@@ -167,7 +167,7 @@ dc=(docker compose --project-name "$project" -f "$compose")
 
 for _attempt in $(seq 1 30); do
   if "${dc[@]}" --profile probe run --rm --no-deps -T probe /usr/local/bin/node -e \
-    "const http=require('node:http');const req=http.request({host:'kassinao',port:8080,path:'/health',headers:{host:'app.example.test'}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>{try{const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));process.exit(res.statusCode===200&&body.surface==='private'?0:1)}catch{process.exit(1)}})});req.setTimeout(3000,()=>req.destroy());req.on('error',()=>process.exit(1));req.end()"
+    "const http=require('node:http');const req=http.request({host:'kassinao',port:8080,path:'/health',headers:{host:'app.example.test'}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>{try{const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));process.exit(res.statusCode===200&&body.surface==='private'?0:1)}catch{process.exit(1)}})});req.setTimeout(3000,()=>req.destroy(new Error('timeout')));req.on('error',()=>process.exit(1));req.end()"
   then
     break
   fi
