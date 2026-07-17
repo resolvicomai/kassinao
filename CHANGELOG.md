@@ -10,6 +10,8 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.18] — 2026-07-17
+
 ### Fixed
 
 - Anonymous release pulls and runtime proofs now stay on the exact Docker daemon audited by the workflow instead of falling back to the runner's preinstalled daemon when the credential store is emptied.
@@ -368,7 +370,8 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
-[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.17...HEAD
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.18...HEAD
+[1.4.18]: https://github.com/resolvicomai/kassinao/compare/v1.4.17...v1.4.18
 [1.4.17]: https://github.com/resolvicomai/kassinao/compare/v1.4.16...v1.4.17
 [1.4.16]: https://github.com/resolvicomai/kassinao/compare/v1.4.15...v1.4.16
 [1.4.15]: https://github.com/resolvicomai/kassinao/compare/v1.4.14...v1.4.15
