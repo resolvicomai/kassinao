@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 const SCRIPT = path.join(process.cwd(), 'scripts', 'egress-fail-closed.sh');
 const tempDirs: string[] = [];
 const CORE_ID = 'a'.repeat(64);
+const ROUTER_ID = 'b'.repeat(64);
+const PUBLIC_ID = 'd'.repeat(64);
 const TUNNEL_ID = 'c'.repeat(64);
 
 afterEach(() => {
@@ -58,6 +60,8 @@ case "\${1:-}" in
       reference="\${4:-}"
       case "$reference" in
         kassinao|${CORE_ID}) cid=${CORE_ID}; name=kassinao; service=kassinao ;;
+        kassinao-router|${ROUTER_ID}) cid=${ROUTER_ID}; name=kassinao-router; service=kassinao-router ;;
+        kassinao-public|${PUBLIC_ID}) cid=${PUBLIC_ID}; name=kassinao-public; service=kassinao-public ;;
         kassinao-tunnel|${TUNNEL_ID}) cid=${TUNNEL_ID}; name=kassinao-tunnel; service=cloudflared ;;
         *) exit 1 ;;
       esac
@@ -132,14 +136,16 @@ esac
 }
 
 describe('contenção fail-closed do egress', () => {
-  it('para e prova core e túnel sem ignorar o resultado', () => {
+  it('para e prova core, router, público e túnel sem ignorar o resultado', () => {
     const { result, calls } = runFailClosed();
 
     expect(result.status, result.stderr).toBe(0);
     expect(calls).toContain(`stop --timeout 30 ${CORE_ID}`);
+    expect(calls).toContain(`stop --timeout 30 ${ROUTER_ID}`);
+    expect(calls).toContain(`stop --timeout 30 ${PUBLIC_ID}`);
     expect(calls).toContain(`stop --timeout 30 ${TUNNEL_ID}`);
     expect(calls).not.toContain('kill');
-    expect(calls.match(/inspect -f \{\{\.State\.Running\}\}/g)).toHaveLength(2);
+    expect(calls.match(/inspect -f \{\{\.State\.Running\}\}/g)).toHaveLength(4);
   });
 
   it('usa kill como fallback e ainda exige State.Running=false', () => {
@@ -147,8 +153,12 @@ describe('contenção fail-closed do egress', () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(calls).toContain(`kill ${CORE_ID}`);
+    expect(calls).toContain(`kill ${ROUTER_ID}`);
+    expect(calls).toContain(`kill ${PUBLIC_ID}`);
     expect(calls).toContain(`kill ${TUNNEL_ID}`);
     expect(calls).toContain(`stop --timeout 10 ${CORE_ID}`);
+    expect(calls).toContain(`stop --timeout 10 ${ROUTER_ID}`);
+    expect(calls).toContain(`stop --timeout 10 ${PUBLIC_ID}`);
     expect(calls).toContain(`stop --timeout 10 ${TUNNEL_ID}`);
   });
 
@@ -168,6 +178,8 @@ describe('contenção fail-closed do egress', () => {
     expect(result.stderr).toContain('não pertence ao projeto/serviço esperado');
     expect(calls).not.toContain(`stop --timeout 30 ${CORE_ID}`);
     expect(calls).not.toContain(`kill ${CORE_ID}`);
+    expect(calls).toContain(`stop --timeout 30 ${ROUTER_ID}`);
+    expect(calls).toContain(`stop --timeout 30 ${PUBLIC_ID}`);
     expect(calls).toContain(`stop --timeout 30 ${TUNNEL_ID}`);
   });
 });

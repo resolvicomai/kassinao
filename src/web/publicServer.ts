@@ -196,14 +196,31 @@ export function createPublicApp(): Express {
     res
       .type('text/plain')
       .set('Cache-Control', 'public, max-age=3600')
-      .send(`User-agent: *\nAllow: /\nSitemap: ${origin}/sitemap.xml\n`);
+      .send(
+        [
+          'User-agent: *',
+          'Allow: /',
+          'Disallow: /app',
+          'Disallow: /auth',
+          'Disallow: /api',
+          `Sitemap: ${origin}/sitemap.xml`,
+          '',
+        ].join('\n'),
+      );
   });
   app.get('/sitemap.xml', (_req, res) => {
     const role = res.locals.publicRole as PublicRole;
+    const sharedPublicOrigin = config.docsUrl === config.publicUrl;
     const urls =
       role === 'docs'
         ? [`${config.docsUrl}/`, `${config.docsUrl}/en`]
-        : [`${config.publicUrl}/`, `${config.publicUrl}/en`, `${config.publicUrl}/demo`, `${config.publicUrl}/en/demo`];
+        : [
+            `${config.publicUrl}/`,
+            `${config.publicUrl}/en`,
+            `${config.publicUrl}/demo`,
+            `${config.publicUrl}/en/demo`,
+            ...(sharedPublicOrigin ? [`${config.publicUrl}/docs`, `${config.publicUrl}/en/docs`] : []),
+          ];
     const entries = urls.map((url) => `  <url><loc>${url}</loc></url>`).join('\n');
     res
       .type('application/xml')
@@ -260,6 +277,7 @@ export function createPublicApp(): Express {
 
   app.get('*', (req, res) => {
     const role = res.locals.publicRole as PublicRole;
+    const sharedPublicOrigin = config.docsUrl === config.publicUrl;
     const locale: Locale =
       req.path === '/en' || req.path === '/en/docs' || localeFromValue(req.query.lang) === 'en' ? 'en' : 'pt';
     if (role === 'docs') {
@@ -280,6 +298,10 @@ export function createPublicApp(): Express {
       return;
     }
     if (req.path === '/docs' || req.path === '/en/docs') {
+      if (sharedPublicOrigin) {
+        sendPublicPage(res, role, locale, docsPage(locale));
+        return;
+      }
       res.redirect(301, locale === 'en' ? `${config.docsUrl}/en` : `${config.docsUrl}/`);
       return;
     }

@@ -16,11 +16,16 @@ chmod 600 .env
 npm run dev
 ```
 
-For the Docker source path, build before starting Compose:
+For the Docker source path, Docker Engine 28.1.0+ and Docker Compose 2.36.0+
+are required. Then build before starting Compose:
 
 ```bash
 docker build -t kassinao-local:dev .
-docker compose up -d --no-build
+# In .env, keep APP_URL/MCP_URL/PUBLIC_URL/DOCS_URL on the same localhost
+# origin, set ALLOW_LOCAL_APP_URL=true, PUBLIC_SURFACES_ENABLED=false,
+# TRUST_PROXY_HOPS=1, and COMPOSE_PROFILES=split-public.
+docker compose --profile split-public up -d --no-build
+docker compose logs -f kassinao kassinao-router kassinao-public
 ```
 
 Never use production credentials, recordings, domains, IDs, auth state, or backups in development fixtures, screenshots, issues, or pull requests.

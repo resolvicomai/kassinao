@@ -12,6 +12,7 @@ const SHARED_INSTALLER = path.join(process.cwd(), 'scripts', 'install-shared-hos
 const CORE_ID = 'a'.repeat(64);
 const PUBLIC_ID = 'b'.repeat(64);
 const TUNNEL_ID = 'c'.repeat(64);
+const ROUTER_ID = 'd'.repeat(64);
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -21,6 +22,7 @@ function runWatch(
   status: string,
   options: {
     profiles?: string;
+    routerStatus?: string;
     publicStatus?: string;
     tunnelStatus?: string;
     coreState?: string;
@@ -72,7 +74,7 @@ if [ "$1" = inspect ]; then
   if [ "$2" = -f ]; then
     reference="$4"
     case "$reference" in
-      ${CORE_ID}|${PUBLIC_ID}) printf '%s\n' "$FAKE_APP_IMAGE" ;;
+      ${CORE_ID}|${ROUTER_ID}|${PUBLIC_ID}) printf '%s\n' "$FAKE_APP_IMAGE" ;;
       ${TUNNEL_ID}) printf '%s\n' "$FAKE_TUNNEL_IMAGE" ;;
       *) exit 1 ;;
     esac
@@ -83,6 +85,7 @@ if [ "$1" = inspect ]; then
   reference="$4"
   case "$reference" in
     kassinao|${CORE_ID}) cid=${CORE_ID}; name=kassinao; service=kassinao; health="$FAKE_STATUS" ;;
+    kassinao-router|${ROUTER_ID}) cid=${ROUTER_ID}; name=kassinao-router; service=kassinao-router; health="$FAKE_ROUTER_STATUS" ;;
     kassinao-public|${PUBLIC_ID}) cid=${PUBLIC_ID}; name=kassinao-public; service=kassinao-public; health="$FAKE_PUBLIC_STATUS" ;;
     kassinao-tunnel|${TUNNEL_ID}) cid=${TUNNEL_ID}; name=kassinao-tunnel; service=cloudflared; health="$FAKE_TUNNEL_STATUS" ;;
     *) exit 1 ;;
@@ -218,6 +221,7 @@ export PATH=${dir}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin 
       DOCKER_BIN: docker,
       DOCKER_LOG: log,
       FAKE_STATUS: status,
+      FAKE_ROUTER_STATUS: options.routerStatus ?? 'healthy',
       FAKE_PUBLIC_STATUS: options.publicStatus ?? 'healthy',
       FAKE_TUNNEL_STATUS: options.tunnelStatus ?? 'healthy',
       FAKE_CORE_STATE: options.coreState ?? 'running',
@@ -305,6 +309,7 @@ describe('watchdog de saúde no host', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(calls).toContain('inspect --format');
     expect(calls).toContain(`restart ${CORE_ID}`);
+    expect(calls).not.toContain('kassinao-router');
     expect(calls).not.toContain('kassinao-public');
     expect(calls).not.toContain('kassinao-tunnel');
     expect(calls).not.toContain('--time');
@@ -436,6 +441,18 @@ describe('watchdog de saúde no host', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(calls).toContain(`restart ${PUBLIC_ID}`);
     expect(calls).not.toContain(`restart ${CORE_ID}`);
+    expect(calls).not.toContain(`restart ${TUNNEL_ID}`);
+  });
+
+  it('trata o router como componente obrigatório do perfil público', () => {
+    const { result, calls } = runWatch('healthy', {
+      profiles: 'split-public',
+      routerStatus: 'unhealthy',
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls).toContain(`restart ${ROUTER_ID}`);
+    expect(calls).not.toContain(`restart ${CORE_ID}`);
+    expect(calls).not.toContain(`restart ${PUBLIC_ID}`);
     expect(calls).not.toContain(`restart ${TUNNEL_ID}`);
   });
 });

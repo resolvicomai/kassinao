@@ -16,7 +16,8 @@ _saved_no_dump_preload="${LD_PRELOAD-}"
 _forbidden_override=''
 for _name in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION \
   DOCKER_BIN SYSTEMCTL_BIN KASSINAO_HARDENER KASSINAO_STORAGE_VERIFIER KASSINAO_SHARED_AUDITOR \
-  KASSINAO_RUNTIME_DIR KASSINAO_CONTAINER KASSINAO_PUBLIC_CONTAINER KASSINAO_TUNNEL_CONTAINER; do
+  KASSINAO_RUNTIME_DIR KASSINAO_CONTAINER KASSINAO_ROUTER_CONTAINER KASSINAO_PUBLIC_CONTAINER \
+  KASSINAO_TUNNEL_CONTAINER; do
   if declare -p "$_name" >/dev/null 2>&1; then _forbidden_override="$_name"; break; fi
 done
 [ -r "/proc/$$/environ" ] || die '/proc é obrigatório para limpar o ambiente do watchdog'
@@ -66,6 +67,7 @@ SYSTEMCTL=systemctl
 HARDENER="$DEPLOY_DIR/scripts/harden-docker-egress.sh"
 EGRESS_UNIT=kassinao-docker-egress.service
 CORE_CONTAINER=kassinao
+ROUTER_CONTAINER=kassinao-router
 PUBLIC_CONTAINER=kassinao-public
 TUNNEL_CONTAINER=kassinao-tunnel
 env_value() {
@@ -119,7 +121,7 @@ DOCKER_CONFIG_FILE="$DOCKER_CONFIG/config.json"
   die 'configuração isolada do cliente Docker diverge do objeto vazio selado'
 export DOCKER_CONFIG
 
-for container in "$CORE_CONTAINER" "$PUBLIC_CONTAINER" "$TUNNEL_CONTAINER"; do
+for container in "$CORE_CONTAINER" "$ROUTER_CONTAINER" "$PUBLIC_CONTAINER" "$TUNNEL_CONTAINER"; do
   case "$container" in
     '' | *[!A-Za-z0-9_.-]*) die 'nome de container inválido' ;;
   esac
@@ -263,8 +265,10 @@ fi
 if [ "$PROFILES_KNOWN" != true ]; then
   # Compatibilidade com containers antigos sem o label acima: componentes
   # opcionais que ainda existem são tratados como ativos, nunca ignorados.
-  managed_container_id "$PUBLIC_CONTAINER" "$PUBLIC_CONTAINER" kassinao-public >/dev/null 2>&1 && \
+  if managed_container_id "$ROUTER_CONTAINER" "$ROUTER_CONTAINER" kassinao-router >/dev/null 2>&1 ||
+    managed_container_id "$PUBLIC_CONTAINER" "$PUBLIC_CONTAINER" kassinao-public >/dev/null 2>&1; then
     PROFILES=split-public
+  fi
   if managed_container_id "$TUNNEL_CONTAINER" "$TUNNEL_CONTAINER" cloudflared >/dev/null 2>&1; then
     PROFILES="${PROFILES:+$PROFILES,}tunnel"
   fi
@@ -357,6 +361,7 @@ PY
 status=0
 watch_container core "$CORE_CONTAINER" kassinao || status=1
 if profile_enabled split-public; then
+  watch_container router "$ROUTER_CONTAINER" kassinao-router || status=1
   watch_container public "$PUBLIC_CONTAINER" kassinao-public || status=1
 fi
 if profile_enabled tunnel; then

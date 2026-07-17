@@ -149,7 +149,7 @@ assert_no_kassinao_containers() {
     name="$(docker inspect -f '{{.Name}}' "$id" 2>/dev/null)" || die "não foi possível inspecionar o nome Docker de $id"
     name="${name#/}"
     [ "$project" != kassinao ] || die 'container do projeto Kassinão permaneceu após compose down'
-    case "$name" in kassinao | kassinao-public | kassinao-tunnel) die 'container reservado do Kassinão permaneceu após compose down' ;; esac
+    case "$name" in kassinao | kassinao-router | kassinao-public | kassinao-tunnel) die 'container reservado do Kassinão permaneceu após compose down' ;; esac
   done
 }
 

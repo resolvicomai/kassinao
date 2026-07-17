@@ -14,7 +14,8 @@ _saved_no_dump_marker="${KASSINAO_NO_DUMP_ACTIVE-}"
 _saved_no_dump_preload="${LD_PRELOAD-}"
 _forbidden_override=''
 for _name in DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION \
-  KASSINAO_CONTAINER KASSINAO_TUNNEL_CONTAINER KASSINAO_RUNTIME_DIR; do
+  KASSINAO_CONTAINER KASSINAO_ROUTER_CONTAINER KASSINAO_PUBLIC_CONTAINER KASSINAO_TUNNEL_CONTAINER \
+  KASSINAO_RUNTIME_DIR; do
   if declare -p "$_name" >/dev/null 2>&1; then _forbidden_override="$_name"; break; fi
 done
 [ -r "/proc/$$/environ" ] || die '/proc é obrigatório para limpar o ambiente do fail-closed'
@@ -89,7 +90,11 @@ exec 9<>"$LOCK_FILE"
 flock -w 30 9 || die 'outra manutenção do Kassinão está em andamento'
 
 status=0
-for pair in kassinao:kassinao kassinao-tunnel:cloudflared; do
+for pair in \
+  kassinao:kassinao \
+  kassinao-router:kassinao-router \
+  kassinao-public:kassinao-public \
+  kassinao-tunnel:cloudflared; do
   container="${pair%%:*}"
   expected_service="${pair#*:}"
   cid="$(docker inspect --format '{{.Id}}' "$container" 2>/dev/null)" || continue
@@ -120,4 +125,4 @@ for pair in kassinao:kassinao kassinao-tunnel:cloudflared; do
 done
 
 [ "$status" -eq 0 ] || exit 1
-echo 'Componentes privados confirmados como parados após falha de egress.'
+echo 'Componentes do Kassinão confirmados como parados após falha de egress.'

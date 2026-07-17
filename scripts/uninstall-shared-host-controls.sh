@@ -366,7 +366,11 @@ docker_main_pid_before="$(systemctl show docker.service -p MainPID --value 2>/de
 systemctl is-active --quiet docker.service || die 'docker.service precisa estar active'
 docker info >/dev/null 2>&1 || die 'daemon Docker local indisponível'
 containers="$(docker ps -a --format '{{.Names}}')" || die 'não foi possível enumerar containers'
-for pair in kassinao:kassinao kassinao-public:kassinao-public kassinao-tunnel:cloudflared; do
+for pair in \
+  kassinao:kassinao \
+  kassinao-router:kassinao-router \
+  kassinao-public:kassinao-public \
+  kassinao-tunnel:cloudflared; do
   container="${pair%%:*}"
   service="${pair#*:}"
   grep -Fqx "$container" <<<"$containers" || continue

@@ -128,6 +128,7 @@ import json, os, sys
 
 expected = {
     'kassinao': 'kassinao',
+    'kassinao-router': 'kassinao-router',
     'kassinao-public': 'kassinao-public',
     'cloudflared': 'kassinao-tunnel',
 }

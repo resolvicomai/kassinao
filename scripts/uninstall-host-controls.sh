@@ -135,7 +135,7 @@ containers="$(docker ps -a --format '{{.Names}}')" || {
   echo 'ERRO: não foi possível enumerar o daemon Docker local' >&2
   exit 1
 }
-for container in kassinao kassinao-tunnel kassinao-public; do
+for container in kassinao kassinao-router kassinao-public kassinao-tunnel; do
   grep -Fqx "$container" <<<"$containers" || continue
   running="$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)"
   restart_policy="$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$container" 2>/dev/null || true)"

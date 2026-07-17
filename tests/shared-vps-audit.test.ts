@@ -56,23 +56,25 @@ function shellLiteral(value: string): string {
 }
 
 function projectContainer(
-  service: 'kassinao' | 'kassinao-public' | 'cloudflared',
+  service: 'kassinao' | 'kassinao-router' | 'kassinao-public' | 'cloudflared',
   dataRoot: string,
   noDumpHelper = '/usr/local/libexec/kassinao/kassinao-no-dump',
 ): DockerItem {
-  const names = { kassinao: 'kassinao', 'kassinao-public': 'kassinao-public', cloudflared: 'kassinao-tunnel' };
+  const names = {
+    kassinao: 'kassinao',
+    'kassinao-router': 'kassinao-router',
+    'kassinao-public': 'kassinao-public',
+    cloudflared: 'kassinao-tunnel',
+  };
   const networkNames =
     service === 'kassinao'
-      ? ['kassinao_private']
-      : service === 'kassinao-public'
-        ? ['kassinao_public']
-        : ['kassinao_private', 'kassinao_public'];
-  const portBindings =
-    service === 'kassinao'
-      ? { '8080/tcp': [{ HostIp: '127.0.0.1', HostPort: '8080' }] }
-      : service === 'kassinao-public'
-        ? { '8081/tcp': [{ HostIp: '127.0.0.1', HostPort: '8081' }] }
-        : {};
+      ? ['kassinao_core_link', 'kassinao_core_egress']
+      : service === 'kassinao-router'
+        ? ['kassinao_host_ingress', 'kassinao_edge_ingress', 'kassinao_core_link', 'kassinao_public_link']
+        : service === 'kassinao-public'
+          ? ['kassinao_public_link']
+          : ['kassinao_edge_ingress', 'kassinao_tunnel_egress'];
+  const portBindings = service === 'kassinao-router' ? { '8080/tcp': [{ HostIp: '127.0.0.1', HostPort: '8080' }] } : {};
   const mounts =
     service === 'kassinao'
       ? [
@@ -104,7 +106,7 @@ function projectContainer(
     service === 'kassinao'
       ? [
           ...APP_DEFAULT_ENV,
-          'PORT=8080',
+          'PORT=8082',
           'WEB_BIND_ADDRESS=0.0.0.0',
           'RECORDINGS_DIR=/app/recordings',
           'STATE_DIR=/app/state',
@@ -115,24 +117,43 @@ function projectContainer(
           'XDG_CACHE_HOME=/home/node/.cache',
           'DOTENV_CONFIG_PATH=/run/secrets/kassinao-app.env',
         ]
-      : service === 'kassinao-public'
+      : service === 'kassinao-router'
         ? [
             ...APP_DEFAULT_ENV,
-            'PORT=8081',
-            'WEB_BIND_ADDRESS=0.0.0.0',
+            'PORT=8080',
+            'WEB_BIND_INTERFACE=edge0',
+            'WEB_HOST_BIND_INTERFACE=host0',
+            'APP_URL=https://app.example.com',
+            'MCP_URL=https://mcp.example.com',
             'PUBLIC_URL=https://www.example.com',
             'DOCS_URL=https://docs.example.com',
-            'SOURCE_URL=https://github.com/example/kassinao',
             `KASSINAO_RELEASE_DIGEST=sha256:${'a'.repeat(64)}`,
             `KASSINAO_DEPLOYMENT_FINGERPRINT=${'e'.repeat(32)}`,
-            'TRUST_PROXY_HOPS=1',
-            'REPO_PUBLIC=true',
           ]
-        : CLOUDFLARED_DEFAULT_ENV;
-  const pidsLimit = service === 'kassinao' ? 256 : service === 'kassinao-public' ? 128 : 64;
+        : service === 'kassinao-public'
+          ? [
+              ...APP_DEFAULT_ENV,
+              'PORT=8081',
+              'WEB_BIND_ADDRESS=0.0.0.0',
+              'PUBLIC_URL=https://www.example.com',
+              'DOCS_URL=https://docs.example.com',
+              'SOURCE_URL=https://github.com/example/kassinao',
+              `KASSINAO_RELEASE_DIGEST=sha256:${'a'.repeat(64)}`,
+              `KASSINAO_DEPLOYMENT_FINGERPRINT=${'e'.repeat(32)}`,
+              'TRUST_PROXY_HOPS=1',
+              'REPO_PUBLIC=true',
+            ]
+          : CLOUDFLARED_DEFAULT_ENV;
+  const pidsLimit = service === 'kassinao' ? 256 : service === 'cloudflared' ? 64 : 128;
   const memoryLimit =
-    service === 'kassinao' ? 2 * 1024 ** 3 : service === 'kassinao-public' ? 384 * 1024 ** 2 : 192 * 1024 ** 2;
-  const nanoCpus = service === 'kassinao' ? 1_000_000_000 : 200_000_000;
+    service === 'kassinao'
+      ? 2 * 1024 ** 3
+      : service === 'kassinao-router'
+        ? 256 * 1024 ** 2
+        : service === 'kassinao-public'
+          ? 384 * 1024 ** 2
+          : 192 * 1024 ** 2;
+  const nanoCpus = service === 'kassinao' ? 1_000_000_000 : service === 'kassinao-router' ? 100_000_000 : 200_000_000;
   const logConfig =
     service === 'kassinao' ? { 'max-size': '10m', 'max-file': '3' } : { 'max-size': '5m', 'max-file': '2' };
 
@@ -164,7 +185,9 @@ function projectContainer(
             Cmd:
               service === 'kassinao'
                 ? ['/usr/local/bin/node', 'dist/index.js']
-                : ['/usr/local/bin/node', 'dist/public.js'],
+                : service === 'kassinao-router'
+                  ? ['/usr/local/bin/node', 'dist/router.js']
+                  : ['/usr/local/bin/node', 'dist/public.js'],
           }),
     },
     HostConfig: {
@@ -215,12 +238,22 @@ function safeForeign(): DockerItem {
 }
 
 function fixture(
-  options: { storageFails?: boolean; hardenerFails?: boolean; rollbackFails?: boolean; uid?: number } = {},
+  options: {
+    storageFails?: boolean;
+    hardenerFails?: boolean;
+    rollbackFails?: boolean;
+    trustProxyHops?: string;
+    uid?: number;
+    dockerEngineVersion?: string;
+    dockerComposeVersion?: string;
+  } = {},
 ) {
   const directory = realpathSync(mkdtempSync(path.join(tmpdir(), 'kassinao-shared-audit-')));
   const scripts = path.join(directory, 'scripts');
   const bin = path.join(directory, 'bin');
   const dataRoot = path.join(directory, 'data');
+  const configDirectory = path.join(dataRoot, 'config');
+  const appEnv = path.join(configDirectory, 'app.env');
   const backingFile = path.join(directory, 'kassinao.luks');
   const dockerJson = path.join(directory, 'docker.json');
   const volumeJson = path.join(directory, 'volumes.json');
@@ -251,6 +284,8 @@ function fixture(
   mkdirSync(scripts);
   mkdirSync(bin);
   mkdirSync(dataRoot);
+  mkdirSync(configDirectory);
+  writeFileSync(appEnv, `TRUST_PROXY_HOPS=${options.trustProxyHops ?? '1'}\n`, { mode: 0o440 });
   mkdirSync(runtimeRoot, { recursive: true });
   mkdirSync(dockerClientDirectory, { recursive: true });
   mkdirSync(installedNoDumpDir);
@@ -335,7 +370,40 @@ done`,
   chmodSync(auditor, 0o755);
   writeFileSync(
     path.join(directory, 'docker-compose.yml'),
-    'services:\n  cloudflared:\n    image: ' + CLOUDFLARED + '\n',
+    [
+      'services:',
+      '  kassinao:',
+      '    networks:',
+      '      core_link:',
+      '        interface_name: core0',
+      '        aliases: [kassinao-core]',
+      '      core_egress:',
+      '        interface_name: egress0',
+      '  kassinao-router:',
+      "    command: ['/usr/local/bin/node', 'dist/router.js']",
+      '    ports:',
+      "      - '127.0.0.1:${KASSINAO_HOST_PORT:-8080}:8080'",
+      '    networks:',
+      '      edge_ingress:',
+      '        interface_name: edge0',
+      '        aliases: [kassinao]',
+      '      core_link:',
+      '        interface_name: core0',
+      '      public_link:',
+      '        interface_name: public0',
+      '  kassinao-public:',
+      '    networks:',
+      '      public_link:',
+      '        interface_name: public0',
+      '  cloudflared:',
+      `    image: ${CLOUDFLARED}`,
+      '    networks:',
+      '      edge_ingress:',
+      '        interface_name: edge0',
+      '      tunnel_egress:',
+      '        interface_name: egress0',
+      '',
+    ].join('\n'),
   );
   const noDumpDigest = createHash('sha256').update(readFileSync(noDumpSource)).digest('hex');
   writeFileSync(
@@ -352,6 +420,11 @@ done`,
       '    mem_limit: ${KASSINAO_CORE_MEMORY_LIMIT:?Defina KASSINAO_CORE_MEMORY_LIMIT no compose.env}',
       '    memswap_limit: ${KASSINAO_CORE_MEMORY_LIMIT:?Defina KASSINAO_CORE_MEMORY_LIMIT no compose.env}',
       '    cpus: ${KASSINAO_CORE_CPUS:?Defina KASSINAO_CORE_CPUS no compose.env}',
+      '  kassinao-router:',
+      "    user: '\${KASSINAO_UID:?Defina um UID privado do adapter shared}:\${KASSINAO_GID:?Defina um GID privado do adapter shared}'",
+      '    mem_limit: ${KASSINAO_ROUTER_MEMORY_LIMIT:?Defina KASSINAO_ROUTER_MEMORY_LIMIT no compose.env}',
+      '    memswap_limit: ${KASSINAO_ROUTER_MEMORY_LIMIT:?Defina KASSINAO_ROUTER_MEMORY_LIMIT no compose.env}',
+      '    cpus: ${KASSINAO_ROUTER_CPUS:?Defina KASSINAO_ROUTER_CPUS no compose.env}',
       '  kassinao-public:',
       "    user: '\${KASSINAO_UID:?Defina um UID privado do adapter shared}:\${KASSINAO_GID:?Defina um GID privado do adapter shared}'",
       '    mem_limit: ${KASSINAO_PUBLIC_MEMORY_LIMIT:?Defina KASSINAO_PUBLIC_MEMORY_LIMIT no compose.env}',
@@ -383,9 +456,14 @@ done`,
       `KASSINAO_UID=${PRIVATE_UID}`,
       `KASSINAO_GID=${PRIVATE_GID}`,
       'KASSINAO_HOST_PORT=8080',
-      'KASSINAO_PUBLIC_HOST_PORT=8081',
+      'APP_URL=https://app.example.com',
+      'MCP_URL=https://mcp.example.com',
+      'PUBLIC_URL=https://www.example.com',
+      'DOCS_URL=https://docs.example.com',
       'KASSINAO_CORE_MEMORY_LIMIT=2g',
       'KASSINAO_CORE_CPUS=1.0',
+      'KASSINAO_ROUTER_MEMORY_LIMIT=256m',
+      'KASSINAO_ROUTER_CPUS=0.1',
       'KASSINAO_PUBLIC_MEMORY_LIMIT=384m',
       'KASSINAO_PUBLIC_CPUS=0.2',
       'KASSINAO_TUNNEL_MEMORY_LIMIT=192m',
@@ -518,6 +596,11 @@ fi
 set -eu
 printf 'docker:%s\\n' "$*" >> ${shellLiteral(calls)}
 case "\${1:-}" in
+  version) printf '%s\n' ${shellLiteral(options.dockerEngineVersion ?? '29.6.1')} ;;
+  compose)
+    [ "\${2:-}" = version ] || exit 89
+    printf '%s\n' ${shellLiteral(options.dockerComposeVersion ?? '2.36.0')}
+    ;;
   info)
     case "$*" in
       *DockerRootDir*) printf '%s\\n' "\${DOCKER_ROOT_DIR:?}" ;;
@@ -631,7 +714,14 @@ PY
     ;;
   network)
     case "\${2:-}" in
-      ls) printf 'private-network-id\\npublic-network-id\\ncompany-network-id\\n' ;;
+      ls)
+        python3 - <<'PY'
+import json, os
+with open(os.environ['DOCKER_NETWORK_FIXTURE_JSON'], encoding='utf-8') as source:
+    for item in json.load(source):
+        print(item['Id'])
+PY
+        ;;
       inspect)
         [ "\${3:-}" = --format ] || exit 96
         python3 - "$@" <<'PY'
@@ -645,9 +735,11 @@ for item in items:
     options = item.get('Options') or {}
     projected = {
         'Id': item.get('Id'), 'Name': item.get('Name'), 'Driver': item.get('Driver'),
-        'Internal': item.get('Internal'),
+        'Internal': item.get('Internal'), 'EnableIPv6': item.get('EnableIPv6', False),
         'IPAM': {'Driver': (item.get('IPAM') or {}).get('Driver'), 'Config': (item.get('IPAM') or {}).get('Config')},
         'BridgeName': options.get('com.docker.network.bridge.name'),
+        'HostBindingIPv4': options.get('com.docker.network.bridge.host_binding_ipv4'),
+        'EnableICC': options.get('com.docker.network.bridge.enable_icc'),
         'GatewayModeIPv4': options.get('com.docker.network.bridge.gateway_mode_ipv4'),
         'GatewayModeIPv6': options.get('com.docker.network.bridge.gateway_mode_ipv6'),
         'ComposeProject': (item.get('Labels') or {}).get('com.docker.compose.project'),
@@ -702,9 +794,10 @@ esac
     projectContainer('kassinao-public', dataRoot, installedNoDump),
     projectContainer('cloudflared', dataRoot, installedNoDump),
     safeForeign(),
+    projectContainer('kassinao-router', dataRoot, installedNoDump),
   ];
   writeFileSync(dockerJson, JSON.stringify(items));
-  writeFileSync(containerIds, 'kassinao-id\nkassinao-public-id\ncloudflared-id\nforeign-id\n');
+  writeFileSync(containerIds, 'kassinao-id\nkassinao-public-id\ncloudflared-id\nforeign-id\nkassinao-router-id\n');
   const volumeItems = [
     {
       Name: 'company-data',
@@ -721,8 +814,12 @@ esac
     linksJson,
     JSON.stringify([
       { ifname: 'lo', linkinfo: {} },
-      { ifname: 'kas-private0', linkinfo: { info_kind: 'bridge' } },
+      { ifname: 'kas-host0', linkinfo: { info_kind: 'bridge' } },
+      { ifname: 'kas-edge0', linkinfo: { info_kind: 'bridge' } },
+      { ifname: 'kas-core0', linkinfo: { info_kind: 'bridge' } },
       { ifname: 'kas-public0', linkinfo: { info_kind: 'bridge' } },
+      { ifname: 'kas-core-eg0', linkinfo: { info_kind: 'bridge' } },
+      { ifname: 'kas-tunnel-eg0', linkinfo: { info_kind: 'bridge' } },
       { ifname: 'company0', linkinfo: { info_kind: 'bridge' } },
     ]),
   );
@@ -740,16 +837,20 @@ esac
 
   const networkItems = [
     {
-      Id: 'private-network-id',
-      Name: 'kassinao_private',
+      Id: 'core-egress-network-id',
+      Name: 'kassinao_core_egress',
       Driver: 'bridge',
       Internal: false,
-      Options: { 'com.docker.network.bridge.name': 'kas-private0' },
-      Labels: { 'com.docker.compose.project': 'kassinao', 'com.docker.compose.network': 'private' },
+      Options: {
+        'com.docker.network.bridge.name': 'kas-core-eg0',
+        'com.docker.network.bridge.enable_icc': 'false',
+      },
+      Labels: { 'com.docker.compose.project': 'kassinao', 'com.docker.compose.network': 'core_egress' },
+      Containers: { 'kassinao-id': { Name: 'kassinao' } },
     },
     {
-      Id: 'public-network-id',
-      Name: 'kassinao_public',
+      Id: 'public-link-network-id',
+      Name: 'kassinao_public_link',
       Driver: 'bridge',
       Internal: true,
       Options: {
@@ -757,7 +858,11 @@ esac
         'com.docker.network.bridge.gateway_mode_ipv4': 'isolated',
         'com.docker.network.bridge.gateway_mode_ipv6': 'isolated',
       },
-      Labels: { 'com.docker.compose.project': 'kassinao', 'com.docker.compose.network': 'public' },
+      Labels: { 'com.docker.compose.project': 'kassinao', 'com.docker.compose.network': 'public_link' },
+      Containers: {
+        'kassinao-public-id': { Name: 'kassinao-public' },
+        'kassinao-router-id': { Name: 'kassinao-router' },
+      },
     },
     {
       Id: 'company-network-id',
@@ -766,6 +871,65 @@ esac
       Internal: false,
       Options: {},
       Labels: {},
+    },
+    {
+      Id: 'edge-ingress-network-id',
+      Name: 'kassinao_edge_ingress',
+      Driver: 'bridge',
+      Internal: true,
+      Options: {
+        'com.docker.network.bridge.name': 'kas-edge0',
+        'com.docker.network.bridge.gateway_mode_ipv4': 'isolated',
+        'com.docker.network.bridge.gateway_mode_ipv6': 'isolated',
+      },
+      Labels: { 'com.docker.compose.project': 'kassinao', 'com.docker.compose.network': 'edge_ingress' },
+      Containers: {
+        'kassinao-router-id': { Name: 'kassinao-router' },
+        'cloudflared-id': { Name: 'kassinao-tunnel' },
+      },
+    },
+    {
+      Id: 'core-link-network-id',
+      Name: 'kassinao_core_link',
+      Driver: 'bridge',
+      Internal: true,
+      Options: {
+        'com.docker.network.bridge.name': 'kas-core0',
+        'com.docker.network.bridge.gateway_mode_ipv4': 'isolated',
+        'com.docker.network.bridge.gateway_mode_ipv6': 'isolated',
+      },
+      Labels: { 'com.docker.compose.project': 'kassinao', 'com.docker.compose.network': 'core_link' },
+      Containers: {
+        'kassinao-id': { Name: 'kassinao' },
+        'kassinao-router-id': { Name: 'kassinao-router' },
+      },
+    },
+    {
+      Id: 'tunnel-egress-network-id',
+      Name: 'kassinao_tunnel_egress',
+      Driver: 'bridge',
+      Internal: false,
+      Options: {
+        'com.docker.network.bridge.name': 'kas-tunnel-eg0',
+        'com.docker.network.bridge.enable_icc': 'false',
+      },
+      Labels: { 'com.docker.compose.project': 'kassinao', 'com.docker.compose.network': 'tunnel_egress' },
+      Containers: { 'cloudflared-id': { Name: 'kassinao-tunnel' } },
+    },
+    {
+      Id: 'host-ingress-network-id',
+      Name: 'kassinao_host_ingress',
+      Driver: 'bridge',
+      Internal: false,
+      EnableIPv6: false,
+      Options: {
+        'com.docker.network.bridge.name': 'kas-host0',
+        'com.docker.network.bridge.host_binding_ipv4': '127.0.0.1',
+        'com.docker.network.bridge.gateway_mode_ipv4': 'nat',
+        'com.docker.network.bridge.enable_icc': 'false',
+      },
+      Labels: { 'com.docker.compose.project': 'kassinao', 'com.docker.compose.network': 'host_ingress' },
+      Containers: { 'kassinao-router-id': { Name: 'kassinao-router' } },
     },
   ];
   writeFileSync(networkJson, JSON.stringify(networkItems));
@@ -803,6 +967,7 @@ esac
     networkItems,
     preflightNetworkItems,
     dataRoot,
+    appEnv,
     backingFile,
     dockerRootDir: '/var/lib/docker',
   };
@@ -853,10 +1018,22 @@ function useInstalledPreflightTopology(aFixture: ReturnType<typeof fixture>): vo
   copyFileSync(aFixture.networkJson, aFixture.preflightNetworkJson);
 }
 
-function prepareAbsentPreflightTopology(aFixture: ReturnType<typeof fixture>): void {
-  aFixture.items.splice(0, 3);
+function persistContainerInventory(aFixture: ReturnType<typeof fixture>): void {
   writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
-  writeFileSync(aFixture.containerIds, 'foreign-id\n');
+  writeFileSync(aFixture.containerIds, `${aFixture.items.map((item) => item.Id).join('\n')}\n`);
+}
+
+function ownProjectContainers(aFixture: ReturnType<typeof fixture>): DockerItem[] {
+  return aFixture.items.filter((item) => item.Config?.Labels?.['com.docker.compose.project'] === 'kassinao');
+}
+
+function prepareAbsentPreflightTopology(aFixture: ReturnType<typeof fixture>): void {
+  aFixture.items.splice(
+    0,
+    aFixture.items.length,
+    ...aFixture.items.filter((item) => item.Config?.Labels?.['com.docker.compose.project'] !== 'kassinao'),
+  );
+  persistContainerInventory(aFixture);
 }
 
 function installOwnedPreflightFirewall(aFixture: ReturnType<typeof fixture>): void {
@@ -865,15 +1042,22 @@ function installOwnedPreflightFirewall(aFixture: ReturnType<typeof fixture>): vo
 }
 
 function prepareOwnedUninstallTopology(aFixture: ReturnType<typeof fixture>): void {
-  for (const item of aFixture.items.slice(0, 3)) item.State = { Running: false };
-  writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
+  for (const item of ownProjectContainers(aFixture)) item.State = { Running: false };
+  persistContainerInventory(aFixture);
 }
 
 function prepareAbsentUninstallTopology(aFixture: ReturnType<typeof fixture>): void {
-  aFixture.items.splice(0, 3);
-  aFixture.networkItems.splice(0, 2);
-  writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
-  writeFileSync(aFixture.containerIds, 'foreign-id\n');
+  aFixture.items.splice(
+    0,
+    aFixture.items.length,
+    ...aFixture.items.filter((item) => item.Config?.Labels?.['com.docker.compose.project'] !== 'kassinao'),
+  );
+  aFixture.networkItems.splice(
+    0,
+    aFixture.networkItems.length,
+    ...aFixture.networkItems.filter((item) => item.Labels?.['com.docker.compose.project'] !== 'kassinao'),
+  );
+  persistContainerInventory(aFixture);
   writeFileSync(aFixture.networkJson, JSON.stringify(aFixture.networkItems));
   writeFileSync(
     aFixture.linksJson,
@@ -889,6 +1073,29 @@ function disableTunnelProfile(aFixture: ReturnType<typeof fixture>): void {
   const current = readFileSync(envFile, 'utf8');
   expect(current).toContain('COMPOSE_PROFILES=tunnel,split-public');
   writeFileSync(envFile, current.replace('COMPOSE_PROFILES=tunnel,split-public', 'COMPOSE_PROFILES=split-public'));
+}
+
+function removeOptionalTunnelTopology(aFixture: ReturnType<typeof fixture>): void {
+  disableTunnelProfile(aFixture);
+  aFixture.items.splice(
+    0,
+    aFixture.items.length,
+    ...aFixture.items.filter((item) => item.Config?.Labels?.['com.docker.compose.service'] !== 'cloudflared'),
+  );
+  const edge = aFixture.networkItems.find((item) => item.Name === 'kassinao_edge_ingress');
+  delete edge?.Containers?.['cloudflared-id'];
+  aFixture.networkItems.splice(
+    0,
+    aFixture.networkItems.length,
+    ...aFixture.networkItems.filter((item) => item.Name !== 'kassinao_tunnel_egress'),
+  );
+  persistContainerInventory(aFixture);
+  writeFileSync(aFixture.networkJson, JSON.stringify(aFixture.networkItems));
+  writeFileSync(aFixture.preflightNetworkJson, JSON.stringify(aFixture.networkItems));
+  for (const file of [aFixture.linksJson, aFixture.preflightLinksJson]) {
+    const links = JSON.parse(readFileSync(file, 'utf8')) as DockerItem[];
+    writeFileSync(file, JSON.stringify(links.filter((link) => link.ifname !== 'kas-tunnel-eg0')));
+  }
 }
 
 function replaceEnvValue(aFixture: ReturnType<typeof fixture>, key: string, value: string): void {
@@ -908,6 +1115,22 @@ describe('shared VPS read-only audit', () => {
     expect(source).toContain('docker_forward_hook_is_stable');
     expect(source).toContain('verify-shared-luks-storage.sh');
     expect(source).toContain('check-shared-migration-rollback.sh');
+    expect(source).toContain('expected_services=kassinao,kassinao-router,kassinao-public');
+    expect(source).toContain('KASSINAO_ROUTER_MEMORY_LIMIT');
+    expect(source).toContain("'PORT': '8082'");
+    expect(source).toContain("'WEB_BIND_INTERFACE': 'edge0'");
+    expect(source).toContain("'WEB_HOST_BIND_INTERFACE': 'host0'");
+    expect(source).toContain(
+      "'kassinao-router': {'kassinao_host_ingress', 'kassinao_edge_ingress', 'kassinao_core_link', 'kassinao_public_link'}",
+    );
+    expect(source).toContain("'cloudflared': {'kassinao_edge_ingress', 'kassinao_tunnel_egress'}");
+    expect(source).toContain(
+      "mandatory_reserved_interfaces = {'kas-host0', 'kas-edge0', 'kas-core0', 'kas-public0', 'kas-core-eg0'}",
+    );
+    expect(source).toContain("tunnel_reserved_interface = 'kas-tunnel-eg0'");
+    expect(source).toContain("network.get('EnableICC') != 'false'");
+    expect(source).toContain('origens públicas/docs não podem coincidir com APP_URL/MCP_URL');
+    expect(source).not.toContain('KASSINAO_PUBLIC_HOST_PORT');
     expect(source).toContain('SAFE_SYSTEM_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
     expect(source).toContain('export PATH="$SAFE_SYSTEM_PATH" HOME=/root LC_ALL=C');
     expect(source).toContain('env_file_override="$KASSINAO_ENV_FILE"');
@@ -927,8 +1150,34 @@ describe('shared VPS read-only audit', () => {
     expect(source).not.toContain('{{json $mount.Driver}}');
     expect(source).toContain("type(mount.get('RW')) is not bool");
     expect(source).toContain("mount_type in ('bind', 'volume')");
-    expect(source).not.toMatch(/\bdocker\s+(?:start|stop|restart|kill|rm|run|create|update|compose)\b/);
+    expect(source).not.toMatch(/\bdocker\s+(?:start|stop|restart|kill|rm|run|create|update)\b/);
+    expect(source).not.toMatch(/\bdocker\s+compose\s+(?:up|down|start|stop|restart|kill|rm|run|create)\b/);
     expect(source).not.toMatch(/\b(?:iptables|ip6tables|nft|systemctl)\s/);
+  });
+
+  it.each(['28.0.0', '28.0.99'])('recusa Docker Engine %s antes do inventário e dos controles', (version) => {
+    const aFixture = fixture({ dockerEngineVersion: version });
+
+    const result = run(aFixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Docker Engine >=28.1.0');
+    const calls = readFileSync(aFixture.calls, 'utf8');
+    expect(calls).toContain('docker:version --format {{.Server.Version}}');
+    expect(calls).not.toMatch(/^(?:storage|rollback|hardener):/m);
+    expect(calls).not.toMatch(/^docker:(?:ps|inspect|network|volume|image)\b/m);
+  });
+
+  it('aceita o limite exato Docker Engine 28.1.0 com Compose 2.36.0', () => {
+    const aFixture = fixture({
+      dockerEngineVersion: '28.1.0',
+      dockerComposeVersion: '2.36.0',
+    });
+
+    const result = run(aFixture);
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain('Audit shared aprovado');
   });
 
   it('aprova storage, egress, projeto isolado e vizinho sem privilégio', () => {
@@ -943,6 +1192,16 @@ describe('shared VPS read-only audit', () => {
     expect(calls).toContain('docker:ps -aq --no-trunc');
     expect(calls).toContain('docker:network ls -q --no-trunc');
     expect(calls).not.toMatch(/docker:(?:start|stop|restart|kill|rm|run|create|update)/);
+  });
+
+  it.each(['0', '2'] as const)('recusa TRUST_PROXY_HOPS=%s no app.env shared', (trustProxyHops) => {
+    const aFixture = fixture({ trustProxyHops });
+    const result = run(aFixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('TRUST_PROXY_HOPS precisa ser exatamente 1');
+    const calls = readFileSync(aFixture.calls, 'utf8');
+    expect(calls).toContain('docker:version --format {{.Server.Version}}');
+    expect(calls).not.toContain('docker:ps ');
   });
 
   it('aceita Name e Driver ausentes como null quando não são obrigatórios no mount', () => {
@@ -1008,7 +1267,7 @@ describe('shared VPS read-only audit', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('swap ativo sem prova dm-crypt');
     const calls = existsSync(aFixture.calls) ? readFileSync(aFixture.calls, 'utf8') : '';
-    expect(calls).not.toContain('docker:');
+    expect(calls).not.toContain('docker:ps ');
     expect(calls).not.toContain('storage:');
   });
 
@@ -1045,21 +1304,25 @@ describe('shared VPS read-only audit', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/fs\.suid_dumpable/);
     const calls = existsSync(aFixture.calls) ? readFileSync(aFixture.calls, 'utf8') : '';
-    expect(calls).not.toContain('docker:');
+    expect(calls).not.toContain('docker:ps ');
   });
 
   it.each([
     ['core parado', 0, (item: DockerItem) => (item.State.Running = false)],
     ['public parado', 1, (item: DockerItem) => (item.State.Running = false)],
     ['túnel parado', 2, (item: DockerItem) => (item.State.Running = false)],
+    ['router parado', 4, (item: DockerItem) => (item.State.Running = false)],
     ['core unhealthy', 0, (item: DockerItem) => (item.State.Health.Status = 'unhealthy')],
     ['public sem health', 1, (item: DockerItem) => delete item.State.Health],
+    ['router sem health', 4, (item: DockerItem) => delete item.State.Health],
     ['PidsLimit core', 0, (item: DockerItem) => (item.HostConfig.PidsLimit = 255)],
     ['PidsLimit public', 1, (item: DockerItem) => (item.HostConfig.PidsLimit = 127)],
     ['PidsLimit túnel', 2, (item: DockerItem) => (item.HostConfig.PidsLimit = 63)],
+    ['PidsLimit router', 4, (item: DockerItem) => (item.HostConfig.PidsLimit = 127)],
     ['driver de log core', 0, (item: DockerItem) => (item.HostConfig.LogConfig.Type = 'local')],
     ['driver de log public', 1, (item: DockerItem) => (item.HostConfig.LogConfig.Type = 'local')],
     ['driver de log túnel', 2, (item: DockerItem) => (item.HostConfig.LogConfig.Type = 'local')],
+    ['driver de log router', 4, (item: DockerItem) => (item.HostConfig.LogConfig.Type = 'local')],
     ['max-size core', 0, (item: DockerItem) => (item.HostConfig.LogConfig.Config['max-size'] = '11m')],
     ['max-file core', 0, (item: DockerItem) => (item.HostConfig.LogConfig.Config['max-file'] = '4')],
     ['max-size public', 1, (item: DockerItem) => (item.HostConfig.LogConfig.Config['max-size'] = '6m')],
@@ -1111,16 +1374,18 @@ describe('shared VPS read-only audit', () => {
       (aFixture: ReturnType<typeof fixture>) => {
         prepareOwnedUninstallTopology(aFixture);
         aFixture.items.splice(1, 1);
-        writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
-        writeFileSync(aFixture.containerIds, 'kassinao-id\ncloudflared-id\nforeign-id\n');
+        persistContainerInventory(aFixture);
       },
     ],
     [
       'redes/interfaces sem containers',
       (aFixture: ReturnType<typeof fixture>) => {
-        aFixture.items.splice(0, 3);
-        writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
-        writeFileSync(aFixture.containerIds, 'foreign-id\n');
+        aFixture.items.splice(
+          0,
+          aFixture.items.length,
+          ...aFixture.items.filter((item) => item.Config?.Labels?.['com.docker.compose.project'] !== 'kassinao'),
+        );
+        persistContainerInventory(aFixture);
       },
     ],
     [
@@ -1513,9 +1778,7 @@ describe('shared VPS read-only audit', () => {
 
   it('faz preflight dos vizinhos antes de existirem containers novos sem exigir egress ativo', () => {
     const aFixture = fixture({ hardenerFails: true });
-    aFixture.items.splice(0, 3);
-    writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
-    writeFileSync(aFixture.containerIds, 'foreign-id\n');
+    prepareAbsentPreflightTopology(aFixture);
 
     const result = run(aFixture, ['--preflight']);
 
@@ -1558,9 +1821,8 @@ describe('shared VPS read-only audit', () => {
 
   it('faz audit neighbors-only antes de storage ou hardener próprios existirem', () => {
     const aFixture = fixture({ storageFails: true, hardenerFails: true });
-    aFixture.items.splice(0, 3);
-    writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
-    writeFileSync(aFixture.containerIds, 'foreign-id\n');
+    prepareAbsentPreflightTopology(aFixture);
+    rmSync(aFixture.appEnv);
 
     const result = run(aFixture, ['--neighbors-only']);
 
@@ -1589,10 +1851,9 @@ describe('shared VPS read-only audit', () => {
     [
       'container vizinho privilegiado',
       (aFixture: ReturnType<typeof fixture>) => {
-        aFixture.items.splice(0, 3);
+        prepareAbsentPreflightTopology(aFixture);
         aFixture.items[0].HostConfig.Privileged = true;
-        writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
-        writeFileSync(aFixture.containerIds, 'foreign-id\n');
+        persistContainerInventory(aFixture);
       },
     ],
     [
@@ -1713,8 +1974,8 @@ describe('shared VPS read-only audit', () => {
   it('aceita no preflight containers oficiais parados quando o contrato estático permanece íntegro', () => {
     const aFixture = fixture();
     useInstalledPreflightTopology(aFixture);
-    for (const item of aFixture.items.slice(0, 3)) item.State = { Running: false };
-    writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
+    for (const item of ownProjectContainers(aFixture)) item.State = { Running: false };
+    persistContainerInventory(aFixture);
 
     const result = run(aFixture, ['--preflight']);
 
@@ -1740,9 +2001,9 @@ describe('shared VPS read-only audit', () => {
   ] as const)('preflight recusa container parado com drift estático: %s', (_label, mutate) => {
     const aFixture = fixture();
     useInstalledPreflightTopology(aFixture);
-    for (const item of aFixture.items.slice(0, 3)) item.State = { Running: false };
+    for (const item of ownProjectContainers(aFixture)) item.State = { Running: false };
     mutate(aFixture.items[0]);
-    writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
+    persistContainerInventory(aFixture);
 
     const result = run(aFixture, ['--preflight']);
 
@@ -1768,17 +2029,56 @@ describe('shared VPS read-only audit', () => {
     expect(readFileSync(aFixture.calls, 'utf8')).not.toContain('storage:');
   });
 
-  it('aceita no preflight somente o túnel oficial desabilitado, parado e com restart=no', () => {
+  it.each([{ args: [] }, { args: ['--preflight'] }] as const)(
+    'aceita ausência limpa do túnel quando o profile está desabilitado: %j',
+    ({ args }) => {
+      const aFixture = fixture();
+      useInstalledPreflightTopology(aFixture);
+      removeOptionalTunnelTopology(aFixture);
+
+      const result = run(aFixture, [...args]);
+
+      expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+      expect(result.stdout).toMatch(/(?:Preflight|Audit) shared aprovado/);
+    },
+  );
+
+  it.each([
+    [
+      'bridge sem rede',
+      (aFixture: ReturnType<typeof fixture>, _tunnelNetwork: DockerItem) => {
+        const links = JSON.parse(readFileSync(aFixture.linksJson, 'utf8')) as DockerItem[];
+        links.push({ ifname: 'kas-tunnel-eg0', linkinfo: { info_kind: 'bridge' } });
+        writeFileSync(aFixture.linksJson, JSON.stringify(links));
+      },
+    ],
+    [
+      'rede sem bridge',
+      (aFixture: ReturnType<typeof fixture>, tunnelNetwork: DockerItem) => {
+        aFixture.networkItems.push(tunnelNetwork);
+        writeFileSync(aFixture.networkJson, JSON.stringify(aFixture.networkItems));
+      },
+    ],
+    [
+      'member do túnel retido em edge_ingress',
+      (aFixture: ReturnType<typeof fixture>, _tunnelNetwork: DockerItem) => {
+        const edge = aFixture.networkItems.find((item) => item.Name === 'kassinao_edge_ingress');
+        edge!.Containers['cloudflared-id'] = { Name: 'kassinao-tunnel' };
+        writeFileSync(aFixture.networkJson, JSON.stringify(aFixture.networkItems));
+      },
+    ],
+  ] as const)('recusa estado parcial com profile tunnel desabilitado: %s', (_label, mutate) => {
     const aFixture = fixture();
-    disableTunnelProfile(aFixture);
-    useInstalledPreflightTopology(aFixture);
-    aFixture.items[2].State = { Running: false };
-    writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
+    const tunnelNetwork = structuredClone(
+      aFixture.networkItems.find((item) => item.Name === 'kassinao_tunnel_egress')!,
+    );
+    removeOptionalTunnelTopology(aFixture);
+    mutate(aFixture, tunnelNetwork);
 
-    const result = run(aFixture, ['--preflight']);
+    const result = run(aFixture);
 
-    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
-    expect(result.stdout).toContain('Preflight shared aprovado');
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/parcial|divergentes|bridge reservada|membership divergente/);
   });
 
   it.each([
@@ -1845,7 +2145,7 @@ describe('shared VPS read-only audit', () => {
     const result = run(aFixture, ['--neighbors-only']);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('policy de egress da kas-private0 está ausente ou divergente');
+    expect(result.stderr).toContain('policy das saídas e do host ingress kas-host0');
   });
 
   it('com zero containers ainda inventaria e recusa rede reservada estrangeira', () => {
@@ -1876,7 +2176,7 @@ describe('shared VPS read-only audit', () => {
       aFixture.preflightLinksJson,
       JSON.stringify([
         { ifname: 'lo', linkinfo: {} },
-        { ifname: 'kas-private0', linkinfo: { info_kind: 'bridge' } },
+        { ifname: 'kas-core-eg0', linkinfo: { info_kind: 'bridge' } },
       ]),
     );
 
@@ -1911,7 +2211,9 @@ describe('shared VPS read-only audit', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('o adapter não altera o hook global');
-    expect(existsSync(aFixture.calls)).toBe(false);
+    const calls = readFileSync(aFixture.calls, 'utf8');
+    expect(calls).toContain('docker:version --format {{.Server.Version}}');
+    expect(calls).not.toContain('docker:ps ');
   });
 
   it.each([
@@ -1919,7 +2221,10 @@ describe('shared VPS read-only audit', () => {
       'ausente',
       [
         { ifname: 'lo', linkinfo: {} },
-        { ifname: 'kas-private0', linkinfo: { info_kind: 'bridge' } },
+        { ifname: 'kas-edge0', linkinfo: { info_kind: 'bridge' } },
+        { ifname: 'kas-core0', linkinfo: { info_kind: 'bridge' } },
+        { ifname: 'kas-public0', linkinfo: { info_kind: 'bridge' } },
+        { ifname: 'kas-core-eg0', linkinfo: { info_kind: 'bridge' } },
       ],
       'interfaces/redes reservadas do projeto estão ausentes ou divergentes',
     ],
@@ -1927,8 +2232,11 @@ describe('shared VPS read-only audit', () => {
       'de tipo divergente',
       [
         { ifname: 'lo', linkinfo: {} },
-        { ifname: 'kas-private0', linkinfo: { info_kind: 'bridge' } },
+        { ifname: 'kas-edge0', linkinfo: { info_kind: 'bridge' } },
+        { ifname: 'kas-core0', linkinfo: { info_kind: 'bridge' } },
         { ifname: 'kas-public0', linkinfo: { info_kind: 'dummy' } },
+        { ifname: 'kas-core-eg0', linkinfo: { info_kind: 'bridge' } },
+        { ifname: 'kas-tunnel-eg0', linkinfo: { info_kind: 'bridge' } },
       ],
       'interface reservada kas-public0 não é bridge própria',
     ],
@@ -1957,7 +2265,7 @@ describe('shared VPS read-only audit', () => {
 
   it.each([
     ['storage sem prova', { storageFails: true }, 'storage shared'],
-    ['egress divergente', { hardenerFails: true }, 'policy de egress'],
+    ['egress divergente', { hardenerFails: true }, 'policy das saídas'],
     ['execução não-root', { uid: 1000 }, 'como root'],
   ])('falha fechado em %s', (_name, options, message) => {
     const result = run(fixture(options));
@@ -1966,7 +2274,7 @@ describe('shared VPS read-only audit', () => {
   });
 
   it.each([
-    ['rede do projeto', (item: DockerItem) => (item.NetworkSettings.Networks.kassinao_private = {})],
+    ['rede do projeto', (item: DockerItem) => (item.NetworkSettings.Networks.kassinao_core_link = {})],
     ['privileged', (item: DockerItem) => (item.HostConfig.Privileged = true)],
     ['docker.sock', (item: DockerItem) => item.Mounts.push({ Source: '/var/run/docker.sock', Destination: '/sock' })],
     ['host network', (item: DockerItem) => (item.HostConfig.NetworkMode = 'host')],
@@ -2024,27 +2332,73 @@ describe('shared VPS read-only audit', () => {
 
   it.each([
     [
-      'label de projeto da rede privada',
+      'label de projeto do core_egress',
       (aFixture: ReturnType<typeof fixture>) =>
         (aFixture.networkItems[0].Labels['com.docker.compose.project'] = 'company'),
     ],
     [
-      'label lógico da rede pública',
+      'label lógico de public_link',
       (aFixture: ReturnType<typeof fixture>) =>
         (aFixture.networkItems[1].Labels['com.docker.compose.network'] = 'external'),
     ],
-    ['Internal da rede pública', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[1].Internal = false)],
+    ['Internal de public_link', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[1].Internal = false)],
     [
-      'gateway IPv4 da rede pública',
+      'gateway IPv4 de public_link',
       (aFixture: ReturnType<typeof fixture>) =>
         (aFixture.networkItems[1].Options['com.docker.network.bridge.gateway_mode_ipv4'] = 'nat'),
     ],
     [
-      'gateway IPv6 da rede pública',
+      'gateway IPv6 de public_link',
       (aFixture: ReturnType<typeof fixture>) =>
         delete aFixture.networkItems[1].Options['com.docker.network.bridge.gateway_mode_ipv6'],
     ],
-    ['Internal da rede privada', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[0].Internal = true)],
+    ['Internal de core_egress', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[0].Internal = true)],
+    [
+      'ICC de core_egress',
+      (aFixture: ReturnType<typeof fixture>) =>
+        (aFixture.networkItems[0].Options['com.docker.network.bridge.enable_icc'] = 'true'),
+    ],
+    [
+      'ICC de tunnel_egress',
+      (aFixture: ReturnType<typeof fixture>) =>
+        (aFixture.networkItems[5].Options['com.docker.network.bridge.enable_icc'] = 'true'),
+    ],
+    ['Internal de edge_ingress', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[3].Internal = false)],
+    ['Internal de host_ingress', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[6].Internal = true)],
+    ['IPv6 de host_ingress', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[6].EnableIPv6 = true)],
+    [
+      'binding de host_ingress',
+      (aFixture: ReturnType<typeof fixture>) =>
+        (aFixture.networkItems[6].Options['com.docker.network.bridge.host_binding_ipv4'] = '0.0.0.0'),
+    ],
+    [
+      'gateway IPv4 de host_ingress',
+      (aFixture: ReturnType<typeof fixture>) =>
+        (aFixture.networkItems[6].Options['com.docker.network.bridge.gateway_mode_ipv4'] = 'isolated'),
+    ],
+    [
+      'gateway IPv6 de host_ingress',
+      (aFixture: ReturnType<typeof fixture>) =>
+        (aFixture.networkItems[6].Options['com.docker.network.bridge.gateway_mode_ipv6'] = 'nat'),
+    ],
+    [
+      'ICC de host_ingress',
+      (aFixture: ReturnType<typeof fixture>) =>
+        (aFixture.networkItems[6].Options['com.docker.network.bridge.enable_icc'] = 'true'),
+    ],
+    [
+      'membership de host_ingress',
+      (aFixture: ReturnType<typeof fixture>) => delete aFixture.networkItems[6].Containers['kassinao-router-id'],
+    ],
+    [
+      'gateway IPv6 de core_link',
+      (aFixture: ReturnType<typeof fixture>) =>
+        delete aFixture.networkItems[4].Options['com.docker.network.bridge.gateway_mode_ipv6'],
+    ],
+    [
+      'membership de core_link',
+      (aFixture: ReturnType<typeof fixture>) => delete aFixture.networkItems[4].Containers['kassinao-router-id'],
+    ],
   ] as const)('recusa drift de ownership/policy de rede: %s', (_label, mutate) => {
     const aFixture = fixture();
     mutate(aFixture);
@@ -2053,7 +2407,9 @@ describe('shared VPS read-only audit', () => {
     const result = run(aFixture);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/bridge reservada|rede privada reservada|rede pública reservada/);
+    expect(result.stderr).toMatch(
+      /bridge reservada|rede host_ingress|rede interna reservada|rede de egress reservada|membership divergente/,
+    );
   });
 
   it('não consulta nem materializa campos secretos de workloads vizinhos', () => {
@@ -2078,7 +2434,7 @@ describe('shared VPS read-only audit', () => {
       Mountpoint: '/var/lib/docker/volumes/unused-secret-volume/_data',
       Options: { type: 'cifs', o: `password=${sentinel}`, device: '//files/share' },
     });
-    writeFileSync(aFixture.containerIds, 'kassinao-id\nkassinao-public-id\ncloudflared-id\nforeign-id\n');
+    persistContainerInventory(aFixture);
     writeFileSync(aFixture.volumeNames, 'company-data\nunused-secret-volume\n');
     writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
     writeFileSync(aFixture.networkJson, JSON.stringify(aFixture.networkItems));
@@ -2122,7 +2478,11 @@ describe('shared VPS read-only audit', () => {
       'mount extra',
       (item: DockerItem) => item.Mounts.push({ Type: 'bind', Source: '/tmp', Destination: '/extra', RW: true }),
     ],
-    ['porta pública', (item: DockerItem) => (item.HostConfig.PortBindings['8080/tcp'][0].HostIp = '0.0.0.0')],
+    [
+      'porta publicada pelo core',
+      (item: DockerItem) =>
+        (item.HostConfig.PortBindings = { '8082/tcp': [{ HostIp: '127.0.0.1', HostPort: '8082' }] }),
+    ],
     ['capability', (item: DockerItem) => (item.HostConfig.CapAdd = ['NET_RAW'])],
     ['sem no-new-privileges', (item: DockerItem) => (item.HostConfig.SecurityOpt = [])],
     ['swap maior', (item: DockerItem) => (item.HostConfig.MemorySwap *= 2)],
@@ -2139,10 +2499,52 @@ describe('shared VPS read-only audit', () => {
     expect(result.stderr).toContain('inventário Docker viola');
   });
 
+  it.each([
+    ['segredo em Config.Env', (item: DockerItem) => item.Config.Env.push('DISCORD_TOKEN=nao-pode-persistir')],
+    [
+      'mount',
+      (item: DockerItem) => item.Mounts.push({ Type: 'bind', Source: '/tmp', Destination: '/extra', RW: false }),
+    ],
+    [
+      'host bind fora de loopback',
+      (item: DockerItem) => (item.HostConfig.PortBindings['8080/tcp'][0].HostIp = '0.0.0.0'),
+    ],
+    [
+      'host bind IPv6 em vez do IPv4 exato',
+      (item: DockerItem) => (item.HostConfig.PortBindings['8080/tcp'][0].HostIp = '::1'),
+    ],
+    [
+      'origem divergente',
+      (item: DockerItem) => {
+        const index = item.Config.Env.findIndex((entry: string) => entry.startsWith('APP_URL='));
+        item.Config.Env[index] = 'APP_URL=https://outro.example.com';
+      },
+    ],
+    [
+      'fingerprint divergente',
+      (item: DockerItem) => {
+        const index = item.Config.Env.findIndex((entry: string) =>
+          entry.startsWith('KASSINAO_DEPLOYMENT_FINGERPRINT='),
+        );
+        item.Config.Env[index] = `KASSINAO_DEPLOYMENT_FINGERPRINT=${'f'.repeat(32)}`;
+      },
+    ],
+    ['membership extra', (item: DockerItem) => (item.NetworkSettings.Networks.company_default = {})],
+  ] as const)('recusa router com %s', (_label, mutate) => {
+    const aFixture = fixture();
+    mutate(aFixture.items[4]);
+    persistContainerInventory(aFixture);
+
+    const result = run(aFixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('inventário Docker viola');
+  });
+
   it('aceita MemorySwappiness null do Docker 29 sob limite efetivo sem swap', () => {
     const aFixture = fixture();
-    for (const item of aFixture.items.slice(0, 3)) item.HostConfig.MemorySwappiness = null;
-    writeFileSync(aFixture.dockerJson, JSON.stringify(aFixture.items));
+    for (const item of ownProjectContainers(aFixture)) item.HostConfig.MemorySwappiness = null;
+    persistContainerInventory(aFixture);
 
     const result = run(aFixture);
 
@@ -2192,6 +2594,21 @@ describe('shared VPS read-only audit', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('reservam menos de 25% da memória física');
+  });
+
+  it.each([
+    ['path em APP_URL', 'APP_URL', 'https://app.example.com/app', 'origem HTTPS exata'],
+    ['host público igual ao app', 'PUBLIC_URL', 'https://app.example.com', 'não podem coincidir'],
+    ['host público igual ao app em outra porta', 'PUBLIC_URL', 'https://app.example.com:8443', 'não podem coincidir'],
+    ['host docs igual ao MCP', 'DOCS_URL', 'https://mcp.example.com', 'não podem coincidir'],
+  ] as const)('recusa contrato de origem inválido: %s', (_label, key, value, message) => {
+    const aFixture = fixture();
+    replaceEnvValue(aFixture, key, value);
+
+    const result = run(aFixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
   });
 
   it.each([

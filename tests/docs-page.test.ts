@@ -181,13 +181,22 @@ describe('documentation page', () => {
     expect(html).toContain('data/{recordings,state,auth,cache}');
     expect(html).toContain('chmod 700 data data/*');
     expect(html).toContain('docker build -t kassinao-local:dev .');
-    expect(html).toContain('docker compose up -d --no-build');
+    expect(html).toContain('docker compose --profile split-public up -d --no-build');
+    expect(html).toContain('COMPOSE_PROFILES=split-public');
+    expect(html).toContain('Quickstart exige Docker Engine 28.1.0+ e Docker Compose 2.36.0+');
+    expect(html).toContain('MCP_URL=http://localhost:8080');
+    expect(html).toContain('PUBLIC_URL=http://localhost:8080');
+    expect(html).toContain('DOCS_URL=http://localhost:8080');
     expect(html).not.toContain('docker compose pull');
     expect(html).toContain('bitfield 68242432');
     expect(html).toContain('APP_URL/privacy');
     expect(html).toContain('abre sem login');
     expect(html).toContain('dm-crypt/LUKS');
     expect(html).toContain('topologia split');
+    expect(html).toContain('proxy_set_header Host $http_host');
+    expect(html).toContain('proxy_set_header CF-Connecting-IP &quot;&quot;');
+    expect(html).toContain('proxy_set_header X-Forwarded-For $remote_addr');
+    expect(html).toContain('não aceita CF-Connecting-IP isolado');
     expect(html).toContain('A URL não é segredo');
     expect(html).toContain('Falha fechada');
     expect(html).toContain('Aviso técnico não é consentimento jurídico.');
@@ -278,9 +287,10 @@ describe('documentation page', () => {
       expect(html).toContain('--source-digest');
       expect(html).toContain('--deny-self-hosted-runners');
       expect(html).toContain('http://kassinao:8080');
-      expect(html).toContain('http://kassinao-public:8081');
       expect(html).toContain('KASSINAO_HOST_PORT');
-      expect(html).toContain('KASSINAO_PUBLIC_HOST_PORT');
+      expect(html).not.toContain('KASSINAO_PUBLIC_HOST_PORT');
+      expect(html).toContain('Compose 2.36');
+      expect(html).toContain('router');
       expect(html).toContain('CHECKSUM=&quot;$ARCHIVE.sha256&quot;');
       expect(html).toContain('sha256sum -c &quot;$(basename &quot;$CHECKSUM&quot;)&quot;');
     }
@@ -348,11 +358,15 @@ describe('documentation page', () => {
       expect(removeDedicated).toBeLessThan(neighborAudit);
     }
     expect(docsPage('pt')).toContain('adapter moderno');
-    expect(docsPage('pt')).toContain('rollback de dados, não rollback operacional');
-    expect(docsPage('pt')).toContain('recuperação do serviço é fix-forward');
+    expect(docsPage('pt')).toContain('rollback de dados, não um rollback operacional pronto');
+    expect(docsPage('pt')).toContain('primitiva selada de topologia');
+    expect(docsPage('pt')).toContain('adapter root-only privado');
+    expect(docsPage('pt')).toContain('recuperação é fix-forward');
     expect(docsPage('en')).toContain('modern');
-    expect(docsPage('en')).toContain('data rollback, not an operational rollback');
-    expect(docsPage('en')).toContain('service recovery is fix-forward');
+    expect(docsPage('en')).toContain('data rollback, not a ready-to-use operational rollback');
+    expect(docsPage('en')).toContain('sealed topology primitive');
+    expect(docsPage('en')).toContain('private root-only adapter');
+    expect(docsPage('en')).toContain('recovery is fix-forward');
   });
 
   it('shows accessible progress and failure feedback when copying code fails', async () => {

@@ -23,7 +23,7 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       NPM_CONFIG_BUILD_FROM_SOURCE: 'true'
       NPM_CONFIG_OMIT: 'peer'
@@ -32,6 +32,30 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+
+      - name: Install the Docker Engine used by Compose and image smokes
+        uses: docker/setup-docker-action@6d7cfa65f60a9dda7b46e5513fa982536f3c9877 # v5.3.0
+        with:
+          version: v29.6.1
+
+      - name: Require the production Docker and Compose minimums
+        run: |
+          set -euo pipefail
+          engine_version="$(docker version --format '{{.Server.Version}}')"
+          compose_version="$(docker compose version --short)"
+          python3 - "$engine_version" "$compose_version" <<'PY'
+          import re
+          import sys
+
+          def version(raw):
+              match = re.match(r'^v?(\d+)\.(\d+)\.(\d+)', raw)
+              if not match:
+                  raise SystemExit(1)
+              return tuple(map(int, match.groups()))
+
+          if version(sys.argv[1]) < (28, 1, 0) or version(sys.argv[2]) < (2, 36, 0):
+              raise SystemExit('Docker Engine 28.1.0+ and Docker Compose 2.36.0+ are required')
+          PY
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -143,6 +167,33 @@ jobs:
           KASSINAO_TEST_STORAGE_ROOT=/srv/kassinao-ci npm test
           npm run build
           npm run typecheck:preview
+
+      - name: Validate the exact dedicated and shared Compose models
+        env:
+          KASSINAO_IMAGE: kassinao:release-check
+          KASSINAO_APP_ENV_FILE: /dev/null
+          KASSINAO_UID: '61050'
+          KASSINAO_GID: '61050'
+          KASSINAO_DATA_ROOT: /tmp/kassinao-release-data
+          KASSINAO_SHARED_APP_ENV_FILE: /tmp/kassinao-release-app.env
+          KASSINAO_SHARED_TUNNEL_TOKEN_FILE: /tmp/kassinao-release-tunnel-token
+          KASSINAO_CORE_MEMORY_LIMIT: 2g
+          KASSINAO_CORE_CPUS: '1.0'
+          KASSINAO_ROUTER_MEMORY_LIMIT: 256m
+          KASSINAO_ROUTER_CPUS: '0.1'
+          KASSINAO_PUBLIC_MEMORY_LIMIT: 384m
+          KASSINAO_PUBLIC_CPUS: '0.2'
+          KASSINAO_TUNNEL_MEMORY_LIMIT: 192m
+          KASSINAO_TUNNEL_CPUS: '0.2'
+          APP_URL: http://localhost:8080
+          MCP_URL: http://localhost:8080
+          PUBLIC_URL: http://localhost:8080
+          DOCS_URL: http://localhost:8080
+          SOURCE_URL: https://github.com/resolvicomai/kassinao
+          COMPOSE_PROFILES: split-public
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.shared.yml config --quiet
 
       - name: Install QEMU emulators before creating the multi-platform builder
         uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
@@ -351,6 +402,10 @@ jobs:
 
           bash scripts/smoke-public-image.sh "$amd64_image" "${image#*@}" linux/amd64
           bash scripts/smoke-public-image.sh "$arm64_image" "${image#*@}" linux/arm64
+          DOCKER_CONFIG="$anonymous_config" \
+            bash scripts/smoke-router-image.sh "$amd64_image" "${image#*@}" linux/amd64
+          DOCKER_CONFIG="$anonymous_config" \
+            bash scripts/smoke-router-image.sh "$arm64_image" "${image#*@}" linux/arm64
 
           extract_no_dump_runtime() {
             local platform="$1" architecture="$2" reference="$3" destination="dist/native-runtime/linux-$2"

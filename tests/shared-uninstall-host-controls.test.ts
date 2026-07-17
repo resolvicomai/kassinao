@@ -20,14 +20,19 @@ function runContainerGate(options: { running?: string; restart?: string; project
     `#!/usr/bin/env bash
 set -eu
 case "$1" in
-  ps) printf 'kassinao\nkassinao-public\nkassinao-tunnel\n' ;;
+  ps) printf 'kassinao\nkassinao-router\nkassinao-public\nkassinao-tunnel\n' ;;
   inspect)
     case "$3" in
       *State.Running*) printf '%s\n' "\${TEST_RUNNING}" ;;
       *RestartPolicy.Name*) printf '%s\n' "\${TEST_RESTART}" ;;
       *compose.project*) printf '%s\n' "\${TEST_PROJECT}" ;;
       *compose.service*)
-        case "$4" in kassinao) printf 'kassinao\n' ;; kassinao-public) printf 'kassinao-public\n' ;; kassinao-tunnel) printf '%s\n' "\${TEST_SERVICE}" ;; esac
+        case "$4" in
+          kassinao) printf 'kassinao\n' ;;
+          kassinao-router) printf 'kassinao-router\n' ;;
+          kassinao-public) printf 'kassinao-public\n' ;;
+          kassinao-tunnel) printf '%s\n' "\${TEST_SERVICE}" ;;
+        esac
         ;;
       *) exit 2 ;;
     esac

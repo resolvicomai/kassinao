@@ -10,6 +10,30 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.17] — 2026-07-16
+
+### Added
+
+- A secret-free edge router is now the only host-published application process. Separate listeners bind exclusively to the isolated tunnel interface and a router-only host-ingress interface, remain unready until both binds succeed, and share one admission budget. The sealed host firewall blocks new router-to-host pivots through the NAT bridge while preserving established loopback traffic; private app/MCP routes remain separated from the isolated landing/docs process and the local quickstart preserves one origin.
+- Sealed transition helpers provide resumable, exact-identity topology changes for shared deployments and for upgrades from the published v1.4.14-v1.4.16 dedicated layout.
+- Release and CI gates now smoke-test the real router/core/public image topology and validate the fully rendered dedicated and shared Compose models.
+
+### Changed
+
+- Docker Engine 28.1.0 or newer is now required alongside Docker Compose 2.36.0. Engine 28.1 is the first daemon release that applies the named-interface contract used by the split router; deploy and both production audits reject Engine 28.0 before runtime mutation.
+- Docker Compose 2.36.0 or newer is required so each service receives a deterministic interface name. Core, router, public, and tunnel now have exact network membership, isolated internal links, a router-only internal host bridge with IPv4 NAT/IPv6 isolation/ICC disabled, and separate egress bridges.
+- Shared-host upgrades must set the new required `KASSINAO_ROUTER_MEMORY_LIMIT` and `KASSINAO_ROUTER_CPUS` values. The router is now the sole ingress, and the obsolete `KASSINAO_PUBLIC_HOST_PORT` setting has been removed.
+- The local quickstart uses the same split public/private architecture as production. Public and documentation origins may intentionally share the app origin; conflicting synthetic `www` aliases still fail closed.
+- Production configuration requires `TRUST_PROXY_HOPS=1`, and deploy/audit gates verify that exact value before stopping the existing runtime.
+
+### Security
+
+- The router rebuilds trusted forwarding headers, rejects unsupported proxy methods, upgrades, absolute-form targets, and request expectations, and streams responses without exposing secrets or private health details. It ignores `CF-Connecting-IP` without a trusted forwarding chain; the host-proxy contract now preserves `Host`, removes that header, and overwrites `X-Forwarded-For`. Per-upstream admission limits, client-close cancellation, and a response-header deadline prevent abandoned requests from accumulating behind a slow core.
+- Host hardening now proves exact bridge metadata, gateway isolation, inter-container-communication policy, immutable container identities, and the complete network set before applying egress rules. Any extra network or endpoint fails closed.
+- Public privacy routes are verified as exact redirects to the private application origin; private namespaces remain unavailable from public/docs hosts.
+- Deploy now proves external DNS resolution, hostname-valid TLS, and handshake availability for every configured origin before stopping the existing runtime.
+- Topology transitions persist root-only state on the encrypted data filesystem and recheck that recordings are idle on every retry before removing a runtime.
+
 ## [1.4.16] — 2026-07-16
 
 ### Security
@@ -340,7 +364,8 @@ First public release.
 - **Interactive onboarding** — `/help` with per-topic buttons; DMing the bot also replies with the guide.
 - Bilingual (pt-BR / English), HTTPS via Cloudflare Tunnel, silence warnings, auto-stop, retention/expiry, crash recovery, and graceful shutdown.
 
-[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.16...HEAD
+[Unreleased]: https://github.com/resolvicomai/kassinao/compare/v1.4.17...HEAD
+[1.4.17]: https://github.com/resolvicomai/kassinao/compare/v1.4.16...v1.4.17
 [1.4.16]: https://github.com/resolvicomai/kassinao/compare/v1.4.15...v1.4.16
 [1.4.15]: https://github.com/resolvicomai/kassinao/compare/v1.4.14...v1.4.15
 [1.4.14]: https://github.com/resolvicomai/kassinao/compare/v1.4.13...v1.4.14
