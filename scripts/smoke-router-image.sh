@@ -232,38 +232,45 @@ function request(path, host, init = {}) {
   });
 }
 
-const core = await request('/app', 'app.example.test');
-assert.equal(core.status, 200);
-assert.equal(core.body.toString('utf8'), 'core-response');
-assert.deepEqual(core.headers['set-cookie'], [
-  'core_a=1; Path=/; HttpOnly',
-  'core_b=2; Path=/; Secure',
-]);
+async function main() {
+  const core = await request('/app', 'app.example.test');
+  assert.equal(core.status, 200);
+  assert.equal(core.body.toString('utf8'), 'core-response');
+  assert.deepEqual(core.headers['set-cookie'], [
+    'core_a=1; Path=/; HttpOnly',
+    'core_b=2; Path=/; Secure',
+  ]);
 
-const echo = await request('/api/echo', 'mcp.example.test', {
-  method: 'POST',
-  body: 'streamed-body',
-  headers: { 'content-type': 'text/plain' },
+  const echo = await request('/api/echo', 'mcp.example.test', {
+    method: 'POST',
+    body: 'streamed-body',
+    headers: { 'content-type': 'text/plain' },
+  });
+  assert.equal(echo.status, 200);
+  assert.deepEqual(JSON.parse(echo.body.toString('utf8')), {
+    body: 'streamed-body',
+    forwardedHost: 'mcp.example.test',
+    forwardedProto: 'https',
+  });
+
+  const range = await request('/asset', 'site.example.test', { headers: { range: 'bytes=2-5' } });
+  assert.equal(range.status, 206);
+  assert.equal(range.headers['content-range'], 'bytes 2-5/10');
+  assert.equal(range.body.toString('utf8'), 'cdef');
+
+  assert.equal((await request('/', 'docs.example.test')).status, 200);
+  assert.equal((await request('/app', 'site.example.test')).status, 404);
+  assert.equal((await request('/', 'unknown.example.test')).status, 421);
+
+  const privacy = await request('/privacy', 'site.example.test');
+  assert.equal(privacy.status, 308);
+  assert.equal(privacy.headers.location, 'https://app.example.test/privacy');
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
 });
-assert.equal(echo.status, 200);
-assert.deepEqual(JSON.parse(echo.body.toString('utf8')), {
-  body: 'streamed-body',
-  forwardedHost: 'mcp.example.test',
-  forwardedProto: 'https',
-});
-
-const range = await request('/asset', 'site.example.test', { headers: { range: 'bytes=2-5' } });
-assert.equal(range.status, 206);
-assert.equal(range.headers['content-range'], 'bytes 2-5/10');
-assert.equal(range.body.toString('utf8'), 'cdef');
-
-assert.equal((await request('/', 'docs.example.test')).status, 200);
-assert.equal((await request('/app', 'site.example.test')).status, 404);
-assert.equal((await request('/', 'unknown.example.test')).status, 421);
-
-const privacy = await request('/privacy', 'site.example.test');
-assert.equal(privacy.status, 308);
-assert.equal(privacy.headers.location, 'https://app.example.test/privacy');
 NODE
 
 "${dc[@]}" --profile probe run --rm --no-deps -T probe /usr/local/bin/node - <<'NODE'
@@ -275,8 +282,16 @@ async function mustFail(url) {
   }
   throw new Error(`unexpected direct reachability: ${url}`);
 }
-await mustFail('http://kassinao-core:8082/health');
-await mustFail('http://kassinao-public:8081/health');
+
+async function main() {
+  await mustFail('http://kassinao-core:8082/health');
+  await mustFail('http://kassinao-public:8081/health');
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
 NODE
 
 for service in core public; do

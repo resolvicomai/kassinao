@@ -1516,6 +1516,17 @@ describe('artefatos de distribuição', () => {
     expect(routerSmoke).toContain("const http = require('node:http');");
     expect(routerSmoke).toContain('headers: { host, ...(init.headers || {}) }');
     expect(routerSmoke).not.toContain("fetch('http://kassinao:8080/health',{headers:{host:");
+    const nodeStdinBlocks = [...routerSmoke.matchAll(/\/usr\/local\/bin\/node - <<'NODE'\n([\s\S]*?)\nNODE/g)].map(
+      (match) => match[1],
+    );
+    expect(nodeStdinBlocks).toHaveLength(2);
+    for (const block of nodeStdinBlocks) {
+      const syntaxCheck = spawnSync(process.execPath, ['--check', '-'], {
+        input: block,
+        encoding: 'utf8',
+      });
+      expect(syntaxCheck.status, syntaxCheck.stderr).toBe(0);
+    }
     expect(routerSmoke).toContain("await mustFail('http://kassinao-core:8082/health')");
     expect(routerSmoke).toContain("await mustFail('http://kassinao-public:8081/health')");
     expect(workflow).toContain('extract_no_dump_runtime linux/amd64 amd64 "$amd64_image"');
