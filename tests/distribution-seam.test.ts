@@ -362,6 +362,7 @@ function fakeRuntime(
   const coreId = 'a'.repeat(64);
   const publicId = 'b'.repeat(64);
   const tunnelId = 'c'.repeat(64);
+  const routerId = 'e'.repeat(64);
   const foreignId = 'f'.repeat(64);
   const staleTunnelId = 'd'.repeat(64);
   if (initiallyRunning) writeFileSync(running, 'running');
@@ -414,7 +415,7 @@ if [ "\${1:-}" = version ]; then
   exit 0
 fi
 if [ "\${1:-}" = compose ] && [ "\${2:-}" = version ]; then
-  printf '2.35.1\n'
+  printf '2.36.1\n'
   exit 0
 fi
 resolve_container() {
@@ -435,6 +436,10 @@ resolve_container() {
     ${foreignId})
       [ -f ${shellLiteral(foreignSquatter)} ] || return 1
       cid=${shellLiteral(foreignId)}; name=kassinao; project=company; service=kassinao
+      ;;
+    kassinao-router|${routerId})
+      [ -f ${shellLiteral(running)} ] || return 1
+      cid=${shellLiteral(routerId)}; name=kassinao-router; project=kassinao; service=kassinao-router
       ;;
     kassinao-public|${publicId})
       [ -f ${shellLiteral(running)} ] || return 1
@@ -491,6 +496,7 @@ case " $* " in
     service="\${!#}"
     case "$service" in
       kassinao) cid=${shellLiteral(coreId)} ;;
+      kassinao-router) cid=${shellLiteral(routerId)} ;;
       kassinao-public) cid=${shellLiteral(publicId)} ;;
       cloudflared) cid=${shellLiteral(tunnelId)} ;;
       *) exit 1 ;;
@@ -565,17 +571,40 @@ exit ${egressActive ? '0' : '3'}
       `#!/usr/bin/env bash
 set -eu
 output=/dev/null
+headers=/dev/null
+head_request=false
 url="\${!#}"
 printf 'curl %s\n' "$url" >> ${shellLiteral(log)}
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o) output="$2"; shift 2 ;;
+    --output) output="$2"; shift 2 ;;
+    -D) headers="$2"; shift 2 ;;
+    --head) head_request=true; shift ;;
     *) shift ;;
   esac
 done
+if [ "$head_request" = true ]; then
+  [ -z "\${FAKE_PREFLIGHT_FAIL:-}" ] || exit 60
+  exit 0
+fi
 surface=private
 case "$url" in *www.example.com* | *docs.example.com*) surface=public ;; esac
+[ -z "\${FAKE_PUBLIC_HOST:-}" ] || [[ "$url" != *"\${FAKE_PUBLIC_HOST}"* ]] || surface=public
 [ -z "\${FAKE_ALL_SURFACE:-}" ] || surface="$FAKE_ALL_SURFACE"
+if [ "$surface" = public ]; then
+  case "$url" in
+    */privacy | */en/privacy)
+      location="https://app.example.com\${url#*example.com}"
+      [ -z "\${FAKE_BAD_PRIVACY_REDIRECT:-}" ] || location="https://wrong.example.com/privacy"
+      if [ "$headers" != /dev/null ]; then
+        printf 'HTTP/1.1 308 Permanent Redirect\\r\\nLocation: %s\\r\\n\\r\\n' "$location" > "$headers"
+      fi
+      printf '308'
+      exit 0
+      ;;
+  esac
+fi
 if [ "$output" != /dev/null ]; then
   case "$url" in
     https://app.example.com/privacy)
@@ -601,7 +630,7 @@ if [ "$output" != /dev/null ]; then
 fi
 if [ "$surface" = public ]; then
   case "$url" in
-    */app | */auth/login | */api/meetings | */mcp | */privacy | */en/privacy) printf '404'; exit 0 ;;
+    */app | */auth/login | */api/meetings | */mcp) printf '404'; exit 0 ;;
   esac
 fi
 printf '200'
@@ -674,6 +703,8 @@ function deploymentFixture(
     'KASSINAO_ROLLBACK_RETENTION_HOURS=72',
     'KASSINAO_CORE_MEMORY_LIMIT=2g',
     'KASSINAO_CORE_CPUS=1.0',
+    'KASSINAO_ROUTER_MEMORY_LIMIT=256m',
+    'KASSINAO_ROUTER_CPUS=0.1',
     'KASSINAO_PUBLIC_MEMORY_LIMIT=384m',
     'KASSINAO_PUBLIC_CPUS=0.2',
     'KASSINAO_TUNNEL_MEMORY_LIMIT=192m',
@@ -741,6 +772,7 @@ function deploymentFixture(
       'ALLOW_ALL_GUILDS=false',
       'ALLOW_LEGACY_SHARED_STATE=false',
       `PUBLIC_SURFACES_ENABLED=${mode === 'single' ? 'true' : 'false'}`,
+      'TRUST_PROXY_HOPS=1',
       '',
     ].join('\n'),
   );
@@ -839,11 +871,20 @@ exit ${options.rollbackCheckerFails ? '1' : '0'}
         read_only: true,
         cap_drop: ['ALL'],
         security_opt: ['no-new-privileges:true'],
-        networks: { private: null },
+        networks: {
+          core_link: {
+            interface_name: 'core0',
+            aliases: ['kassinao-core'],
+          },
+          core_egress: {
+            interface_name: 'egress0',
+            gw_priority: 1,
+          },
+        },
         environment:
           hostScope === 'shared'
             ? {
-                PORT: '8080',
+                PORT: '8082',
                 WEB_BIND_ADDRESS: '0.0.0.0',
                 RECORDINGS_DIR: '/app/recordings',
                 STATE_DIR: '/app/state',
@@ -855,11 +896,12 @@ exit ${options.rollbackCheckerFails ? '1' : '0'}
                 DOTENV_CONFIG_PATH: '/run/secrets/kassinao-app.env',
               }
             : {
+                PORT: '8082',
+                WEB_BIND_ADDRESS: '0.0.0.0',
                 KASSINAO_RELEASE_DIGEST: digest,
                 KASSINAO_DEPLOYMENT_FINGERPRINT: deploymentFingerprint,
               },
         ...(hostScope === 'shared' ? {} : { env_file: [{ path: path.join(directory, 'app.env'), required: true }] }),
-        ports: [{ host_ip: '127.0.0.1', target: 8080, published: '8080' }],
         volumes: [
           { type: 'bind', source: recordings, target: '/app/recordings' },
           { type: 'bind', source: state, target: '/app/state' },
@@ -896,12 +938,23 @@ exit ${options.rollbackCheckerFails ? '1' : '0'}
       },
     },
     networks: {
-      private: {
+      edge_ingress: {
+        internal: true,
         driver_opts: {
-          'com.docker.network.bridge.name': 'kas-private0',
+          'com.docker.network.bridge.name': 'kas-edge0',
+          'com.docker.network.bridge.gateway_mode_ipv4': 'isolated',
+          'com.docker.network.bridge.gateway_mode_ipv6': 'isolated',
         },
       },
-      public: {
+      core_link: {
+        internal: true,
+        driver_opts: {
+          'com.docker.network.bridge.name': 'kas-core0',
+          'com.docker.network.bridge.gateway_mode_ipv4': 'isolated',
+          'com.docker.network.bridge.gateway_mode_ipv6': 'isolated',
+        },
+      },
+      public_link: {
         internal: true,
         driver_opts: {
           'com.docker.network.bridge.name': 'kas-public0',
@@ -909,17 +962,65 @@ exit ${options.rollbackCheckerFails ? '1' : '0'}
           'com.docker.network.bridge.gateway_mode_ipv6': 'isolated',
         },
       },
+      core_egress: {
+        driver_opts: {
+          'com.docker.network.bridge.name': 'kas-core-eg0',
+          'com.docker.network.bridge.enable_icc': 'false',
+        },
+      },
     },
   };
   if (mode === 'split') {
     const services = normalizedConfig.services as Record<string, unknown>;
+    services['kassinao-router'] = {
+      image,
+      user: `${uid}:${gid}`,
+      read_only: true,
+      cap_drop: ['ALL'],
+      security_opt: ['no-new-privileges:true'],
+      command: ['/usr/local/bin/node', 'dist/router.js'],
+      networks: {
+        edge_ingress: {
+          interface_name: 'edge0',
+          aliases: ['kassinao'],
+        },
+        core_link: { interface_name: 'core0' },
+        public_link: { interface_name: 'public0' },
+      },
+      environment: {
+        NODE_ENV: 'production',
+        PORT: '8080',
+        WEB_BIND_INTERFACE: 'edge0',
+        APP_URL: appUrl,
+        MCP_URL: appUrl,
+        PUBLIC_URL: publicUrl,
+        DOCS_URL: docsUrl,
+        KASSINAO_RELEASE_DIGEST: digest,
+        KASSINAO_DEPLOYMENT_FINGERPRINT: deploymentFingerprint,
+      },
+      ports: [{ host_ip: '127.0.0.1', target: 8080, published: '8080' }],
+      ...(hostScope === 'shared'
+        ? {
+            restart: 'no',
+            mem_limit: 268_435_456,
+            memswap_limit: 268_435_456,
+            mem_swappiness: 0,
+            cpus: 0.1,
+          }
+        : {}),
+    };
     services['kassinao-public'] = {
       image,
       user: `${uid}:${gid}`,
       read_only: true,
       cap_drop: ['ALL'],
       security_opt: ['no-new-privileges:true'],
-      networks: { public: null },
+      command: ['/usr/local/bin/node', 'dist/public.js'],
+      networks: {
+        public_link: {
+          interface_name: 'public0',
+        },
+      },
       environment: {
         NODE_ENV: 'production',
         PORT: '8081',
@@ -932,7 +1033,6 @@ exit ${options.rollbackCheckerFails ? '1' : '0'}
         TRUST_PROXY_HOPS: '1',
         REPO_PUBLIC: 'true',
       },
-      ports: [{ host_ip: '127.0.0.1', target: 8081, published: '8081' }],
       ...(hostScope === 'shared'
         ? {
             restart: 'no',
@@ -1229,22 +1329,53 @@ describe('artefatos de distribuição', () => {
     expect(existsSync(path.join(fixture, 'dist'))).toBe(false);
   });
 
-  it('usa imagens publicadas e processos sem rede ou dados compartilhados no Compose', () => {
+  it('usa imagens publicadas e separa router, core e processo público no Compose', () => {
     const compose = repositoryFile('docker-compose.yml');
     const privateProcess = serviceBlock(compose, 'kassinao');
+    const routerProcess = serviceBlock(compose, 'kassinao-router');
     const publicProcess = serviceBlock(compose, 'kassinao-public');
+    const tunnelProcess = serviceBlock(compose, 'cloudflared');
 
     expect(compose).not.toMatch(/^\s*build:\s*/m);
     expect(privateProcess).toMatch(/^\s*image:\s*\$\{KASSINAO_IMAGE/m);
+    expect(routerProcess).toMatch(/^\s*image:\s*\$\{KASSINAO_IMAGE/m);
     expect(publicProcess).toMatch(/^\s*image:\s*\$\{KASSINAO_IMAGE/m);
+    expect(routerProcess).toContain("command: ['/usr/local/bin/node', 'dist/router.js']");
     expect(publicProcess).toContain("command: ['/usr/local/bin/node', 'dist/public.js']");
-    expect(privateProcess).toMatch(/^\s*networks:\s*\[private\]\s*$/m);
-    expect(publicProcess).toMatch(/^\s*networks:\s*\[public\]\s*$/m);
-    expect(privateProcess).not.toMatch(/^\s*networks:\s*\[[^\]]*public/m);
-    expect(publicProcess).not.toMatch(/^\s*networks:\s*\[[^\]]*private/m);
+    expect(privateProcess).toContain("PORT: '8082'");
+    expect(privateProcess).toMatch(/core_link:\n\s+interface_name: core0\n\s+aliases: \[kassinao-core\]/);
+    expect(privateProcess).toMatch(/core_egress:\n\s+interface_name: egress0\n\s+gw_priority: 1/);
+    expect(routerProcess).toContain('WEB_BIND_INTERFACE: edge0');
+    expect(routerProcess).toMatch(/edge_ingress:\n\s+interface_name: edge0\n\s+aliases: \[kassinao\]/);
+    expect(routerProcess).toMatch(/core_link:\n\s+interface_name: core0/);
+    expect(routerProcess).toMatch(/public_link:\n\s+interface_name: public0/);
+    expect(publicProcess).toMatch(/public_link:\n\s+interface_name: public0/);
+    expect(tunnelProcess).toMatch(/edge_ingress:\n\s+interface_name: edge0/);
+    expect(tunnelProcess).toMatch(/tunnel_egress:\n\s+interface_name: egress0\n\s+gw_priority: 1/);
+    expect(privateProcess).not.toMatch(/^\s*ports:/m);
+    expect(publicProcess).not.toMatch(/^\s*ports:/m);
+    expect(tunnelProcess).not.toMatch(/^\s*ports:/m);
+    expect(routerProcess.match(/^\s*ports:/gm)).toHaveLength(1);
+    expect(routerProcess).toContain("- '127.0.0.1:${KASSINAO_HOST_PORT:-8080}:8080'");
+    expect(routerProcess).not.toMatch(/^\s*env_file:/m);
+    expect(routerProcess).not.toMatch(/^\s*volumes:/m);
     expect(publicProcess).not.toMatch(/^\s*env_file:/m);
     expect(publicProcess).not.toMatch(/^\s*volumes:/m);
-    expect(compose).toMatch(/^  public:\n    internal: true\n    driver_opts:/m);
+    expect(compose.match(/^  (?:edge_ingress|core_link|public_link):\n    internal: true\n/gm)).toHaveLength(3);
+    expect(compose).toMatch(/^  core_egress:\n    driver_opts:/m);
+    expect(compose).toMatch(/^  tunnel_egress:\n    driver_opts:/m);
+    const routerKeys = [...routerProcess.matchAll(/^\s{6}([A-Z][A-Z0-9_]*):/gm)].map((match) => match[1]);
+    expect(routerKeys).toEqual([
+      'NODE_ENV',
+      'PORT',
+      'WEB_BIND_INTERFACE',
+      'APP_URL',
+      'MCP_URL',
+      'PUBLIC_URL',
+      'DOCS_URL',
+      'KASSINAO_RELEASE_DIGEST',
+      'KASSINAO_DEPLOYMENT_FINGERPRINT',
+    ]);
     const configuredKeys = [...publicProcess.matchAll(/^\s{6}([A-Z][A-Z0-9_]*):/gm)].map((match) => match[1]);
     for (const name of configuredKeys) {
       expect(PUBLIC_RUNTIME_ENV.has(name), `${name} precisa constar da allowlist pública`).toBe(true);
@@ -1323,11 +1454,32 @@ describe('artefatos de distribuição', () => {
     expect(workflow).toContain('prove_no_dump_runtime linux/arm64 "$arm64_image"');
     expect(workflow).toContain('bash scripts/smoke-public-image.sh "$amd64_image" "${image#*@}" linux/amd64');
     expect(workflow).toContain('bash scripts/smoke-public-image.sh "$arm64_image" "${image#*@}" linux/arm64');
+    expect(workflow).toContain('bash scripts/smoke-router-image.sh "$amd64_image" "${image#*@}" linux/amd64');
+    expect(workflow).toContain('bash scripts/smoke-router-image.sh "$arm64_image" "${image#*@}" linux/arm64');
     expect(ciWorkflow).toContain('Smoke-test public process through the default image entrypoint');
     expect(ciWorkflow).toContain('bash scripts/smoke-public-image.sh kassinao:ci sha256:');
+    expect(ciWorkflow).toContain('Smoke-test the isolated single-origin router topology');
+    expect(ciWorkflow).toContain('bash scripts/smoke-router-image.sh kassinao:ci sha256:');
+    for (const workflowSource of [workflow, ciWorkflow]) {
+      expect(workflowSource).toContain('Validate the exact dedicated and shared Compose models');
+      expect(workflowSource).toContain('docker compose -f docker-compose.yml config --quiet');
+      expect(workflowSource).toContain(
+        'docker compose -f docker-compose.yml -f docker-compose.shared.yml config --quiet',
+      );
+      expect(workflowSource).toContain('COMPOSE_PROFILES: split-public');
+    }
     const publicSmoke = repositoryFile('scripts/smoke-public-image.sh');
     expect(publicSmoke).toContain('"$image" /usr/local/bin/node dist/public.js');
     expect(publicSmoke).toContain("body.surface === 'public'");
+    const routerSmoke = repositoryFile('scripts/smoke-router-image.sh');
+    expect(routerSmoke).toContain('command: [/usr/local/bin/node, dist/router.js]');
+    expect(routerSmoke).toContain('interface_name: edge0');
+    expect(routerSmoke).toContain('interface_name: core0');
+    expect(routerSmoke).toContain('interface_name: public0');
+    expect(routerSmoke).toContain("ports: ['127.0.0.1::8080']");
+    expect(routerSmoke).toContain('port router 8080');
+    expect(routerSmoke).toContain("await mustFail('http://kassinao-core:8082/health')");
+    expect(routerSmoke).toContain("await mustFail('http://kassinao-public:8081/health')");
     expect(workflow).toContain('extract_no_dump_runtime linux/amd64 amd64 "$amd64_image"');
     expect(workflow).toContain('extract_no_dump_runtime linux/arm64 arm64 "$arm64_image"');
     expect(workflow).toContain('dist/native-runtime');
@@ -1363,14 +1515,26 @@ describe('artefatos de distribuição', () => {
     const rollbackTmpfiles = repositoryFile('deploy/tmpfiles.d/kassinao-rollback.conf.in');
 
     expect(audit).toContain('CORE_ENTRYPOINT=');
+    expect(audit).toContain('ROUTER_ENTRYPOINT=');
     expect(audit).toContain('PUBLIC_ENTRYPOINT=');
     expect(audit).toContain('core preserva entrypoint no-dump e command selados');
+    expect(audit).toContain('router preserva entrypoint no-dump e command selados');
     expect(audit).toContain('processo público preserva entrypoint no-dump e command selados');
 
     expect(harden).toContain('{{range $id, $member := .Containers}}{{printf "%s|%s\\n" $id $member.Name}}{{end}}');
     expect(harden).toContain('managed_container_id()');
     expect(harden).toContain('ocupa nome reservado sem identidade Compose aprovada');
-    expect(harden).toContain('BRIDGE_NAME=kas-private0');
+    expect(harden).toContain('ROUTER_CONTAINER=kassinao-router');
+    expect(harden).toContain('CORE_EGRESS_BRIDGE=kas-core-eg0');
+    expect(harden).toContain('TUNNEL_EGRESS_BRIDGE=kas-tunnel-eg0');
+    expect(harden).toContain('container_topology()');
+    expect(harden).toContain('participa de rede não autorizada na bridge');
+    expect(harden).toContain('membership da bridge $expected_bridge diverge da topologia aprovada');
+    expect(harden).toContain('router_expected=');
+    expect(harden).toContain('assert_network_members "$router_edge_network"');
+    expect(harden).toContain('topologia parcial; core, router e público precisam existir juntos');
+    expect(harden).toContain('if [ -n "$tunnel_cid" ]');
+    expect(harden).toContain('"$ROUTER_CONTAINER:kassinao-router"');
     expect(harden).toContain('PRELOAD=true');
     expect(harden).toContain('--preload)');
     expect(harden).toContain('--check)');
@@ -1386,6 +1550,16 @@ describe('artefatos de distribuição', () => {
     expect(harden).toContain('KASSINAO-EGRESS-B');
     expect(harden).toContain('KASSINAO-HOST-A');
     expect(harden).toContain('KASSINAO-HOST-B');
+    expect(harden).toContain('check_owned_reference_scopes');
+    expect(harden).toContain('check_reserved_chain_inventory');
+    expect(harden).toContain('check_policy_reference_scopes');
+    expect(harden).toContain('canonicalize_positioned_rule');
+    expect(harden).toContain('DOCKER-USER 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-EGRESS');
+    expect(harden).toContain('DOCKER-USER 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-EGRESS');
+    expect(harden).toContain('INPUT 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-HOST');
+    expect(harden).toContain('INPUT 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-HOST');
+    expect(harden).not.toContain('-o "$CORE_EGRESS_BRIDGE" -j RETURN');
+    expect(harden).not.toContain('-o "$TUNNEL_EGRESS_BRIDGE" -j RETURN');
     expect(harden).toContain('chain_is_referenced "$tool" "$inactive"');
     expect(harden).toContain('"$tool" -F "$inactive"');
     expect(harden).not.toContain('"$tool" -F "$anchor"');
@@ -1441,14 +1615,23 @@ describe('artefatos de distribuição', () => {
     expect(uninstaller).not.toContain('docker stop');
     expect(uninstaller).toContain('kassinao-harden-docker-egress --remove');
     expect(uninstaller).toContain('os dados da instância não foram apagados');
-    expect(audit).toContain('first_docker="$("$tool" -S DOCKER-USER');
-    expect(audit).toContain('PRIVATE_MEMBERS=');
+    expect(audit).toContain('ROUTER_CONTAINER=kassinao-router');
+    expect(audit).toContain('network_for_bridge()');
+    expect(audit).toContain('container_alias_is()');
+    expect(audit).toContain('compose_labels_are()');
+    expect(audit).toContain('kas-edge0');
+    expect(audit).toContain('kas-core0');
+    expect(audit).toContain('kas-public0');
+    expect(audit).toContain('kas-core-eg0');
+    expect(audit).toContain('kas-tunnel-eg0');
+    expect(audit).toContain('"$DEPLOY_REAL/scripts/harden-docker-egress.sh" --check');
+    expect(audit).not.toContain('kas-private0');
     expect(audit).toContain('.HostConfig.CapAdd');
     expect(audit).toContain('.HostConfig.DeviceCgroupRules');
     expect(audit).toContain('.HostConfig.UtsMode');
-    expect(audit).toContain("expected_forward='-A FORWARD -j DOCKER-USER'");
-    expect(audit).toContain('mapfile -t egress_rules');
-    expect(audit).toContain('mapfile -t host_rules');
+    expect(audit).toContain('router possui somente topologia pública canônica e nenhum segredo');
+    expect(audit).toContain('processo público não publica porta no host');
+    expect(audit).not.toContain('firewall_family_ok()');
     expect(audit).toContain('scripts e units root correspondem exatamente ao kit atual');
     expect(audit).toContain('systemctl is-enabled --quiet kassinao-health-watch.timer');
     expect(audit).toContain('systemctl is-enabled --quiet kassinao-docker-egress.service');
@@ -1475,6 +1658,7 @@ describe('artefatos de distribuição', () => {
     expect(audit).toContain("unit_words_are kassinao-docker-egress.service ReadWritePaths '/run/lock/kassinao'");
     expect(audit).toContain('unit_property_is docker.service NeedDaemonReload no');
     expect(audit).toContain("app.get('PUBLIC_SURFACES_ENABLED') != 'false'");
+    expect(audit).toContain("app.get('TRUST_PROXY_HOPS') != '1'");
     expect(audit).toContain("app.get('ALLOW_ALL_GUILDS') != 'false'");
     expect(audit).toContain("re.fullmatch(r'[0-9]{17,20}', item)");
     expect(audit).toContain('ambiente efetivo do core corresponde às invariantes privadas do app.env');
@@ -1500,9 +1684,6 @@ describe('artefatos de distribuição', () => {
     expect(audit).toContain("any(step != 'publickey' for step in chain.split(','))");
     expect(audit).toContain('systemctl start kassinao-health-watch.service');
     expect(audit).toContain('ExecMainStatus 0');
-    expect(audit).toContain('egress_chain=KASSINAO-EGRESS-A; egress_inactive=KASSINAO-EGRESS-B');
-    expect(audit).toContain('host_chain=KASSINAO-HOST-B; host_inactive=KASSINAO-HOST-A');
-    expect(audit).toContain('[ "$CORE_BRIDGE" = kas-private0 ]');
     expect(deploy).toContain("'build', 'cap_add', 'devices', 'device_cgroup_rules'");
     expect(deploy).toContain("network_mode.startswith('container:')");
   });
@@ -1603,6 +1784,10 @@ describe('artefatos de distribuição', () => {
     expect(listing.stdout).toContain('scripts/finalize-shared-migration.sh');
     expect(listing.stdout).toContain('scripts/harden-docker-egress.sh');
     expect(listing.stdout).toContain('scripts/egress-fail-closed.sh');
+    expect(listing.stdout).toContain('scripts/smoke-public-image.sh');
+    expect(listing.stdout).toContain('scripts/smoke-router-image.sh');
+    expect(listing.stdout).toContain('scripts/transition-dedicated-runtime-topology.sh');
+    expect(listing.stdout).toContain('scripts/transition-runtime-topology.sh');
     expect(listing.stdout).toContain('scripts/install-host-controls.sh');
     expect(listing.stdout).toContain('scripts/uninstall-host-controls.sh');
     expect(listing.stdout).toContain('scripts/uninstall-shared-host-controls.sh');
@@ -1642,6 +1827,10 @@ describe('artefatos de distribuição', () => {
     expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/prepare-legacy-shared-layout\.sh/);
     expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/check-shared-migration-rollback\.sh/);
     expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/finalize-shared-migration\.sh/);
+    expect(manifest.stdout.match(/[0-9a-f]{64}  \.\/scripts\/transition-runtime-topology\.sh/g)).toHaveLength(1);
+    expect(manifest.stdout.match(/[0-9a-f]{64}  \.\/scripts\/transition-dedicated-runtime-topology\.sh/g)).toHaveLength(
+      1,
+    );
     expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/runtime\/linux-amd64\/kassinao-no-dump/);
     expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/runtime\/linux-arm64\/libkassinao-no-dump\.so/);
   });
@@ -1858,6 +2047,7 @@ describe('bootstrap da identidade privada', () => {
     expect(app.get('ALLOWED_GUILD_IDS')).toBe('987654321098765432');
     expect(app.get('ALLOW_ALL_GUILDS')).toBe('false');
     expect(app.get('PUBLIC_SURFACES_ENABLED')).toBe('false');
+    expect(app.get('TRUST_PROXY_HOPS')).toBe('1');
     expect(compose.get('KASSINAO_DEPLOYMENT_MODE')).toBe('split');
     expect(compose.get('KASSINAO_DEPLOYMENT_FINGERPRINT')).toMatch(/^[0-9a-f]{32}$/);
     expect(compose.get('KASSINAO_UID')).toBe(String(process.getuid?.()));
@@ -1869,7 +2059,7 @@ describe('bootstrap da identidade privada', () => {
     expect(readFileSync(fixture.appEnv, 'utf8')).not.toContain('kassinao.cloud');
   });
 
-  it('falha antes de alterar os arquivos quando a topologia split mistura hosts', () => {
+  it('falha antes de alterar os arquivos quando uma superfície pública usa o host privado', () => {
     const fixture = bootstrapFixture();
     const beforeApp = readFileSync(fixture.appEnv, 'utf8');
     const beforeCompose = readFileSync(fixture.composeEnv, 'utf8');
@@ -1879,7 +2069,7 @@ describe('bootstrap da identidade privada', () => {
       'dummy-oauth-secret-not-real',
       'https://app.example.com',
       'https://www.example.com',
-      'https://www.example.com',
+      'https://app.example.com',
       '',
       '',
     ].join('\n');
@@ -1896,7 +2086,39 @@ describe('bootstrap da identidade privada', () => {
     });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('hosts próprios');
+    expect(result.stderr).toContain('separados de app/MCP');
+    expect(readFileSync(fixture.appEnv, 'utf8')).toBe(beforeApp);
+    expect(readFileSync(fixture.composeEnv, 'utf8')).toBe(beforeCompose);
+  });
+
+  it('recusa alias www da landing que ocuparia uma origem privada ou de docs', () => {
+    const fixture = bootstrapFixture();
+    const beforeApp = readFileSync(fixture.appEnv, 'utf8');
+    const beforeCompose = readFileSync(fixture.composeEnv, 'utf8');
+    const input = [
+      'dummy-bot-secret-not-real',
+      '123456789012345678',
+      'dummy-oauth-secret-not-real',
+      'https://www.example.com',
+      'https://example.com',
+      'https://docs.example.com',
+      '',
+      '',
+    ].join('\n');
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      input,
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH,
+        HOME: fixture.directory,
+        KASSINAO_APP_ENV_FILE: 'app.env',
+        KASSINAO_COMPOSE_ENV_FILE: '.env',
+      },
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('alias www');
     expect(readFileSync(fixture.appEnv, 'utf8')).toBe(beforeApp);
     expect(readFileSync(fixture.composeEnv, 'utf8')).toBe(beforeCompose);
   });
@@ -1961,10 +2183,8 @@ describe('bootstrap da identidade privada', () => {
     expect(app.get('SOURCE_URL')).toBe('https://github.com/example/kassinao');
   });
 
-  it('não permite separar landing e docs apenas por case, trailing dot ou porta default', () => {
+  it('permite landing e docs na mesma origem pública canônica', () => {
     const fixture = bootstrapFixture();
-    const beforeApp = readFileSync(fixture.appEnv, 'utf8');
-    const beforeCompose = readFileSync(fixture.composeEnv, 'utf8');
     const input = [
       'dummy-bot-secret-not-real',
       '123456789012345678',
@@ -1973,6 +2193,27 @@ describe('bootstrap da identidade privada', () => {
       'https://shared.example.com',
       'https://SHARED.Example.com.:0443',
       '',
+      'https://github.com/example/kassinao',
+      'Example Operator',
+      'mailto:privacy@example.com',
+      '',
+      '987654321098765432',
+      '',
+      '2026-07-14',
+      '1.0',
+      'Members of the configured Discord servers',
+      'Record meetings and provide operator-enabled outputs',
+      'Operator-defined organizational necessity',
+      'Example Cloud',
+      'Brazil',
+      '',
+      '',
+      'Container host and provider logs expire after thirty days',
+      '',
+      'Requests are verified and answered through the operator contact',
+      '',
+      '',
+      'Incidents are triaged contained investigated and communicated',
       '',
     ].join('\n');
     const result = spawnSync('bash', [fixture.script], {
@@ -1987,10 +2228,12 @@ describe('bootstrap da identidade privada', () => {
       },
     });
 
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('hosts próprios');
-    expect(readFileSync(fixture.appEnv, 'utf8')).toBe(beforeApp);
-    expect(readFileSync(fixture.composeEnv, 'utf8')).toBe(beforeCompose);
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    for (const file of [fixture.appEnv, fixture.composeEnv]) {
+      const env = activeEnvironment(readFileSync(file, 'utf8'));
+      expect(env.get('PUBLIC_URL')).toBe('https://shared.example.com');
+      expect(env.get('DOCS_URL')).toBe('https://shared.example.com');
+    }
   });
 
   it('continua recusando caminho, query e credenciais durante a canonicalização', () => {
@@ -2080,14 +2323,25 @@ describe('deploy image-only', () => {
     expect(result.stderr).toContain('daemon local da VPS');
   });
 
-  it('não aceita topologia split separada apenas por case, trailing dot ou porta default', () => {
-    const digest = `sha256:${'6'.repeat(64)}`;
+  it('recusa alias www da landing que colide com a origem privada antes do shutdown', () => {
+    const digest = `sha256:${'5'.repeat(64)}`;
     const image = `ghcr.io/example/kassinao@${digest}`;
-    const fixture = deploymentFixture(image, { mode: 'split' });
+    const fixture = deploymentFixture(image, { initiallyRunning: true });
     for (const file of [path.join(fixture.directory, '.env'), path.join(fixture.directory, 'app.env')]) {
-      replaceEnvironmentValue(file, 'PUBLIC_URL', 'https://shared.example.com');
-      replaceEnvironmentValue(file, 'DOCS_URL', 'https://SHARED.Example.com.:0443');
+      replaceEnvironmentValue(file, 'APP_URL', 'https://www.example.com');
+      replaceEnvironmentValue(file, 'MCP_URL', 'https://www.example.com');
+      replaceEnvironmentValue(file, 'PUBLIC_URL', 'https://example.com');
     }
+    replaceEnvironmentValue(
+      path.join(fixture.directory, 'app.env'),
+      'PRIVACY_POLICY_URL',
+      'https://www.example.com/privacy',
+    );
+    replaceEnvironmentValue(
+      path.join(fixture.directory, 'app.env'),
+      'DATA_DELETION_URL',
+      'https://www.example.com/privacy#data-rights',
+    );
 
     const result = spawnSync('bash', [fixture.script], {
       cwd: fixture.directory,
@@ -2101,7 +2355,91 @@ describe('deploy image-only', () => {
     });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('hosts próprios');
+    expect(result.stderr).toContain('alias www');
+    expect(existsSync(fixture.runtime.log)).toBe(false);
+  });
+
+  it.each(['0', '2'] as const)('recusa TRUST_PROXY_HOPS=%s antes do shutdown', (trustProxyHops) => {
+    const digest = `sha256:${'4'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { initiallyRunning: true });
+    replaceEnvironmentValue(path.join(fixture.directory, 'app.env'), 'TRUST_PROXY_HOPS', trustProxyHops);
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('TRUST_PROXY_HOPS precisa ser exatamente 1');
+    const calls = existsSync(fixture.runtime.log) ? readFileSync(fixture.runtime.log, 'utf8') : '';
+    expect(calls).not.toContain('stop --timeout');
+  });
+
+  it('recusa falha de DNS/TLS externo antes de parar o runtime existente', () => {
+    const digest = `sha256:${'8'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { initiallyRunning: true });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+        FAKE_PREFLIGHT_FAIL: '1',
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('DNS/TLS externo indisponível antes do deploy');
+    expect(result.stderr).toContain('nenhum container foi parado');
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).toContain('curl https://app.example.com/health');
+    expect(calls).not.toContain('stop --timeout');
+    expect(calls).not.toContain(' up -d ');
+  });
+
+  it('aceita landing e docs no mesmo host após canonicalizar case, trailing dot e porta default', () => {
+    const digest = `sha256:${'6'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, {
+      mode: 'split',
+      mutateNormalizedConfig(config) {
+        const services = config.services as Record<string, { environment?: Record<string, string> }>;
+        for (const service of ['kassinao-router', 'kassinao-public']) {
+          if (!services[service].environment) continue;
+          services[service].environment.PUBLIC_URL = 'https://shared.example.com';
+          services[service].environment.DOCS_URL = 'https://shared.example.com';
+        }
+      },
+    });
+    for (const file of [path.join(fixture.directory, '.env'), path.join(fixture.directory, 'app.env')]) {
+      replaceEnvironmentValue(file, 'PUBLIC_URL', 'https://shared.example.com');
+      replaceEnvironmentValue(file, 'DOCS_URL', 'https://SHARED.Example.com.:0443');
+    }
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+        FAKE_PUBLIC_HOST: 'shared.example.com',
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
   });
 
   it('compara .env e app.env pelas origens canônicas', () => {
@@ -2394,7 +2732,8 @@ describe('deploy image-only', () => {
     const calls = readFileSync(fixture.runtime.log, 'utf8');
     expect(calls).toContain('up -d --no-build');
     expect(calls).toContain(`stop --timeout 30 ${'a'.repeat(64)}`);
-    expect(calls).not.toContain('curl https://app.example.com/health');
+    const startAt = calls.indexOf('up -d --no-build');
+    expect(calls.slice(startAt)).not.toMatch(/^curl /m);
     expect(existsSync(path.join(fixture.directory, '.deployed-image'))).toBe(false);
   });
 
@@ -3038,6 +3377,7 @@ printf '%s\n' '{"filesystems":[]}'
     const calls = readFileSync(fixture.runtime.log, 'utf8');
     for (const [container, id] of [
       ['kassinao', 'a'.repeat(64)],
+      ['kassinao-router', 'e'.repeat(64)],
       ['kassinao-tunnel', 'c'.repeat(64)],
       ['kassinao-public', 'b'.repeat(64)],
     ] as const) {
@@ -3070,6 +3410,26 @@ printf '%s\n' '{"filesystems":[]}'
         expect(calls).toContain(`curl https://${host}${privatePath}`);
       }
     }
+  });
+
+  it('recusa split quando privacy pública redireciona para destino diferente do app canônico', () => {
+    const digest = `sha256:${'7'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { mode: 'split' });
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+        FAKE_BAD_PRIVACY_REDIRECT: '1',
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('redirect de política diverge');
   });
 
   it('recusa split quando landing ou docs chegam ao processo privado', () => {

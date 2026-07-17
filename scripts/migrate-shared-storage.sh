@@ -328,7 +328,11 @@ forbidden = {
     'KASSINAO_AUTH_DIR', 'KASSINAO_MODEL_CACHE_DIR', 'KASSINAO_UID', 'KASSINAO_GID',
     'KASSINAO_SHARED_LUKS_BACKING_FILE', 'KASSINAO_SHARED_LUKS_MAPPER',
     'KASSINAO_SHARED_LUKS_UUID', 'KASSINAO_SHARED_APP_ENV_FILE',
-    'KASSINAO_SHARED_TUNNEL_TOKEN_FILE', 'KASSINAO_HOST_PORT', 'KASSINAO_PUBLIC_HOST_PORT',
+    'KASSINAO_SHARED_TUNNEL_TOKEN_FILE', 'KASSINAO_HOST_PORT',
+    'KASSINAO_CORE_MEMORY_LIMIT', 'KASSINAO_CORE_CPUS',
+    'KASSINAO_ROUTER_MEMORY_LIMIT', 'KASSINAO_ROUTER_CPUS',
+    'KASSINAO_PUBLIC_MEMORY_LIMIT', 'KASSINAO_PUBLIC_CPUS',
+    'KASSINAO_TUNNEL_MEMORY_LIMIT', 'KASSINAO_TUNNEL_CPUS',
 }
 allowed = set()
 with open(template, encoding='utf-8') as handle:
@@ -590,6 +594,7 @@ for line in sys.stdin:
 
 expected = {
     'kassinao': 'kassinao',
+    'kassinao-router': 'kassinao-router',
     'kassinao-public': 'kassinao-public',
     'cloudflared': 'kassinao-tunnel',
 }

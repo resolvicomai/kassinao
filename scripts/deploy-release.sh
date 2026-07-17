@@ -106,7 +106,11 @@ cleanup() {
 
 stop_failed_deploy_containers() {
   local identity container expected_service cid lookup_status running confirmed
-  for identity in kassinao:kassinao kassinao-tunnel:cloudflared kassinao-public:kassinao-public; do
+  for identity in \
+    kassinao:kassinao \
+    kassinao-router:kassinao-router \
+    kassinao-public:kassinao-public \
+    kassinao-tunnel:cloudflared; do
     container="${identity%%:*}"
     expected_service="${identity#*:}"
     if cid="$(managed_container_id "$container" "$container" "$expected_service")"; then
@@ -568,6 +572,8 @@ for required in DISCORD_TOKEN APPLICATION_ID DISCORD_CLIENT_SECRET APP_URL ALLOW
 done
 [ "$(env_value ALLOW_ALL_GUILDS "$APP_ENV")" = false ] || die 'kit privado exige ALLOW_ALL_GUILDS=false'
 [ "$(env_value ALLOW_LEGACY_SHARED_STATE "$APP_ENV")" = false ] || die 'kit de produção recusa estado legado compartilhado'
+[ "$(env_value TRUST_PROXY_HOPS "$APP_ENV")" = 1 ] || \
+  die 'TRUST_PROXY_HOPS precisa ser exatamente 1 no core atrás do router'
 rollback_retention_hours="$(env_value KASSINAO_ROLLBACK_RETENTION_HOURS "$ENV_FILE")"
 app_rollback_retention_hours="$(env_value KASSINAO_ROLLBACK_RETENTION_HOURS "$APP_ENV")"
 [[ "$rollback_retention_hours" =~ ^[1-9][0-9]*$ ]] && \
@@ -692,9 +698,19 @@ has_profile split-public || die 'o kit operacional exige profile split-public'
 [ "$(env_value PUBLIC_SURFACES_ENABLED "$APP_ENV")" = false ] || die 'o core privado exige PUBLIC_SURFACES_ENABLED=false'
 app_host="$(origin_host "$app_url")"; mcp_host="$(origin_host "$mcp_url")"
 public_host="$(origin_host "$public_url")"; docs_host="$(origin_host "$docs_url")"
-[ "$public_host" != "$docs_host" ] && [ "$public_host" != "$app_host" ] && [ "$public_host" != "$mcp_host" ] && \
+[ "$public_host" != "$app_host" ] && [ "$public_host" != "$mcp_host" ] && \
   [ "$docs_host" != "$app_host" ] && [ "$docs_host" != "$mcp_host" ] || \
-  die 'o kit operacional exige hosts próprios para landing/docs, separados de app/MCP'
+  die 'landing/docs precisam ficar em hosts separados de app/MCP'
+public_www_host=''
+if [[ "$public_host" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z0-9.-]+$ ]] && \
+   [[ ! "$public_host" =~ ^[0-9.]+$ ]] && [[ "$public_host" != www.* ]]; then
+  public_www_host="www.$public_host"
+fi
+[ -z "$public_www_host" ] || {
+  [ "$public_www_host" != "$app_host" ] && \
+    [ "$public_www_host" != "$mcp_host" ] && \
+    [ "$public_www_host" != "$docs_host" ]
+} || die 'o alias www da landing conflita com APP_URL, MCP_URL ou DOCS_URL'
 
 data_root="$(env_value KASSINAO_DATA_ROOT "$ENV_FILE")"
 recordings_path="$(env_value KASSINAO_RECORDINGS_DIR "$ENV_FILE")"
@@ -769,7 +785,7 @@ PY
 engine_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
 compose_version="$(docker compose version --short 2>/dev/null || true)"
 python3 - "$engine_version" "$compose_version" <<'PY' || \
-  die 'produção exige Docker Engine >=28.0.0 e Docker Compose >=2.35.0'
+  die 'produção exige Docker Engine >=28.0.0 e Docker Compose >=2.36.0'
 import re
 import sys
 
@@ -779,7 +795,7 @@ def version(raw):
         raise SystemExit(1)
     return tuple(map(int, match.groups()))
 
-if version(sys.argv[1]) < (28, 0, 0) or version(sys.argv[2]) < (2, 35, 0):
+if version(sys.argv[1]) < (28, 0, 0) or version(sys.argv[2]) < (2, 36, 0):
     raise SystemExit(1)
 PY
 docker_env=(env -i "PATH=$PATH" "HOME=$HOME" "LC_ALL=$LC_ALL" "LD_PRELOAD=${LD_PRELOAD-}" \
@@ -807,20 +823,20 @@ for profile in "${profile_list[@]}"; do [ -z "$profile" ] || compose_structure+=
 
 "${compose[@]}" config --quiet
 "${compose_structure[@]}" config --no-env-resolution --format json > "$TEMP_CONFIG"
-python3 - "$TEMP_CONFIG" "$image" "$cloudflared_image" "$release_digest" "$deployment_fingerprint" "$mode" "$host_scope" "$data_root" "$recordings_path" "$state_path" "$auth_path" "$cache_path" "$APP_ENV" "${tunnel_token_file:-}" "$uid" "$gid" "$source_url" <<'PY' || \
+python3 - "$TEMP_CONFIG" "$image" "$cloudflared_image" "$release_digest" "$deployment_fingerprint" "$mode" "$host_scope" "$data_root" "$recordings_path" "$state_path" "$auth_path" "$cache_path" "$APP_ENV" "${tunnel_token_file:-}" "$uid" "$gid" "$source_url" "$app_url" "$mcp_url" "$public_url" "$docs_url" <<'PY' || \
   die 'Compose normalizado viola o perfil de segurança do kit'
 import json
 import os
 import sys
 
-config_path, image, cloudflared_image, release_digest, deployment_fingerprint, mode, host_scope, data_root, recordings, state, auth, cache, app_env, tunnel_token_file, uid, gid, source_url = sys.argv[1:]
+config_path, image, cloudflared_image, release_digest, deployment_fingerprint, mode, host_scope, data_root, recordings, state, auth, cache, app_env, tunnel_token_file, uid, gid, source_url, app_url, mcp_url, public_url, docs_url = sys.argv[1:]
 with open(config_path, encoding='utf-8') as handle:
     config = json.load(handle)
 
 services = config.get('services') or {}
 expected_services = {'kassinao'}
 if mode == 'split':
-    expected_services.add('kassinao-public')
+    expected_services.update({'kassinao-router', 'kassinao-public'})
 profiles = os.environ.get('COMPOSE_PROFILES', '')
 # O profile já foi aplicado pela CLI; serviço ausente/presente é a fonte de verdade.
 if 'cloudflared' in services:
@@ -831,6 +847,13 @@ if set(services) != expected_services:
 def network_names(service):
     value = service.get('networks') or {}
     return set(value if isinstance(value, dict) else value)
+
+def network_options(service, name):
+    value = service.get('networks') or {}
+    if not isinstance(value, dict):
+        return {}
+    options = value.get(name) or {}
+    return options if isinstance(options, dict) else {}
 
 def assert_hardened(name, service, *, require_user=False):
     forbidden = ('build', 'cap_add', 'devices', 'device_cgroup_rules', 'volumes_from', 'gpus')
@@ -868,14 +891,28 @@ def env_file_paths(service):
         paths.append(entry.get('path') if isinstance(entry, dict) else entry)
     return {os.path.realpath(path) for path in paths if path}
 
+def ports(service):
+    value = service.get('ports') or []
+    if not isinstance(value, list) or any(not isinstance(port, dict) for port in value):
+        raise SystemExit('ports não normalizadas')
+    return value
+
 def port_hosts(service):
-    return {str(port.get('host_ip') or '') for port in service.get('ports') or [] if isinstance(port, dict)}
+    return {str(port.get('host_ip') or '') for port in ports(service)}
 
 core = services['kassinao']
 assert_hardened('kassinao', core, require_user=True)
-if core.get('image') != image or network_names(core) != {'private'}:
+if core.get('image') != image or network_names(core) != {'core_link', 'core_egress'}:
     raise SystemExit('kassinao: imagem/rede divergente')
 core_environment = core.get('environment') or {}
+if core_environment.get('PORT') != '8082' or core_environment.get('WEB_BIND_ADDRESS') != '0.0.0.0':
+    raise SystemExit('kassinao: listener interno divergente')
+core_link = network_options(core, 'core_link')
+core_egress = network_options(core, 'core_egress')
+if core_link.get('interface_name') != 'core0' or 'kassinao-core' not in set(core_link.get('aliases') or []):
+    raise SystemExit('kassinao: alias/interface do link privado divergente')
+if core_egress.get('interface_name') != 'egress0' or core_egress.get('gw_priority') != 1:
+    raise SystemExit('kassinao: egress/default gateway divergente')
 if host_scope == 'shared':
     if env_file_paths(core):
         raise SystemExit('kassinao: env_file é proibido no adapter shared')
@@ -892,8 +929,8 @@ if host_scope == 'shared':
         raise SystemExit('kassinao: token do túnel não pode entrar em Config.Env')
 elif env_file_paths(core) != {os.path.realpath(app_env)}:
     raise SystemExit('kassinao: env_file precisa apontar somente para app.env privado')
-if port_hosts(core) != {'127.0.0.1'}:
-    raise SystemExit('kassinao: porta do host precisa ficar em loopback')
+if port_hosts(core):
+    raise SystemExit('kassinao: core privado não pode publicar porta no host')
 if (core.get('environment') or {}).get('KASSINAO_RELEASE_DIGEST') != release_digest:
     raise SystemExit('kassinao: fingerprint de release divergente')
 if (core.get('environment') or {}).get('KASSINAO_DEPLOYMENT_FINGERPRINT') != deployment_fingerprint:
@@ -929,49 +966,139 @@ if actual_mounts != expected_mounts:
     raise SystemExit('kassinao: fontes/destinos de volumes divergentes')
 
 if mode == 'split':
+    router = services['kassinao-router']
+    assert_hardened('kassinao-router', router, require_user=True)
+    if router.get('image') != image or network_names(router) != {'edge_ingress', 'core_link', 'public_link'}:
+        raise SystemExit('kassinao-router: imagem/redes divergentes')
+    if router.get('volumes') or router.get('env_file'):
+        raise SystemExit('kassinao-router: volumes/env_file são proibidos')
+    if router.get('command') != ['/usr/local/bin/node', 'dist/router.js']:
+        raise SystemExit('kassinao-router: comando divergente')
+    router_ports = ports(router)
+    if len(router_ports) != 1 or port_hosts(router) != {'127.0.0.1'}:
+        raise SystemExit('kassinao-router: única porta do host precisa ficar em loopback')
+    router_port = router_ports[0]
+    if router_port.get('target') != 8080 or str(router_port.get('published') or '') == '':
+        raise SystemExit('kassinao-router: publish precisa apontar uma única porta loopback para 8080')
+    router_environment = router.get('environment') or {}
+    allowed_router_env = {
+        'NODE_ENV', 'PORT', 'WEB_BIND_INTERFACE', 'APP_URL', 'MCP_URL', 'PUBLIC_URL', 'DOCS_URL',
+        'KASSINAO_RELEASE_DIGEST', 'KASSINAO_DEPLOYMENT_FINGERPRINT'
+    }
+    if set(router_environment) != allowed_router_env:
+        raise SystemExit('kassinao-router: ambiente saiu da allowlist positiva')
+    expected_router_environment = {
+        'NODE_ENV': 'production',
+        'PORT': '8080',
+        'WEB_BIND_INTERFACE': 'edge0',
+        'KASSINAO_RELEASE_DIGEST': release_digest,
+        'KASSINAO_DEPLOYMENT_FINGERPRINT': deployment_fingerprint,
+    }
+    for key, value in expected_router_environment.items():
+        if router_environment.get(key) != value:
+            raise SystemExit(f'kassinao-router: {key} divergente')
+    expected_router_origins = {
+        'APP_URL': app_url,
+        'MCP_URL': mcp_url,
+        'PUBLIC_URL': public_url,
+        'DOCS_URL': docs_url,
+    }
+    for key, value in expected_router_origins.items():
+        if router_environment.get(key) != value:
+            raise SystemExit(f'kassinao-router: {key} diverge da origem privada canônica')
+    edge = network_options(router, 'edge_ingress')
+    router_core = network_options(router, 'core_link')
+    router_public = network_options(router, 'public_link')
+    if edge.get('interface_name') != 'edge0' or 'kassinao' not in set(edge.get('aliases') or []):
+        raise SystemExit('kassinao-router: alias/interface de ingress divergente')
+    if router_core.get('interface_name') != 'core0' or router_public.get('interface_name') != 'public0':
+        raise SystemExit('kassinao-router: interfaces de upstream divergentes')
+
     public = services['kassinao-public']
     assert_hardened('kassinao-public', public, require_user=True)
-    if public.get('image') != image or network_names(public) != {'public'}:
+    if public.get('image') != image or network_names(public) != {'public_link'}:
         raise SystemExit('kassinao-public: imagem/rede divergente')
     if public.get('volumes') or public.get('env_file'):
         raise SystemExit('kassinao-public: volumes/env_file são proibidos')
-    if port_hosts(public) != {'127.0.0.1'}:
-        raise SystemExit('kassinao-public: porta do host precisa ficar em loopback')
+    if public.get('command') != ['/usr/local/bin/node', 'dist/public.js']:
+        raise SystemExit('kassinao-public: comando divergente')
+    if port_hosts(public):
+        raise SystemExit('kassinao-public: processo público não pode publicar porta no host')
+    if network_options(public, 'public_link').get('interface_name') != 'public0':
+        raise SystemExit('kassinao-public: interface interna divergente')
     allowed_public_env = {
         'NODE_ENV', 'PORT', 'WEB_BIND_ADDRESS', 'PUBLIC_URL', 'DOCS_URL',
         'SOURCE_URL', 'KASSINAO_RELEASE_DIGEST', 'KASSINAO_DEPLOYMENT_FINGERPRINT',
         'TRUST_PROXY_HOPS', 'REPO_PUBLIC'
     }
-    if set(public.get('environment') or {}) - allowed_public_env:
-        raise SystemExit('kassinao-public: ambiente fora da allowlist positiva')
-    if (public.get('environment') or {}).get('KASSINAO_RELEASE_DIGEST') != release_digest:
+    public_environment = public.get('environment') or {}
+    if set(public_environment) != allowed_public_env:
+        raise SystemExit('kassinao-public: ambiente saiu da allowlist positiva exata')
+    expected_public_environment = {
+        'NODE_ENV': 'production',
+        'PORT': '8081',
+        'WEB_BIND_ADDRESS': '0.0.0.0',
+        'PUBLIC_URL': public_url,
+        'DOCS_URL': docs_url,
+        'SOURCE_URL': source_url,
+        'KASSINAO_RELEASE_DIGEST': release_digest,
+        'KASSINAO_DEPLOYMENT_FINGERPRINT': deployment_fingerprint,
+        'TRUST_PROXY_HOPS': '1',
+    }
+    for key, value in expected_public_environment.items():
+        if public_environment.get(key) != value:
+            raise SystemExit(f'kassinao-public: {key} divergente')
+    if public_environment.get('REPO_PUBLIC') not in {'true', 'false'}:
+        raise SystemExit('kassinao-public: REPO_PUBLIC precisa ser booleano explícito')
+    if public_environment.get('KASSINAO_RELEASE_DIGEST') != release_digest:
         raise SystemExit('kassinao-public: fingerprint de release divergente')
-    if (public.get('environment') or {}).get('KASSINAO_DEPLOYMENT_FINGERPRINT') != deployment_fingerprint:
+    if public_environment.get('KASSINAO_DEPLOYMENT_FINGERPRINT') != deployment_fingerprint:
         raise SystemExit('kassinao-public: fingerprint do deploy divergente')
-    if (public.get('environment') or {}).get('SOURCE_URL') != source_url:
+    if public_environment.get('SOURCE_URL') != source_url:
         raise SystemExit('kassinao-public: SOURCE_URL diverge do app.env privado')
+    if public_environment.get('TRUST_PROXY_HOPS') != '1':
+        raise SystemExit('kassinao-public: precisa confiar exatamente no router interno')
 
-private_network = (config.get('networks') or {}).get('private') or {}
-private_driver_opts = private_network.get('driver_opts') or {}
-if private_driver_opts.get('com.docker.network.bridge.name') != 'kas-private0':
-    raise SystemExit('rede privada precisa usar a bridge estável kas-private0')
-
-public_network = (config.get('networks') or {}).get('public') or {}
-if public_network.get('internal') is not True:
-    raise SystemExit('rede pública precisa ser internal para negar egress')
-driver_opts = public_network.get('driver_opts') or {}
-if driver_opts.get('com.docker.network.bridge.name') != 'kas-public0':
-    raise SystemExit('rede pública precisa usar a bridge estável kas-public0')
-if driver_opts.get('com.docker.network.bridge.gateway_mode_ipv4') != 'isolated':
-    raise SystemExit('rede pública precisa remover o gateway IPv4 do host')
-if driver_opts.get('com.docker.network.bridge.gateway_mode_ipv6') != 'isolated':
-    raise SystemExit('rede pública precisa remover o gateway IPv6 do host')
+networks = config.get('networks') or {}
+expected_networks = {
+    'edge_ingress': ('kas-edge0', True),
+    'core_link': ('kas-core0', True),
+    'public_link': ('kas-public0', True),
+    'core_egress': ('kas-core-eg0', False),
+}
+if 'cloudflared' in services:
+    expected_networks['tunnel_egress'] = ('kas-tunnel-eg0', False)
+if set(networks) != set(expected_networks):
+    raise SystemExit(f'redes inesperadas: {sorted(set(networks) ^ set(expected_networks))}')
+for name, (bridge, internal) in expected_networks.items():
+    network = networks.get(name) or {}
+    options = network.get('driver_opts') or {}
+    if options.get('com.docker.network.bridge.name') != bridge:
+        raise SystemExit(f'{name}: bridge estável divergente')
+    if internal:
+        if network.get('internal') is not True:
+            raise SystemExit(f'{name}: link precisa ser internal')
+        if options.get('com.docker.network.bridge.gateway_mode_ipv4') != 'isolated':
+            raise SystemExit(f'{name}: gateway IPv4 precisa ser isolated')
+        if options.get('com.docker.network.bridge.gateway_mode_ipv6') != 'isolated':
+            raise SystemExit(f'{name}: gateway IPv6 precisa ser isolated')
+    else:
+        if network.get('internal') is True:
+            raise SystemExit(f'{name}: egress não pode ser internal')
+        if options.get('com.docker.network.bridge.enable_icc') != 'false':
+            raise SystemExit(f'{name}: comunicação lateral precisa ficar desativada')
 
 if 'cloudflared' in services:
     tunnel = services['cloudflared']
     assert_hardened('cloudflared', tunnel)
-    if tunnel.get('image') != cloudflared_image or network_names(tunnel) != {'private', 'public'}:
+    if tunnel.get('image') != cloudflared_image or network_names(tunnel) != {'edge_ingress', 'tunnel_egress'}:
         raise SystemExit('cloudflared: imagem/redes divergentes')
+    tunnel_edge = network_options(tunnel, 'edge_ingress')
+    tunnel_egress = network_options(tunnel, 'tunnel_egress')
+    if tunnel_edge.get('interface_name') != 'edge0':
+        raise SystemExit('cloudflared: interface de ingress divergente')
+    if tunnel_egress.get('interface_name') != 'egress0' or tunnel_egress.get('gw_priority') != 1:
+        raise SystemExit('cloudflared: egress/default gateway divergente')
     if host_scope == 'shared':
         if tunnel.get('environment'):
             raise SystemExit('cloudflared: environment é proibido no adapter shared')
@@ -1000,7 +1127,7 @@ PY
 
 services="$("${compose[@]}" config --services)"
 expected=(kassinao)
-[ "$mode" = split ] && expected+=(kassinao-public)
+[ "$mode" = split ] && expected+=(kassinao-router kassinao-public)
 has_profile tunnel && expected+=(cloudflared)
 for service in $services; do
   case " ${expected[*]} " in *" $service "*) ;; *) die "serviço inesperado: $service" ;; esac
@@ -1015,8 +1142,9 @@ while IFS= read -r configured_image; do
     *) die "imagem não aprovada no Compose: $configured_image" ;;
   esac
 done < <("${compose[@]}" config --images)
-expected_app_images=1; [ "$mode" = split ] && expected_app_images=2
-[ "$app_image_count" -eq "$expected_app_images" ] || die 'core/público não resolveram exatamente para o digest aprovado'
+expected_app_images=1; [ "$mode" = split ] && expected_app_images=3
+[ "$app_image_count" -eq "$expected_app_images" ] || \
+  die 'core/router/público não resolveram exatamente para o digest aprovado'
 
 printf 'Baixando artefato imutável %s...\n' "$image"
 "${compose[@]}" pull
@@ -1856,6 +1984,21 @@ finally:
 PY
 }
 
+# DNS, SNI, certificado e handshake das quatro origens precisam estar válidos
+# antes de parar o runtime existente. O status HTTP pode vir do deploy anterior
+# e não é interpretado aqui; conteúdo/fingerprint pertencem ao smoke pós-start.
+command -v curl >/dev/null 2>&1 || die 'curl é obrigatório para preflight e smoke externo'
+declare -A checked_origins=()
+for origin in "$app_url" "$mcp_url" "$public_url" "$docs_url"; do
+  [ -z "${checked_origins[$origin]+x}" ] || continue
+  checked_origins["$origin"]=1
+  curl --silent --show-error --proto '=https' --tlsv1.2 \
+    --connect-timeout 5 --max-time 15 --retry 2 --retry-all-errors \
+    --head --output /dev/null "$origin/health" ||
+    die "DNS/TLS externo indisponível antes do deploy: $(origin_host "$origin"); nenhum container foi parado"
+done
+unset checked_origins
+
 # Esta prova acontece antes de qualquer stop/recreate. Anomalias estaticas de
 # state/metadata (incluindo hardlink auth->state) falham sem mutar containers.
 operational_snapshot_gate preflight || \
@@ -1948,6 +2091,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
     [ -n "$cid" ] || { all_ready=false; summary+=("$service=ausente"); continue; }
     case "$service" in
       kassinao) expected_container_name=kassinao ;;
+      kassinao-router) expected_container_name=kassinao-router ;;
       kassinao-public) expected_container_name=kassinao-public ;;
       cloudflared) expected_container_name=kassinao-tunnel ;;
       *) die "serviço inesperado durante a prova de identidade: $service" ;;
@@ -1971,7 +2115,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
         [ "$runtime_restart" = no ] || \
         die "$service violou o gate shared de memória sem swap/restart fail-closed"
     fi
-    if [ "$service" = kassinao ] || [ "$service" = kassinao-public ]; then
+    if [ "$service" = kassinao ] || [ "$service" = kassinao-router ] || [ "$service" = kassinao-public ]; then
       [ "$(docker inspect -f '{{.Config.Image}}' "$cid")" = "$image" ] || die "$service executa imagem divergente"
       [ "$status" = healthy ] || all_ready=false
     else
@@ -1995,7 +2139,6 @@ if [ "$host_scope" = shared ]; then
     die 'audit final shared recusou o runtime; a tentativa será contida antes do smoke externo'
 fi
 
-command -v curl >/dev/null 2>&1 || die 'curl é obrigatório para smoke externo'
 smoke_body="$(mktemp "$ROOT/.smoke.XXXXXX")"; chmod 600 "$smoke_body"
 health_targets=("private|$app_url" "private|$mcp_url")
 if [ "$mode" = split ]; then
@@ -2091,7 +2234,35 @@ done
 
 if [ "$mode" = split ]; then
   for origin in "$public_url" "$docs_url"; do
-    for private_path in /app /auth/login /api/meetings /mcp /privacy /en/privacy; do
+    for privacy_path in /privacy /en/privacy; do
+      code="$(curl --silent --show-error --proto '=https' --tlsv1.2 --max-time 20 \
+        -D "$smoke_body" -o /dev/null -w '%{http_code}' "$origin$privacy_path")"
+      [ "$code" = 308 ] || die "host público não redirecionou política $privacy_path: $(origin_host "$origin")"
+      python3 - "$smoke_body" "$app_url$privacy_path" <<'PY' || \
+        die "redirect de política diverge em $(origin_host "$origin")$privacy_path"
+import sys
+
+raw = open(sys.argv[1], 'rb').read().replace(b'\r\n', b'\n')
+blocks = [block for block in raw.split(b'\n\n') if block.strip()]
+if len(blocks) != 1:
+    raise SystemExit(1)
+lines = blocks[0].split(b'\n')
+if not lines or not lines[0].startswith(b'HTTP/'):
+    raise SystemExit(1)
+locations = []
+for line in lines[1:]:
+    if not line:
+        continue
+    if line[:1] in (b' ', b'\t') or b':' not in line:
+        raise SystemExit(1)
+    name, value = line.split(b':', 1)
+    if name.lower() == b'location':
+        locations.append(value.strip().decode('ascii', 'strict'))
+if locations != [sys.argv[2]]:
+    raise SystemExit(1)
+PY
+    done
+    for private_path in /app /auth/login /api/meetings /mcp; do
       code="$(curl --silent --show-error --proto '=https' --tlsv1.2 --max-time 20 -o /dev/null -w '%{http_code}' "$origin$private_path")"
       [ "$code" = 404 ] || die "host público aceitou rota privada $private_path: $(origin_host "$origin")"
     done

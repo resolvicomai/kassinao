@@ -130,18 +130,21 @@ ALLOWED_PUBLIC_TCP_PORTS="${_saved_allowed_tcp:-22}"
 ALLOWED_PUBLIC_UDP_PORTS="${_saved_allowed_udp:-}"
 ENV_FILE="$DEPLOY_REAL/.env"
 CORE_CONTAINER=kassinao
+ROUTER_CONTAINER=kassinao-router
 PUBLIC_CONTAINER=kassinao-public
 TUNNEL_CONTAINER=kassinao-tunnel
 CORE_NETWORKS=''
+ROUTER_NETWORKS=''
 PUBLIC_NETWORKS=''
+TUNNEL_NETWORKS=''
 
-for container_name in "$CORE_CONTAINER" "$PUBLIC_CONTAINER" "$TUNNEL_CONTAINER"; do
+for container_name in "$CORE_CONTAINER" "$ROUTER_CONTAINER" "$PUBLIC_CONTAINER" "$TUNNEL_CONTAINER"; do
   case "$container_name" in
     '' | *[!A-Za-z0-9_.-]*) fatal 'nome de container configurado é inválido' ;;
   esac
 done
-[ "$CORE_CONTAINER" != "$PUBLIC_CONTAINER" ] && [ "$CORE_CONTAINER" != "$TUNNEL_CONTAINER" ] && \
-  [ "$PUBLIC_CONTAINER" != "$TUNNEL_CONTAINER" ] || fatal 'nomes dos containers precisam ser distintos'
+[ "$(printf '%s\n' "$CORE_CONTAINER" "$ROUTER_CONTAINER" "$PUBLIC_CONTAINER" "$TUNNEL_CONTAINER" | sort -u | wc -l | tr -d ' ')" -eq 4 ] || \
+  fatal 'nomes dos containers precisam ser distintos'
 
 pass() { printf 'PASS  %s\n' "$1"; }
 fail() { printf 'FAIL  %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
@@ -181,6 +184,72 @@ allowed_port() {
     *",$wanted,"*) return 0 ;;
     *) return 1 ;;
   esac
+}
+network_for_bridge() {
+  local networks="$1" wanted_bridge="$2" network_name bridge matches=0 matched=''
+  while IFS= read -r network_name; do
+    [ -n "$network_name" ] || continue
+    bridge="$(docker network inspect -f '{{index .Options "com.docker.network.bridge.name"}}' "$network_name" 2>/dev/null || true)"
+    if [ "$bridge" = "$wanted_bridge" ]; then
+      matches=$((matches + 1))
+      matched="$network_name"
+    fi
+  done <<<"$networks"
+  [ "$matches" -eq 1 ] || return 1
+  printf '%s\n' "$matched"
+}
+network_members() {
+  docker network inspect -f '{{range .Containers}}{{printf "%s\n" .Name}}{{end}}' "$1" 2>/dev/null |
+    grep -ve '^$' | sort -u
+}
+internal_network_is() {
+  local network_name="$1" bridge="$2"
+  [ "$(docker network inspect -f '{{.Driver}}' "$network_name" 2>/dev/null || true)" = bridge ] &&
+    [ "$(docker network inspect -f '{{.Internal}}' "$network_name" 2>/dev/null || true)" = true ] &&
+    [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.name"}}' "$network_name" 2>/dev/null || true)" = "$bridge" ] &&
+    [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.gateway_mode_ipv4"}}' "$network_name" 2>/dev/null || true)" = isolated ] &&
+    [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.gateway_mode_ipv6"}}' "$network_name" 2>/dev/null || true)" = isolated ]
+}
+egress_network_is() {
+  local network_name="$1" bridge="$2"
+  [ "$(docker network inspect -f '{{.Driver}}' "$network_name" 2>/dev/null || true)" = bridge ] &&
+    [ "$(docker network inspect -f '{{.Internal}}' "$network_name" 2>/dev/null || true)" = false ] &&
+    [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.name"}}' "$network_name" 2>/dev/null || true)" = "$bridge" ] &&
+    [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.enable_icc"}}' "$network_name" 2>/dev/null || true)" = false ]
+}
+container_alias_is() {
+  local container="$1" expected_network="$2" expected_alias="$3"
+  docker inspect -f '{{json .NetworkSettings.Networks}}' "$container" 2>/dev/null |
+    python3 -c '
+import json
+import sys
+
+networks = json.load(sys.stdin)
+expected_network, expected_alias = sys.argv[1:]
+matches = [name for name, value in networks.items() if expected_alias in set(value.get("Aliases") or [])]
+if matches != [expected_network]:
+    raise SystemExit(1)
+' "$expected_network" "$expected_alias" >/dev/null 2>&1
+}
+compose_labels_are() {
+  local container="$1" service="$2"
+  docker inspect -f '{{json .Config.Labels}}' "$container" 2>/dev/null |
+    python3 -c '
+import json
+import sys
+
+labels = json.load(sys.stdin)
+deploy_dir, service = sys.argv[1:]
+expected = {
+    "com.docker.compose.project": "kassinao",
+    "com.docker.compose.service": service,
+    "com.docker.compose.oneoff": "False",
+    "com.docker.compose.project.working_dir": deploy_dir,
+    "com.docker.compose.project.config_files": deploy_dir + "/docker-compose.yml",
+}
+if not isinstance(labels, dict) or any(labels.get(key) != value for key, value in expected.items()):
+    raise SystemExit(1)
+' "$DEPLOY_REAL" "$service" >/dev/null 2>&1
 }
 
 section REPORT
@@ -391,7 +460,8 @@ profiles = [item.strip() for item in compose.get('COMPOSE_PROFILES', '').split('
 if (len(profiles) != len(set(profiles)) or not set(profiles) <= {'split-public', 'tunnel'} or
         'split-public' not in profiles or (('tunnel' in profiles) != bool(compose.get('TUNNEL_TOKEN')))):
     raise SystemExit(1)
-if (app.get('PUBLIC_SURFACES_ENABLED') != 'false' or app.get('ALLOW_ALL_GUILDS') != 'false' or
+if (app.get('PUBLIC_SURFACES_ENABLED') != 'false' or app.get('TRUST_PROXY_HOPS') != '1' or
+        app.get('ALLOW_ALL_GUILDS') != 'false' or
         app.get('ALLOW_LOCAL_APP_URL', 'false') != 'false' or
         app.get('ALLOW_LEGACY_SHARED_STATE') != 'false' or app.get('BASE_URL', '') != ''):
     raise SystemExit(1)
@@ -409,15 +479,14 @@ if app.get('BASE_URL', '') not in ('', app['APP_URL']):
     raise SystemExit(1)
 if any(compose.get(name) != app.get(name) for name in names):
     raise SystemExit(1)
-if (hosts['PUBLIC_URL'] == hosts['DOCS_URL'] or
-        hosts['PUBLIC_URL'] in (hosts['APP_URL'], hosts['MCP_URL']) or
+if (hosts['PUBLIC_URL'] in (hosts['APP_URL'], hosts['MCP_URL']) or
         hosts['DOCS_URL'] in (hosts['APP_URL'], hosts['MCP_URL'])):
     raise SystemExit(1)
 PY
 then
-  pass 'topologia split, guild allowlist e origens HTTPS privadas foram revalidadas'
+  pass 'topologia split, guild allowlist e separação público/privado foram revalidadas'
 else
-  fail 'produção exige topologia split coerente, allowlist privada e origens HTTPS próprias'
+  fail 'produção exige topologia split coerente, allowlist privada e hosts públicos separados de app/MCP'
 fi
 
 section HOST_GATE
@@ -860,13 +929,13 @@ def parse(raw):
     if not match:
         raise SystemExit(1)
     return tuple(map(int, match.groups()))
-if parse(sys.argv[1]) < (28, 0, 0) or parse(sys.argv[2]) < (2, 35, 0):
+if parse(sys.argv[1]) < (28, 0, 0) or parse(sys.argv[2]) < (2, 36, 0):
     raise SystemExit(1)
 PY
 then
   pass 'Docker Engine e Compose atendem às versões mínimas seguras'
 else
-  fail 'produção exige Docker Engine >=28.0.0 e Compose >=2.35.0'
+  fail 'produção exige Docker Engine >=28.0.0 e Compose >=2.36.0'
 fi
 
 DOCKER_MAIN_PID="$(systemctl show docker -p MainPID --value 2>/dev/null || true)"
@@ -1033,7 +1102,7 @@ else
     ATTACHED_NETWORKS=''
   else
     EXPECTED_CONTAINER_NAMES=("$CORE_CONTAINER")
-    profile_enabled split-public && EXPECTED_CONTAINER_NAMES+=("$PUBLIC_CONTAINER")
+    profile_enabled split-public && EXPECTED_CONTAINER_NAMES+=("$ROUTER_CONTAINER" "$PUBLIC_CONTAINER")
     profile_enabled tunnel && EXPECTED_CONTAINER_NAMES+=("$TUNNEL_CONTAINER")
     dedicated_projection='{"Id":{{json .Id}},"Name":{{json .Name}},"HostConfig":{"Privileged":{{json .HostConfig.Privileged}},"CapAdd":{{json .HostConfig.CapAdd}},"HasDevices":{{if .HostConfig.Devices}}true{{else}}false{{end}},"HasDeviceCgroupRules":{{if .HostConfig.DeviceCgroupRules}}true{{else}}false{{end}},"HasDeviceRequests":{{if .HostConfig.DeviceRequests}}true{{else}}false{{end}},"NetworkMode":{{json .HostConfig.NetworkMode}},"PortBindings":{{json .HostConfig.PortBindings}}},"Mounts":[{{range $index, $mount := .Mounts}}{{if $index}},{{end}}{"Type":{{json $mount.Type}},"Source":{{json $mount.Source}},"Destination":{{json $mount.Destination}},"RW":{{json $mount.RW}}}{{end}}],"NetworkNames":[{{$first := true}}{{range $name, $_ := .NetworkSettings.Networks}}{{if not $first}},{{end}}{{$first = false}}{{json $name}}{{end}}]}'
     if ATTACHED_NETWORKS="$({
@@ -1157,6 +1226,9 @@ else
     [ "$CONFIGURED_IMAGE" = "$EXPECTED_IMAGE" ] \
     && pass 'core usa o digest exato configurado' \
     || fail 'core não usa o digest exato configurado'
+  compose_labels_are "$CORE_CONTAINER" kassinao \
+    && pass 'labels do core pertencem somente ao Compose operacional selado' \
+    || fail 'labels do core divergem do Compose operacional selado'
   [ "$CORE_ENTRYPOINT" = '["/usr/local/bin/kassinao-no-dump","--preload","/usr/local/lib/libkassinao-no-dump.so","--","/usr/bin/tini","--"]' ] \
     && [ "$CORE_COMMAND" = '["/usr/local/bin/node","dist/index.js"]' ] \
     && pass 'core preserva entrypoint no-dump e command selados' \
@@ -1168,6 +1240,10 @@ else
     || fail 'core recebeu fingerprint divergente'
   [ -z "$(container_env_value "$CORE_CONTAINER" TUNNEL_TOKEN)" ] \
     && pass 'core não recebeu credencial do túnel' || fail 'core recebeu credencial do túnel'
+  [ "$(container_env_value "$CORE_CONTAINER" PORT)" = 8082 ] && \
+    [ "$(container_env_value "$CORE_CONTAINER" WEB_BIND_ADDRESS)" = 0.0.0.0 ] \
+    && pass 'core escuta somente na porta interna 8082 declarada' \
+    || fail 'listener interno do core divergiu'
   if [ -n "$APP_ENV_FILE" ] && [ -f "$APP_ENV_FILE" ] && \
      docker inspect -f '{{json .Config.Env}}' "$CORE_CONTAINER" 2>/dev/null | python3 -c '
 import json
@@ -1199,7 +1275,7 @@ for entry in entries:
 configured = read_env(sys.argv[1])
 required = (
     "APP_URL", "BASE_URL", "PUBLIC_URL", "DOCS_URL", "MCP_URL",
-    "PUBLIC_SURFACES_ENABLED", "ALLOW_ALL_GUILDS", "ALLOWED_GUILD_IDS",
+    "PUBLIC_SURFACES_ENABLED", "TRUST_PROXY_HOPS", "ALLOW_ALL_GUILDS", "ALLOWED_GUILD_IDS",
     "ALLOW_LOCAL_APP_URL", "ALLOW_LEGACY_SHARED_STATE",
     "DISCORD_TOKEN", "APPLICATION_ID", "DISCORD_CLIENT_SECRET",
 )
@@ -1212,8 +1288,8 @@ if effective.get("NODE_ENV") != "production":
   else
     fail 'ambiente efetivo do core diverge do app.env privado ou contém duplicatas'
   fi
-  BAD_PORTS="$(docker port "$CORE_CONTAINER" 2>/dev/null | awk '$3 !~ /^127\.0\.0\.1:/ && $3 !~ /^\[::1\]:/ {count++} END {print count+0}')"
-  [ "$BAD_PORTS" -eq 0 ] && pass 'portas do core estão presas a loopback' || fail 'core publica porta fora de loopback'
+  CORE_PORTS="$(docker port "$CORE_CONTAINER" 2>/dev/null || true)"
+  [ -z "$CORE_PORTS" ] && pass 'core não publica porta no host' || fail 'core privado publica porta no host'
 
   MOUNTS="$(docker inspect -f '{{range .Mounts}}{{printf "%s|%s|%s\n" .Type .Source .Destination}}{{end}}' "$CORE_CONTAINER" 2>/dev/null || true)"
   rec_count=0 state_count=0 auth_count=0 cache_count=0
@@ -1246,86 +1322,172 @@ if effective.get("NODE_ENV") != "production":
     && pass 'core usa exatamente os quatro mounts esperados' \
     || fail 'core precisa de um único mount para recordings, state, auth e cache'
   CORE_NETWORKS="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{printf "%s\n" $name}}{{end}}' "$CORE_CONTAINER" 2>/dev/null | sed '/^$/d' | sort -u)"
-  [ "$(grep -cve '^$' <<<"$CORE_NETWORKS")" -eq 1 ] \
-    && pass 'core usa exatamente uma rede privada' \
-    || fail 'core possui rede adicional ou rede privada ausente'
-  if [ "$(grep -cve '^$' <<<"$CORE_NETWORKS")" -eq 1 ]; then
-    CORE_NETWORK_NAME="$(grep -ve '^$' <<<"$CORE_NETWORKS")"
-    PRIVATE_MEMBERS="$(docker network inspect -f '{{range .Containers}}{{printf "%s\n" .Name}}{{end}}' "$CORE_NETWORK_NAME" 2>/dev/null | grep -ve '^$' | sort -u)"
-    EXPECTED_PRIVATE_MEMBERS="$CORE_CONTAINER"
-    if profile_enabled tunnel; then
-      EXPECTED_PRIVATE_MEMBERS="$(printf '%s\n%s\n' "$CORE_CONTAINER" "$TUNNEL_CONTAINER" | sort -u)"
-    fi
-    [ "$PRIVATE_MEMBERS" = "$EXPECTED_PRIVATE_MEMBERS" ] \
-      && pass 'rede privada contém somente core e túnel esperado' \
-      || fail 'rede privada contém endpoint inesperado ou endpoint esperado ausente'
-    read -r CORE_NETWORK_ID CORE_NETWORK_DRIVER CORE_BRIDGE < <(
-      docker network inspect -f '{{.Id}} {{.Driver}} {{index .Options "com.docker.network.bridge.name"}}' "$CORE_NETWORK_NAME" 2>/dev/null || true
-    )
-    CORE_BRIDGE="${CORE_BRIDGE:-br-${CORE_NETWORK_ID:0:12}}"
-    firewall_family_ok() {
-      local tool="$1" destination first_forward first_docker first_input expected_forward expected_docker expected_input index
-      local egress_anchor host_anchor egress_chain host_chain egress_inactive host_inactive
-      shift
-      local -a egress_rules host_rules anchor_rules
-      expected_forward='-A FORWARD -j DOCKER-USER'
-      expected_docker="-A DOCKER-USER -i $CORE_BRIDGE -j KASSINAO-EGRESS"
-      expected_input="-A INPUT -i $CORE_BRIDGE -j KASSINAO-HOST"
-      first_forward="$("$tool" -S FORWARD 2>/dev/null | awk '$1 == "-A" {print; exit}')"
-      first_docker="$("$tool" -S DOCKER-USER 2>/dev/null | awk '$1 == "-A" {print; exit}')"
-      first_input="$("$tool" -S INPUT 2>/dev/null | awk '$1 == "-A" {print; exit}')"
-      [ "$first_forward" = "$expected_forward" ] || return 1
-      [ "$first_docker" = "$expected_docker" ] || return 1
-      [ "$first_input" = "$expected_input" ] || return 1
-      [ "$("$tool" -S FORWARD 2>/dev/null | grep -Fxc -- "$expected_forward")" -eq 1 ] || return 1
-      [ "$("$tool" -S DOCKER-USER 2>/dev/null | grep -Fxc -- "$expected_docker")" -eq 1 ] || return 1
-      [ "$("$tool" -S INPUT 2>/dev/null | grep -Fxc -- "$expected_input")" -eq 1 ] || return 1
+  [ "$(grep -cve '^$' <<<"$CORE_NETWORKS")" -eq 2 ] \
+    && pass 'core usa somente link privado e egress exclusivo' \
+    || fail 'core precisa usar exatamente duas redes'
+  CORE_LINK_NETWORK="$(network_for_bridge "$CORE_NETWORKS" kas-core0 2>/dev/null || true)"
+  CORE_EGRESS_NETWORK="$(network_for_bridge "$CORE_NETWORKS" kas-core-eg0 2>/dev/null || true)"
+  if [ -n "$CORE_LINK_NETWORK" ] && [ -n "$CORE_EGRESS_NETWORK" ] && \
+     [ "$CORE_LINK_NETWORK" != "$CORE_EGRESS_NETWORK" ]; then
+    EXPECTED_CORE_LINK_MEMBERS="$CORE_CONTAINER"
+    profile_enabled split-public && \
+      EXPECTED_CORE_LINK_MEMBERS="$(printf '%s\n%s\n' "$CORE_CONTAINER" "$ROUTER_CONTAINER" | sort -u)"
+    [ "$(network_members "$CORE_LINK_NETWORK")" = "$EXPECTED_CORE_LINK_MEMBERS" ] \
+      && internal_network_is "$CORE_LINK_NETWORK" kas-core0 \
+      && container_alias_is "$CORE_CONTAINER" "$CORE_LINK_NETWORK" kassinao-core \
+      && pass 'link core-router é internal+isolated e contém somente os endpoints esperados' \
+      || fail 'link core-router possui endpoint, alias ou política divergente'
+    [ "$(network_members "$CORE_EGRESS_NETWORK")" = "$CORE_CONTAINER" ] \
+      && egress_network_is "$CORE_EGRESS_NETWORK" kas-core-eg0 \
+      && pass 'egress do core usa bridge exclusiva sem comunicação lateral' \
+      || fail 'egress do core possui endpoint ou política divergente'
+  else
+    fail 'bridges estáveis kas-core0/kas-core-eg0 estão ausentes ou ambíguas'
+  fi
+fi
 
-      mapfile -t anchor_rules < <("$tool" -S KASSINAO-EGRESS 2>/dev/null | awk '$1 == "-A" {print}')
-      [ "${#anchor_rules[@]}" -eq 1 ] || return 1
-      egress_anchor="${anchor_rules[0]}"
-      case "$egress_anchor" in
-        '-A KASSINAO-EGRESS -j KASSINAO-EGRESS-A') egress_chain=KASSINAO-EGRESS-A; egress_inactive=KASSINAO-EGRESS-B ;;
-        '-A KASSINAO-EGRESS -j KASSINAO-EGRESS-B') egress_chain=KASSINAO-EGRESS-B; egress_inactive=KASSINAO-EGRESS-A ;;
-        *) return 1 ;;
-      esac
-      mapfile -t anchor_rules < <("$tool" -S KASSINAO-HOST 2>/dev/null | awk '$1 == "-A" {print}')
-      [ "${#anchor_rules[@]}" -eq 1 ] || return 1
-      host_anchor="${anchor_rules[0]}"
-      case "$host_anchor" in
-        '-A KASSINAO-HOST -j KASSINAO-HOST-A') host_chain=KASSINAO-HOST-A; host_inactive=KASSINAO-HOST-B ;;
-        '-A KASSINAO-HOST -j KASSINAO-HOST-B') host_chain=KASSINAO-HOST-B; host_inactive=KASSINAO-HOST-A ;;
-        *) return 1 ;;
-      esac
-      [ "$("$tool" -S 2>/dev/null | awk -v target="$egress_chain" '$1 == "-A" {for (i=1; i<NF; i++) if ($i == "-j" && $(i+1) == target) count++} END {print count+0}')" -eq 1 ] || return 1
-      [ "$("$tool" -S 2>/dev/null | awk -v target="$host_chain" '$1 == "-A" {for (i=1; i<NF; i++) if ($i == "-j" && $(i+1) == target) count++} END {print count+0}')" -eq 1 ] || return 1
-      [ "$("$tool" -S 2>/dev/null | awk -v a="$egress_inactive" -v b="$host_inactive" '$1 == "-A" {for (i=1; i<NF; i++) if ($i == "-j" && ($(i+1) == a || $(i+1) == b)) count++} END {print count+0}')" -eq 0 ] || return 1
+section ROUTER_CONTAINER
+router_exists=false
+docker inspect --format '{{.Id}}' "$ROUTER_CONTAINER" >/dev/null 2>&1 && router_exists=true
+if profile_enabled split-public; then
+  if [ "$router_exists" != true ]; then
+    fail 'profile split-public ativo sem router'
+  else
+    ROUTER_USER="$(docker inspect -f '{{.Config.User}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_PRIVILEGED="$(docker inspect -f '{{.HostConfig.Privileged}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_READONLY="$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_CAP_DROP="$(docker inspect -f '{{json .HostConfig.CapDrop}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_CAP_ADD="$(docker inspect -f '{{json .HostConfig.CapAdd}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_DEVICES="$(docker inspect -f '{{json .HostConfig.Devices}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_DEVICE_RULES="$(docker inspect -f '{{json .HostConfig.DeviceCgroupRules}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_SECURITY_OPT="$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_NETWORK_MODE="$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_PID_MODE="$(docker inspect -f '{{.HostConfig.PidMode}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_IPC_MODE="$(docker inspect -f '{{.HostConfig.IpcMode}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_UTS_MODE="$(docker inspect -f '{{.HostConfig.UtsMode}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_MOUNTS="$(docker inspect -f '{{json .Mounts}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_ENTRYPOINT="$(docker inspect -f '{{json .Config.Entrypoint}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_COMMAND="$(docker inspect -f '{{json .Config.Cmd}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_STATE_HEALTH="$(docker inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    ROUTER_RESTART_POLICY="$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' "$ROUTER_CONTAINER" 2>/dev/null || true)"
 
-      mapfile -t egress_rules < <("$tool" -S "$egress_chain" 2>/dev/null | awk '$1 == "-A" {print}')
-      [ "${#egress_rules[@]}" -eq "$(( $# + 2 ))" ] || return 1
-      [ "${egress_rules[0]}" = "-A $egress_chain -o $CORE_BRIDGE -j RETURN" ] || return 1
-      index=1
-      for destination in "$@"; do
-        [ "${egress_rules[$index]}" = "-A $egress_chain -d $destination -j REJECT" ] || return 1
-        index=$((index + 1))
-      done
-      [ "${egress_rules[$index]}" = "-A $egress_chain -j RETURN" ] || return 1
+    case "$ROUTER_USER" in '' | 0 | root | 0:0 | root:root) fail 'router roda como root' ;; *) pass 'router roda como não-root' ;; esac
+    [ "$ROUTER_STATE_HEALTH" = 'running|healthy' ] \
+      && pass 'router está running e healthy' \
+      || fail 'router precisa estar running e healthy antes da aprovação'
+    [ "$ROUTER_RESTART_POLICY" = unless-stopped ] \
+      && pass 'router usa restart policy unless-stopped' \
+      || fail 'router precisa usar restart policy unless-stopped'
+    [ "$ROUTER_PRIVILEGED" = false ] && pass 'router não é privilegiado' || fail 'router está privilegiado'
+    [ "$ROUTER_READONLY" = true ] && pass 'root filesystem do router é read-only' || fail 'root filesystem do router permite escrita'
+    grep -q 'ALL' <<<"$ROUTER_CAP_DROP" && pass 'router remove capabilities' || fail 'router mantém capabilities'
+    { [ "$ROUTER_CAP_ADD" = null ] || [ "$ROUTER_CAP_ADD" = '[]' ]; } \
+      && pass 'router não readiciona capabilities' || fail 'router readiciona capabilities'
+    { [ "$ROUTER_DEVICES" = null ] || [ "$ROUTER_DEVICES" = '[]' ]; } && \
+      { [ "$ROUTER_DEVICE_RULES" = null ] || [ "$ROUTER_DEVICE_RULES" = '[]' ]; } \
+      && pass 'router não recebe devices' || fail 'router recebe device ou regra de device'
+    grep -q 'no-new-privileges' <<<"$ROUTER_SECURITY_OPT" \
+      && pass 'router usa no-new-privileges' || fail 'router sem no-new-privileges'
+    grep -Eqi '(apparmor|seccomp)[=:]unconfined' <<<"$ROUTER_SECURITY_OPT" \
+      && fail 'router usa perfil unconfined' || pass 'router não desativa AppArmor/seccomp'
+    [[ "$ROUTER_NETWORK_MODE" != host && "$ROUTER_NETWORK_MODE" != container:* ]] \
+      && pass 'router não compartilha namespace de rede' || fail 'router compartilha namespace de rede'
+    [ -z "$ROUTER_PID_MODE" ] && pass 'router tem namespace de processos isolado' || fail 'router compartilha namespace de processos'
+    { [ -z "$ROUTER_IPC_MODE" ] || [ "$ROUTER_IPC_MODE" = private ]; } \
+      && pass 'router tem IPC isolado' || fail 'router compartilha IPC'
+    [ -z "$ROUTER_UTS_MODE" ] && pass 'router tem UTS isolado' || fail 'router compartilha UTS'
+    [ "$ROUTER_MOUNTS" = '[]' ] && pass 'router não possui mounts' || fail 'router possui mounts'
+    [ "$ROUTER_IMAGE" = "$CONFIGURED_IMAGE" ] && pass 'core e router usam o mesmo digest' || fail 'core e router usam imagens diferentes'
+    compose_labels_are "$ROUTER_CONTAINER" kassinao-router \
+      && pass 'labels do router pertencem somente ao Compose operacional selado' \
+      || fail 'labels do router divergem do Compose operacional selado'
+    [ "$ROUTER_ENTRYPOINT" = '["/usr/local/bin/kassinao-no-dump","--preload","/usr/local/lib/libkassinao-no-dump.so","--","/usr/bin/tini","--"]' ] \
+      && [ "$ROUTER_COMMAND" = '["/usr/local/bin/node","dist/router.js"]' ] \
+      && pass 'router preserva entrypoint no-dump e command selados' \
+      || fail 'router possui entrypoint ou command divergente'
+    ROUTER_RELEASE="$(container_env_value "$ROUTER_CONTAINER" KASSINAO_RELEASE_DIGEST)"
+    ROUTER_DEPLOYMENT="$(container_env_value "$ROUTER_CONTAINER" KASSINAO_DEPLOYMENT_FINGERPRINT)"
+    [ "$ROUTER_RELEASE" = "$EXPECTED_RELEASE" ] && [ "$ROUTER_DEPLOYMENT" = "$EXPECTED_DEPLOYMENT" ] \
+      && pass 'router recebeu os fingerprints exatos' \
+      || fail 'router recebeu fingerprint divergente'
 
-      mapfile -t host_rules < <("$tool" -S "$host_chain" 2>/dev/null | awk '$1 == "-A" {print}')
-      [ "${#host_rules[@]}" -eq 3 ] || return 1
-      [[ "${host_rules[0]}" == "-A $host_chain -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN" || \
-         "${host_rules[0]}" == "-A $host_chain -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN" ]] || return 1
-      [ "${host_rules[1]}" = "-A $host_chain -m addrtype --dst-type LOCAL -j REJECT" ] || return 1
-      [ "${host_rules[2]}" = "-A $host_chain -j RETURN" ] || return 1
-    }
-    if [ "$CORE_NETWORK_DRIVER" = bridge ] && [ "$CORE_BRIDGE" = kas-private0 ] && \
-       firewall_family_ok iptables 127.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 && \
-       firewall_family_ok ip6tables ::1/128 fc00::/7 fe80::/10; then
-      pass 'core/túnel têm egress lateral e acesso ao host negados em IPv4/IPv6'
+    EXPECTED_ROUTER_HOST_PORT="$(env_value KASSINAO_HOST_PORT "$ENV_FILE")"
+    EXPECTED_ROUTER_HOST_PORT="${EXPECTED_ROUTER_HOST_PORT:-8080}"
+    ROUTER_PORTS="$(docker port "$ROUTER_CONTAINER" 2>/dev/null || true)"
+    if [[ "$EXPECTED_ROUTER_HOST_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && \
+       [ "$EXPECTED_ROUTER_HOST_PORT" -le 65535 ] && \
+       [ "$ROUTER_PORTS" = "8080/tcp -> 127.0.0.1:$EXPECTED_ROUTER_HOST_PORT" ]; then
+      pass 'router é o único ingress e publica 8080 somente no loopback IPv4 configurado'
     else
-      fail 'política KASSINAO-EGRESS/HOST está ausente ou incompleta'
+      fail 'router precisa de um único publish 127.0.0.1:HOST_PORT para 8080/tcp'
+    fi
+
+    ROUTER_ALLOWED_ENV='NODE_ENV NODE_VERSION YARN_VERSION PYTHONDONTWRITEBYTECODE PATH HOME HOSTNAME PORT WEB_BIND_INTERFACE APP_URL MCP_URL PUBLIC_URL DOCS_URL KASSINAO_RELEASE_DIGEST KASSINAO_DEPLOYMENT_FINGERPRINT TZ LANG LC_ALL TERM NO_COLOR FORCE_COLOR'
+    bad_router_env=''
+    while IFS= read -r entry; do
+      [ -n "$entry" ] || continue
+      name="${entry%%=*}"
+      value="${entry#*=}"
+      [ "$entry" != "$name" ] || continue
+      [ -n "$value" ] || continue
+      case " $ROUTER_ALLOWED_ENV " in
+        *" $name "*) ;;
+        *) bad_router_env="${bad_router_env}${bad_router_env:+,}$name" ;;
+      esac
+    done < <(docker inspect -f '{{range .Config.Env}}{{printf "%s\n" .}}{{end}}' "$ROUTER_CONTAINER" 2>/dev/null)
+    if [ -z "$bad_router_env" ] && \
+       [ "$(container_env_value "$ROUTER_CONTAINER" NODE_ENV)" = production ] && \
+       [ "$(container_env_value "$ROUTER_CONTAINER" PORT)" = 8080 ] && \
+       [ "$(container_env_value "$ROUTER_CONTAINER" WEB_BIND_INTERFACE)" = edge0 ] && \
+       [ "$(container_env_value "$ROUTER_CONTAINER" APP_URL)" = "$(env_value APP_URL "$ENV_FILE")" ] && \
+       [ "$(container_env_value "$ROUTER_CONTAINER" MCP_URL)" = "$(env_value MCP_URL "$ENV_FILE")" ] && \
+       [ "$(container_env_value "$ROUTER_CONTAINER" PUBLIC_URL)" = "$(env_value PUBLIC_URL "$ENV_FILE")" ] && \
+       [ "$(container_env_value "$ROUTER_CONTAINER" DOCS_URL)" = "$(env_value DOCS_URL "$ENV_FILE")" ]; then
+      pass 'router possui somente topologia pública canônica e nenhum segredo'
+    else
+      fail "env do router saiu da allowlist ou divergiu: ${bad_router_env:-valor canônico}"
+    fi
+
+    ROUTER_NETWORKS="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{printf "%s\n" $name}}{{end}}' "$ROUTER_CONTAINER" 2>/dev/null | sed '/^$/d' | sort -u)"
+    [ "$(grep -cve '^$' <<<"$ROUTER_NETWORKS")" -eq 3 ] \
+      && pass 'router usa somente ingress, link do core e link público' \
+      || fail 'router precisa usar exatamente três redes internas'
+    EDGE_NETWORK="$(network_for_bridge "$ROUTER_NETWORKS" kas-edge0 2>/dev/null || true)"
+    ROUTER_CORE_NETWORK="$(network_for_bridge "$ROUTER_NETWORKS" kas-core0 2>/dev/null || true)"
+    ROUTER_PUBLIC_NETWORK="$(network_for_bridge "$ROUTER_NETWORKS" kas-public0 2>/dev/null || true)"
+    if [ -n "$EDGE_NETWORK" ] && [ -n "$ROUTER_CORE_NETWORK" ] && [ -n "$ROUTER_PUBLIC_NETWORK" ] && \
+       [ "$(printf '%s\n' "$EDGE_NETWORK" "$ROUTER_CORE_NETWORK" "$ROUTER_PUBLIC_NETWORK" | sort -u | wc -l | tr -d ' ')" -eq 3 ]; then
+      EXPECTED_EDGE_MEMBERS="$ROUTER_CONTAINER"
+      profile_enabled tunnel && \
+        EXPECTED_EDGE_MEMBERS="$(printf '%s\n%s\n' "$ROUTER_CONTAINER" "$TUNNEL_CONTAINER" | sort -u)"
+      EXPECTED_ROUTER_CORE_MEMBERS="$(printf '%s\n%s\n' "$CORE_CONTAINER" "$ROUTER_CONTAINER" | sort -u)"
+      EXPECTED_ROUTER_PUBLIC_MEMBERS="$(printf '%s\n%s\n' "$ROUTER_CONTAINER" "$PUBLIC_CONTAINER" | sort -u)"
+      [ "$(network_members "$EDGE_NETWORK")" = "$EXPECTED_EDGE_MEMBERS" ] && \
+        internal_network_is "$EDGE_NETWORK" kas-edge0 \
+        && pass 'ingress contém somente router e túnel esperado' \
+        || fail 'rede de ingress possui endpoint ou política divergente'
+      [ "$(network_members "$ROUTER_CORE_NETWORK")" = "$EXPECTED_ROUTER_CORE_MEMBERS" ] && \
+        internal_network_is "$ROUTER_CORE_NETWORK" kas-core0 \
+        && pass 'router alcança o core somente pelo link interno dedicado' \
+        || fail 'link interno router-core divergiu'
+      [ "$(network_members "$ROUTER_PUBLIC_NETWORK")" = "$EXPECTED_ROUTER_PUBLIC_MEMBERS" ] && \
+        internal_network_is "$ROUTER_PUBLIC_NETWORK" kas-public0 \
+        && pass 'router alcança landing/docs somente pelo link interno dedicado' \
+        || fail 'link interno router-público divergiu'
+      if container_alias_is "$ROUTER_CONTAINER" "$EDGE_NETWORK" kassinao; then
+        pass 'alias de ingress kassinao pertence somente ao router'
+      else
+        fail 'alias de ingress kassinao está ausente ou ambíguo no router'
+      fi
+    else
+      fail 'bridges estáveis kas-edge0/kas-core0/kas-public0 estão ausentes ou ambíguas'
     fi
   fi
+elif [ "$router_exists" = true ] && [ "$(docker inspect -f '{{.State.Running}}' "$ROUTER_CONTAINER" 2>/dev/null || true)" = true ]; then
+  fail 'router está rodando sem profile split-public'
+else
+  pass 'profile split-public inativo não expõe router'
 fi
 
 section PUBLIC_CONTAINER
@@ -1375,9 +1537,12 @@ if profile_enabled split-public; then
     { [ -z "$PUBLIC_IPC_MODE" ] || [ "$PUBLIC_IPC_MODE" = private ]; } && pass 'processo público tem IPC isolado' || fail 'processo público compartilha IPC'
     [ -z "$PUBLIC_UTS_MODE" ] && pass 'processo público tem UTS isolado' || fail 'processo público compartilha UTS'
     [ "$PUBLIC_MOUNTS" = '[]' ] && pass 'processo público não possui mounts' || fail 'processo público possui mounts'
-    BAD_PUBLIC_PORTS="$(docker port "$PUBLIC_CONTAINER" 2>/dev/null | awk '$3 !~ /^127\.0\.0\.1:/ && $3 !~ /^\[::1\]:/ {count++} END {print count+0}')"
-    [ "$BAD_PUBLIC_PORTS" -eq 0 ] && pass 'portas públicas do container estão presas a loopback' || fail 'processo público publica porta fora de loopback'
+    PUBLIC_PORTS="$(docker port "$PUBLIC_CONTAINER" 2>/dev/null || true)"
+    [ -z "$PUBLIC_PORTS" ] && pass 'processo público não publica porta no host' || fail 'processo público publica porta no host'
     [ "$PUBLIC_IMAGE" = "$CONFIGURED_IMAGE" ] && pass 'core e público usam o mesmo digest' || fail 'core e público usam imagens diferentes'
+    compose_labels_are "$PUBLIC_CONTAINER" kassinao-public \
+      && pass 'labels públicos pertencem somente ao Compose operacional selado' \
+      || fail 'labels públicos divergem do Compose operacional selado'
     [ "$PUBLIC_ENTRYPOINT" = '["/usr/local/bin/kassinao-no-dump","--preload","/usr/local/lib/libkassinao-no-dump.so","--","/usr/bin/tini","--"]' ] \
       && [ "$PUBLIC_COMMAND" = '["/usr/local/bin/node","dist/public.js"]' ] \
       && pass 'processo público preserva entrypoint no-dump e command selados' \
@@ -1392,19 +1557,13 @@ if profile_enabled split-public; then
     [ -z "$SHARED_NETWORKS" ] && pass 'core e público não compartilham rede' || fail 'core e público compartilham rede'
     PUBLIC_NETWORK_COUNT="$(grep -cve '^$' <<<"$PUBLIC_NETWORKS")"
     if [ "$PUBLIC_NETWORK_COUNT" -eq 1 ]; then
-      PUBLIC_NETWORK_NAME="$(grep -ve '^$' <<<"$PUBLIC_NETWORKS")"
-      PUBLIC_MEMBERS="$(docker network inspect -f '{{range .Containers}}{{printf "%s\n" .Name}}{{end}}' "$PUBLIC_NETWORK_NAME" 2>/dev/null | grep -ve '^$' | sort -u)"
-      EXPECTED_PUBLIC_MEMBERS="$PUBLIC_CONTAINER"
-      if profile_enabled tunnel; then
-        EXPECTED_PUBLIC_MEMBERS="$(printf '%s\n%s\n' "$PUBLIC_CONTAINER" "$TUNNEL_CONTAINER" | sort -u)"
-      fi
-      [ "$PUBLIC_MEMBERS" = "$EXPECTED_PUBLIC_MEMBERS" ] \
-        && pass 'rede pública contém somente landing/docs e túnel esperado' \
-        || fail 'rede pública contém endpoint inesperado ou endpoint esperado ausente'
-      PUBLIC_NETWORK_POLICY="$(docker network inspect -f '{{.Internal}}|{{index .Options "com.docker.network.bridge.gateway_mode_ipv4"}}|{{index .Options "com.docker.network.bridge.gateway_mode_ipv6"}}' "$PUBLIC_NETWORK_NAME" 2>/dev/null || true)"
-      [ "$PUBLIC_NETWORK_POLICY" = 'true|isolated|isolated' ] \
-        && pass 'rede pública nega egress e gateway IPv4/IPv6 do host' \
-        || fail 'rede pública não está internal+isolated em IPv4/IPv6'
+      PUBLIC_NETWORK_NAME="$(network_for_bridge "$PUBLIC_NETWORKS" kas-public0 2>/dev/null || true)"
+      EXPECTED_PUBLIC_MEMBERS="$(printf '%s\n%s\n' "$ROUTER_CONTAINER" "$PUBLIC_CONTAINER" | sort -u)"
+      [ -n "$PUBLIC_NETWORK_NAME" ] && \
+        [ "$(network_members "$PUBLIC_NETWORK_NAME")" = "$EXPECTED_PUBLIC_MEMBERS" ] && \
+        internal_network_is "$PUBLIC_NETWORK_NAME" kas-public0 \
+        && pass 'link público contém somente router e landing/docs, sem egress' \
+        || fail 'link público possui endpoint ou política divergente'
     else
       fail 'processo público precisa usar exatamente uma rede isolada'
     fi
@@ -1422,7 +1581,20 @@ if profile_enabled split-public; then
         *) bad_public_env="${bad_public_env}${bad_public_env:+,}$name" ;;
       esac
     done < <(docker inspect -f '{{range .Config.Env}}{{printf "%s\n" .}}{{end}}' "$PUBLIC_CONTAINER" 2>/dev/null)
-    [ -z "$bad_public_env" ] && pass 'env público obedece à allowlist positiva' || fail "env público fora da allowlist: $bad_public_env"
+    PUBLIC_REPO_FLAG="$(container_env_value "$PUBLIC_CONTAINER" REPO_PUBLIC)"
+    if [ -z "$bad_public_env" ] && \
+       [ "$(container_env_value "$PUBLIC_CONTAINER" NODE_ENV)" = production ] && \
+       [ "$(container_env_value "$PUBLIC_CONTAINER" PORT)" = 8081 ] && \
+       [ "$(container_env_value "$PUBLIC_CONTAINER" WEB_BIND_ADDRESS)" = 0.0.0.0 ] && \
+       [ "$(container_env_value "$PUBLIC_CONTAINER" PUBLIC_URL)" = "$(env_value PUBLIC_URL "$ENV_FILE")" ] && \
+       [ "$(container_env_value "$PUBLIC_CONTAINER" DOCS_URL)" = "$(env_value DOCS_URL "$ENV_FILE")" ] && \
+       [ "$(container_env_value "$PUBLIC_CONTAINER" SOURCE_URL)" = "$(env_value SOURCE_URL "$ENV_FILE")" ] && \
+       [ "$(container_env_value "$PUBLIC_CONTAINER" TRUST_PROXY_HOPS)" = 1 ] && \
+       { [ "$PUBLIC_REPO_FLAG" = true ] || [ "$PUBLIC_REPO_FLAG" = false ]; }; then
+      pass 'env público obedece à allowlist e aos valores canônicos'
+    else
+      fail "env público saiu da allowlist ou divergiu: ${bad_public_env:-valor canônico}"
+    fi
   fi
 elif [ "$public_exists" = true ] && [ "$(docker inspect -f '{{.State.Running}}' "$PUBLIC_CONTAINER" 2>/dev/null || true)" = true ]; then
   fail 'container público está rodando sem profile split-public'
@@ -1517,40 +1689,44 @@ if profile_enabled tunnel; then
       && pass 'credencial efetiva do túnel corresponde silenciosamente ao .env privado' \
       || fail 'credencial efetiva do túnel está ausente ou diverge do .env privado'
     unset EXPECTED_TUNNEL_TOKEN RUNTIME_TUNNEL_TOKEN
-    if docker inspect -f '{{json .Config.Labels}}' "$TUNNEL_CONTAINER" 2>/dev/null | python3 -c '
-import json
-import sys
-
-labels = json.load(sys.stdin)
-if not isinstance(labels, dict):
-    raise SystemExit(1)
-expected = {
-    "com.docker.compose.project": "kassinao",
-    "com.docker.compose.service": "cloudflared",
-    "com.docker.compose.oneoff": "False",
-    "com.docker.compose.project.working_dir": sys.argv[1],
-    "com.docker.compose.project.config_files": sys.argv[1] + "/docker-compose.yml",
-}
-if any(labels.get(key) != value for key, value in expected.items()):
-    raise SystemExit(1)
-' "$DEPLOY_REAL" >/dev/null 2>&1; then
+    if compose_labels_are "$TUNNEL_CONTAINER" cloudflared; then
       pass 'labels efetivos do cloudflared pertencem ao projeto/serviço Compose selado'
     else
       fail 'labels do cloudflared divergem do projeto, serviço ou Compose operacional'
     fi
     TUNNEL_NETWORKS="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{printf "%s\n" $name}}{{end}}' "$TUNNEL_CONTAINER" 2>/dev/null | sed '/^$/d' | sort -u)"
-    EXPECTED_TUNNEL_NETWORKS="$CORE_NETWORKS"
-    if profile_enabled split-public; then
-      EXPECTED_TUNNEL_NETWORKS="$(printf '%s\n%s\n' "$CORE_NETWORKS" "$PUBLIC_NETWORKS" | grep -ve '^$' | sort -u)"
+    [ "$(grep -cve '^$' <<<"$TUNNEL_NETWORKS")" -eq 2 ] \
+      && pass 'cloudflared usa somente ingress e egress exclusivo' \
+      || fail 'cloudflared precisa usar exatamente duas redes'
+    TUNNEL_EDGE_NETWORK="$(network_for_bridge "$TUNNEL_NETWORKS" kas-edge0 2>/dev/null || true)"
+    TUNNEL_EGRESS_NETWORK="$(network_for_bridge "$TUNNEL_NETWORKS" kas-tunnel-eg0 2>/dev/null || true)"
+    EXPECTED_TUNNEL_EDGE_MEMBERS="$(printf '%s\n%s\n' "$ROUTER_CONTAINER" "$TUNNEL_CONTAINER" | sort -u)"
+    if [ -n "$TUNNEL_EDGE_NETWORK" ] && [ -n "$TUNNEL_EGRESS_NETWORK" ] && \
+       [ "$TUNNEL_EDGE_NETWORK" != "$TUNNEL_EGRESS_NETWORK" ]; then
+      [ "$(network_members "$TUNNEL_EDGE_NETWORK")" = "$EXPECTED_TUNNEL_EDGE_MEMBERS" ] && \
+        internal_network_is "$TUNNEL_EDGE_NETWORK" kas-edge0 \
+        && pass 'cloudflared alcança somente o ingress interno do router' \
+        || fail 'link cloudflared-router possui endpoint ou política divergente'
+      [ "$(network_members "$TUNNEL_EGRESS_NETWORK")" = "$TUNNEL_CONTAINER" ] && \
+        egress_network_is "$TUNNEL_EGRESS_NETWORK" kas-tunnel-eg0 \
+        && pass 'egress do cloudflared usa bridge exclusiva sem comunicação lateral' \
+        || fail 'egress do cloudflared possui endpoint ou política divergente'
+    else
+      fail 'bridges estáveis kas-edge0/kas-tunnel-eg0 estão ausentes ou ambíguas'
     fi
-    [ "$TUNNEL_NETWORKS" = "$EXPECTED_TUNNEL_NETWORKS" ] \
-      && pass 'cloudflared usa somente a união das redes esperadas' \
-      || fail 'cloudflared possui rede extra ou rede esperada ausente'
   fi
 elif [ "$tunnel_exists" = true ] && [ "$(docker inspect -f '{{.State.Running}}' "$TUNNEL_CONTAINER" 2>/dev/null || true)" = true ]; then
   fail 'cloudflared está rodando sem profile tunnel'
 else
   pass 'profile tunnel inativo não mantém cloudflared'
+fi
+
+section EGRESS_POLICY
+if env -i "PATH=$PATH" "HOME=${HOME:-/root}" "LC_ALL=$LC_ALL" \
+   "$DEPLOY_REAL/scripts/harden-docker-egress.sh" --check >/dev/null 2>&1; then
+  pass 'hardener selado aprovou identidade, topologia e policies IPv4/IPv6 das duas saídas'
+else
+  fail 'hardener selado recusou identidade, topologia ou policies IPv4/IPv6'
 fi
 
 section WATCHDOG_EXECUTION

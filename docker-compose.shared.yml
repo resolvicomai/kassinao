@@ -27,6 +27,14 @@ services:
         bind:
           create_host_path: false
 
+  kassinao-router:
+    user: '${KASSINAO_UID:?Defina um UID privado do adapter shared}:${KASSINAO_GID:?Defina um GID privado do adapter shared}'
+    restart: 'no'
+    mem_limit: ${KASSINAO_ROUTER_MEMORY_LIMIT:?Defina KASSINAO_ROUTER_MEMORY_LIMIT no compose.env}
+    memswap_limit: ${KASSINAO_ROUTER_MEMORY_LIMIT:?Defina KASSINAO_ROUTER_MEMORY_LIMIT no compose.env}
+    mem_swappiness: 0
+    cpus: ${KASSINAO_ROUTER_CPUS:?Defina KASSINAO_ROUTER_CPUS no compose.env}
+
   kassinao-public:
     user: '${KASSINAO_UID:?Defina um UID privado do adapter shared}:${KASSINAO_GID:?Defina um GID privado do adapter shared}'
     restart: 'no'

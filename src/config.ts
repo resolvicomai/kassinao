@@ -1228,8 +1228,9 @@ export const config = {
   transcribePrompt: process.env.TRANSCRIBE_PROMPT ?? defaultTranscribePrompt,
   /**
    * Termos fixos do time (produtos, siglas, nomes) pro keyterms_prompt do
-   * Universal-3.5-Pro da AssemblyAI — separados por vírgula. Os nomes dos
-   * participantes de cada gravação entram sozinhos; isto é o vocabulário extra.
+   * Universal-3.5-Pro da AssemblyAI — separados por vírgula. Com
+   * TRANSCRIBE_SEND_MEETING_CONTEXT=true, os nomes dos participantes de cada
+   * gravação também entram; isto é o vocabulário extra configurado pelo operador.
    */
   transcribeKeyterms: (process.env.TRANSCRIBE_KEYTERMS || '')
     .split(',')

@@ -88,12 +88,16 @@ install -m 0644 "$ROOT/SECURITY.md" "$ROOT/LICENSE" "$DEST/"
 install -m 0755 \
   "$ROOT/scripts/deploy-release.sh" \
   "$ROOT/scripts/no-dump-exec.py" \
+  "$ROOT/scripts/smoke-public-image.sh" \
+  "$ROOT/scripts/smoke-router-image.sh" \
   "$ROOT/scripts/inject-secrets.sh" \
   "$ROOT/scripts/backup.sh" \
   "$ROOT/scripts/backup-retention.sh" \
   "$ROOT/scripts/health-watch.sh" \
   "$ROOT/scripts/prepare-storage.sh" \
   "$ROOT/scripts/prepare-shared-storage.sh" \
+  "$ROOT/scripts/transition-dedicated-runtime-topology.sh" \
+  "$ROOT/scripts/transition-runtime-topology.sh" \
   "$ROOT/scripts/validate-legacy-dedicated-installation.sh" \
   "$ROOT/scripts/remove-legacy-health-watch.sh" \
   "$ROOT/scripts/remove-legacy-dedicated-host-controls.sh" \

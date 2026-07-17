@@ -33,9 +33,11 @@ services:
     # fallback único mantém o quick start simples para instalações menores.
     env_file: ${KASSINAO_APP_ENV_FILE:-.env}
     environment:
-      # O core privado nunca recebe ingress direto. O router sem segredos é o
-      # único listener alcançável pelo túnel ou pelo loopback do host.
-      PORT: '8082'
+      # Porta interna invariável: túnel, healthcheck e expose concordam.
+      # KASSINAO_HOST_PORT altera somente a porta publicada no host.
+      PORT: '8080'
+      # Wildcard existe apenas dentro da rede isolada do container. No host, a
+      # publicação abaixo continua presa a 127.0.0.1.
       WEB_BIND_ADDRESS: '0.0.0.0'
       RECORDINGS_DIR: /app/recordings
       STATE_DIR: /app/state
@@ -49,8 +51,12 @@ services:
       TUNNEL_TOKEN: ''
       # Cache de modelos é isolado das gravações e nunca entra no expurgo/backup.
       XDG_CACHE_HOME: /home/node/.cache
+    # O listener fica acessível no HOST somente por loopback. Cloudflare Tunnel
+    # continua usando a rede interna; Nginx/Caddy local pode usar esta porta.
     expose:
-      - '8082'
+      - '8080'
+    ports:
+      - '127.0.0.1:${KASSINAO_HOST_PORT:-8080}:8080'
     volumes:
       # Autenticação e estado nunca compartilham o volume de gravações. Quem
       # migra uma instalação antiga prepara os diretórios antes do primeiro boot.
@@ -72,93 +78,17 @@ services:
           '--',
           '/usr/local/bin/node',
           '-e',
-          "fetch('http://localhost:8082/health').then((r)=>process.exit(r.ok?0:1),()=>process.exit(1))",
+          "fetch('http://localhost:8080/health').then((r)=>process.exit(r.ok?0:1),()=>process.exit(1))",
         ]
       interval: 60s
       timeout: 10s
       retries: 3
       start_period: 30s
-    networks:
-      core_link:
-        interface_name: core0
-        aliases: [kassinao-core]
-      core_egress:
-        interface_name: egress0
-        gw_priority: 1
-
-  # Reverse proxy de origem única. Não recebe env_file, segredo ou volume e
-  # escuta somente na interface compartilhada com o túnel. As interfaces que
-  # alcançam core e público não aceitam ingress porque o processo não faz bind
-  # nelas.
-  kassinao-router:
-    image: ${KASSINAO_IMAGE:-kassinao-local:dev}
-    pull_policy: ${KASSINAO_PULL_POLICY:-never}
-    container_name: kassinao-router
-    profiles: ['split-public']
-    command: ['/usr/local/bin/node', 'dist/router.js']
-    restart: unless-stopped
-    user: '${KASSINAO_UID:-1000}:${KASSINAO_GID:-1000}'
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    pids_limit: 128
-    ulimits:
-      core:
-        soft: 0
-        hard: 0
-    mem_limit: 384m
-    cpus: 0.25
-    logging:
-      driver: json-file
-      options:
-        max-size: 5m
-        max-file: '2'
-    environment:
-      NODE_ENV: production
-      PORT: '8080'
-      WEB_BIND_INTERFACE: edge0
-      APP_URL: ${APP_URL:-}
-      MCP_URL: ${MCP_URL:-}
-      PUBLIC_URL: ${PUBLIC_URL:-}
-      DOCS_URL: ${DOCS_URL:-}
-      KASSINAO_RELEASE_DIGEST: ${KASSINAO_RELEASE_DIGEST:-}
-      KASSINAO_DEPLOYMENT_FINGERPRINT: ${KASSINAO_DEPLOYMENT_FINGERPRINT:-}
-    expose:
-      - '8080'
-    ports:
-      - '127.0.0.1:${KASSINAO_HOST_PORT:-8080}:8080'
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
-    healthcheck:
-      test:
-        [
-          'CMD',
-          '/usr/local/bin/kassinao-no-dump',
-          '--preload',
-          '/usr/local/lib/libkassinao-no-dump.so',
-          '--',
-          '/usr/local/bin/node',
-          '-e',
-          "const os=require('node:os');const ip=(os.networkInterfaces().edge0||[]).find((entry)=>entry.family==='IPv4'&&!entry.internal)?.address;if(!ip)process.exit(1);fetch('http://'+ip+':8080/_kassinao/router-health').then((r)=>process.exit(r.ok?0:1),()=>process.exit(1))",
-        ]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-    networks:
-      edge_ingress:
-        interface_name: edge0
-        aliases: [kassinao]
-      core_link:
-        interface_name: core0
-      public_link:
-        interface_name: public0
+    networks: [private]
 
   # Landing/docs/demo sem Discord, providers, guilds ou volumes privados. Use o
-  # perfil split-public. Todo ingress passa pelo router, que decide o destino
-  # usando host e caminho antes de abrir a conexão interna.
+  # perfil split-public e roteie os hosts públicos para kassinao-public:8081.
+  # O processo recusa iniciar se qualquer segredo for injetado por engano.
   kassinao-public:
     image: ${KASSINAO_IMAGE:-kassinao-local:dev}
     pull_policy: ${KASSINAO_PULL_POLICY:-never}
@@ -193,10 +123,14 @@ services:
       SOURCE_URL: ${SOURCE_URL:-}
       KASSINAO_RELEASE_DIGEST: ${KASSINAO_RELEASE_DIGEST:-}
       KASSINAO_DEPLOYMENT_FINGERPRINT: ${KASSINAO_DEPLOYMENT_FINGERPRINT:-}
-      TRUST_PROXY_HOPS: '1'
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
       REPO_PUBLIC: ${REPO_PUBLIC:-false}
     expose:
       - '8081'
+    ports:
+      # Host proxies (Caddy/Nginx) podem alcançar somente por loopback. O túnel
+      # usa a rede Docker e não depende desta publicação.
+      - '127.0.0.1:${KASSINAO_PUBLIC_HOST_PORT:-8081}:8081'
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
     healthcheck:
@@ -215,9 +149,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
-    networks:
-      public_link:
-        interface_name: public0
+    networks: [public]
 
   # Túnel da Cloudflare: entrega https://SEU_SUBDOMINIO.SEU_DOMINIO com cadeado,
   # sem abrir portas no VPS. O TUNNEL_TOKEN vem do .env (criado no painel da Cloudflare).
@@ -254,49 +186,26 @@ services:
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN}
     depends_on:
-      - kassinao-router
-    networks:
-      edge_ingress:
-        interface_name: edge0
-      tunnel_egress:
-        interface_name: egress0
-        gw_priority: 1
+      - kassinao
+    networks: [private, public]
 
 volumes:
   state-data:
   auth-data:
 
 networks:
-  # Cloudflared enxerga somente o listener edge0 do router. O túnel não
-  # compartilha rede com core/público; os links de upstream do router são
-  # separados da interface de ingress.
-  edge_ingress:
-    internal: true
+  # Containers público e privado nunca compartilham uma rede. Somente o
+  # cloudflared, sem volumes nem privilégios, alcança os dois adapters.
+  private:
     driver_opts:
-      com.docker.network.bridge.name: kas-edge0
-      com.docker.network.bridge.gateway_mode_ipv4: isolated
-      com.docker.network.bridge.gateway_mode_ipv6: isolated
-  # O router abre conexões para os upstreams; os upstreams não alcançam a
-  # interface de ingress do router nem um ao outro.
-  core_link:
-    internal: true
-    driver_opts:
-      com.docker.network.bridge.name: kas-core0
-      com.docker.network.bridge.gateway_mode_ipv4: isolated
-      com.docker.network.bridge.gateway_mode_ipv6: isolated
-  public_link:
+      # Nome estável: as regras host-side já protegem a interface antes mesmo
+      # do primeiro start e continuam válidas quando o Compose recria a rede.
+      com.docker.network.bridge.name: kas-private0
+  # Landing/docs não precisam iniciar conexões externas. O túnel também está
+  # na rede private e preserva seu egress por ela.
+  public:
     internal: true
     driver_opts:
       com.docker.network.bridge.name: kas-public0
       com.docker.network.bridge.gateway_mode_ipv4: isolated
       com.docker.network.bridge.gateway_mode_ipv6: isolated
-  # Egress do core e do túnel ficam em bridges exclusivas. O router e o
-  # processo público não possuem rota externa.
-  core_egress:
-    driver_opts:
-      com.docker.network.bridge.name: kas-core-eg0
-      com.docker.network.bridge.enable_icc: 'false'
-  tunnel_egress:
-    driver_opts:
-      com.docker.network.bridge.name: kas-tunnel-eg0
-      com.docker.network.bridge.enable_icc: 'false'

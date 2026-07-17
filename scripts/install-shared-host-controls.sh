@@ -288,7 +288,11 @@ docker info >/dev/null 2>&1 || die 'daemon Docker local indisponível'
 # de voltar sozinha enquanto storage/egress ainda não foram revalidados.
 containers="$(docker ps -a --format '{{.Names}}')" || die 'não foi possível enumerar containers'
 instance_present=false
-for pair in kassinao:kassinao kassinao-public:kassinao-public kassinao-tunnel:cloudflared; do
+for pair in \
+  kassinao:kassinao \
+  kassinao-router:kassinao-router \
+  kassinao-public:kassinao-public \
+  kassinao-tunnel:cloudflared; do
   container="${pair%%:*}"
   service="${pair#*:}"
   grep -Fqx "$container" <<<"$containers" || continue
@@ -302,7 +306,7 @@ for pair in kassinao:kassinao kassinao-public:kassinao-public kassinao-tunnel:cl
     die "$container não pertence ao projeto/serviço Compose shared esperado"
 done
 if ! grep -Fqx kassinao <<<"$containers"; then
-  for orphan in kassinao-public kassinao-tunnel; do
+  for orphan in kassinao-router kassinao-public kassinao-tunnel; do
     ! grep -Fqx "$orphan" <<<"$containers" || die "$orphan existe sem o core kassinao"
   done
 fi

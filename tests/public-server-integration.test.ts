@@ -195,6 +195,43 @@ describe('superficies publicas por HTTP real', () => {
     }
   });
 
+  it('serve documentacao e publica todas as rotas quando landing e docs usam a mesma origem', async () => {
+    const priorDocsUrl = config.docsUrl;
+    try {
+      config.docsUrl = config.publicUrl;
+      const host = new URL(PUBLIC_ORIGIN).hostname;
+
+      const docsPt = await request('GET', '/docs', host);
+      expect(docsPt.status).toBe(200);
+      expect(docsPt.headers.location).toBeUndefined();
+      expect(docsPt.headers['content-type']).toContain('text/html');
+      expect(docsPt.body).toContain('Kassinão');
+
+      const docsEn = await request('GET', '/en/docs', host);
+      expect(docsEn.status).toBe(200);
+      expect(docsEn.headers.location).toBeUndefined();
+      expect(docsEn.headers['content-language']).toBe('en');
+
+      const sitemap = await request('GET', '/sitemap.xml', host);
+      expect(sitemap.status).toBe(200);
+      expect(sitemap.body).toContain(`${PUBLIC_ORIGIN}/docs`);
+      expect(sitemap.body).toContain(`${PUBLIC_ORIGIN}/en/docs`);
+      expectNoPrivateValues(sitemap);
+    } finally {
+      config.docsUrl = priorDocsUrl;
+    }
+  });
+
+  it('impede crawlers de explorar namespaces privados nas superficies publicas', async () => {
+    const response = await request('GET', '/robots.txt', new URL(PUBLIC_ORIGIN).hostname);
+    expect(response.status).toBe(200);
+    expect(response.body).toContain('Disallow: /app');
+    expect(response.body).toContain('Disallow: /auth');
+    expect(response.body).toContain('Disallow: /api');
+    expect(response.body).toContain(`Sitemap: ${PUBLIC_ORIGIN}/sitemap.xml`);
+    expectNoPrivateValues(response);
+  });
+
   it('devolve health nao indexavel com a identidade exata da release e do deploy', async () => {
     for (const host of [new URL(PUBLIC_ORIGIN).hostname, new URL(DOCS_ORIGIN).hostname]) {
       const response = await request('GET', '/health', host);

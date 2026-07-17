@@ -44,14 +44,14 @@ describe('isolamento process-scoped de core dumps', () => {
     expect(dockerignore).toContain('!native/no-dump-preload.c');
   });
 
-  it('protege também os processos de healthcheck do core e do site público', () => {
+  it('protege também os healthchecks do core, router e site público', () => {
     const compose = readFileSync(path.join(ROOT, 'docker-compose.yml'), 'utf8');
     const guardedHealthchecks = compose.match(
       /'CMD',\s*'\/usr\/local\/bin\/kassinao-no-dump',\s*'--preload',\s*'\/usr\/local\/lib\/libkassinao-no-dump\.so',\s*'--',\s*'\/usr\/local\/bin\/node'/g,
     );
 
-    expect(guardedHealthchecks).toHaveLength(2);
-    expect(compose.match(/ulimits:\s*\n\s*core:\s*\n\s*soft: 0\s*\n\s*hard: 0/g)).toHaveLength(3);
+    expect(guardedHealthchecks).toHaveLength(3);
+    expect(compose.match(/ulimits:\s*\n\s*core:\s*\n\s*soft: 0\s*\n\s*hard: 0/g)).toHaveLength(4);
   });
 
   it('leva o helper host genérico no kit operacional selado', () => {

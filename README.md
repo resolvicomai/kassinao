@@ -63,7 +63,9 @@ The AGPL applies to the software. If an operator modifies the program and lets u
 
 This path is for local evaluation and development. It builds the image from the checked-out source; it is not the hardened production path.
 
-Requirements: Docker with Compose, and a Discord application owned by you.
+Requirements: Docker Engine 28.0.0+, Docker Compose 2.36.0+, and a Discord
+application owned by you. The minimum Compose version is required by the
+router's named interfaces and deterministic gateway selection.
 
 ```bash
 git clone https://github.com/resolvicomai/kassinao.git
@@ -81,7 +83,13 @@ DISCORD_TOKEN=your_bot_token
 APPLICATION_ID=your_application_id
 DISCORD_CLIENT_SECRET=your_oauth_client_secret
 APP_URL=http://localhost:8080
+MCP_URL=http://localhost:8080
+PUBLIC_URL=http://localhost:8080
+DOCS_URL=http://localhost:8080
 ALLOW_LOCAL_APP_URL=true
+PUBLIC_SURFACES_ENABLED=false
+TRUST_PROXY_HOPS=1
+COMPOSE_PROFILES=split-public
 OPERATOR_NAME="Local Kassinão operator"
 PRIVACY_POLICY_URL="http://localhost:8080/privacy"
 OPERATOR_CONTACT_URL="http://localhost:8080/privacy#contact"
@@ -115,11 +123,13 @@ Then build locally before starting Compose:
 
 ```bash
 docker build -t kassinao-local:dev .
-docker compose up -d --no-build
-docker compose logs -f kassinao
+docker compose --profile split-public up -d --no-build
+docker compose logs -f kassinao kassinao-router kassinao-public
 ```
 
-For a public deployment, use your own HTTPS origins and keep `ALLOW_LOCAL_APP_URL=false`.
+The router is the only process published on `127.0.0.1:8080`; the core and
+public process expose no host ports. For a public deployment, use your own HTTPS
+origins and keep `ALLOW_LOCAL_APP_URL=false`.
 
 ## Discord application setup
 
@@ -164,7 +174,7 @@ Only use the hardened path after the selected release is publicly verifiable:
 
 If any artifact is missing, build from source for local evaluation and wait for a verified release. Do not replace the missing digest with a moving tag and do not build the product on the production VPS.
 
-The intended hardened topology is **split-only**. Landing/docs/demo run in a secret-free public process; bot/private app/MCP run in the private core with their own hosts and allowlists. Both production adapters require an amd64 or arm64 Linux VPS with systemd 249+, Docker Engine 28.0.0+, Docker Compose 2.35.0+, GNU coreutils, iptables/ip6tables, iproute2, util-linux, cryptsetup, e2fsprogs, curl, Python 3, tar/gzip, and dm-crypt/LUKS storage. Check architecture and versions before creating or mounting storage; the native bundle, deploy, and audit fail closed on incompatible hosts.
+The hardened topology is **split-only**: a secret-free router receives all ingress, landing/docs/demo run in a second secret-free process, and the bot/private app/MCP run in the private core. The router uses one exclusive internal link per upstream; core and public never share a network, and only core and tunnel receive dedicated egress. Both production adapters require an amd64 or arm64 Linux VPS with systemd 249+, Docker Engine 28.0.0+, Docker Compose 2.36.0+, GNU coreutils, iptables/ip6tables, iproute2, util-linux, cryptsetup, e2fsprogs, curl, Python 3, tar/gzip, and dm-crypt/LUKS storage. Check architecture and versions before creating or mounting storage; the native bundle, deploy, and audit fail closed on incompatible hosts.
 
 Choose exactly one host adapter:
 
@@ -179,7 +189,7 @@ For the legacy v1.4.9 layout, root metadata files under `recordings/` are restri
 
 The v1.4.9 cutover order is strict: apply the private host-global core policy before the first public helper; validate the live legacy project; remove the exact health-watch; stop but retain its containers; prepare the consolidated plaintext layout; and only then run Compose down. After the containers are absent, `remove-legacy-dedicated-host-controls.sh` proves the prepared v3 marker, original `.env`, legacy bundle, remaining installed files, effective systemd hooks, firewall policy, Docker PID, and neighboring-container snapshot before removing only the dedicated allowlist. A fully absent set is a safe no-op; any partial, foreign, or drifted set fails before mutation. The helper never restarts Docker, mutates containers, deletes either data root, deletes the old release or `.env`, or removes the maintenance lock.
 
-In shared mode, the six explicit `KASSINAO_{CORE,PUBLIC,TUNNEL}_{MEMORY_LIMIT,CPUS}` limits must leave at least 25% of physical RAM and online CPUs for neighboring workloads. The audit compares `compose.env`, the overlay, actual host capacity, and Docker runtime. Because the storage device varies, the adapter does not invent an I/O throttle: monitor latency and throughput and size processing and backup windows accordingly.
+In shared mode, the eight explicit `KASSINAO_{CORE,ROUTER,PUBLIC,TUNNEL}_{MEMORY_LIMIT,CPUS}` limits must leave at least 25% of physical RAM and online CPUs for neighboring workloads. The audit compares `compose.env`, the overlay, actual host capacity, and Docker runtime. Because the storage device varies, the adapter does not invent an I/O throttle: monitor latency and throughput and size processing and backup windows accordingly.
 
 Shared mode also requires explicit `KASSINAO_UID` and `KASSINAO_GID` values in the private range `61000..61183`. Choose an unused pair only after checking host accounts/groups, subordinate-ID ranges, processes, protected files, neighboring container `Config.User` values, and prior Kassinão trees. Do not create a Linux account or group for that pair. Public examples leave both values blank, and preparation/audit fail closed on collisions. Dedicated and local installs may keep their documented `1000:1000` default.
 
@@ -190,16 +200,33 @@ The following rules apply to both adapters:
 - active data, authentication state, cache, and deployment snapshots remain inside the adapter's verified dm-crypt/LUKS boundary;
 - in the shared adapter, application secrets and the tunnel token also remain inside that boundary and reach only their intended non-root container through read-only bind mounts;
 - after the storage boundary is mounted and secured, the matching preparation script proves it before creating only the four runtime directories as mode `0700` under the configured non-root UID/GID;
-- a successful deploy deletes its rollback snapshot immediately. A failed deploy may retain operational state and recording metadata, but not auth or audio tracks, for the configured `KASSINAO_ROLLBACK_RETENTION_HOURS` window (72 hours by default, 168 maximum), enforced by a persistent host timer;
+- a successful deploy attempts to delete its rollback snapshot immediately. If that cleanup or the deploy fails, operational state and recording metadata, but not auth or audio tracks, may remain until the persistent host timer removes them within the configured `KASSINAO_ROLLBACK_RETENTION_HOURS` window (72 hours by default, 168 maximum);
 - host firewall, SSH, scoped egress, file modes, backup, and external host checks must pass before the instance is published.
 
 There is no universal shared-storage size. Capacity planning must include retained recordings, maximum duration and concurrency, temporary processing tracks, cache, growth, and a recovery margin while preserving explicit free space for every neighboring workload. The LUKS backing file is preallocated and does not grow automatically. Review `MIN_FREE_MB_START`, `MIN_FREE_MB_ABORT`, and `DISK_ALERT_PCT` for the chosen capacity, monitor both the encrypted filesystem and its host filesystem, and use the documented offline growth procedure before either boundary becomes tight.
 
-All four configured HTTPS origins must resolve before `deploy-release.sh`, because its final gate tests every surface externally. They use three or four hostnames: `MCP_URL` may equal `APP_URL`, while landing and docs remain separate from the private core. Keep the bot uninvited and the instance unannounced until deploy and audit both pass.
+All four configured HTTPS origins must resolve before `deploy-release.sh`, because its final gate tests every surface externally. `MCP_URL` may equal `APP_URL`, and `DOCS_URL` may equal `PUBLIC_URL`; the public group must never share a host with the private core. Keep the bot uninvited and the instance unannounced until deploy and audit both pass.
 
-`APP_URL`, `MCP_URL`, `PUBLIC_URL`, and `DOCS_URL` remain the external HTTPS origins. In the Compose tunnel ingress rules, route the app/MCP hostnames to `http://kassinao:8080` and the landing/docs hostnames to `http://kassinao-public:8081`. A host proxy uses the corresponding loopback ports from `KASSINAO_HOST_PORT` and `KASSINAO_PUBLIC_HOST_PORT`. Never expose either port directly to the internet.
+`APP_URL`, `MCP_URL`, `PUBLIC_URL`, and `DOCS_URL` remain the external HTTPS origins. In Cloudflare Tunnel, point every hostname to the single ingress `http://kassinao:8080`; that name is an edge-network alias owned by the router, not the core. A host proxy uses only the `KASSINAO_HOST_PORT` loopback port. The core and public process publish no host ports and must never be connected directly to the tunnel or internet.
 
-Detailed production, legacy-plaintext migration, reboot, storage-growth, and safe host-control removal procedures live in the [documentation](https://docs.kassinao.cloud/en). Modern dedicated/shared adapter conversion requires a separately audited procedure because its `DATA_ROOT` is already mounted; never run the plaintext migrator on it. `uninstall-host-controls.sh` and `uninstall-shared-host-controls.sh` both reject running/restarting containers, pending snapshots, and drift; neither stops containers, restarts Docker, or deletes the release, storage, backing file, or secrets. A legacy shared migration preserves `DATA_ROOT.plaintext-before-shared-luks` and writes an encrypted `pending` marker with a 1-168 hour deadline. After the migrator succeeds, that plaintext copy is a data rollback, not an operational rollback: never restart the legacy Compose stack or reinstall dedicated host controls on the shared host. Service recovery is fix-forward through the shared adapter. If operational rollback is a requirement, do not cross the migration boundary without a separate, host-tested reversal adapter. While the marker exists, the checker rejects inconsistent state; after the deadline, deploy, backup, health, and audit fail closed. After validating the app, access, a real recording, and a restorable backup, stop only Kassinão, purge original legacy sources with `prepare-legacy-shared-layout.sh --purge-originals`, and only then run `finalize-shared-migration.sh --confirm-destroy-plaintext-rollback`. The confirmed purge rechecks the exact legacy `.env` bytes and identity before unlinking that one file; it never deletes other files from the old release tree. This is logical deletion only: provider backups, snapshots, and storage remnants may retain old secret material, so rotate every migrated Discord, provider, MCP, tunnel, and session credential after validation. On reboot, leave Kassinão stopped until an operator enters the LUKS passphrase directly at the `cryptsetup` prompt, verifies storage, and runs the scoped deploy and audit; never store unlock material in the VPS, an environment file, cloud-init, or a systemd unit. Keep secrets, host paths, LUKS backing/mapper/UUID values, unlock material, operational evidence, and organization-specific policy out of this repository.
+When using Nginx on the host instead of the bundled tunnel, preserve the requested host, remove Cloudflare's identity header, and overwrite rather than append the client-IP chain. The router discards every incoming forwarded host/protocol value and rebuilds them from the configured origin:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;
+    proxy_set_header CF-Connecting-IP "";
+    proxy_set_header Forwarded "";
+    proxy_set_header X-Forwarded-Host "";
+    proxy_set_header X-Forwarded-Proto "";
+    proxy_set_header X-Forwarded-For $remote_addr;
+}
+```
+
+Keep that loopback port unreachable from the network. An equivalent proxy must preserve `Host`, delete `CF-Connecting-IP`, and set `X-Forwarded-For` from its own authenticated connection rather than accepting a client-supplied value.
+
+Detailed production, legacy-plaintext migration, reboot, storage-growth, and safe host-control removal procedures live in the [documentation](https://docs.kassinao.cloud/en). Modern dedicated/shared adapter conversion requires a separately audited procedure because its `DATA_ROOT` is already mounted; never run the plaintext migrator on it. `uninstall-host-controls.sh` and `uninstall-shared-host-controls.sh` both reject running/restarting containers, pending snapshots, and drift; neither stops containers, restarts Docker, or deletes the release, storage, backing file, or secrets. A legacy shared migration preserves `DATA_ROOT.plaintext-before-shared-luks` and writes an encrypted `pending` marker with a 1-168 hour deadline. That plaintext copy is a data rollback, not a turnkey operational rollback. The public bundle includes a sealed, resumable topology-transition primitive for exact verified bundles, but it intentionally does not contain an organization's rescue environment, host paths, credentials, or private runbook. Operational reversal exists only when the operator prepared and host-tested a separate root-only adapter before migration; otherwise service recovery is fix-forward through the shared adapter. Never manually restart the legacy Compose stack or reinstall dedicated controls on the shared host. While the marker exists, the checker rejects inconsistent state; after the deadline, deploy, backup, health, and audit fail closed. After validating the app, access, a real recording, and a restorable backup, stop only Kassinão, purge original legacy sources with `prepare-legacy-shared-layout.sh --purge-originals`, and only then run `finalize-shared-migration.sh --confirm-destroy-plaintext-rollback`. The confirmed purge rechecks the exact legacy `.env` bytes and identity before unlinking that one file; it never deletes other files from the old release tree. This is logical deletion only: provider backups, snapshots, and storage remnants may retain old secret material, so rotate every migrated Discord, provider, MCP, tunnel, and session credential after validation. On reboot, leave Kassinão stopped until an operator enters the LUKS passphrase directly at the `cryptsetup` prompt, verifies storage, and runs the scoped deploy and audit; never store unlock material in the VPS, an environment file, cloud-init, or a systemd unit. Keep secrets, host paths, LUKS backing/mapper/UUID values, unlock material, operational evidence, the reversal adapter, and organization-specific policy out of this repository and the public image.
 
 ## Privacy and data flow
 

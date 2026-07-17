@@ -900,7 +900,9 @@ export function createWebApp(): Express {
       return;
     }
     if (decision.action === 'rewrite') req.url = decision.path;
-    if (!config.publicSurfacesEnabled && decision.roles.some((role) => role === 'public' || role === 'docs')) {
+    const privateRole = decision.roles.some((role) => role === 'app' || role === 'mcp');
+    const publicRole = decision.roles.some((role) => role === 'public' || role === 'docs');
+    if (!config.publicSurfacesEnabled && publicRole && !privateRole) {
       res.status(404).set('X-Robots-Tag', 'noindex, nofollow, noarchive').type('text/plain').send('Not found.');
       return;
     }

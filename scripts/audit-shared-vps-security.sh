@@ -215,6 +215,17 @@ done
   [ "$app_env" = "$data_root/config/app.env" ] && \
   [ "$tunnel_token_file" = "$data_root/config/cloudflared-token" ] || \
   die 'mounts privados precisam ser filhos exatos de KASSINAO_DATA_ROOT'
+app_env_value() {
+  local key="$1"
+  awk -v key="$key" '
+    index($0, key "=") == 1 { count++; value = substr($0, length(key) + 2) }
+    END { if (count != 1) exit 2; print value }
+  ' "$app_env" 2>/dev/null || die 'app.env shared está ausente, irregular ou contém chave obrigatória duplicada'
+}
+if [ "$audit_mode" != neighbors-only ]; then
+  [ "$(app_env_value TRUST_PROXY_HOPS)" = 1 ] || \
+    die 'TRUST_PROXY_HOPS precisa ser exatamente 1 no app.env shared'
+fi
 [[ "$uid" =~ ^[0-9]+$ ]] && [ "$uid" -ge 61000 ] && [ "$uid" -le 61183 ] ||
   die 'KASSINAO_UID shared precisa ser explícito e ficar na faixa privada 61000..61183'
 [[ "$gid" =~ ^[0-9]+$ ]] && [ "$gid" -ge 61000 ] && [ "$gid" -le 61183 ] ||
@@ -257,16 +268,19 @@ PROC_ROOT=/proc
 [ -d "$PROC_ROOT" ] && [ ! -L "$PROC_ROOT" ] || die '/proc é obrigatório para provar a exclusividade do UID/GID shared'
 
 host_port="$(env_value KASSINAO_HOST_PORT)"
-public_host_port="$(env_value KASSINAO_PUBLIC_HOST_PORT)"
 [[ "$host_port" =~ ^[0-9]+$ ]] && [ "$host_port" -ge 1 ] && [ "$host_port" -le 65535 ] || \
   die 'KASSINAO_HOST_PORT inválida'
-[[ "$public_host_port" =~ ^[0-9]+$ ]] && [ "$public_host_port" -ge 1 ] && [ "$public_host_port" -le 65535 ] || \
-  die 'KASSINAO_PUBLIC_HOST_PORT inválida'
+app_url="$(env_value APP_URL)"
+mcp_url="$(env_value MCP_URL)"
+public_url="$(env_value PUBLIC_URL)"
+docs_url="$(env_value DOCS_URL)"
 
 profiles="$(env_value COMPOSE_PROFILES)"
 profile_enabled() { case ",$profiles," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
-expected_services=kassinao
-profile_enabled split-public && expected_services+=,kassinao-public
+split_public_count="$(awk -F, '{ for (i=1; i<=NF; i++) if ($i == "split-public") count++ } END { print count + 0 }' <<<"$profiles")"
+[ "$split_public_count" -eq 1 ] || \
+  die 'COMPOSE_PROFILES shared precisa habilitar split-public exatamente uma vez'
+expected_services=kassinao,kassinao-router,kassinao-public
 profile_enabled tunnel && expected_services+=,cloudflared
 
 # O overlay selado precisa consumir cada limite explícito exatamente onde o
@@ -276,6 +290,9 @@ for resource_line in \
   '    mem_limit: ${KASSINAO_CORE_MEMORY_LIMIT:?Defina KASSINAO_CORE_MEMORY_LIMIT no compose.env}' \
   '    memswap_limit: ${KASSINAO_CORE_MEMORY_LIMIT:?Defina KASSINAO_CORE_MEMORY_LIMIT no compose.env}' \
   '    cpus: ${KASSINAO_CORE_CPUS:?Defina KASSINAO_CORE_CPUS no compose.env}' \
+  '    mem_limit: ${KASSINAO_ROUTER_MEMORY_LIMIT:?Defina KASSINAO_ROUTER_MEMORY_LIMIT no compose.env}' \
+  '    memswap_limit: ${KASSINAO_ROUTER_MEMORY_LIMIT:?Defina KASSINAO_ROUTER_MEMORY_LIMIT no compose.env}' \
+  '    cpus: ${KASSINAO_ROUTER_CPUS:?Defina KASSINAO_ROUTER_CPUS no compose.env}' \
   '    mem_limit: ${KASSINAO_PUBLIC_MEMORY_LIMIT:?Defina KASSINAO_PUBLIC_MEMORY_LIMIT no compose.env}' \
   '    memswap_limit: ${KASSINAO_PUBLIC_MEMORY_LIMIT:?Defina KASSINAO_PUBLIC_MEMORY_LIMIT no compose.env}' \
   '    cpus: ${KASSINAO_PUBLIC_CPUS:?Defina KASSINAO_PUBLIC_CPUS no compose.env}' \
@@ -287,16 +304,43 @@ do
     die 'docker-compose.shared.yml diverge do contrato explícito de CPU/RAM'
 done
 for resource_key in mem_limit memswap_limit cpus; do
-  [ "$(grep -Ec "^    ${resource_key}:" "$SHARED_COMPOSE_FILE")" -eq 3 ] || \
+  [ "$(grep -Ec "^    ${resource_key}:" "$SHARED_COMPOSE_FILE")" -eq 4 ] || \
     die 'docker-compose.shared.yml contém limite de CPU/RAM extra ou ausente'
 done
 runtime_identity_line="    user: '\${KASSINAO_UID:?Defina um UID privado do adapter shared}:\${KASSINAO_GID:?Defina um GID privado do adapter shared}'"
-[ "$(grep -Fxc -- "$runtime_identity_line" "$SHARED_COMPOSE_FILE")" -eq 2 ] ||
-  die 'docker-compose.shared.yml precisa exigir UID/GID privados nos dois serviços da aplicação'
+[ "$(grep -Fxc -- "$runtime_identity_line" "$SHARED_COMPOSE_FILE")" -eq 3 ] ||
+  die 'docker-compose.shared.yml precisa exigir UID/GID privados nos três serviços da aplicação'
 [ "$(grep -Fxc -- "    user: '65532:65532'" "$SHARED_COMPOSE_FILE")" -eq 1 ] ||
   die 'docker-compose.shared.yml precisa selar cloudflared como 65532:65532'
+router_compose_block="$(awk '
+  /^  kassinao-router:$/ { inside=1 }
+  inside && /^  [A-Za-z0-9_.-]+:$/ && $0 != "  kassinao-router:" { exit }
+  inside { print }
+' "$COMPOSE_FILE")"
+[ -n "$router_compose_block" ] && \
+  [ "$(grep -Fxc -- "    command: ['/usr/local/bin/node', 'dist/router.js']" <<<"$router_compose_block")" -eq 1 ] && \
+  ! grep -Eq '^    (env_file|volumes):' <<<"$router_compose_block" || \
+  die 'router selado precisa permanecer sem env_file/volumes e com command exato'
+for compose_contract in \
+  '      - '\''127.0.0.1:${KASSINAO_HOST_PORT:-8080}:8080'\''' \
+  '        aliases: [kassinao-core]' \
+  '        aliases: [kassinao]'
+do
+  [ "$(grep -Fxc -- "$compose_contract" "$COMPOSE_FILE")" -eq 1 ] || \
+    die 'docker-compose.yml diverge do contrato exclusivo de ingress/aliases'
+done
+for interface_contract in 'interface_name: edge0:2' 'interface_name: core0:2' 'interface_name: public0:2' 'interface_name: egress0:2'; do
+  interface_value="${interface_contract%:*}"
+  interface_count="${interface_contract##*:}"
+  [ "$(grep -Fxc -- "        $interface_value" "$COMPOSE_FILE")" -eq "$interface_count" ] || \
+    die 'docker-compose.yml diverge do contrato de interfaces nomeadas'
+done
+unset compose_contract interface_contract interface_value interface_count
+unset router_compose_block
 core_memory_limit="$(env_value KASSINAO_CORE_MEMORY_LIMIT)"
 core_cpu_limit="$(env_value KASSINAO_CORE_CPUS)"
+router_memory_limit="$(env_value KASSINAO_ROUTER_MEMORY_LIMIT)"
+router_cpu_limit="$(env_value KASSINAO_ROUTER_CPUS)"
 public_memory_limit="$(env_value KASSINAO_PUBLIC_MEMORY_LIMIT)"
 public_cpu_limit="$(env_value KASSINAO_PUBLIC_CPUS)"
 tunnel_memory_limit="$(env_value KASSINAO_TUNNEL_MEMORY_LIMIT)"
@@ -391,7 +435,7 @@ if [ "$audit_mode" != neighbors-only ]; then
 fi
 if [ "$audit_mode" = full ] || [ "$audit_mode" = uninstall-preflight ] || [ "$reserved_firewall_present" = true ]; then
   env -i "PATH=$PATH" HOME=/root "$HARDENER" --shared-host --check >/dev/null || \
-    die 'policy de egress da kas-private0 está ausente ou divergente'
+    die 'policy de egress das bridges kas-core-eg0/kas-tunnel-eg0 está ausente ou divergente'
 fi
 if [ "$audit_mode" = full ]; then
   env -i "PATH=$PATH" HOME=/root "KASSINAO_ENV_FILE=$ENV_FILE" "$ROLLBACK_CHECKER" >/dev/null || \
@@ -405,10 +449,12 @@ env -i "PATH=$PATH" HOME=/root LC_ALL=C "LD_PRELOAD=${LD_PRELOAD-}" \
   DOCKER_HOST=unix:///var/run/docker.sock "DOCKER_CONFIG=$DOCKER_CONFIG" python3 - \
   "$audit_mode" "$image" "$cloudflared_image" "$expected_services" "$expected_existing_image" "$require_current_images" \
   "$recordings" "$state" "$auth" "$cache" \
-  "$app_env" "$tunnel_token_file" "$data_root/.kassinao-mounted" "$host_port" "$public_host_port" "$data_root" "$backing_file" \
+  "$app_env" "$tunnel_token_file" "$data_root/.kassinao-mounted" "$host_port" \
+  "$app_url" "$mcp_url" "$public_url" "$docs_url" "$data_root" "$backing_file" \
   "$ROOT" \
   "$no_dump_installed" "$no_dump_helper_state" \
-  "$core_memory_limit" "$core_cpu_limit" "$public_memory_limit" "$public_cpu_limit" \
+  "$core_memory_limit" "$core_cpu_limit" "$router_memory_limit" "$router_cpu_limit" \
+  "$public_memory_limit" "$public_cpu_limit" \
   "$tunnel_memory_limit" "$tunnel_cpu_limit" "$host_memory_kib" "$host_cpu_count" \
   "$uid" "$gid" "$PROC_ROOT" \
   7<<<"$linux_links_json" 8<<<"$ipv4_filter_rules" 9<<<"$ipv6_filter_rules" <<'PY' || \
@@ -435,7 +481,10 @@ import sys
     tunnel_token_file,
     sentinel,
     host_port,
-    public_host_port,
+    app_url,
+    mcp_url,
+    public_url,
+    docs_url,
     data_root,
     backing_file,
     release_root,
@@ -443,6 +492,8 @@ import sys
     no_dump_helper_state,
     core_memory_limit,
     core_cpu_limit,
+    router_memory_limit,
+    router_cpu_limit,
     public_memory_limit,
     public_cpu_limit,
     tunnel_memory_limit,
@@ -455,11 +506,34 @@ import sys
 ) = sys.argv[1:]
 require_current_images = require_current_images_raw == 'true'
 runtime_uid, runtime_gid = int(runtime_uid_raw), int(runtime_gid_raw)
+expected_services = set(expected_services_raw.split(','))
 
 
 def fail(message):
     print(f'ERRO: {message}', file=sys.stderr)
     raise SystemExit(1)
+
+
+def exact_https_origin(raw, label):
+    match = re.fullmatch(r'https://([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)(?::([0-9]{1,5}))?', raw)
+    if match is None or '..' in match.group(1) or match.group(1).startswith('.') or match.group(1).endswith('.'):
+        fail(f'{label} precisa ser uma origem HTTPS exata, sem path, query, fragmento ou credenciais')
+    port = match.group(2)
+    if port is not None and not 1 <= int(port) <= 65535:
+        fail(f'{label} possui porta inválida')
+    return match.group(1).lower()
+
+
+private_origins = {
+    exact_https_origin(app_url, 'APP_URL'),
+    exact_https_origin(mcp_url, 'MCP_URL'),
+}
+public_origins = {
+    exact_https_origin(public_url, 'PUBLIC_URL'),
+    exact_https_origin(docs_url, 'DOCS_URL'),
+}
+if private_origins & public_origins:
+    fail('origens públicas/docs não podem coincidir com APP_URL/MCP_URL')
 
 
 def process_output(command, label, limit, environment):
@@ -609,6 +683,7 @@ if len(items) != len(container_ids):
     fail('projeção sanitizada de containers retornou cardinalidade divergente')
 expected_project_names = {
     'kassinao': '/kassinao',
+    'kassinao-router': '/kassinao-router',
     'kassinao-public': '/kassinao-public',
     'cloudflared': '/kassinao-tunnel',
 }
@@ -702,6 +777,7 @@ network_projection = (
     r'{"Id":{{json .Id}},"Name":{{json .Name}},"Driver":{{json .Driver}},'
     r'"Internal":{{json .Internal}},"IPAM":{"Driver":{{json .IPAM.Driver}},"Config":{{json .IPAM.Config}}},'
     r'"BridgeName":{{json (index .Options "com.docker.network.bridge.name")}},'
+    r'"EnableICC":{{json (index .Options "com.docker.network.bridge.enable_icc")}},'
     r'"GatewayModeIPv4":{{json (index .Options "com.docker.network.bridge.gateway_mode_ipv4")}},'
     r'"GatewayModeIPv6":{{json (index .Options "com.docker.network.bridge.gateway_mode_ipv6")}},'
     r'"ComposeProject":{{json (index .Labels "com.docker.compose.project")}},'
@@ -736,7 +812,7 @@ for item in items:
     if labels.get('com.docker.compose.project') == 'kassinao':
         service = labels.get('com.docker.compose.service')
         image_name = config.get('Image')
-        if service in {'kassinao', 'kassinao-public', 'cloudflared'} and isinstance(image_name, str):
+        if service in {'kassinao', 'kassinao-router', 'kassinao-public', 'cloudflared'} and isinstance(image_name, str):
             project_images.add(image_name)
 for image_name in project_images:
     if re.fullmatch(r'[a-z0-9][a-z0-9._/-]*(?::[0-9A-Za-z._-]+)?@sha256:[0-9a-f]{64}', image_name) is None:
@@ -776,6 +852,10 @@ expected_resources = {
         'memory': parse_memory_limit(core_memory_limit, 'KASSINAO_CORE_MEMORY_LIMIT'),
         'nano_cpus': parse_cpu_limit(core_cpu_limit, 'KASSINAO_CORE_CPUS'),
     },
+    'kassinao-router': {
+        'memory': parse_memory_limit(router_memory_limit, 'KASSINAO_ROUTER_MEMORY_LIMIT'),
+        'nano_cpus': parse_cpu_limit(router_cpu_limit, 'KASSINAO_ROUTER_CPUS'),
+    },
     'kassinao-public': {
         'memory': parse_memory_limit(public_memory_limit, 'KASSINAO_PUBLIC_MEMORY_LIMIT'),
         'nano_cpus': parse_cpu_limit(public_cpu_limit, 'KASSINAO_PUBLIC_CPUS'),
@@ -792,9 +872,10 @@ except (TypeError, ValueError):
     fail('capacidade física do host é inválida')
 if host_memory_bytes <= 0 or host_cpu_nanos <= 0:
     fail('capacidade física do host precisa ser positiva')
-if sum(item['memory'] for item in expected_resources.values()) * 4 > host_memory_bytes * 3:
+enabled_resources = [expected_resources[service] for service in expected_services]
+if sum(item['memory'] for item in enabled_resources) * 4 > host_memory_bytes * 3:
     fail('limites de RAM reservam menos de 25% da memória física para workloads vizinhos')
-if sum(item['nano_cpus'] for item in expected_resources.values()) * 4 > host_cpu_nanos * 3:
+if sum(item['nano_cpus'] for item in enabled_resources) * 4 > host_cpu_nanos * 3:
     fail('limites de CPU reservam menos de 25% das CPUs online para workloads vizinhos')
 
 
@@ -851,7 +932,9 @@ elif firewall_states not in (['absent', 'absent'], ['owned', 'owned']):
 firewall_state = firewall_states[0]
 
 
-reserved_interfaces = {'kas-private0', 'kas-public0'}
+mandatory_reserved_interfaces = {'kas-edge0', 'kas-core0', 'kas-public0', 'kas-core-eg0'}
+tunnel_reserved_interface = 'kas-tunnel-eg0'
+reserved_interfaces = mandatory_reserved_interfaces | {tunnel_reserved_interface}
 interfaces = {}
 for link in links:
     if not isinstance(link, dict):
@@ -888,9 +971,9 @@ def normalize_image_environment_map(raw):
 
 image_environment_map = normalize_image_environment_map(image_environment_map)
 
-expected_services = set(expected_services_raw.split(','))
 expected_names = {
     'kassinao': 'kassinao',
+    'kassinao-router': 'kassinao-router',
     'kassinao-public': 'kassinao-public',
     'cloudflared': 'kassinao-tunnel',
 }
@@ -925,12 +1008,7 @@ for item in project:
     if service in expected_services:
         by_service[service] = item
         continue
-    if audit_mode != 'preflight':
-        fail(f'serviço desabilitado ainda existe no runtime: {service}')
-    container_state = item.get('State') or {}
-    restart = str((((item.get('HostConfig') or {}).get('RestartPolicy') or {}).get('Name') or 'no')).lower()
-    if container_state.get('Running') is not False or restart != 'no':
-        fail(f'serviço desabilitado não está inerte para remoção explícita: {service}')
+    fail(f'serviço desabilitado ainda existe no runtime: {service}')
 project_owned = bool(project) and set(by_service) == expected_services
 if audit_mode == 'full' and not project_owned:
     fail(f'serviços do projeto divergentes: {sorted(set(by_service) ^ expected_services)}')
@@ -978,9 +1056,10 @@ if audit_mode == 'uninstall-preflight' and project:
     if not project_owned:
         fail('topologia de containers Kassinão está parcial antes do uninstall')
     expected_networks_by_service = {
-        'kassinao': {'kassinao_private'},
-        'kassinao-public': {'kassinao_public'},
-        'cloudflared': {'kassinao_private', 'kassinao_public'},
+        'kassinao': {'kassinao_core_link', 'kassinao_core_egress'},
+        'kassinao-router': {'kassinao_edge_ingress', 'kassinao_core_link', 'kassinao_public_link'},
+        'kassinao-public': {'kassinao_public_link'},
+        'cloudflared': {'kassinao_edge_ingress', 'kassinao_tunnel_egress'},
     }
     for service, item in by_service.items():
         config = item.get('Config') or {}
@@ -1009,7 +1088,7 @@ def image_matches_contract(service, actual):
     desired = expected_cloudflared_image if service == 'cloudflared' else expected_image
     if require_current_images:
         return actual == desired
-    if expected_existing_image and service in ('kassinao', 'kassinao-public'):
+    if expected_existing_image and service in ('kassinao', 'kassinao-router', 'kassinao-public'):
         return actual == expected_existing_image
     if audit_mode == 'preflight':
         return digest_pattern.fullmatch(actual) is not None and image_repository(actual) == image_repository(desired)
@@ -1063,7 +1142,7 @@ def assert_liveness_contract(service, item):
     if state.get('Running') is not True:
         fail(f'{service}: container precisa estar Running no audit full')
 
-    if service in ('kassinao', 'kassinao-public'):
+    if service in ('kassinao', 'kassinao-router', 'kassinao-public'):
         health_status = str(((state.get('Health') or {}).get('Status') or ''))
         if health_status != 'healthy':
             fail(f'{service}: Health.Status precisa ser healthy no audit full')
@@ -1076,6 +1155,7 @@ def assert_static_runtime_contract(service, host):
 
     expected_pids_limit = {
         'kassinao': 256,
+        'kassinao-router': 128,
         'kassinao-public': 128,
         'cloudflared': 64,
     }[service]
@@ -1085,6 +1165,7 @@ def assert_static_runtime_contract(service, host):
 
     expected_log_config = {
         'kassinao': {'max-size': '10m', 'max-file': '3'},
+        'kassinao-router': {'max-size': '5m', 'max-file': '2'},
         'kassinao-public': {'max-size': '5m', 'max-file': '2'},
         'cloudflared': {'max-size': '5m', 'max-file': '2'},
     }[service]
@@ -1099,13 +1180,13 @@ def assert_ports(name, host, expected_internal=None, expected_host=None):
     for internal, values in bindings.items():
         for binding in values or []:
             host_ip = str((binding or {}).get('HostIp') or '')
-            if host_ip not in ('127.0.0.1', '::1'):
-                fail(f'{name}: porta publicada fora de loopback')
-            actual.append((internal, str((binding or {}).get('HostPort') or '')))
+            if host_ip != '127.0.0.1':
+                fail(f'{name}: porta publicada fora do bind IPv4 loopback exato')
+            actual.append((internal, host_ip, str((binding or {}).get('HostPort') or '')))
     if expected_internal is None:
         if actual:
             fail(f'{name}: não deve publicar portas')
-    elif actual != [(expected_internal, expected_host)]:
+    elif actual != [(expected_internal, '127.0.0.1', expected_host)]:
         fail(f'{name}: binding de porta divergente')
 
 
@@ -1155,18 +1236,18 @@ for service, item in contract_by_service.items():
     if audit_mode == 'full':
         assert_liveness_contract(service, item)
 
-    if service in {'kassinao', 'kassinao-public'}:
+    if service in {'kassinao', 'kassinao-router', 'kassinao-public'}:
         expected_entrypoint = [
             '/usr/local/bin/kassinao-no-dump', '--preload',
             '/usr/local/lib/libkassinao-no-dump.so', '--', '/usr/bin/tini', '--',
         ]
         if config.get('Entrypoint') != expected_entrypoint:
             fail(f'{service}: entrypoint no-dump divergente')
-        expected_command = (
-            ['/usr/local/bin/node', 'dist/index.js']
-            if service == 'kassinao'
-            else ['/usr/local/bin/node', 'dist/public.js']
-        )
+        expected_command = {
+            'kassinao': ['/usr/local/bin/node', 'dist/index.js'],
+            'kassinao-router': ['/usr/local/bin/node', 'dist/router.js'],
+            'kassinao-public': ['/usr/local/bin/node', 'dist/public.js'],
+        }[service]
         if config.get('Cmd') != expected_command:
             fail(f'{service}: command divergente')
 
@@ -1183,7 +1264,7 @@ for service, item in contract_by_service.items():
         if set(environment) != set(image_environment) | additions:
             fail('kassinao: Config.Env saiu da allowlist positiva')
         fixed = {
-            'PORT': '8080',
+            'PORT': '8082',
             'WEB_BIND_ADDRESS': '0.0.0.0',
             'RECORDINGS_DIR': '/app/recordings',
             'STATE_DIR': '/app/state',
@@ -1201,6 +1282,31 @@ for service, item in contract_by_service.items():
         if not re.fullmatch(r'[0-9a-f]{32}', fingerprint):
             fail('kassinao: deployment fingerprint inválido')
         app_fingerprints.add(fingerprint)
+    elif service == 'kassinao-router':
+        additions = {
+            'NODE_ENV', 'PORT', 'WEB_BIND_INTERFACE', 'APP_URL', 'MCP_URL', 'PUBLIC_URL', 'DOCS_URL',
+            'KASSINAO_RELEASE_DIGEST', 'KASSINAO_DEPLOYMENT_FINGERPRINT'
+        }
+        if set(environment) != set(image_environment) | additions:
+            fail('kassinao-router: Config.Env saiu da allowlist positiva')
+        fixed = {
+            'NODE_ENV': 'production',
+            'PORT': '8080',
+            'WEB_BIND_INTERFACE': 'edge0',
+            'APP_URL': app_url,
+            'MCP_URL': mcp_url,
+            'PUBLIC_URL': public_url,
+            'DOCS_URL': docs_url,
+        }
+        if any(environment.get(key) != value for key, value in fixed.items()):
+            fail('kassinao-router: bind/origens divergem do compose.env selado')
+        app_runtime_images.add(image)
+        if environment.get('KASSINAO_RELEASE_DIGEST') != image.rsplit('@', 1)[1]:
+            fail('kassinao-router: release digest do ambiente não corresponde à imagem existente')
+        fingerprint = environment.get('KASSINAO_DEPLOYMENT_FINGERPRINT') or ''
+        if not re.fullmatch(r'[0-9a-f]{32}', fingerprint):
+            fail('kassinao-router: deployment fingerprint inválido')
+        app_fingerprints.add(fingerprint)
     elif service == 'kassinao-public':
         additions = {
             'NODE_ENV', 'PORT', 'WEB_BIND_ADDRESS', 'PUBLIC_URL', 'DOCS_URL', 'SOURCE_URL',
@@ -1208,7 +1314,9 @@ for service, item in contract_by_service.items():
         }
         if set(environment) != set(image_environment) | additions:
             fail('kassinao-public: Config.Env saiu da allowlist positiva')
-        if environment.get('PORT') != '8081' or environment.get('WEB_BIND_ADDRESS') != '0.0.0.0':
+        if (environment.get('PORT') != '8081' or environment.get('WEB_BIND_ADDRESS') != '0.0.0.0' or
+                environment.get('PUBLIC_URL') != public_url or environment.get('DOCS_URL') != docs_url or
+                environment.get('TRUST_PROXY_HOPS') != '1'):
             fail('kassinao-public: Config.Env fixo divergente')
         app_runtime_images.add(image)
         if environment.get('KASSINAO_RELEASE_DIGEST') != image.rsplit('@', 1)[1]:
@@ -1227,9 +1335,10 @@ for service, item in contract_by_service.items():
             fail('cloudflared: command/token-file divergente')
 
     expected_networks = {
-        'kassinao': {'kassinao_private'},
-        'kassinao-public': {'kassinao_public'},
-        'cloudflared': {'kassinao_private', 'kassinao_public'},
+        'kassinao': {'kassinao_core_link', 'kassinao_core_egress'},
+        'kassinao-router': {'kassinao_edge_ingress', 'kassinao_core_link', 'kassinao_public_link'},
+        'kassinao-public': {'kassinao_public_link'},
+        'cloudflared': {'kassinao_edge_ingress', 'kassinao_tunnel_egress'},
     }[service]
     actual_networks = set((((item.get('NetworkSettings') or {}).get('Networks')) or {}).keys())
     if actual_networks != expected_networks:
@@ -1253,11 +1362,15 @@ for service, item in contract_by_service.items():
                 fail(f'kassinao: source divergente em {target}')
             if bool(mount.get('RW')) != writable:
                 fail(f'kassinao: modo de escrita divergente em {target}')
+        assert_ports(service, host)
+    elif service == 'kassinao-router':
+        if mounts:
+            fail('kassinao-router: mounts proibidos')
         assert_ports(service, host, '8080/tcp', host_port)
     elif service == 'kassinao-public':
         if mounts:
             fail('kassinao-public: mounts proibidos')
-        assert_ports(service, host, '8081/tcp', public_host_port)
+        assert_ports(service, host)
     else:
         if no_dump_helper_state != 'owned':
             fail('cloudflared: launcher no-dump instalado não foi provado contra a release')
@@ -1276,9 +1389,9 @@ for service, item in contract_by_service.items():
         assert_ports(service, host)
 
 if len(app_runtime_images) > 1:
-    fail('core e superfície pública usam digests diferentes')
+    fail('core, router e superfície pública usam digests diferentes')
 if len(app_fingerprints) > 1:
-    fail('core e superfície pública usam deployment fingerprints diferentes')
+    fail('core, router e superfície pública usam deployment fingerprints diferentes')
 if expected_existing_image and expected_existing_image not in app_runtime_images:
     fail('imagem anterior explícita não corresponde aos containers existentes')
 
@@ -1289,10 +1402,38 @@ if not project_networks:
     if audit_mode == 'full':
         fail('redes do projeto kassinao não puderam ser identificadas')
 
-reserved_networks = {
-    'kassinao_private': ('kas-private0', 'private'),
-    'kassinao_public': ('kas-public0', 'public'),
+all_reserved_networks = {
+    'kassinao_edge_ingress': {
+        'bridge': 'kas-edge0', 'label': 'edge_ingress', 'internal': True,
+        'members': {'kassinao-router', 'cloudflared'},
+    },
+    'kassinao_core_link': {
+        'bridge': 'kas-core0', 'label': 'core_link', 'internal': True,
+        'members': {'kassinao', 'kassinao-router'},
+    },
+    'kassinao_public_link': {
+        'bridge': 'kas-public0', 'label': 'public_link', 'internal': True,
+        'members': {'kassinao-router', 'kassinao-public'},
+    },
+    'kassinao_core_egress': {
+        'bridge': 'kas-core-eg0', 'label': 'core_egress', 'internal': False,
+        'members': {'kassinao'},
+    },
+    'kassinao_tunnel_egress': {
+        'bridge': 'kas-tunnel-eg0', 'label': 'tunnel_egress', 'internal': False,
+        'members': {'cloudflared'},
+    },
 }
+tunnel_enabled = 'cloudflared' in expected_services
+reserved_networks = {
+    name: contract for name, contract in all_reserved_networks.items()
+    if tunnel_enabled or name != 'kassinao_tunnel_egress'
+}
+# Sem o profile tunnel, cloudflared não participa de edge_ingress.
+if not tunnel_enabled:
+    reserved_networks['kassinao_edge_ingress'] = {
+        **reserved_networks['kassinao_edge_ingress'], 'members': {'kassinao-router'},
+    }
 owned_reserved_networks = set()
 for network in networks:
     if not isinstance(network, dict):
@@ -1305,27 +1446,48 @@ for network in networks:
     expected = reserved_networks.get(name)
     if expected is None:
         fail(f'bridge reservada {bridge or "sem-nome"} pertence a outra rede/workload')
-    expected_bridge, expected_label = expected
+    expected_bridge = expected['bridge']
+    expected_label = expected['label']
     if (network.get('Driver') != 'bridge' or bridge != expected_bridge or
             network.get('ComposeProject') != 'kassinao' or
             network.get('ComposeNetwork') != expected_label):
         fail(f'bridge reservada {expected_bridge} pertence a outra rede/workload')
     gateway_ipv4 = network.get('GatewayModeIPv4')
     gateway_ipv6 = network.get('GatewayModeIPv6')
-    if expected_label == 'private':
-        if network.get('Internal') is not False or gateway_ipv4 not in (None, '') or gateway_ipv6 not in (None, ''):
-            fail('rede privada reservada diverge do contrato de gateway externo')
-    elif (network.get('Internal') is not True or gateway_ipv4 != 'isolated' or
-            gateway_ipv6 != 'isolated'):
-        fail('rede pública reservada precisa ser Internal=true com gateway IPv4/IPv6 isolated')
+    if expected['internal']:
+        if (network.get('Internal') is not True or gateway_ipv4 != 'isolated' or
+                gateway_ipv6 != 'isolated'):
+            fail(f'rede interna reservada {expected_label} precisa ser isolated em IPv4/IPv6')
+    elif (network.get('Internal') is not False or gateway_ipv4 not in (None, '') or
+            gateway_ipv6 not in (None, '') or network.get('EnableICC') != 'false'):
+        fail(f'rede de egress reservada {expected_label} precisa ser externa com ICC=false')
+    expected_member_services = expected['members']
+    if not expected_member_services <= set(all_by_service):
+        fail(f'rede reservada {expected_label} possui membership parcial')
+    expected_members = {
+        str(all_by_service[service].get('Id') or ''): expected_names[service]
+        for service in expected_member_services
+    }
+    actual_members = {}
+    for member in network.get('Containers') or []:
+        if not isinstance(member, dict):
+            fail(f'rede reservada {expected_label} possui member inválido')
+        member_id = str(member.get('Id') or '')
+        member_name = str(member.get('Name') or '')
+        if not member_id or not member_name or member_id in actual_members:
+            fail(f'rede reservada {expected_label} possui member ausente ou duplicado')
+        actual_members[member_id] = member_name
+    if actual_members != expected_members:
+        fail(f'rede reservada {expected_label} possui membership divergente')
     if name in owned_reserved_networks:
         fail(f'rede reservada duplicada no inventário: {name}')
     owned_reserved_networks.add(name)
 
 expected_reserved_networks = set(reserved_networks)
+expected_reserved_interfaces = mandatory_reserved_interfaces | ({tunnel_reserved_interface} if tunnel_enabled else set())
 topology_absent = not present_reserved_interfaces and not owned_reserved_networks and not project
 topology_owned = (
-    present_reserved_interfaces == reserved_interfaces and
+    present_reserved_interfaces == expected_reserved_interfaces and
     owned_reserved_networks == expected_reserved_networks and
     project_owned
 )

@@ -55,6 +55,32 @@ jobs:
           KASSINAO_TEST_STORAGE_ROOT: /srv/kassinao-ci
       - run: npm run build
       - run: npm run typecheck:preview
+      - name: Validate the exact dedicated and shared Compose models
+        env:
+          KASSINAO_IMAGE: kassinao:ci
+          KASSINAO_APP_ENV_FILE: /dev/null
+          KASSINAO_UID: '61050'
+          KASSINAO_GID: '61050'
+          KASSINAO_DATA_ROOT: /tmp/kassinao-ci-data
+          KASSINAO_SHARED_APP_ENV_FILE: /tmp/kassinao-ci-app.env
+          KASSINAO_SHARED_TUNNEL_TOKEN_FILE: /tmp/kassinao-ci-tunnel-token
+          KASSINAO_CORE_MEMORY_LIMIT: 2g
+          KASSINAO_CORE_CPUS: '1.0'
+          KASSINAO_ROUTER_MEMORY_LIMIT: 256m
+          KASSINAO_ROUTER_CPUS: '0.1'
+          KASSINAO_PUBLIC_MEMORY_LIMIT: 384m
+          KASSINAO_PUBLIC_CPUS: '0.2'
+          KASSINAO_TUNNEL_MEMORY_LIMIT: 192m
+          KASSINAO_TUNNEL_CPUS: '0.2'
+          APP_URL: http://localhost:8080
+          MCP_URL: http://localhost:8080
+          PUBLIC_URL: http://localhost:8080
+          DOCS_URL: http://localhost:8080
+          SOURCE_URL: https://github.com/resolvicomai/kassinao
+          COMPOSE_PROFILES: split-public
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.shared.yml config --quiet
       # o conector MCP é um pacote separado — sem este step, mcp/ quebrado passaria verde
       - name: Install MCP dependencies
         run: npm ci
@@ -72,5 +98,7 @@ jobs:
         run: docker build --build-arg LOCAL_TRANSCRIBE=1 -t kassinao:ci .
       - name: Smoke-test public process through the default image entrypoint
         run: bash scripts/smoke-public-image.sh kassinao:ci sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - name: Smoke-test the isolated single-origin router topology
+        run: bash scripts/smoke-router-image.sh kassinao:ci sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa linux/amd64
       - name: Smoke-test local transcriber dependencies
         run: docker run --rm --entrypoint python3 kassinao:ci -c "import faster_whisper"

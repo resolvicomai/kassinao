@@ -129,6 +129,7 @@ SCRIPT_SOURCES=(
   "$ROOT/scripts/verify-storage-encryption.sh"
   "$ROOT/scripts/harden-docker-egress.sh"
   "$ROOT/scripts/egress-fail-closed.sh"
+  "$ROOT/scripts/transition-dedicated-runtime-topology.sh"
 )
 UNIT_NAMES=(
   kassinao-health-watch.service
@@ -269,22 +270,190 @@ for path_name in "${STORAGE_PATHS[@]}"; do
 done
 rollback_dir="$data_root/rollback"
 [ ! -L "$rollback_dir" ] || { echo 'ERRO: diretório de rollback não pode ser symlink' >&2; exit 1; }
+DEDICATED_LEGACY_TRANSITION_ACTIVE=false
+CURRENT_CONTROLS_COMMITTED=false
+DEDICATED_TRANSITION_SCRIPT=''
+DEDICATED_TRANSITION_LEGACY=''
+DEDICATED_TRANSITION_STATE=''
+DEDICATED_TRANSITION_LOCK_ARGS=()
+STORAGE_PATHS_TMP=''
+ROLLBACK_TMPFILES_TMP=''
+ROLLBACK_SERVICE_TMP=''
+HOST_CONTROLS_TMP=''
+on_exit() {
+  local status=$? restore_status=0
+  rm -f -- "${STORAGE_PATHS_TMP:-}" "${ROLLBACK_TMPFILES_TMP:-}" \
+    "${ROLLBACK_SERVICE_TMP:-}" "${HOST_CONTROLS_TMP:-}"
+  if [ "$status" -ne 0 ] && [ "$DEDICATED_LEGACY_TRANSITION_ACTIVE" = true ]; then
+    if [ "$CURRENT_CONTROLS_COMMITTED" = false ]; then
+      printf 'Installer falhou antes de trocar os controles; restaurando runtime legacy verificado.\n' >&2
+      env -i "PATH=$PATH" "HOME=${HOME:-/root}" "LC_ALL=$LC_ALL" "LD_PRELOAD=${LD_PRELOAD-}" \
+        "$DEDICATED_TRANSITION_SCRIPT" restore-legacy \
+        --legacy-bundle "$DEDICATED_TRANSITION_LEGACY" \
+        --state-file "$DEDICATED_TRANSITION_STATE" \
+        "${DEDICATED_TRANSITION_LOCK_ARGS[@]}" \
+        7>&7 8>&8 9>&9 >&2 || restore_status=$?
+      if [ "$restore_status" -ne 0 ]; then
+        printf 'ERRO: restauração automática legacy falhou; runtime permanece parado e exige intervenção pelo bundle anterior.\n' >&2
+      fi
+    else
+      printf 'ERRO: installer falhou após iniciar a troca dos controles; runtime legacy permanece intencionalmente parado. Reinstale o bundle anterior antes de restaurar seu runtime.\n' >&2
+    fi
+  fi
+  exit "$status"
+}
+trap on_exit EXIT
+
+# Reinstalações e upgrades precisam serializar toda a troca de marker,
+# dispatchers, units e serviços com o deploy atualmente instalado. Os FDs
+# permanecem abertos até o EXIT do installer; quando há bundle anterior
+# distinto, a transição legacy herda exatamente os mesmos open-file
+# descriptions.
+installed_marker=/etc/kassinao/host-controls.env
+installed_deploy_dir=''
+if [ -e "$installed_marker" ] || [ -L "$installed_marker" ]; then
+  [ -f "$installed_marker" ] && [ ! -L "$installed_marker" ] &&
+    [ "$(readlink -f -- "$installed_marker" 2>/dev/null || true)" = "$installed_marker" ] &&
+    [ "$(stat -c '%a:%u:%g:%h' "$installed_marker" 2>/dev/null || true)" = 600:0:0:1 ] ||
+    die 'marker instalado anterior é irregular; atualização dedicated recusada'
+  installed_deploy_dir="$(
+    python3 - "$installed_marker" "$data_root" "$rollback_retention_hours" <<'PY'
+import pathlib
+import sys
+values = {}
+for line in pathlib.Path(sys.argv[1]).read_text(encoding='utf-8').splitlines():
+    if '=' not in line:
+        raise SystemExit(1)
+    key, value = line.split('=', 1)
+    if key in values:
+        raise SystemExit(1)
+    values[key] = value
+if set(values) != {
+    'KASSINAO_DEPLOY_DIR',
+    'KASSINAO_DATA_ROOT',
+    'KASSINAO_ROLLBACK_RETENTION_HOURS',
+}:
+    raise SystemExit(1)
+if values['KASSINAO_DATA_ROOT'] != sys.argv[2] or values['KASSINAO_ROLLBACK_RETENTION_HOURS'] != sys.argv[3]:
+    raise SystemExit(1)
+print(values['KASSINAO_DEPLOY_DIR'])
+PY
+  )" || die 'marker instalado anterior diverge do storage/retenção current'
+  [[ "$installed_deploy_dir" =~ ^/[A-Za-z0-9._/-]+$ ]] ||
+    die 'KASSINAO_DEPLOY_DIR anterior não é caminho absoluto simples'
+  case "$installed_deploy_dir" in / | *//* | */./* | */../* | */. | */.. | */)
+    die 'KASSINAO_DEPLOY_DIR anterior não é canônico'
+    ;;
+  esac
+  [ -d "$installed_deploy_dir" ] && [ ! -L "$installed_deploy_dir" ] &&
+    [ "$(readlink -f -- "$installed_deploy_dir" 2>/dev/null || true)" = "$installed_deploy_dir" ] ||
+    die 'KASSINAO_DEPLOY_DIR anterior não é diretório real canônico'
+
+  current_transition_lock="$ROOT/.deploy.lock"
+  installed_transition_lock="$installed_deploy_dir/.deploy.lock"
+  maintenance_transition_lock=/run/lock/kassinao/maintenance.lock
+  if [ "$current_transition_lock" = "$installed_transition_lock" ]; then
+    first_transition_lock="$current_transition_lock"
+    second_transition_lock=''
+  elif [[ "$current_transition_lock" < "$installed_transition_lock" ]]; then
+    first_transition_lock="$current_transition_lock"
+    second_transition_lock="$installed_transition_lock"
+  else
+    first_transition_lock="$installed_transition_lock"
+    second_transition_lock="$current_transition_lock"
+  fi
+  for transition_lock in "$first_transition_lock" ${second_transition_lock:+"$second_transition_lock"}; do
+    if [ ! -e "$transition_lock" ]; then
+      (set -o noclobber; : > "$transition_lock") 2>/dev/null ||
+        die "não foi possível criar $transition_lock sem colisão"
+      chmod 0600 "$transition_lock"
+    fi
+    [ -f "$transition_lock" ] && [ ! -L "$transition_lock" ] &&
+      [ "$(readlink -f -- "$transition_lock" 2>/dev/null || true)" = "$transition_lock" ] &&
+      [ "$(stat -c '%a:%u:%g:%h' "$transition_lock" 2>/dev/null || true)" = 600:0:0:1 ] ||
+      die "deploy lock da atualização é irregular: $transition_lock"
+  done
+  [ -f "$maintenance_transition_lock" ] && [ ! -L "$maintenance_transition_lock" ] &&
+    [ "$(readlink -f -- "$maintenance_transition_lock" 2>/dev/null || true)" = "$maintenance_transition_lock" ] &&
+    [ "$(stat -c '%a:%u:%g:%h' "$maintenance_transition_lock" 2>/dev/null || true)" = 600:0:0:1 ] ||
+    die 'maintenance.lock da atualização é irregular'
+
+  exec 7<>"$first_transition_lock"
+  if [ -n "$second_transition_lock" ]; then exec 8<>"$second_transition_lock"; fi
+  exec 9<>"$maintenance_transition_lock"
+  assert_installer_lock_fd() {
+    local fd="$1" path="$2" description="$3"
+    [ "$(readlink -f -- "/proc/$$/fd/$fd" 2>/dev/null || true)" = "$path" ] &&
+      [ "$(stat -c '%d:%i' "$path" 2>/dev/null || true)" = "$(stat -Lc '%d:%i' "/proc/$$/fd/$fd" 2>/dev/null || true)" ] &&
+      [ "$(stat -Lc '%a:%u:%g:%h' "/proc/$$/fd/$fd" 2>/dev/null || true)" = 600:0:0:1 ] ||
+      die "$description mudou durante a abertura pelo installer"
+  }
+  assert_installer_lock_fd 7 "$first_transition_lock" 'primeiro deploy lock'
+  flock -w 120 7 || die 'primeiro deploy lock não foi liberado para o installer'
+  if [ -n "$second_transition_lock" ]; then
+    assert_installer_lock_fd 8 "$second_transition_lock" 'segundo deploy lock'
+    flock -w 120 8 || die 'segundo deploy lock não foi liberado para o installer'
+  fi
+  assert_installer_lock_fd 9 "$maintenance_transition_lock" maintenance.lock
+  flock -w 120 9 || die 'maintenance.lock não foi liberado para o installer'
+  assert_installer_lock_fd 7 "$first_transition_lock" 'primeiro deploy lock'
+  if [ -n "$second_transition_lock" ]; then
+    assert_installer_lock_fd 8 "$second_transition_lock" 'segundo deploy lock'
+  fi
+  assert_installer_lock_fd 9 "$maintenance_transition_lock" maintenance.lock
+fi
+
 # Faça a prova antes de gravar qualquer controle no host. A cópia instalada é
 # executada novamente abaixo para provar também o artefato privilegiado.
 env -i "PATH=$PATH" "HOME=${HOME:-/root}" "$ROOT/scripts/verify-storage-encryption.sh" "${STORAGE_PATHS[@]}"
+
+# v1.4.14..v1.4.16 usam kas-private0/kas-public0 e não possuem router. Trocar
+# primeiro os dispatchers faria o hardener novo encontrar uma topologia parcial.
+# Retire o runtime/policy legacy ainda sob os controles antigos, antes de gravar
+# qualquer marker, unit ou dispatcher desta release.
+LEGACY_COMPOSE_SHA256=f4d545edbdfe50910126afc441fe7dd47de5eacf3a9cf171c6d2c1a47a1ad2ef
+if [ -n "$installed_deploy_dir" ] && [ "$installed_deploy_dir" != "$ROOT" ]; then
+  legacy_deploy_dir="$installed_deploy_dir"
+  legacy_compose="$legacy_deploy_dir/docker-compose.yml"
+  if [ -f "$legacy_compose" ] && [ ! -L "$legacy_compose" ] &&
+    [ "$(sha256sum "$legacy_compose" | awk '{print $1}')" = "$LEGACY_COMPOSE_SHA256" ]; then
+    dedicated_transition_root="$data_root/dedicated-topology-transition"
+    install -d -o root -g root -m 0700 "$dedicated_transition_root"
+    DEDICATED_TRANSITION_SCRIPT="$ROOT/scripts/transition-dedicated-runtime-topology.sh"
+    DEDICATED_TRANSITION_LEGACY="$legacy_deploy_dir"
+    DEDICATED_TRANSITION_STATE="$dedicated_transition_root/dedicated-runtime-topology.json"
+    [ -n "$second_transition_lock" ] || die 'transição legacy exige dois deploy locks distintos'
+    DEDICATED_TRANSITION_LOCK_ARGS=(
+      --inherited-first-lock-fd 7
+      --inherited-second-lock-fd 8
+      --inherited-maintenance-lock-fd 9
+    )
+    DEDICATED_LEGACY_TRANSITION_ACTIVE=true
+    env -i "PATH=$PATH" "HOME=${HOME:-/root}" "LC_ALL=$LC_ALL" "LD_PRELOAD=${LD_PRELOAD-}" \
+      "$DEDICATED_TRANSITION_SCRIPT" retire-legacy \
+      --legacy-bundle "$legacy_deploy_dir" \
+      --state-file "$DEDICATED_TRANSITION_STATE" \
+      "${DEDICATED_TRANSITION_LOCK_ARGS[@]}" \
+      7>&7 8>&8 9>&9
+  elif docker --host unix:///var/run/docker.sock inspect kassinao >/dev/null 2>&1 &&
+    ! docker --host unix:///var/run/docker.sock inspect kassinao-router >/dev/null 2>&1; then
+    die 'runtime anterior sem router não corresponde às releases v1.4.14..v1.4.16; migração automática recusada'
+  fi
+fi
+
 [ ! -L /etc/kassinao ] || { echo 'ERRO: /etc/kassinao não pode ser symlink' >&2; exit 1; }
 install -d -o root -g root -m 0755 /etc/kassinao
 STORAGE_PATHS_TMP="$(mktemp /etc/kassinao/.storage-paths.XXXXXX)"
 ROLLBACK_TMPFILES_TMP="$(mktemp /etc/kassinao/.rollback-tmpfiles.XXXXXX)"
 ROLLBACK_SERVICE_TMP="$(mktemp /etc/kassinao/.rollback-service.XXXXXX)"
 HOST_CONTROLS_TMP="$(mktemp /etc/kassinao/.host-controls.XXXXXX)"
-trap 'rm -f -- "${STORAGE_PATHS_TMP:-}" "${ROLLBACK_TMPFILES_TMP:-}" "${ROLLBACK_SERVICE_TMP:-}" "${HOST_CONTROLS_TMP:-}"' EXIT
 printf '%s\n' "${STORAGE_PATHS[@]}" > "$STORAGE_PATHS_TMP"
 install -o root -g root -m 0600 "$STORAGE_PATHS_TMP" /etc/kassinao/storage-paths
 rm -f -- "$STORAGE_PATHS_TMP"; STORAGE_PATHS_TMP=''
 printf 'KASSINAO_DEPLOY_DIR=%s\nKASSINAO_DATA_ROOT=%s\nKASSINAO_ROLLBACK_RETENTION_HOURS=%s\n' \
   "$ROOT" "$data_root" "$rollback_retention_hours" > "$HOST_CONTROLS_TMP"
 install -o root -g root -m 0600 "$HOST_CONTROLS_TMP" /etc/kassinao/host-controls.env
+CURRENT_CONTROLS_COMMITTED=true
 rm -f -- "$HOST_CONTROLS_TMP"; HOST_CONTROLS_TMP=''
 sed -e "s|@ROLLBACK_DIR@|$rollback_dir|g" \
   -e "s|@CLEANUP_AGE@|$rollback_cleanup_age|g" \

@@ -266,7 +266,12 @@ for line in sys.stdin:
     if not isinstance(item, dict):
         raise SystemExit(1)
     items.append(item)
-expected = {'kassinao': 'kassinao', 'kassinao-public': 'kassinao-public', 'cloudflared': 'kassinao-tunnel'}
+expected = {
+    'kassinao': 'kassinao',
+    'kassinao-router': 'kassinao-router',
+    'kassinao-public': 'kassinao-public',
+    'cloudflared': 'kassinao-tunnel',
+}
 seen = set()
 for item in items:
     labels = (item.get('Config') or {}).get('Labels') or {}

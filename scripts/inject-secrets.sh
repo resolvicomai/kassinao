@@ -588,7 +588,8 @@ build_app_env() {
     !/^INCIDENT_CONTACT_URL=/ && !/^INCIDENT_PROCESS=/ && !/^SOURCE_URL=/ &&
     !/^KASSINAO_ROLLBACK_RETENTION_HOURS=/ &&
     !/^ALLOW_LOCAL_APP_URL=/ && !/^ALLOW_LEGACY_SHARED_STATE=/ &&
-    !/^PUBLIC_SURFACES_ENABLED=/ && !/^ALLOWED_GUILD_IDS=/ && !/^ALLOW_ALL_GUILDS=/
+    !/^PUBLIC_SURFACES_ENABLED=/ && !/^TRUST_PROXY_HOPS=/ &&
+    !/^ALLOWED_GUILD_IDS=/ && !/^ALLOW_ALL_GUILDS=/
   ' "$APP_ENV_FILE" > "$TMP_FILE"
   printf '%s=%s\n' DISCORD_TOKEN "$DTOKEN" >> "$TMP_FILE"
   printf '%s=%s\n' APPLICATION_ID "$APP_ID" >> "$TMP_FILE"
@@ -628,6 +629,7 @@ build_app_env() {
   printf '%s=%s\n' ALLOW_LOCAL_APP_URL "$([[ "$APP_ORIGIN" == http://* ]] && printf true || printf false)" >> "$TMP_FILE"
   printf '%s=%s\n' ALLOW_LEGACY_SHARED_STATE false >> "$TMP_FILE"
   printf '%s=%s\n' PUBLIC_SURFACES_ENABLED false >> "$TMP_FILE"
+  printf '%s=%s\n' TRUST_PROXY_HOPS 1 >> "$TMP_FILE"
   printf '%s=%s\n' ALLOWED_GUILD_IDS "$GUILDS" >> "$TMP_FILE"
   printf '%s=%s\n' ALLOW_ALL_GUILDS false >> "$TMP_FILE"
   if [ "$HOST_SCOPE" = shared ]; then
@@ -760,8 +762,8 @@ canonical_origin "$APP_ORIGIN" APP_ORIGIN || { echo 'ERRO: APP_URL precisa ser u
   exit 1
 }
 
-read_value '5) PUBLIC_URL (origem HTTPS exclusiva da landing): ' PUBLIC_ORIGIN
-read_value '6) DOCS_URL (origem HTTPS exclusiva da documentação): ' DOCS_ORIGIN
+read_value '5) PUBLIC_URL (origem HTTPS da landing): ' PUBLIC_ORIGIN
+read_value '6) DOCS_URL (origem HTTPS da documentação; pode repetir a landing): ' DOCS_ORIGIN
 read_value_default '7) MCP_URL (Enter = APP_URL): ' "$APP_ORIGIN" MCP_ORIGIN
 
 for origin_name in PUBLIC_ORIGIN DOCS_ORIGIN MCP_ORIGIN; do
@@ -776,11 +778,23 @@ app_host="$(origin_host "$APP_ORIGIN")"
 mcp_host="$(origin_host "$MCP_ORIGIN")"
 public_host="$(origin_host "$PUBLIC_ORIGIN")"
 docs_host="$(origin_host "$DOCS_ORIGIN")"
-[ "$public_host" != "$docs_host" ] && [ "$public_host" != "$app_host" ] && [ "$public_host" != "$mcp_host" ] && \
+[ "$public_host" != "$app_host" ] && [ "$public_host" != "$mcp_host" ] && \
   [ "$docs_host" != "$app_host" ] && [ "$docs_host" != "$mcp_host" ] || {
-    echo 'ERRO: landing e docs precisam de hosts próprios, separados de app/MCP.' >&2
+    echo 'ERRO: landing/docs precisam ficar em hosts separados de app/MCP.' >&2
     exit 1
   }
+public_www_host=''
+if is_public_dns_host "$public_host" && [[ "$public_host" != www.* ]]; then
+  public_www_host="www.$public_host"
+fi
+[ -z "$public_www_host" ] || {
+  [ "$public_www_host" != "$app_host" ] && \
+    [ "$public_www_host" != "$mcp_host" ] && \
+    [ "$public_www_host" != "$docs_host" ]
+} || {
+  echo 'ERRO: o alias www da landing conflita com APP_URL, MCP_URL ou DOCS_URL.' >&2
+  exit 1
+}
 
 read_value '8) SOURCE_URL (repositório público do source desta instalação): ' SOURCE_URL
 canonical_public_page_url "$SOURCE_URL" SOURCE_URL || {

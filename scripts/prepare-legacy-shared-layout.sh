@@ -437,7 +437,12 @@ def remove_empty_directory(path):
         os.close(parent_fd)
 
 def kassinao_items(items):
-    reserved = {'kassinao': 'kassinao', 'kassinao-public': 'kassinao-public', 'cloudflared': 'kassinao-tunnel'}
+    reserved = {
+        'kassinao': 'kassinao',
+        'kassinao-router': 'kassinao-router',
+        'kassinao-public': 'kassinao-public',
+        'cloudflared': 'kassinao-tunnel',
+    }
     selected = []
     seen = set()
     for item in items:
