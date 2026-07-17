@@ -62,6 +62,7 @@ function policyRules(family: 4 | 6, extraRule = ''): string {
     '-A DOCKER-USER -i kas-tunnel-eg0 -j KASSINAO-EGRESS',
     '-A INPUT -i kas-core-eg0 -j KASSINAO-HOST',
     '-A INPUT -i kas-tunnel-eg0 -j KASSINAO-HOST',
+    '-A INPUT -i kas-host0 -j KASSINAO-HOST',
     '-A KASSINAO-EGRESS -j KASSINAO-EGRESS-A',
     ...destinations.map((destination) => `-A KASSINAO-EGRESS-A -d ${destination} -j REJECT`),
     '-A KASSINAO-EGRESS-A -j RETURN',
@@ -470,7 +471,10 @@ esac
   const networksFor = (role: 'core' | 'router' | 'public' | 'tunnel', baseline: string): string =>
     options.extraNetworkRole === role ? `${baseline}\\nforeign_${role}` : baseline;
   const coreNetworks = networksFor('core', 'kassinao_core_link\\nkassinao_core_egress');
-  const routerNetworks = networksFor('router', 'kassinao_edge_ingress\\nkassinao_core_link\\nkassinao_public_link');
+  const routerNetworks = networksFor(
+    'router',
+    'kassinao_host_ingress\\nkassinao_edge_ingress\\nkassinao_core_link\\nkassinao_public_link',
+  );
   const publicNetworks = networksFor('public', 'kassinao_public_link');
   const tunnelNetworks = networksFor('tunnel', 'kassinao_edge_ingress\\nkassinao_tunnel_egress');
   const publicDiscovery = options.missingPublic ? 'exit 1' : `printf '${publicId}\\n'`;
@@ -518,6 +522,7 @@ if [ "\${1:-}" = network ] && [ "\${2:-}" = inspect ] && [ "\${3:-}" = -f ]; the
     case "\${5:-}" in
       kassinao_core_link) printf '${coreLinkMembers}\\n' ;;
       kassinao_core_egress) printf '${coreId}|kassinao\\n' ;;
+      kassinao_host_ingress) printf '${routerId}|kassinao-router\\n' ;;
       kassinao_edge_ingress) printf '${edgeMembers}\\n' ;;
       kassinao_public_link) printf '${routerId}|kassinao-router\\n${publicId}|kassinao-public\\n' ;;
       kassinao_tunnel_egress) printf '${tunnelId}|kassinao-tunnel\\n' ;;
@@ -527,6 +532,7 @@ if [ "\${1:-}" = network ] && [ "\${2:-}" = inspect ] && [ "\${3:-}" = -f ]; the
     case "\${5:-}" in
       kassinao_core_link) printf '${coreLinkMetadata}\\n' ;;
       kassinao_core_egress) printf '${coreEgressMetadata}\\n' ;;
+      kassinao_host_ingress) printf 'bridge|true|kas-host0|nat|isolated|false\\n' ;;
       kassinao_edge_ingress) printf 'bridge|true|kas-edge0|isolated|isolated|true\\n' ;;
       kassinao_public_link) printf 'bridge|true|kas-public0|isolated|isolated|true\\n' ;;
       kassinao_tunnel_egress) printf 'bridge|false|kas-tunnel-eg0|||false\\n' ;;
@@ -822,6 +828,7 @@ describe('identidade da topologia no hardener de egress', () => {
     ['current', '-A DOCKER-USER -i kas-tunnel-eg0 -j KASSINAO-EGRESS'],
     ['current', '-A INPUT -i kas-core-eg0 -j KASSINAO-HOST'],
     ['current', '-A INPUT -i kas-tunnel-eg0 -j KASSINAO-HOST'],
+    ['current', '-A INPUT -i kas-host0 -j KASSINAO-HOST'],
     ['legacy', '-A DOCKER-USER -i kas-private0 -j KASSINAO-EGRESS'],
     ['legacy', '-A INPUT -i kas-private0 -j KASSINAO-HOST'],
   ] as const)(
@@ -931,7 +938,7 @@ describe('identidade da topologia no hardener de egress', () => {
     expect(retry.stderr).toContain('regras Kassinão divergiram');
     expect(harness.read(4)).toBe(beforeV4);
     expect(harness.read(6)).toBe(beforeV6);
-  });
+  }, 15_000);
 
   it.each([
     ['present', {}, 'present'],

@@ -79,7 +79,7 @@ describe('shared-host Compose adapter', () => {
     expect(base.match(/^\s+- '127\.0\.0\.1:[^']+'$/gm)).toHaveLength(1);
   });
 
-  it('mantém o router secret-free, preso a edge0 e como único ingress do host/túnel', () => {
+  it('mantém o router secret-free, preso a host0/edge0 e como único ingress do host/túnel', () => {
     const core = serviceBlock(base, 'kassinao');
     const router = serviceBlock(base, 'kassinao-router');
     const publicProcess = serviceBlock(base, 'kassinao-public');
@@ -87,6 +87,8 @@ describe('shared-host Compose adapter', () => {
 
     expect(router).toContain("command: ['/usr/local/bin/node', 'dist/router.js']");
     expect(router).toContain('WEB_BIND_INTERFACE: edge0');
+    expect(router).toContain('WEB_HOST_BIND_INTERFACE: host0');
+    expect(router).toMatch(/host_ingress:\n\s+interface_name: host0\n\s+gw_priority: 1/);
     expect(router).toMatch(/edge_ingress:\n\s+interface_name: edge0\n\s+aliases: \[kassinao\]/);
     expect(router).toMatch(/core_link:\n\s+interface_name: core0/);
     expect(router).toMatch(/public_link:\n\s+interface_name: public0/);
@@ -107,7 +109,7 @@ describe('shared-host Compose adapter', () => {
     expect(tunnel).toContain('- kassinao-router');
   });
 
-  it('separa cinco redes e concede egress somente ao core e ao túnel', () => {
+  it('separa seis redes, mantém o publish numa bridge host-only e concede egress somente ao core e ao túnel', () => {
     const router = serviceBlock(base, 'kassinao-router');
     const publicProcess = serviceBlock(base, 'kassinao-public');
     const core = serviceBlock(base, 'kassinao');
@@ -116,7 +118,17 @@ describe('shared-host Compose adapter', () => {
       (match) => match[1],
     );
 
-    expect(networkNames).toEqual(['edge_ingress', 'core_link', 'public_link', 'core_egress', 'tunnel_egress']);
+    expect(networkNames).toEqual([
+      'host_ingress',
+      'edge_ingress',
+      'core_link',
+      'public_link',
+      'core_egress',
+      'tunnel_egress',
+    ]);
+    expect(base).toMatch(
+      /^  host_ingress:\n    internal: true\n    driver_opts:\n[\s\S]*?com\.docker\.network\.bridge\.name: kas-host0\n[\s\S]*?com\.docker\.network\.bridge\.gateway_mode_ipv4: nat\n[\s\S]*?com\.docker\.network\.bridge\.gateway_mode_ipv6: isolated\n[\s\S]*?com\.docker\.network\.bridge\.enable_icc: 'false'/m,
+    );
     for (const network of ['edge_ingress', 'core_link', 'public_link']) {
       expect(base).toMatch(
         new RegExp(
@@ -253,6 +265,7 @@ describe('shared-host Compose adapter', () => {
       NODE_ENV: 'production',
       PORT: '8080',
       WEB_BIND_INTERFACE: 'edge0',
+      WEB_HOST_BIND_INTERFACE: 'host0',
       APP_URL: 'https://app.example.test',
       MCP_URL: 'https://mcp.example.test',
       PUBLIC_URL: 'https://example.test',
@@ -261,6 +274,7 @@ describe('shared-host Compose adapter', () => {
       KASSINAO_DEPLOYMENT_FINGERPRINT: '2'.repeat(32),
     });
     expect(router.networks).toMatchObject({
+      host_ingress: { interface_name: 'host0', gw_priority: 1 },
       edge_ingress: { interface_name: 'edge0', aliases: expect.arrayContaining(['kassinao']) },
       core_link: { interface_name: 'core0' },
       public_link: { interface_name: 'public0' },
@@ -299,6 +313,7 @@ describe('shared-host Compose adapter', () => {
       'core_egress',
       'core_link',
       'edge_ingress',
+      'host_ingress',
       'public_link',
       'tunnel_egress',
     ]);

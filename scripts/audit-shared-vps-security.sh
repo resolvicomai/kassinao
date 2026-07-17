@@ -457,7 +457,7 @@ if [ "$audit_mode" != neighbors-only ]; then
 fi
 if [ "$audit_mode" = full ] || [ "$audit_mode" = uninstall-preflight ] || [ "$reserved_firewall_present" = true ]; then
   env -i "PATH=$PATH" HOME=/root "$HARDENER" --shared-host --check >/dev/null || \
-    die 'policy de egress das bridges kas-core-eg0/kas-tunnel-eg0 está ausente ou divergente'
+    die 'policy das saídas e do host ingress kas-host0 está ausente ou divergente'
 fi
 if [ "$audit_mode" = full ]; then
   env -i "PATH=$PATH" HOME=/root "KASSINAO_ENV_FILE=$ENV_FILE" "$ROLLBACK_CHECKER" >/dev/null || \
@@ -954,7 +954,7 @@ elif firewall_states not in (['absent', 'absent'], ['owned', 'owned']):
 firewall_state = firewall_states[0]
 
 
-mandatory_reserved_interfaces = {'kas-edge0', 'kas-core0', 'kas-public0', 'kas-core-eg0'}
+mandatory_reserved_interfaces = {'kas-host0', 'kas-edge0', 'kas-core0', 'kas-public0', 'kas-core-eg0'}
 tunnel_reserved_interface = 'kas-tunnel-eg0'
 reserved_interfaces = mandatory_reserved_interfaces | {tunnel_reserved_interface}
 interfaces = {}
@@ -1079,7 +1079,7 @@ if audit_mode == 'uninstall-preflight' and project:
         fail('topologia de containers Kassinão está parcial antes do uninstall')
     expected_networks_by_service = {
         'kassinao': {'kassinao_core_link', 'kassinao_core_egress'},
-        'kassinao-router': {'kassinao_edge_ingress', 'kassinao_core_link', 'kassinao_public_link'},
+        'kassinao-router': {'kassinao_host_ingress', 'kassinao_edge_ingress', 'kassinao_core_link', 'kassinao_public_link'},
         'kassinao-public': {'kassinao_public_link'},
         'cloudflared': {'kassinao_edge_ingress', 'kassinao_tunnel_egress'},
     }
@@ -1306,7 +1306,8 @@ for service, item in contract_by_service.items():
         app_fingerprints.add(fingerprint)
     elif service == 'kassinao-router':
         additions = {
-            'NODE_ENV', 'PORT', 'WEB_BIND_INTERFACE', 'APP_URL', 'MCP_URL', 'PUBLIC_URL', 'DOCS_URL',
+            'NODE_ENV', 'PORT', 'WEB_BIND_INTERFACE', 'WEB_HOST_BIND_INTERFACE',
+            'APP_URL', 'MCP_URL', 'PUBLIC_URL', 'DOCS_URL',
             'KASSINAO_RELEASE_DIGEST', 'KASSINAO_DEPLOYMENT_FINGERPRINT'
         }
         if set(environment) != set(image_environment) | additions:
@@ -1315,6 +1316,7 @@ for service, item in contract_by_service.items():
             'NODE_ENV': 'production',
             'PORT': '8080',
             'WEB_BIND_INTERFACE': 'edge0',
+            'WEB_HOST_BIND_INTERFACE': 'host0',
             'APP_URL': app_url,
             'MCP_URL': mcp_url,
             'PUBLIC_URL': public_url,
@@ -1358,7 +1360,7 @@ for service, item in contract_by_service.items():
 
     expected_networks = {
         'kassinao': {'kassinao_core_link', 'kassinao_core_egress'},
-        'kassinao-router': {'kassinao_edge_ingress', 'kassinao_core_link', 'kassinao_public_link'},
+        'kassinao-router': {'kassinao_host_ingress', 'kassinao_edge_ingress', 'kassinao_core_link', 'kassinao_public_link'},
         'kassinao-public': {'kassinao_public_link'},
         'cloudflared': {'kassinao_edge_ingress', 'kassinao_tunnel_egress'},
     }[service]
@@ -1425,6 +1427,10 @@ if not project_networks:
         fail('redes do projeto kassinao não puderam ser identificadas')
 
 all_reserved_networks = {
+    'kassinao_host_ingress': {
+        'bridge': 'kas-host0', 'label': 'host_ingress', 'internal': True, 'host_ingress': True,
+        'members': {'kassinao-router'},
+    },
     'kassinao_edge_ingress': {
         'bridge': 'kas-edge0', 'label': 'edge_ingress', 'internal': True,
         'members': {'kassinao-router', 'cloudflared'},
@@ -1476,7 +1482,11 @@ for network in networks:
         fail(f'bridge reservada {expected_bridge} pertence a outra rede/workload')
     gateway_ipv4 = network.get('GatewayModeIPv4')
     gateway_ipv6 = network.get('GatewayModeIPv6')
-    if expected['internal']:
+    if expected.get('host_ingress'):
+        if (network.get('Internal') is not True or gateway_ipv4 != 'nat' or
+                gateway_ipv6 != 'isolated' or network.get('EnableICC') != 'false'):
+            fail('rede host_ingress precisa ser internal, NAT somente em IPv4 e ICC=false')
+    elif expected['internal']:
         if (network.get('Internal') is not True or gateway_ipv4 != 'isolated' or
                 gateway_ipv6 != 'isolated'):
             fail(f'rede interna reservada {expected_label} precisa ser isolated em IPv4/IPv6')

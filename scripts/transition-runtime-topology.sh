@@ -609,7 +609,7 @@ validate_compose_contract() {
     die "redes Compose $topology não puderam ser resolvidas"
   if [ "$topology" = current ]; then
     expected_services=$'kassinao\nkassinao-public\nkassinao-router'
-    expected_networks=$'core_egress\ncore_link\nedge_ingress\npublic_link'
+    expected_networks=$'core_egress\ncore_link\nedge_ingress\nhost_ingress\npublic_link'
     if [ "$TUNNEL" = true ]; then
       expected_services+=$'\ncloudflared'
       expected_networks+=$'\ntunnel_egress'
@@ -642,7 +642,7 @@ expected_services = {
     'legacy': {'kassinao', 'kassinao-public'} | ({'cloudflared'} if tunnel else set()),
 }[topology]
 expected_networks = {
-    'current': {'edge_ingress', 'core_link', 'public_link', 'core_egress'} | ({'tunnel_egress'} if tunnel else set()),
+    'current': {'edge_ingress', 'host_ingress', 'core_link', 'public_link', 'core_egress'} | ({'tunnel_egress'} if tunnel else set()),
     'legacy': {'private', 'public'},
 }[topology]
 if set(services) != expected_services or set(networks) != expected_networks:
@@ -676,7 +676,7 @@ expected_container_networks() {
   local topology="$1" service="$2"
   case "$topology:$service" in
     current:kassinao) printf 'kassinao_core_egress\nkassinao_core_link\n' ;;
-    current:kassinao-router) printf 'kassinao_core_link\nkassinao_edge_ingress\nkassinao_public_link\n' ;;
+    current:kassinao-router) printf 'kassinao_core_link\nkassinao_edge_ingress\nkassinao_host_ingress\nkassinao_public_link\n' ;;
     current:kassinao-public) printf 'kassinao_public_link\n' ;;
     current:cloudflared) printf 'kassinao_edge_ingress\nkassinao_tunnel_egress\n' ;;
     legacy:kassinao) printf 'kassinao_private\n' ;;
@@ -710,6 +710,7 @@ topology_networks() {
   local topology="$1"
   if [ "$topology" = current ]; then
     printf 'edge_ingress:kas-edge0:true:isolated:isolated:any\n'
+    printf 'host_ingress:kas-host0:true:nat:isolated:false\n'
     printf 'core_link:kas-core0:true:isolated:isolated:any\n'
     printf 'public_link:kas-public0:true:isolated:isolated:any\n'
     printf 'core_egress:kas-core-eg0:false:any:any:false\n'

@@ -496,6 +496,7 @@ case " $* " in
   *" config --quiet "*) exit 0 ;;
   *" config --services "*) printf '%s' ${shellLiteral(servicesOutput)}; exit 0 ;;
   *" config --images "*) printf '%s' ${shellLiteral(imagesOutput)}; exit 0 ;;
+  *" port kassinao-router 8080 "*) printf '127.0.0.1:8080\n'; exit 0 ;;
   *" ps -q "*)
     service="\${!#}"
     case "$service" in
@@ -942,6 +943,15 @@ exit ${options.rollbackCheckerFails ? '1' : '0'}
       },
     },
     networks: {
+      host_ingress: {
+        internal: true,
+        driver_opts: {
+          'com.docker.network.bridge.name': 'kas-host0',
+          'com.docker.network.bridge.gateway_mode_ipv4': 'nat',
+          'com.docker.network.bridge.gateway_mode_ipv6': 'isolated',
+          'com.docker.network.bridge.enable_icc': 'false',
+        },
+      },
       edge_ingress: {
         internal: true,
         driver_opts: {
@@ -984,6 +994,10 @@ exit ${options.rollbackCheckerFails ? '1' : '0'}
       security_opt: ['no-new-privileges:true'],
       command: ['/usr/local/bin/node', 'dist/router.js'],
       networks: {
+        host_ingress: {
+          interface_name: 'host0',
+          gw_priority: 1,
+        },
         edge_ingress: {
           interface_name: 'edge0',
           aliases: ['kassinao'],
@@ -995,6 +1009,7 @@ exit ${options.rollbackCheckerFails ? '1' : '0'}
         NODE_ENV: 'production',
         PORT: '8080',
         WEB_BIND_INTERFACE: 'edge0',
+        WEB_HOST_BIND_INTERFACE: 'host0',
         APP_URL: appUrl,
         MCP_URL: appUrl,
         PUBLIC_URL: publicUrl,
@@ -1371,6 +1386,8 @@ describe('artefatos de distribuição', () => {
     expect(privateProcess).toMatch(/core_link:\n\s+interface_name: core0\n\s+aliases: \[kassinao-core\]/);
     expect(privateProcess).toMatch(/core_egress:\n\s+interface_name: egress0\n\s+gw_priority: 1/);
     expect(routerProcess).toContain('WEB_BIND_INTERFACE: edge0');
+    expect(routerProcess).toContain('WEB_HOST_BIND_INTERFACE: host0');
+    expect(routerProcess).toMatch(/host_ingress:\n\s+interface_name: host0\n\s+gw_priority: 1/);
     expect(routerProcess).toMatch(/edge_ingress:\n\s+interface_name: edge0\n\s+aliases: \[kassinao\]/);
     expect(routerProcess).toMatch(/core_link:\n\s+interface_name: core0/);
     expect(routerProcess).toMatch(/public_link:\n\s+interface_name: public0/);
@@ -1387,6 +1404,9 @@ describe('artefatos de distribuição', () => {
     expect(publicProcess).not.toMatch(/^\s*env_file:/m);
     expect(publicProcess).not.toMatch(/^\s*volumes:/m);
     expect(compose.match(/^  (?:edge_ingress|core_link|public_link):\n    internal: true\n/gm)).toHaveLength(3);
+    expect(compose).toMatch(
+      /^  host_ingress:\n    internal: true\n    driver_opts:\n[\s\S]*?gateway_mode_ipv4: nat\n[\s\S]*?gateway_mode_ipv6: isolated\n[\s\S]*?enable_icc: 'false'/m,
+    );
     expect(compose).toMatch(/^  core_egress:\n    driver_opts:/m);
     expect(compose).toMatch(/^  tunnel_egress:\n    driver_opts:/m);
     const routerKeys = [...routerProcess.matchAll(/^\s{6}([A-Z][A-Z0-9_]*):/gm)].map((match) => match[1]);
@@ -1394,6 +1414,7 @@ describe('artefatos de distribuição', () => {
       'NODE_ENV',
       'PORT',
       'WEB_BIND_INTERFACE',
+      'WEB_HOST_BIND_INTERFACE',
       'APP_URL',
       'MCP_URL',
       'PUBLIC_URL',
@@ -1577,6 +1598,7 @@ describe('artefatos de distribuição', () => {
     expect(harden).toContain('ocupa nome reservado sem identidade Compose aprovada');
     expect(harden).toContain('ROUTER_CONTAINER=kassinao-router');
     expect(harden).toContain('CORE_EGRESS_BRIDGE=kas-core-eg0');
+    expect(harden).toContain('HOST_INGRESS_BRIDGE=kas-host0');
     expect(harden).toContain('TUNNEL_EGRESS_BRIDGE=kas-tunnel-eg0');
     expect(harden).toContain('container_topology()');
     expect(harden).toContain('participa de rede não autorizada na bridge');
@@ -1609,6 +1631,7 @@ describe('artefatos de distribuição', () => {
     expect(harden).toContain('DOCKER-USER 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-EGRESS');
     expect(harden).toContain('INPUT 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-HOST');
     expect(harden).toContain('INPUT 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-HOST');
+    expect(harden).toContain('INPUT 3 -i "$HOST_INGRESS_BRIDGE" -j KASSINAO-HOST');
     expect(harden).not.toContain('-o "$CORE_EGRESS_BRIDGE" -j RETURN');
     expect(harden).not.toContain('-o "$TUNNEL_EGRESS_BRIDGE" -j RETURN');
     expect(harden).toContain('chain_is_referenced "$tool" "$inactive"');
@@ -1635,6 +1658,7 @@ describe('artefatos de distribuição', () => {
     expect(failClosedScript).toContain('docker stop --timeout 30 "$cid"');
     expect(failClosedScript).not.toContain('docker stop --time ');
     expect(deploy).not.toContain('docker stop --time ');
+    expect(deploy).toContain('--header "Host: ${app_url#https://}"');
     expect(failClosedScript).toContain('docker kill "$cid"');
     expect(failClosedScript).toContain("'{{.State.Running}}'");
     expect(dockerDropIn).toContain('Wants=kassinao-docker-egress.service');
@@ -1671,6 +1695,7 @@ describe('artefatos de distribuição', () => {
     expect(audit).toContain('container_alias_is()');
     expect(audit).toContain('compose_labels_are()');
     expect(audit).toContain('kas-edge0');
+    expect(audit).toContain('kas-host0');
     expect(audit).toContain('kas-core0');
     expect(audit).toContain('kas-public0');
     expect(audit).toContain('kas-core-eg0');
@@ -2753,6 +2778,7 @@ describe('deploy image-only', () => {
 
     expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
     const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).toContain('curl http://127.0.0.1:8080/health');
     const immutableId = 'd'.repeat(64);
     const removeAt = calls.indexOf(`rm ${immutableId}\n`);
     const upAt = calls.indexOf('up -d --no-build');

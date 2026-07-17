@@ -6,6 +6,7 @@ function validEnvironment(): NodeJS.ProcessEnv {
     NODE_ENV: 'production',
     PORT: '8080',
     WEB_BIND_INTERFACE: 'ingress0',
+    WEB_HOST_BIND_INTERFACE: 'host0',
     APP_URL: 'https://app.example.test',
     PUBLIC_URL: 'https://example.test',
     DOCS_URL: 'https://docs.example.test',
@@ -25,7 +26,7 @@ describe('ambiente isolado do edge router', () => {
 
     expect(readRouterRuntimeConfiguration(env, 4321)).toEqual({
       port: 8080,
-      bindInterface: 'ingress0',
+      bindInterfaces: ['ingress0', 'host0'],
       origins: {
         app: 'https://app.example.test',
         public: 'https://example.test',
@@ -81,6 +82,7 @@ describe('ambiente isolado do edge router', () => {
     ['PORT', '65536'],
     ['PORT', '8e3'],
     ['WEB_BIND_INTERFACE', 'interface-name-too-long'],
+    ['WEB_HOST_BIND_INTERFACE', 'interface-name-too-long'],
     ['APP_URL', 'http://app.example.test'],
     ['PUBLIC_URL', 'https://example.test/path'],
     ['DOCS_URL', 'https://user:pass@docs.example.test'],
@@ -89,6 +91,12 @@ describe('ambiente isolado do edge router', () => {
     ['KASSINAO_DEPLOYMENT_FINGERPRINT', 'short'],
   ])('recusa configuração inválida em %s', (name, value) => {
     expect(() => readRouterRuntimeConfiguration({ ...validEnvironment(), [name]: value })).toThrow(name);
+  });
+
+  it('recusa reutilizar a mesma interface para túnel e publish do host', () => {
+    expect(() =>
+      readRouterRuntimeConfiguration({ ...validEnvironment(), WEB_HOST_BIND_INTERFACE: 'ingress0' }),
+    ).toThrow('precisam ser distintas');
   });
 
   it('aceita HTTP somente em origem loopback explícita', () => {

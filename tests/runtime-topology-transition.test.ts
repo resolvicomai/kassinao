@@ -488,7 +488,7 @@ esac
 `,
   );
   const currentServices = ['kassinao', 'kassinao-public', 'kassinao-router', 'cloudflared'];
-  const currentNetworks = ['core_egress', 'core_link', 'edge_ingress', 'public_link', 'tunnel_egress'];
+  const currentNetworks = ['core_egress', 'core_link', 'edge_ingress', 'host_ingress', 'public_link', 'tunnel_egress'];
   const legacyServices = ['kassinao', 'kassinao-public', 'cloudflared'];
   const legacyNetworks = ['private', 'public'];
   function identifier(value: string): string {
@@ -527,7 +527,7 @@ esac
       kassinao: { service: 'kassinao', networks: ['kassinao_core_egress', 'kassinao_core_link'] },
       'kassinao-router': {
         service: 'kassinao-router',
-        networks: ['kassinao_core_link', 'kassinao_edge_ingress', 'kassinao_public_link'],
+        networks: ['kassinao_core_link', 'kassinao_edge_ingress', 'kassinao_host_ingress', 'kassinao_public_link'],
       },
       'kassinao-public': { service: 'kassinao-public', networks: ['kassinao_public_link'] },
       'kassinao-tunnel': {
@@ -548,6 +548,14 @@ esac
       };
     }
     const networkDefinitions = {
+      kassinao_host_ingress: {
+        key: 'host_ingress',
+        bridge: 'kas-host0',
+        internal: true,
+        gateway4: 'nat',
+        gateway6: 'isolated',
+        icc: 'false',
+      },
       kassinao_edge_ingress: {
         key: 'edge_ingress',
         bridge: 'kas-edge0',
@@ -706,7 +714,7 @@ elif args[0] == 'compose':
         'legacy': ['kassinao', 'kassinao-public', 'cloudflared'],
     }[topology]
     networks = {
-        'current': ['core_egress', 'core_link', 'edge_ingress', 'public_link', 'tunnel_egress'],
+        'current': ['core_egress', 'core_link', 'edge_ingress', 'host_ingress', 'public_link', 'tunnel_egress'],
         'legacy': ['private', 'public'],
     }[topology]
     if 'config' in args and '--services' in args:

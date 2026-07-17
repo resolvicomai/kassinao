@@ -128,6 +128,7 @@ services:
       NODE_ENV: production
       PORT: '8080'
       WEB_BIND_INTERFACE: edge0
+      WEB_HOST_BIND_INTERFACE: host0
       APP_URL: https://app.example.test
       MCP_URL: https://mcp.example.test
       PUBLIC_URL: https://site.example.test
@@ -135,6 +136,9 @@ services:
       KASSINAO_RELEASE_DIGEST: ${SMOKE_RELEASE_DIGEST}
       KASSINAO_DEPLOYMENT_FINGERPRINT: ${SMOKE_DEPLOYMENT_FINGERPRINT}
     networks:
+      host_ingress:
+        interface_name: host0
+        gw_priority: 1
       edge_ingress:
         interface_name: edge0
         aliases: [kassinao]
@@ -158,6 +162,12 @@ services:
         interface_name: edge0
 
 networks:
+  host_ingress:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: nat
+      com.docker.network.bridge.gateway_mode_ipv6: isolated
+      com.docker.network.bridge.enable_icc: 'false'
   edge_ingress:
     internal: true
     driver_opts:

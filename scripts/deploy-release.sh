@@ -971,7 +971,7 @@ if actual_mounts != expected_mounts:
 if mode == 'split':
     router = services['kassinao-router']
     assert_hardened('kassinao-router', router, require_user=True)
-    if router.get('image') != image or network_names(router) != {'edge_ingress', 'core_link', 'public_link'}:
+    if router.get('image') != image or network_names(router) != {'host_ingress', 'edge_ingress', 'core_link', 'public_link'}:
         raise SystemExit('kassinao-router: imagem/redes divergentes')
     if router.get('volumes') or router.get('env_file'):
         raise SystemExit('kassinao-router: volumes/env_file são proibidos')
@@ -985,7 +985,8 @@ if mode == 'split':
         raise SystemExit('kassinao-router: publish precisa apontar uma única porta loopback para 8080')
     router_environment = router.get('environment') or {}
     allowed_router_env = {
-        'NODE_ENV', 'PORT', 'WEB_BIND_INTERFACE', 'APP_URL', 'MCP_URL', 'PUBLIC_URL', 'DOCS_URL',
+        'NODE_ENV', 'PORT', 'WEB_BIND_INTERFACE', 'WEB_HOST_BIND_INTERFACE',
+        'APP_URL', 'MCP_URL', 'PUBLIC_URL', 'DOCS_URL',
         'KASSINAO_RELEASE_DIGEST', 'KASSINAO_DEPLOYMENT_FINGERPRINT'
     }
     if set(router_environment) != allowed_router_env:
@@ -994,6 +995,7 @@ if mode == 'split':
         'NODE_ENV': 'production',
         'PORT': '8080',
         'WEB_BIND_INTERFACE': 'edge0',
+        'WEB_HOST_BIND_INTERFACE': 'host0',
         'KASSINAO_RELEASE_DIGEST': release_digest,
         'KASSINAO_DEPLOYMENT_FINGERPRINT': deployment_fingerprint,
     }
@@ -1009,11 +1011,14 @@ if mode == 'split':
     for key, value in expected_router_origins.items():
         if router_environment.get(key) != value:
             raise SystemExit(f'kassinao-router: {key} diverge da origem privada canônica')
+    host_ingress = network_options(router, 'host_ingress')
     edge = network_options(router, 'edge_ingress')
     router_core = network_options(router, 'core_link')
     router_public = network_options(router, 'public_link')
     if edge.get('interface_name') != 'edge0' or 'kassinao' not in set(edge.get('aliases') or []):
         raise SystemExit('kassinao-router: alias/interface de ingress divergente')
+    if host_ingress.get('interface_name') != 'host0' or host_ingress.get('gw_priority') != 1:
+        raise SystemExit('kassinao-router: interface/default gateway do publish divergente')
     if router_core.get('interface_name') != 'core0' or router_public.get('interface_name') != 'public0':
         raise SystemExit('kassinao-router: interfaces de upstream divergentes')
 
@@ -1064,27 +1069,36 @@ if mode == 'split':
 
 networks = config.get('networks') or {}
 expected_networks = {
-    'edge_ingress': ('kas-edge0', True),
-    'core_link': ('kas-core0', True),
-    'public_link': ('kas-public0', True),
-    'core_egress': ('kas-core-eg0', False),
+    'host_ingress': ('kas-host0', 'host'),
+    'edge_ingress': ('kas-edge0', 'isolated'),
+    'core_link': ('kas-core0', 'isolated'),
+    'public_link': ('kas-public0', 'isolated'),
+    'core_egress': ('kas-core-eg0', 'egress'),
 }
 if 'cloudflared' in services:
-    expected_networks['tunnel_egress'] = ('kas-tunnel-eg0', False)
+    expected_networks['tunnel_egress'] = ('kas-tunnel-eg0', 'egress')
 if set(networks) != set(expected_networks):
     raise SystemExit(f'redes inesperadas: {sorted(set(networks) ^ set(expected_networks))}')
-for name, (bridge, internal) in expected_networks.items():
+for name, (bridge, kind) in expected_networks.items():
     network = networks.get(name) or {}
     options = network.get('driver_opts') or {}
     if options.get('com.docker.network.bridge.name') != bridge:
         raise SystemExit(f'{name}: bridge estável divergente')
-    if internal:
+    if kind in {'isolated', 'host'}:
         if network.get('internal') is not True:
             raise SystemExit(f'{name}: link precisa ser internal')
+    if kind == 'isolated':
         if options.get('com.docker.network.bridge.gateway_mode_ipv4') != 'isolated':
             raise SystemExit(f'{name}: gateway IPv4 precisa ser isolated')
         if options.get('com.docker.network.bridge.gateway_mode_ipv6') != 'isolated':
             raise SystemExit(f'{name}: gateway IPv6 precisa ser isolated')
+    elif kind == 'host':
+        if options.get('com.docker.network.bridge.gateway_mode_ipv4') != 'nat':
+            raise SystemExit(f'{name}: gateway IPv4 precisa ser nat para o publish loopback')
+        if options.get('com.docker.network.bridge.gateway_mode_ipv6') != 'isolated':
+            raise SystemExit(f'{name}: gateway IPv6 precisa permanecer isolated')
+        if options.get('com.docker.network.bridge.enable_icc') != 'false':
+            raise SystemExit(f'{name}: comunicação lateral precisa ficar desativada')
     else:
         if network.get('internal') is True:
             raise SystemExit(f'{name}: egress não pode ser internal')
@@ -2143,6 +2157,27 @@ if [ "$host_scope" = shared ]; then
 fi
 
 smoke_body="$(mktemp "$ROOT/.smoke.XXXXXX")"; chmod 600 "$smoke_body"
+router_endpoint="$("${compose[@]}" port kassinao-router 8080 2>/dev/null || true)"
+if [[ "$router_endpoint" =~ ^127\.0\.0\.1:([1-9][0-9]{0,4})$ ]] && [ "${BASH_REMATCH[1]}" -le 65535 ]; then
+  :
+else
+  die 'router não resolveu um endpoint loopback IPv4 concreto para o smoke local'
+fi
+code="$(curl --silent --show-error --noproxy '*' --proto '=http' --connect-timeout 3 --max-time 10 \
+  --header "Host: ${app_url#https://}" -o "$smoke_body" -w '%{http_code}' "http://$router_endpoint/health")"
+[ "$code" = 200 ] || die 'listener host0/DNAT loopback não respondeu ao smoke local'
+python3 - "$smoke_body" "$release_digest" "$deployment_fingerprint" <<'PY' || \
+  die 'listener host0/DNAT loopback devolveu fingerprint ou superfície divergente'
+import json
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    body = json.load(handle)
+if (not isinstance(body, dict) or body.get('ok') is not True or body.get('ready') is not True or
+        body.get('release') != sys.argv[2] or body.get('deployment') != sys.argv[3] or
+        body.get('surface') != 'private'):
+    raise SystemExit(1)
+PY
+
 health_targets=("private|$app_url" "private|$mcp_url")
 if [ "$mode" = split ]; then
   health_targets+=("public|$public_url" "public|$docs_url")

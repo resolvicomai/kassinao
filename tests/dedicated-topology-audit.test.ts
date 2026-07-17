@@ -21,12 +21,12 @@ describe('auditoria da topologia dedicated', () => {
     expect(audit).not.toContain('KASSINAO_PUBLIC_HOST_PORT');
   });
 
-  it('prova os três links internos e as duas saídas exclusivas', () => {
-    for (const bridge of ['kas-edge0', 'kas-core0', 'kas-public0', 'kas-core-eg0', 'kas-tunnel-eg0']) {
+  it('prova o ingress host, os três links isolados e as duas saídas exclusivas', () => {
+    for (const bridge of ['kas-host0', 'kas-edge0', 'kas-core0', 'kas-public0', 'kas-core-eg0', 'kas-tunnel-eg0']) {
       expect(audit).toContain(bridge);
     }
     expect(audit).toContain('core usa somente link privado e egress exclusivo');
-    expect(audit).toContain('router usa somente ingress, link do core e link público');
+    expect(audit).toContain('router usa somente host ingress, edge ingress, link do core e link público');
     expect(audit).toContain('cloudflared usa somente ingress e egress exclusivo');
     expect(audit).toContain('container_alias_is "$CORE_CONTAINER" "$CORE_LINK_NETWORK" kassinao-core');
     expect(audit).toContain('container_alias_is "$ROUTER_CONTAINER" "$EDGE_NETWORK" kassinao');
@@ -35,7 +35,9 @@ describe('auditoria da topologia dedicated', () => {
 
   it('delega a prova exata de firewall ao hardener selado', () => {
     expect(audit).toContain('"$DEPLOY_REAL/scripts/harden-docker-egress.sh" --check');
-    expect(audit).toContain('hardener selado aprovou identidade, topologia e policies IPv4/IPv6 das duas saídas');
+    expect(audit).toContain(
+      'hardener selado aprovou identidade, topologia e policies IPv4/IPv6 das saídas e do host ingress',
+    );
     expect(audit).not.toContain('firewall_family_ok()');
     expect(audit).not.toContain('mapfile -t egress_rules');
   });

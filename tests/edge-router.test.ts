@@ -6,7 +6,9 @@ import {
   createEdgeRouterServer,
   createEdgeTopology,
   decideEdgeRequest,
+  listenEdgeRouter,
   resolveExclusiveInterfaceAddress,
+  resolveExclusiveInterfaceAddresses,
   type EdgeTopology,
 } from '../src/web/edgeRouter';
 import { createPublicApp } from '../src/web/publicServer';
@@ -329,6 +331,173 @@ describe('bind exclusivo por interface', () => {
     ],
   ])('falha fechada quando a interface é %s', (interfaces) => {
     expect(() => resolveExclusiveInterfaceAddress('ingress0', interfaces)).toThrow('exatamente um endereço');
+  });
+
+  it('resolve listeners distintos para edge e host sem aceitar endereço compartilhado', () => {
+    const interfaces = {
+      edge0: [
+        {
+          address: '172.30.0.2',
+          netmask: '255.255.255.0',
+          family: 'IPv4' as const,
+          mac: '00:00:00:00:00:00',
+          internal: false,
+          cidr: '172.30.0.2/24',
+        },
+      ],
+      host0: [
+        {
+          address: '172.31.0.2',
+          netmask: '255.255.255.0',
+          family: 'IPv4' as const,
+          mac: '00:00:00:00:00:01',
+          internal: false,
+          cidr: '172.31.0.2/24',
+        },
+      ],
+    };
+    expect(resolveExclusiveInterfaceAddresses(['edge0', 'host0'], interfaces)).toEqual(['172.30.0.2', '172.31.0.2']);
+    expect(() => resolveExclusiveInterfaceAddresses(['edge0', 'edge0'], interfaces)).toThrow('distintas');
+    expect(() =>
+      resolveExclusiveInterfaceAddresses(['edge0', 'host0'], {
+        ...interfaces,
+        host0: [{ ...interfaces.edge0[0] }],
+      }),
+    ).toThrow('endereços IPv4 distintos');
+  });
+
+  it('abre host primeiro, mantém edge por último e aborta o boot parcial sem mascarar o erro', async () => {
+    const bindError = Object.assign(new Error('segundo bind falhou'), { code: 'EADDRINUSE' });
+    const cleanupError = new Error('cleanup falhou');
+    const started: Server[] = [];
+    const closed: Server[] = [];
+    const addresses: string[] = [];
+    let forcedCleanup = false;
+    let attempt = 0;
+    const start = listenEdgeRouter(
+      {
+        topology: createEdgeTopology(DISTINCT_ORIGINS),
+        port: 8080,
+        bindInterfaces: ['edge0', 'host0'],
+        networkInterfaces: {
+          edge0: [
+            {
+              address: '172.30.0.2',
+              netmask: '255.255.255.0',
+              family: 'IPv4',
+              mac: '00:00:00:00:00:02',
+              internal: false,
+              cidr: '172.30.0.2/24',
+            },
+          ],
+          host0: [
+            {
+              address: '172.31.0.2',
+              netmask: '255.255.255.0',
+              family: 'IPv4',
+              mac: '00:00:00:00:00:03',
+              internal: false,
+              cidr: '172.31.0.2/24',
+            },
+          ],
+        },
+      },
+      {
+        async listen(server, _port, address): Promise<void> {
+          addresses.push(address);
+          attempt++;
+          if (attempt === 2) throw bindError;
+          started.push(server);
+        },
+        async close(servers, force): Promise<Error | undefined> {
+          closed.push(...servers);
+          forcedCleanup = force === true;
+          throw cleanupError;
+        },
+      },
+    );
+    await expect(start).rejects.toBe(bindError);
+    expect(started).toHaveLength(1);
+    expect(closed).toEqual(started);
+    expect(addresses).toEqual(['172.31.0.2', '172.30.0.2']);
+    expect(forcedCleanup).toBe(true);
+  });
+
+  it('responde 503 no primeiro socket e só libera tráfego depois dos dois binds', async () => {
+    let hostPort = 0;
+    let attempt = 0;
+    const listener = await listenEdgeRouter(
+      {
+        topology: createEdgeTopology(DISTINCT_ORIGINS),
+        core: { hostname: '127.0.0.1', port: 1 },
+        upstreamTimeoutMs: 100,
+        port: 0,
+        bindInterfaces: ['edge0', 'host0'],
+        networkInterfaces: {
+          edge0: [
+            {
+              address: '172.30.0.2',
+              netmask: '255.255.255.0',
+              family: 'IPv4',
+              mac: '00:00:00:00:00:04',
+              internal: false,
+              cidr: '172.30.0.2/24',
+            },
+          ],
+          host0: [
+            {
+              address: '172.31.0.2',
+              netmask: '255.255.255.0',
+              family: 'IPv4',
+              mac: '00:00:00:00:00:05',
+              internal: false,
+              cidr: '172.31.0.2/24',
+            },
+          ],
+        },
+      },
+      {
+        async listen(server): Promise<void> {
+          attempt++;
+          await new Promise<void>((resolve, reject) => {
+            server.once('error', reject);
+            server.listen(0, '127.0.0.1', () => {
+              server.off('error', reject);
+              resolve();
+            });
+          });
+          const bound = server.address();
+          if (!bound || typeof bound === 'string') throw new Error('listener de teste sem porta');
+          if (attempt === 1) {
+            hostPort = bound.port;
+            expect((await request(hostPort, { host: 'app.example.test' })).status).toBe(503);
+          }
+        },
+        async close(servers, force): Promise<Error | undefined> {
+          await Promise.all(
+            servers.map(
+              (server) =>
+                new Promise<void>((resolve) => {
+                  if (force) server.closeAllConnections();
+                  if (!server.listening) return resolve();
+                  server.close(() => resolve());
+                }),
+            ),
+          );
+          return undefined;
+        },
+      },
+    );
+    try {
+      expect((await request(hostPort, { host: 'app.example.test' })).status).toBe(502);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        listener.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        }),
+      );
+    }
   });
 });
 

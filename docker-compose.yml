@@ -87,9 +87,9 @@ services:
         gw_priority: 1
 
   # Reverse proxy de origem única. Não recebe env_file, segredo ou volume e
-  # escuta somente na interface compartilhada com o túnel. As interfaces que
-  # alcançam core e público não aceitam ingress porque o processo não faz bind
-  # nelas.
+  # abre dois listeners explícitos: edge0 para o túnel e host0 para o único
+  # publish loopback. As interfaces que alcançam core e público não aceitam
+  # ingress porque o processo nunca faz bind nelas ou em 0.0.0.0.
   kassinao-router:
     image: ${KASSINAO_IMAGE:-kassinao-local:dev}
     pull_policy: ${KASSINAO_PULL_POLICY:-never}
@@ -119,6 +119,7 @@ services:
       NODE_ENV: production
       PORT: '8080'
       WEB_BIND_INTERFACE: edge0
+      WEB_HOST_BIND_INTERFACE: host0
       APP_URL: ${APP_URL:-}
       MCP_URL: ${MCP_URL:-}
       PUBLIC_URL: ${PUBLIC_URL:-}
@@ -148,6 +149,9 @@ services:
       retries: 3
       start_period: 15s
     networks:
+      host_ingress:
+        interface_name: host0
+        gw_priority: 1
       edge_ingress:
         interface_name: edge0
         aliases: [kassinao]
@@ -267,6 +271,16 @@ volumes:
   auth-data:
 
 networks:
+  # Rede NAT interna exclusiva do router. Ela materializa a bridge usada pelo
+  # publish loopback sem dar ao processo uma rota externa ou compartilhar o
+  # listener do host com o túnel, core ou processo público.
+  host_ingress:
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.name: kas-host0
+      com.docker.network.bridge.gateway_mode_ipv4: nat
+      com.docker.network.bridge.gateway_mode_ipv6: isolated
+      com.docker.network.bridge.enable_icc: 'false'
   # Cloudflared enxerga somente o listener edge0 do router. O túnel não
   # compartilha rede com core/público; os links de upstream do router são
   # separados da interface de ingress.

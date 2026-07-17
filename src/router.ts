@@ -5,10 +5,10 @@ if (process.platform === 'darwin') delete process.env.__CF_USER_TEXT_ENCODING;
 
 async function main(): Promise<void> {
   const runtime = readRouterRuntimeConfiguration(process.env);
-  const server = await listenEdgeRouter({
+  const listener = await listenEdgeRouter({
     topology: createEdgeTopology(runtime.origins),
     port: runtime.port,
-    bindInterface: runtime.bindInterface,
+    bindInterfaces: runtime.bindInterfaces,
     releaseDigest: runtime.releaseDigest,
     deploymentFingerprint: runtime.deploymentFingerprint,
   });
@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   const close = (): void => {
     if (closing) return;
     closing = true;
-    server.close((error) => process.exit(error ? 1 : 0));
+    listener.close((error) => process.exit(error ? 1 : 0));
     setTimeout(() => process.exit(1), 15_000).unref();
   };
   process.once('SIGINT', close);

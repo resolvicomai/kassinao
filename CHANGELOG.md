@@ -14,14 +14,14 @@ latest README, documentation, configuration template, and tests.
 
 ### Added
 
-- A secret-free edge router is now the only host-published application process. It separates private app/MCP routes from the isolated landing/docs process while preserving a single-origin local quickstart.
+- A secret-free edge router is now the only host-published application process. Separate listeners bind exclusively to the isolated tunnel interface and a router-only host-ingress interface, remain unready until both binds succeed, and share one admission budget. The sealed host firewall blocks new router-to-host pivots through the NAT bridge while preserving established loopback traffic; private app/MCP routes remain separated from the isolated landing/docs process and the local quickstart preserves one origin.
 - Sealed transition helpers provide resumable, exact-identity topology changes for shared deployments and for upgrades from the published v1.4.14-v1.4.16 dedicated layout.
 - Release and CI gates now smoke-test the real router/core/public image topology and validate the fully rendered dedicated and shared Compose models.
 
 ### Changed
 
 - Docker Engine 28.1.0 or newer is now required alongside Docker Compose 2.36.0. Engine 28.1 is the first daemon release that applies the named-interface contract used by the split router; deploy and both production audits reject Engine 28.0 before runtime mutation.
-- Docker Compose 2.36.0 or newer is required so each service receives a deterministic interface name. Core, router, public, and tunnel now have exact network membership, isolated internal links, and separate egress bridges.
+- Docker Compose 2.36.0 or newer is required so each service receives a deterministic interface name. Core, router, public, and tunnel now have exact network membership, isolated internal links, a router-only internal host bridge with IPv4 NAT/IPv6 isolation/ICC disabled, and separate egress bridges.
 - Shared-host upgrades must set the new required `KASSINAO_ROUTER_MEMORY_LIMIT` and `KASSINAO_ROUTER_CPUS` values. The router is now the sole ingress, and the obsolete `KASSINAO_PUBLIC_HOST_PORT` setting has been removed.
 - The local quickstart uses the same split public/private architecture as production. Public and documentation origins may intentionally share the app origin; conflicting synthetic `www` aliases still fail closed.
 - Production configuration requires `TRUST_PROXY_HOPS=1`, and deploy/audit gates verify that exact value before stopping the existing runtime.

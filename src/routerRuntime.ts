@@ -10,6 +10,7 @@ const ROUTER_RUNTIME_ENV = new Set([
   'HOSTNAME',
   'PORT',
   'WEB_BIND_INTERFACE',
+  'WEB_HOST_BIND_INTERFACE',
   'APP_URL',
   'PUBLIC_URL',
   'DOCS_URL',
@@ -26,7 +27,7 @@ const ROUTER_RUNTIME_ENV = new Set([
 
 export interface RouterRuntimeConfiguration {
   port: number;
-  bindInterface: string;
+  bindInterfaces: readonly [string, string];
   origins: {
     app: string;
     public: string;
@@ -70,6 +71,14 @@ function optionalFingerprint(env: NodeJS.ProcessEnv, name: string, pattern: RegE
   return raw;
 }
 
+function bindInterface(env: NodeJS.ProcessEnv, name: string): string {
+  const value = requiredValue(env, name);
+  if (!/^[A-Za-z0-9_.-]{1,15}$/.test(value)) {
+    throw new Error(`${name} precisa ser um nome de interface Linux válido`);
+  }
+  return value;
+}
+
 /**
  * Consome o marcador efêmero do launcher e valida o ambiente antes de importar
  * qualquer módulo do processo privado. Nomes desconhecidos são reportados sem
@@ -94,14 +103,15 @@ export function readRouterRuntimeConfiguration(
   const port = Number(rawPort);
   if (port > 65535) throw new Error('PORT precisa ser um inteiro entre 1 e 65535');
 
-  const bindInterface = requiredValue(env, 'WEB_BIND_INTERFACE');
-  if (!/^[A-Za-z0-9_.-]{1,15}$/.test(bindInterface)) {
-    throw new Error('WEB_BIND_INTERFACE precisa ser um nome de interface Linux válido');
+  const edgeBindInterface = bindInterface(env, 'WEB_BIND_INTERFACE');
+  const hostBindInterface = bindInterface(env, 'WEB_HOST_BIND_INTERFACE');
+  if (edgeBindInterface === hostBindInterface) {
+    throw new Error('WEB_BIND_INTERFACE e WEB_HOST_BIND_INTERFACE precisam ser distintas');
   }
 
   return {
     port,
-    bindInterface,
+    bindInterfaces: [edgeBindInterface, hostBindInterface],
     origins: {
       app: exactOrigin(env, 'APP_URL'),
       public: exactOrigin(env, 'PUBLIC_URL'),

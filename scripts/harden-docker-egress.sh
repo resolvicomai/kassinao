@@ -1,6 +1,7 @@
 #!/bin/bash -p
 # Instala uma política mínima de contenção lateral para as duas saídas
-# independentes do Kassinão. A atualização usa policies A/B: a policy ativa
+# independentes e bloqueia pivô para o host, inclusive pela bridge NAT do
+# publish loopback. A atualização usa policies A/B: a policy ativa
 # nunca é esvaziada enquanto a substituta está sendo construída.
 set -Eeuo pipefail
 umask 077
@@ -136,6 +137,7 @@ CORE_CONTAINER=kassinao
 ROUTER_CONTAINER=kassinao-router
 TUNNEL_CONTAINER=kassinao-tunnel
 PUBLIC_CONTAINER=kassinao-public
+HOST_INGRESS_BRIDGE=kas-host0
 EDGE_INGRESS_BRIDGE=kas-edge0
 CORE_LINK_BRIDGE=kas-core0
 PUBLIC_LINK_BRIDGE=kas-public0
@@ -145,12 +147,12 @@ case "$CORE_CONTAINER" in '' | *[!A-Za-z0-9_.-]*) echo 'ERRO: nome de container 
 case "$ROUTER_CONTAINER" in '' | *[!A-Za-z0-9_.-]*) echo 'ERRO: nome do router inválido' >&2; exit 1 ;; esac
 case "$TUNNEL_CONTAINER" in '' | *[!A-Za-z0-9_.-]*) echo 'ERRO: nome do túnel inválido' >&2; exit 1 ;; esac
 case "$PUBLIC_CONTAINER" in '' | *[!A-Za-z0-9_.-]*) echo 'ERRO: nome público inválido' >&2; exit 1 ;; esac
-case "$EDGE_INGRESS_BRIDGE:$CORE_LINK_BRIDGE:$PUBLIC_LINK_BRIDGE:$CORE_EGRESS_BRIDGE:$TUNNEL_EGRESS_BRIDGE" in
+case "$HOST_INGRESS_BRIDGE:$EDGE_INGRESS_BRIDGE:$CORE_LINK_BRIDGE:$PUBLIC_LINK_BRIDGE:$CORE_EGRESS_BRIDGE:$TUNNEL_EGRESS_BRIDGE" in
   *[!A-Za-z0-9_.:-]*) echo 'ERRO: nome de bridge inválido' >&2; exit 1 ;;
 esac
 [ "$(printf '%s\n' \
-  "$EDGE_INGRESS_BRIDGE" "$CORE_LINK_BRIDGE" "$PUBLIC_LINK_BRIDGE" \
-  "$CORE_EGRESS_BRIDGE" "$TUNNEL_EGRESS_BRIDGE" | sort -u | wc -l | tr -d ' ')" -eq 5 ] ||
+  "$HOST_INGRESS_BRIDGE" "$EDGE_INGRESS_BRIDGE" "$CORE_LINK_BRIDGE" \
+  "$PUBLIC_LINK_BRIDGE" "$CORE_EGRESS_BRIDGE" "$TUNNEL_EGRESS_BRIDGE" | sort -u | wc -l | tr -d ' ')" -eq 6 ] ||
   die 'bridges da topologia precisam ser distintas'
 
 # Nomes são apenas pontos de descoberta. Um container só participa da prova de
@@ -302,6 +304,12 @@ assert_network_metadata() {
     return 1
   }
   case "$expected_kind" in
+    host)
+      [ "$internal" = true ] && [ "$gateway4" = nat ] && [ "$gateway6" = isolated ] && [ "$icc" = false ] || {
+        echo "ERRO: bridge host ingress $expected_bridge precisa ser internal, NAT somente em IPv4 e ICC=false" >&2
+        return 1
+      }
+      ;;
     internal)
       [ "$internal" = true ] && [ "$gateway4" = isolated ] && [ "$gateway6" = isolated ] || {
         echo "ERRO: bridge interna $expected_bridge não está isolada" >&2
@@ -431,7 +439,7 @@ if [ "$MODE" != remove ] &&
     }
 
     core_expected="${CORE_LINK_BRIDGE}|internal"$'\n'"${CORE_EGRESS_BRIDGE}|egress"
-    router_expected="${EDGE_INGRESS_BRIDGE}|internal"$'\n'"${CORE_LINK_BRIDGE}|internal"$'\n'"${PUBLIC_LINK_BRIDGE}|internal"
+    router_expected="${HOST_INGRESS_BRIDGE}|host"$'\n'"${EDGE_INGRESS_BRIDGE}|internal"$'\n'"${CORE_LINK_BRIDGE}|internal"$'\n'"${PUBLIC_LINK_BRIDGE}|internal"
     public_expected="${PUBLIC_LINK_BRIDGE}|internal"
     tunnel_expected="${EDGE_INGRESS_BRIDGE}|internal"$'\n'"${TUNNEL_EGRESS_BRIDGE}|egress"
 
@@ -445,6 +453,7 @@ if [ "$MODE" != remove ] &&
 
     core_link_network="$(network_for_bridge "$core_topology" "$CORE_LINK_BRIDGE")"
     core_egress_network="$(network_for_bridge "$core_topology" "$CORE_EGRESS_BRIDGE")"
+    router_host_network="$(network_for_bridge "$router_topology" "$HOST_INGRESS_BRIDGE")"
     router_edge_network="$(network_for_bridge "$router_topology" "$EDGE_INGRESS_BRIDGE")"
     router_core_network="$(network_for_bridge "$router_topology" "$CORE_LINK_BRIDGE")"
     router_public_network="$(network_for_bridge "$router_topology" "$PUBLIC_LINK_BRIDGE")"
@@ -456,6 +465,8 @@ if [ "$MODE" != remove ] &&
     public_members="${router_cid}|${ROUTER_CONTAINER}"$'\n'"${public_cid}|${PUBLIC_CONTAINER}"
     edge_members="${router_cid}|${ROUTER_CONTAINER}"
     [ -z "$tunnel_cid" ] || edge_members="${edge_members}"$'\n'"${tunnel_cid}|${TUNNEL_CONTAINER}"
+    assert_network_members "$router_host_network" "$HOST_INGRESS_BRIDGE" host host-ingress \
+      "${router_cid}|${ROUTER_CONTAINER}" || exit 1
     assert_network_members "$core_link_network" "$CORE_LINK_BRIDGE" internal core-link "$core_members" || exit 1
     assert_network_members "$core_egress_network" "$CORE_EGRESS_BRIDGE" egress core-egress \
       "${core_cid}|${CORE_CONTAINER}" || exit 1
@@ -480,6 +491,8 @@ if [ "$MODE" != remove ] &&
       [ "$tunnel_topology" = "$(container_topology "$tunnel_cid" túnel "$tunnel_expected")" ] ||
         die 'topologia do túnel mudou durante a validação'
     fi
+    assert_network_members "$router_host_network" "$HOST_INGRESS_BRIDGE" host host-ingress \
+      "${router_cid}|${ROUTER_CONTAINER}" || exit 1
     assert_network_members "$core_link_network" "$CORE_LINK_BRIDGE" internal core-link "$core_members" || exit 1
     assert_network_members "$core_egress_network" "$CORE_EGRESS_BRIDGE" egress core-egress \
       "${core_cid}|${CORE_CONTAINER}" || exit 1
@@ -545,9 +558,10 @@ chain_reference_count() {
 }
 
 check_reference_scope() {
-  local tool="$1" target="$2" expected_one="$3" expected_two="${4:-}"
+  local tool="$1" target="$2" expected_one="$3" expected_two="${4:-}" expected_three="${5:-}"
   "$tool" -S 2>/dev/null | awk \
-    -v target="$target" -v expected_one="$expected_one" -v expected_two="$expected_two" '
+    -v target="$target" -v expected_one="$expected_one" -v expected_two="$expected_two" \
+    -v expected_three="$expected_three" '
     $1 == "-A" {
       for (i = 1; i < NF; i++) {
         if (($i == "-j" || $i == "-g") && $(i + 1) == target) {
@@ -555,13 +569,15 @@ check_reference_scope() {
             one++
           } else if (expected_two != "" && $0 == expected_two) {
             two++
+          } else if (expected_three != "" && $0 == expected_three) {
+            three++
           } else {
             invalid = 1
           }
         }
       }
     }
-    END { exit (!invalid && one <= 1 && two <= 1) ? 0 : 1 }
+    END { exit (!invalid && one <= 1 && two <= 1 && three <= 1) ? 0 : 1 }
   '
 }
 
@@ -572,7 +588,8 @@ check_anchor_reference_scopes() {
     "-A DOCKER-USER -i $TUNNEL_EGRESS_BRIDGE -j KASSINAO-EGRESS" &&
     check_reference_scope "$tool" KASSINAO-HOST \
       "-A INPUT -i $CORE_EGRESS_BRIDGE -j KASSINAO-HOST" \
-      "-A INPUT -i $TUNNEL_EGRESS_BRIDGE -j KASSINAO-HOST"
+      "-A INPUT -i $TUNNEL_EGRESS_BRIDGE -j KASSINAO-HOST" \
+      "-A INPUT -i $HOST_INGRESS_BRIDGE -j KASSINAO-HOST"
 }
 
 check_policy_reference_scopes() {
@@ -656,8 +673,10 @@ check_policy_family() {
     "$tool" INPUT 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-HOST || return 1
   check_unique_positioned_rule \
     "$tool" INPUT 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-HOST || return 1
+  check_unique_positioned_rule \
+    "$tool" INPUT 3 -i "$HOST_INGRESS_BRIDGE" -j KASSINAO-HOST || return 1
   [ "$(chain_reference_count "$tool" KASSINAO-EGRESS)" -eq 2 ] || return 1
-  [ "$(chain_reference_count "$tool" KASSINAO-HOST)" -eq 2 ] || return 1
+  [ "$(chain_reference_count "$tool" KASSINAO-HOST)" -eq 3 ] || return 1
 
   mapfile -t anchor_rules < <("$tool" -S KASSINAO-EGRESS 2>/dev/null | awk '$1 == "-A" {print}')
   [ "${#anchor_rules[@]}" -eq 1 ] || return 1
@@ -875,6 +894,7 @@ allowed_owned_inventory() {
     "-A DOCKER-USER -i $TUNNEL_EGRESS_BRIDGE -j KASSINAO-EGRESS" \
     "-A INPUT -i $CORE_EGRESS_BRIDGE -j KASSINAO-HOST" \
     "-A INPUT -i $TUNNEL_EGRESS_BRIDGE -j KASSINAO-HOST" \
+    "-A INPUT -i $HOST_INGRESS_BRIDGE -j KASSINAO-HOST" \
     '-A KASSINAO-EGRESS -j KASSINAO-EGRESS-A' \
     '-A KASSINAO-EGRESS -j KASSINAO-EGRESS-B' \
     '-A KASSINAO-HOST -j KASSINAO-HOST-A' \
@@ -1225,6 +1245,8 @@ remove_policy_family() {
     delete_exact_rule_if_present "$tool" DOCKER-USER -i "$bridge" -j KASSINAO-EGRESS || return 1
     delete_exact_rule_if_present "$tool" INPUT -i "$bridge" -j KASSINAO-HOST || return 1
   done
+  delete_exact_rule_if_present \
+    "$tool" INPUT -i "$HOST_INGRESS_BRIDGE" -j KASSINAO-HOST || return 1
 
   check_owned_removal_progress_family "$tool" "$@" || return 1
   for chain in KASSINAO-EGRESS KASSINAO-HOST; do
@@ -1317,7 +1339,7 @@ if [ "$MODE" = check ]; then
   if check_owned_reference_scopes && \
      check_policy_family ipt 127.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 && \
      check_policy_family ip6t ::1/128 fc00::/7 fe80::/10; then
-    echo "Política de egress/host válida em $CORE_EGRESS_BRIDGE e $TUNNEL_EGRESS_BRIDGE."
+    echo "Política de egress/host válida nas saídas e no host ingress $HOST_INGRESS_BRIDGE."
     exit 0
   fi
   echo 'ERRO: política de egress/host ausente, incompleta ou desviada' >&2
@@ -1356,7 +1378,7 @@ if [ "$MODE" = remove ]; then
     echo 'ERRO: remoção terminou em estado não ausente' >&2
     exit 1
   }
-  echo "Regras exclusivas do Kassinão removidas de $CORE_EGRESS_BRIDGE e $TUNNEL_EGRESS_BRIDGE; hooks do Docker preservados."
+  echo "Regras exclusivas do Kassinão removidas das saídas e do host ingress $HOST_INGRESS_BRIDGE; hooks do Docker preservados."
   exit 0
 fi
 
@@ -1451,6 +1473,8 @@ canonicalize_positioned_rule \
 canonicalize_positioned_rule \
   ipt INPUT 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-HOST
 canonicalize_positioned_rule \
+  ipt INPUT 3 -i "$HOST_INGRESS_BRIDGE" -j KASSINAO-HOST
+canonicalize_positioned_rule \
   ip6t DOCKER-USER 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-EGRESS
 canonicalize_positioned_rule \
   ip6t DOCKER-USER 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-EGRESS
@@ -1458,6 +1482,8 @@ canonicalize_positioned_rule \
   ip6t INPUT 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-HOST
 canonicalize_positioned_rule \
   ip6t INPUT 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-HOST
+canonicalize_positioned_rule \
+  ip6t INPUT 3 -i "$HOST_INGRESS_BRIDGE" -j KASSINAO-HOST
 
 # A aplicação só é concluída depois de provar novamente anchors, policies e
 # referências em ambas as famílias contra o contrato completo.
@@ -1468,9 +1494,9 @@ check_policy_family ipt 127.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.
 }
 
 if [ "$OFFLINE" = true ]; then
-  echo "Política de egress/host pré-carregada antes do daemon Docker nas duas bridges de saída."
+  echo "Política de egress/host pré-carregada antes do daemon Docker nas saídas e no host ingress."
 elif [ "${PRELOAD:-false}" = true ]; then
-  echo "Política de egress/host pré-carregada nas duas bridges; topologia ainda não existe."
+  echo "Política de egress/host pré-carregada nas saídas e no host ingress; topologia ainda não existe."
 else
   echo "Política de egress/host aplicada; saídas presentes têm membership exclusivo validado."
 fi

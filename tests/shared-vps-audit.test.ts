@@ -70,7 +70,7 @@ function projectContainer(
     service === 'kassinao'
       ? ['kassinao_core_link', 'kassinao_core_egress']
       : service === 'kassinao-router'
-        ? ['kassinao_edge_ingress', 'kassinao_core_link', 'kassinao_public_link']
+        ? ['kassinao_host_ingress', 'kassinao_edge_ingress', 'kassinao_core_link', 'kassinao_public_link']
         : service === 'kassinao-public'
           ? ['kassinao_public_link']
           : ['kassinao_edge_ingress', 'kassinao_tunnel_egress'];
@@ -122,6 +122,7 @@ function projectContainer(
             ...APP_DEFAULT_ENV,
             'PORT=8080',
             'WEB_BIND_INTERFACE=edge0',
+            'WEB_HOST_BIND_INTERFACE=host0',
             'APP_URL=https://app.example.com',
             'MCP_URL=https://mcp.example.com',
             'PUBLIC_URL=https://www.example.com',
@@ -812,6 +813,7 @@ esac
     linksJson,
     JSON.stringify([
       { ifname: 'lo', linkinfo: {} },
+      { ifname: 'kas-host0', linkinfo: { info_kind: 'bridge' } },
       { ifname: 'kas-edge0', linkinfo: { info_kind: 'bridge' } },
       { ifname: 'kas-core0', linkinfo: { info_kind: 'bridge' } },
       { ifname: 'kas-public0', linkinfo: { info_kind: 'bridge' } },
@@ -912,6 +914,20 @@ esac
       },
       Labels: { 'com.docker.compose.project': 'kassinao', 'com.docker.compose.network': 'tunnel_egress' },
       Containers: { 'cloudflared-id': { Name: 'kassinao-tunnel' } },
+    },
+    {
+      Id: 'host-ingress-network-id',
+      Name: 'kassinao_host_ingress',
+      Driver: 'bridge',
+      Internal: true,
+      Options: {
+        'com.docker.network.bridge.name': 'kas-host0',
+        'com.docker.network.bridge.gateway_mode_ipv4': 'nat',
+        'com.docker.network.bridge.gateway_mode_ipv6': 'isolated',
+        'com.docker.network.bridge.enable_icc': 'false',
+      },
+      Labels: { 'com.docker.compose.project': 'kassinao', 'com.docker.compose.network': 'host_ingress' },
+      Containers: { 'kassinao-router-id': { Name: 'kassinao-router' } },
     },
   ];
   writeFileSync(networkJson, JSON.stringify(networkItems));
@@ -1101,12 +1117,13 @@ describe('shared VPS read-only audit', () => {
     expect(source).toContain('KASSINAO_ROUTER_MEMORY_LIMIT');
     expect(source).toContain("'PORT': '8082'");
     expect(source).toContain("'WEB_BIND_INTERFACE': 'edge0'");
+    expect(source).toContain("'WEB_HOST_BIND_INTERFACE': 'host0'");
     expect(source).toContain(
-      "'kassinao-router': {'kassinao_edge_ingress', 'kassinao_core_link', 'kassinao_public_link'}",
+      "'kassinao-router': {'kassinao_host_ingress', 'kassinao_edge_ingress', 'kassinao_core_link', 'kassinao_public_link'}",
     );
     expect(source).toContain("'cloudflared': {'kassinao_edge_ingress', 'kassinao_tunnel_egress'}");
     expect(source).toContain(
-      "mandatory_reserved_interfaces = {'kas-edge0', 'kas-core0', 'kas-public0', 'kas-core-eg0'}",
+      "mandatory_reserved_interfaces = {'kas-host0', 'kas-edge0', 'kas-core0', 'kas-public0', 'kas-core-eg0'}",
     );
     expect(source).toContain("tunnel_reserved_interface = 'kas-tunnel-eg0'");
     expect(source).toContain("network.get('EnableICC') != 'false'");
@@ -2126,7 +2143,7 @@ describe('shared VPS read-only audit', () => {
     const result = run(aFixture, ['--neighbors-only']);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('policy de egress das bridges kas-core-eg0/kas-tunnel-eg0');
+    expect(result.stderr).toContain('policy das saídas e do host ingress kas-host0');
   });
 
   it('com zero containers ainda inventaria e recusa rede reservada estrangeira', () => {
@@ -2246,7 +2263,7 @@ describe('shared VPS read-only audit', () => {
 
   it.each([
     ['storage sem prova', { storageFails: true }, 'storage shared'],
-    ['egress divergente', { hardenerFails: true }, 'policy de egress'],
+    ['egress divergente', { hardenerFails: true }, 'policy das saídas'],
     ['execução não-root', { uid: 1000 }, 'como root'],
   ])('falha fechado em %s', (_name, options, message) => {
     const result = run(fixture(options));
@@ -2345,6 +2362,26 @@ describe('shared VPS read-only audit', () => {
         (aFixture.networkItems[5].Options['com.docker.network.bridge.enable_icc'] = 'true'),
     ],
     ['Internal de edge_ingress', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[3].Internal = false)],
+    ['Internal de host_ingress', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[6].Internal = false)],
+    [
+      'gateway IPv4 de host_ingress',
+      (aFixture: ReturnType<typeof fixture>) =>
+        (aFixture.networkItems[6].Options['com.docker.network.bridge.gateway_mode_ipv4'] = 'isolated'),
+    ],
+    [
+      'gateway IPv6 de host_ingress',
+      (aFixture: ReturnType<typeof fixture>) =>
+        (aFixture.networkItems[6].Options['com.docker.network.bridge.gateway_mode_ipv6'] = 'nat'),
+    ],
+    [
+      'ICC de host_ingress',
+      (aFixture: ReturnType<typeof fixture>) =>
+        (aFixture.networkItems[6].Options['com.docker.network.bridge.enable_icc'] = 'true'),
+    ],
+    [
+      'membership de host_ingress',
+      (aFixture: ReturnType<typeof fixture>) => delete aFixture.networkItems[6].Containers['kassinao-router-id'],
+    ],
     [
       'gateway IPv6 de core_link',
       (aFixture: ReturnType<typeof fixture>) =>
@@ -2363,7 +2400,7 @@ describe('shared VPS read-only audit', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(
-      /bridge reservada|rede interna reservada|rede de egress reservada|membership divergente/,
+      /bridge reservada|rede host_ingress|rede interna reservada|rede de egress reservada|membership divergente/,
     );
   });
 

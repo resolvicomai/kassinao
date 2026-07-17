@@ -210,6 +210,15 @@ internal_network_is() {
     [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.gateway_mode_ipv4"}}' "$network_name" 2>/dev/null || true)" = isolated ] &&
     [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.gateway_mode_ipv6"}}' "$network_name" 2>/dev/null || true)" = isolated ]
 }
+host_ingress_network_is() {
+  local network_name="$1" bridge="$2"
+  [ "$(docker network inspect -f '{{.Driver}}' "$network_name" 2>/dev/null || true)" = bridge ] &&
+    [ "$(docker network inspect -f '{{.Internal}}' "$network_name" 2>/dev/null || true)" = true ] &&
+    [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.name"}}' "$network_name" 2>/dev/null || true)" = "$bridge" ] &&
+    [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.gateway_mode_ipv4"}}' "$network_name" 2>/dev/null || true)" = nat ] &&
+    [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.gateway_mode_ipv6"}}' "$network_name" 2>/dev/null || true)" = isolated ] &&
+    [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.enable_icc"}}' "$network_name" 2>/dev/null || true)" = false ]
+}
 egress_network_is() {
   local network_name="$1" bridge="$2"
   [ "$(docker network inspect -f '{{.Driver}}' "$network_name" 2>/dev/null || true)" = bridge ] &&
@@ -1423,7 +1432,7 @@ if profile_enabled split-public; then
       fail 'router precisa de um único publish 127.0.0.1:HOST_PORT para 8080/tcp'
     fi
 
-    ROUTER_ALLOWED_ENV='NODE_ENV NODE_VERSION YARN_VERSION PYTHONDONTWRITEBYTECODE PATH HOME HOSTNAME PORT WEB_BIND_INTERFACE APP_URL MCP_URL PUBLIC_URL DOCS_URL KASSINAO_RELEASE_DIGEST KASSINAO_DEPLOYMENT_FINGERPRINT TZ LANG LC_ALL TERM NO_COLOR FORCE_COLOR'
+    ROUTER_ALLOWED_ENV='NODE_ENV NODE_VERSION YARN_VERSION PYTHONDONTWRITEBYTECODE PATH HOME HOSTNAME PORT WEB_BIND_INTERFACE WEB_HOST_BIND_INTERFACE APP_URL MCP_URL PUBLIC_URL DOCS_URL KASSINAO_RELEASE_DIGEST KASSINAO_DEPLOYMENT_FINGERPRINT TZ LANG LC_ALL TERM NO_COLOR FORCE_COLOR'
     bad_router_env=''
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
@@ -1440,6 +1449,7 @@ if profile_enabled split-public; then
        [ "$(container_env_value "$ROUTER_CONTAINER" NODE_ENV)" = production ] && \
        [ "$(container_env_value "$ROUTER_CONTAINER" PORT)" = 8080 ] && \
        [ "$(container_env_value "$ROUTER_CONTAINER" WEB_BIND_INTERFACE)" = edge0 ] && \
+       [ "$(container_env_value "$ROUTER_CONTAINER" WEB_HOST_BIND_INTERFACE)" = host0 ] && \
        [ "$(container_env_value "$ROUTER_CONTAINER" APP_URL)" = "$(env_value APP_URL "$ENV_FILE")" ] && \
        [ "$(container_env_value "$ROUTER_CONTAINER" MCP_URL)" = "$(env_value MCP_URL "$ENV_FILE")" ] && \
        [ "$(container_env_value "$ROUTER_CONTAINER" PUBLIC_URL)" = "$(env_value PUBLIC_URL "$ENV_FILE")" ] && \
@@ -1450,14 +1460,19 @@ if profile_enabled split-public; then
     fi
 
     ROUTER_NETWORKS="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{printf "%s\n" $name}}{{end}}' "$ROUTER_CONTAINER" 2>/dev/null | sed '/^$/d' | sort -u)"
-    [ "$(grep -cve '^$' <<<"$ROUTER_NETWORKS")" -eq 3 ] \
-      && pass 'router usa somente ingress, link do core e link público' \
-      || fail 'router precisa usar exatamente três redes internas'
+    [ "$(grep -cve '^$' <<<"$ROUTER_NETWORKS")" -eq 4 ] \
+      && pass 'router usa somente host ingress, edge ingress, link do core e link público' \
+      || fail 'router precisa usar exatamente quatro redes dedicadas'
+    HOST_NETWORK="$(network_for_bridge "$ROUTER_NETWORKS" kas-host0 2>/dev/null || true)"
     EDGE_NETWORK="$(network_for_bridge "$ROUTER_NETWORKS" kas-edge0 2>/dev/null || true)"
     ROUTER_CORE_NETWORK="$(network_for_bridge "$ROUTER_NETWORKS" kas-core0 2>/dev/null || true)"
     ROUTER_PUBLIC_NETWORK="$(network_for_bridge "$ROUTER_NETWORKS" kas-public0 2>/dev/null || true)"
-    if [ -n "$EDGE_NETWORK" ] && [ -n "$ROUTER_CORE_NETWORK" ] && [ -n "$ROUTER_PUBLIC_NETWORK" ] && \
-       [ "$(printf '%s\n' "$EDGE_NETWORK" "$ROUTER_CORE_NETWORK" "$ROUTER_PUBLIC_NETWORK" | sort -u | wc -l | tr -d ' ')" -eq 3 ]; then
+    if [ -n "$HOST_NETWORK" ] && [ -n "$EDGE_NETWORK" ] && [ -n "$ROUTER_CORE_NETWORK" ] && [ -n "$ROUTER_PUBLIC_NETWORK" ] && \
+       [ "$(printf '%s\n' "$HOST_NETWORK" "$EDGE_NETWORK" "$ROUTER_CORE_NETWORK" "$ROUTER_PUBLIC_NETWORK" | sort -u | wc -l | tr -d ' ')" -eq 4 ]; then
+      [ "$(network_members "$HOST_NETWORK")" = "$ROUTER_CONTAINER" ] && \
+        host_ingress_network_is "$HOST_NETWORK" kas-host0 \
+        && pass 'host ingress contém somente o router e permite o publish IPv4 local' \
+        || fail 'host ingress possui endpoint ou política divergente'
       EXPECTED_EDGE_MEMBERS="$ROUTER_CONTAINER"
       profile_enabled tunnel && \
         EXPECTED_EDGE_MEMBERS="$(printf '%s\n%s\n' "$ROUTER_CONTAINER" "$TUNNEL_CONTAINER" | sort -u)"
@@ -1481,7 +1496,7 @@ if profile_enabled split-public; then
         fail 'alias de ingress kassinao está ausente ou ambíguo no router'
       fi
     else
-      fail 'bridges estáveis kas-edge0/kas-core0/kas-public0 estão ausentes ou ambíguas'
+      fail 'bridges estáveis kas-host0/kas-edge0/kas-core0/kas-public0 estão ausentes ou ambíguas'
     fi
   fi
 elif [ "$router_exists" = true ] && [ "$(docker inspect -f '{{.State.Running}}' "$ROUTER_CONTAINER" 2>/dev/null || true)" = true ]; then
@@ -1724,7 +1739,7 @@ fi
 section EGRESS_POLICY
 if env -i "PATH=$PATH" "HOME=${HOME:-/root}" "LC_ALL=$LC_ALL" \
    "$DEPLOY_REAL/scripts/harden-docker-egress.sh" --check >/dev/null 2>&1; then
-  pass 'hardener selado aprovou identidade, topologia e policies IPv4/IPv6 das duas saídas'
+   pass 'hardener selado aprovou identidade, topologia e policies IPv4/IPv6 das saídas e do host ingress'
 else
   fail 'hardener selado recusou identidade, topologia ou policies IPv4/IPv6'
 fi

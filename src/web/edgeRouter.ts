@@ -70,8 +70,17 @@ export interface EdgeRouterOptions {
 
 export interface ListenEdgeRouterOptions extends EdgeRouterOptions {
   port: number;
-  bindInterface: string;
+  bindInterfaces: readonly [string, string];
   networkInterfaces?: NodeJS.Dict<NetworkInterfaceInfo[]>;
+}
+
+export interface EdgeRouterListener {
+  close(callback: (error?: Error) => void): void;
+}
+
+interface EdgeRouterListenerLifecycle {
+  listen(server: Server, port: number, address: string): Promise<void>;
+  close(servers: readonly Server[], force?: boolean): Promise<Error | undefined>;
 }
 
 const INTERNAL_HEALTH_PATH = '/_kassinao/router-health';
@@ -464,11 +473,13 @@ function rawResponse(socket: Duplex, status: number, reason: string): void {
   );
 }
 
-export function createEdgeRouterServer(options: EdgeRouterOptions): Server {
-  const core = options.core ?? DEFAULT_CORE_UPSTREAM;
-  const publicUpstream = options.public ?? DEFAULT_PUBLIC_UPSTREAM;
-  const timeoutMs = options.upstreamTimeoutMs ?? 120_000;
-  const maxUpstreamRequests = options.maxUpstreamRequests ?? 128;
+interface EdgeRouterResources {
+  agents: Record<EdgeTarget, http.Agent>;
+  admissions: Record<EdgeTarget, { active: number; limit: number }>;
+  dispose(): void;
+}
+
+function createEdgeRouterResources(maxUpstreamRequests: number): EdgeRouterResources {
   if (!Number.isSafeInteger(maxUpstreamRequests) || maxUpstreamRequests < 1 || maxUpstreamRequests > 512) {
     throw new Error('maxUpstreamRequests precisa ser um inteiro entre 1 e 512');
   }
@@ -490,6 +501,28 @@ export function createEdgeRouterServer(options: EdgeRouterOptions): Server {
     core: { active: 0, limit: maxUpstreamRequests },
     public: { active: 0, limit: maxUpstreamRequests },
   };
+  let disposed = false;
+  return {
+    agents,
+    admissions,
+    dispose(): void {
+      if (disposed) return;
+      disposed = true;
+      agents.core.destroy();
+      agents.public.destroy();
+    },
+  };
+}
+
+function createEdgeRouterServerWithResources(
+  options: EdgeRouterOptions,
+  resources: EdgeRouterResources,
+  acceptingRequests: () => boolean,
+  disposeOnClose: boolean,
+): Server {
+  const core = options.core ?? DEFAULT_CORE_UPSTREAM;
+  const publicUpstream = options.public ?? DEFAULT_PUBLIC_UPSTREAM;
+  const timeoutMs = options.upstreamTimeoutMs ?? 120_000;
 
   const server = http.createServer(
     {
@@ -504,6 +537,10 @@ export function createEdgeRouterServer(options: EdgeRouterOptions): Server {
       requireHostHeader: true,
     },
     (req, res) => {
+      if (!acceptingRequests()) {
+        sendText(res, 503, 'Service unavailable.', false);
+        return;
+      }
       const decision = decideEdgeRequest(options.topology, {
         method: req.method ?? 'GET',
         host: req.headers.host,
@@ -541,9 +578,9 @@ export function createEdgeRouterServer(options: EdgeRouterOptions): Server {
         res,
         decision,
         decision.target === 'core' ? core : publicUpstream,
-        agents[decision.target],
+        resources.agents[decision.target],
         timeoutMs,
-        admissions[decision.target],
+        resources.admissions[decision.target],
       );
     },
   );
@@ -554,11 +591,15 @@ export function createEdgeRouterServer(options: EdgeRouterOptions): Server {
   server.on('connect', (_req, socket) => rawResponse(socket, 405, 'Method Not Allowed'));
   server.on('upgrade', (_req, socket) => rawResponse(socket, 426, 'Upgrade Required'));
   server.on('clientError', (_error, socket) => rawResponse(socket, 400, 'Bad Request'));
-  server.once('close', () => {
-    agents.core.destroy();
-    agents.public.destroy();
-  });
+  if (disposeOnClose) {
+    server.once('close', resources.dispose);
+  }
   return server;
+}
+
+export function createEdgeRouterServer(options: EdgeRouterOptions): Server {
+  const resources = createEdgeRouterResources(options.maxUpstreamRequests ?? 128);
+  return createEdgeRouterServerWithResources(options, resources, () => true, true);
 }
 
 export function resolveExclusiveInterfaceAddress(
@@ -574,16 +615,118 @@ export function resolveExclusiveInterfaceAddress(
   return candidates[0].address;
 }
 
-export async function listenEdgeRouter(options: ListenEdgeRouterOptions): Promise<Server> {
-  const address = resolveExclusiveInterfaceAddress(options.bindInterface, options.networkInterfaces);
-  const server = createEdgeRouterServer(options);
-  await new Promise<void>((resolve, reject) => {
+export function resolveExclusiveInterfaceAddresses(
+  interfaceNames: readonly [string, string],
+  interfaces: NodeJS.Dict<NetworkInterfaceInfo[]> = os.networkInterfaces(),
+): readonly [string, string] {
+  if (interfaceNames[0] === interfaceNames[1]) {
+    throw new Error('As interfaces de edge e host precisam ser distintas');
+  }
+  const addresses = interfaceNames.map((name) => resolveExclusiveInterfaceAddress(name, interfaces)) as [
+    string,
+    string,
+  ];
+  if (addresses[0] === addresses[1]) {
+    throw new Error('As interfaces de edge e host precisam usar endereços IPv4 distintos');
+  }
+  return addresses;
+}
+
+function listenServer(server: Server, port: number, address: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => reject(error);
     server.once('error', onError);
-    server.listen(options.port, address, () => {
+    server.listen(port, address, () => {
       server.off('error', onError);
       resolve();
     });
   });
-  return server;
+}
+
+function closeServers(servers: readonly Server[], force = false): Promise<Error | undefined> {
+  return new Promise((resolve) => {
+    if (servers.length === 0) {
+      resolve(undefined);
+      return;
+    }
+    let pending = servers.length;
+    let settled = false;
+    const errors: Error[] = [];
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      resolve(
+        error ?? (errors.length > 0 ? new AggregateError(errors, 'Falha ao fechar listeners do router') : undefined),
+      );
+    };
+    const deadline = force
+      ? setTimeout(() => finish(new Error('Timeout ao abortar listeners parciais do router')), 1_000)
+      : undefined;
+    deadline?.unref();
+    for (const server of servers) {
+      server.close((error) => {
+        if (error) errors.push(error);
+        pending--;
+        if (pending === 0) {
+          if (deadline) clearTimeout(deadline);
+          finish();
+        }
+      });
+      if (force) server.closeAllConnections();
+    }
+  });
+}
+
+const systemListenerLifecycle: EdgeRouterListenerLifecycle = {
+  listen: listenServer,
+  close: closeServers,
+};
+
+export async function listenEdgeRouter(
+  options: ListenEdgeRouterOptions,
+  lifecycle: EdgeRouterListenerLifecycle = systemListenerLifecycle,
+): Promise<EdgeRouterListener> {
+  const addresses = resolveExclusiveInterfaceAddresses(options.bindInterfaces, options.networkInterfaces);
+  const resources = createEdgeRouterResources(options.maxUpstreamRequests ?? 128);
+  let acceptingRequests = false;
+  // host0 abre primeiro; edge0, alcançável pelo túnel, é sempre o último bind.
+  // Ambos devolvem 503 até que os dois listeners estejam confirmados.
+  const bindings = [addresses[1], addresses[0]].map((address) => ({
+    address,
+    server: createEdgeRouterServerWithResources(options, resources, () => acceptingRequests, false),
+  }));
+  const servers = bindings.map(({ server }) => server);
+  for (const server of servers) server.maxConnections = 256;
+  const started: Server[] = [];
+  try {
+    for (const { address, server } of bindings) {
+      await lifecycle.listen(server, options.port, address);
+      started.push(server);
+    }
+    acceptingRequests = true;
+  } catch (error) {
+    acceptingRequests = false;
+    try {
+      if (started.length > 0) await lifecycle.close(started, true);
+    } catch {
+      // O erro original de bind é o diagnóstico acionável; cleanup não o mascara.
+    }
+    resources.dispose();
+    throw error;
+  }
+  return {
+    close(callback): void {
+      acceptingRequests = false;
+      void lifecycle.close(servers).then(
+        (error) => {
+          resources.dispose();
+          callback(error);
+        },
+        (error: unknown) => {
+          resources.dispose();
+          callback(error as Error);
+        },
+      );
+    },
+  };
 }
