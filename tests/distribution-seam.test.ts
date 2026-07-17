@@ -1490,8 +1490,23 @@ describe('artefatos de distribuição', () => {
     expect(workflow).toContain('gh release edit "$tag" --draft');
     expect(workflow).toContain('amd64_image="$repository@$(platform_digest amd64)"');
     expect(workflow).toContain('arm64_image="$repository@$(platform_digest arm64)"');
-    expect(workflow).toContain('DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/amd64 "$amd64_image"');
-    expect(workflow).toContain('DOCKER_CONFIG="$anonymous_config" docker pull --platform linux/arm64 "$arm64_image"');
+    expect(workflow).toContain('test "$runtime_docker_context" = setup-docker-action');
+    expect(workflow).toContain(
+      'runtime_docker_host="$(docker context inspect "$runtime_docker_context" --format \'{{ .Endpoints.docker.Host }}\')"',
+    );
+    expect(workflow).toContain('runtime_docker_id="$(docker info --format \'{{ .ID }}\')"');
+    expect(workflow).toContain('export DOCKER_CONFIG="$anonymous_config"');
+    expect(workflow).toContain('export DOCKER_HOST="$runtime_docker_host"');
+    expect(workflow).toContain('test "$(docker info --format \'{{ .ID }}\')" = "$runtime_docker_id"');
+    expect(workflow).toContain('docker pull --platform linux/amd64 "$amd64_image"');
+    expect(workflow).toContain('docker pull --platform linux/arm64 "$arm64_image"');
+    expect(workflow).not.toContain('DOCKER_CONFIG="$anonymous_config" docker pull');
+    expect(workflow.indexOf('export DOCKER_HOST="$runtime_docker_host"')).toBeLessThan(
+      workflow.indexOf('docker pull --platform linux/amd64 "$amd64_image"'),
+    );
+    expect(workflow.indexOf('export DOCKER_HOST="$runtime_docker_host"')).toBeLessThan(
+      workflow.indexOf('bash scripts/smoke-router-image.sh "$amd64_image"'),
+    );
     expect(workflow).not.toContain('docker pull --platform linux/amd64 "$image"');
     expect(workflow).not.toContain('docker pull --platform linux/arm64 "$image"');
     expect(workflow).toContain('docker run --rm --platform linux/amd64 --network none --read-only --user 1000:1000');
