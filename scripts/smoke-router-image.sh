@@ -167,7 +167,7 @@ dc=(docker compose --project-name "$project" -f "$compose")
 
 for _attempt in $(seq 1 30); do
   if "${dc[@]}" --profile probe run --rm --no-deps -T probe /usr/local/bin/node -e \
-    "fetch('http://kassinao:8080/health',{headers:{host:'app.example.test'}}).then(async r=>{const b=await r.json();process.exit(r.ok&&b.surface==='private'?0:1)},()=>process.exit(1))"
+    "const http=require('node:http');const req=http.request({host:'kassinao',port:8080,path:'/health',headers:{host:'app.example.test'}},res=>{const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>{try{const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));process.exit(res.statusCode===200&&body.surface==='private'?0:1)}catch{process.exit(1)}})});req.setTimeout(3000,()=>req.destroy());req.on('error',()=>process.exit(1));req.end()"
   then
     break
   fi
@@ -207,19 +207,35 @@ PY
 
 "${dc[@]}" --profile probe run --rm --no-deps -T probe /usr/local/bin/node - <<'NODE'
 const assert = require('node:assert/strict');
+const http = require('node:http');
 
-async function request(path, host, init = {}) {
-  return fetch(`http://kassinao:8080${path}`, {
-    redirect: 'manual',
-    ...init,
-    headers: { host, ...(init.headers || {}) },
+function request(path, host, init = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      host: 'kassinao',
+      port: 8080,
+      path,
+      method: init.method || 'GET',
+      headers: { host, ...(init.headers || {}) },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({
+        status: res.statusCode,
+        headers: res.headers,
+        body: Buffer.concat(chunks),
+      }));
+    });
+    req.setTimeout(5000, () => req.destroy(new Error('router smoke request timed out')));
+    req.on('error', reject);
+    req.end(init.body);
   });
 }
 
 const core = await request('/app', 'app.example.test');
 assert.equal(core.status, 200);
-assert.equal(await core.text(), 'core-response');
-assert.deepEqual(core.headers.getSetCookie(), [
+assert.equal(core.body.toString('utf8'), 'core-response');
+assert.deepEqual(core.headers['set-cookie'], [
   'core_a=1; Path=/; HttpOnly',
   'core_b=2; Path=/; Secure',
 ]);
@@ -230,7 +246,7 @@ const echo = await request('/api/echo', 'mcp.example.test', {
   headers: { 'content-type': 'text/plain' },
 });
 assert.equal(echo.status, 200);
-assert.deepEqual(await echo.json(), {
+assert.deepEqual(JSON.parse(echo.body.toString('utf8')), {
   body: 'streamed-body',
   forwardedHost: 'mcp.example.test',
   forwardedProto: 'https',
@@ -238,8 +254,8 @@ assert.deepEqual(await echo.json(), {
 
 const range = await request('/asset', 'site.example.test', { headers: { range: 'bytes=2-5' } });
 assert.equal(range.status, 206);
-assert.equal(range.headers.get('content-range'), 'bytes 2-5/10');
-assert.equal(await range.text(), 'cdef');
+assert.equal(range.headers['content-range'], 'bytes 2-5/10');
+assert.equal(range.body.toString('utf8'), 'cdef');
 
 assert.equal((await request('/', 'docs.example.test')).status, 200);
 assert.equal((await request('/app', 'site.example.test')).status, 404);
@@ -247,7 +263,7 @@ assert.equal((await request('/', 'unknown.example.test')).status, 421);
 
 const privacy = await request('/privacy', 'site.example.test');
 assert.equal(privacy.status, 308);
-assert.equal(privacy.headers.get('location'), 'https://app.example.test/privacy');
+assert.equal(privacy.headers.location, 'https://app.example.test/privacy');
 NODE
 
 "${dc[@]}" --profile probe run --rm --no-deps -T probe /usr/local/bin/node - <<'NODE'

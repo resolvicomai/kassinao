@@ -1513,6 +1513,9 @@ describe('artefatos de distribuição', () => {
     expect(routerSmoke).toContain('interface_name: public0');
     expect(routerSmoke).toContain("ports: ['127.0.0.1::8080']");
     expect(routerSmoke).toContain('port router 8080');
+    expect(routerSmoke).toContain("const http = require('node:http');");
+    expect(routerSmoke).toContain('headers: { host, ...(init.headers || {}) }');
+    expect(routerSmoke).not.toContain("fetch('http://kassinao:8080/health',{headers:{host:");
     expect(routerSmoke).toContain("await mustFail('http://kassinao-core:8082/health')");
     expect(routerSmoke).toContain("await mustFail('http://kassinao-public:8081/health')");
     expect(workflow).toContain('extract_no_dump_runtime linux/amd64 amd64 "$amd64_image"');
