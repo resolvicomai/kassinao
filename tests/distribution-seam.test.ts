@@ -596,7 +596,10 @@ fi
 surface=private
 case "$url" in *www.example.com* | *docs.example.com*) surface=public ;; esac
 [ -z "\${FAKE_PUBLIC_HOST:-}" ] || [[ "$url" != *"\${FAKE_PUBLIC_HOST}"* ]] || surface=public
-[ -z "\${FAKE_ALL_SURFACE:-}" ] || surface="$FAKE_ALL_SURFACE"
+case "$url" in
+  http://127.0.0.1:*) [ -z "\${FAKE_LOCAL_SURFACE:-}" ] || surface="$FAKE_LOCAL_SURFACE" ;;
+  *) [ -z "\${FAKE_EXTERNAL_SURFACE:-}" ] || surface="$FAKE_EXTERNAL_SURFACE" ;;
+esac
 if [ "$surface" = public ]; then
   case "$url" in
     */privacy | */en/privacy)
@@ -3495,7 +3498,7 @@ printf '%s\n' '{"filesystems":[]}'
         PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
         KASSINAO_DEPLOY_DIR: fixture.directory,
         KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
-        FAKE_ALL_SURFACE: 'public',
+        FAKE_EXTERNAL_SURFACE: 'public',
       },
       encoding: 'utf8',
     });
@@ -3503,6 +3506,39 @@ printf '%s\n' '{"filesystems":[]}'
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('fingerprint/roteamento externo diverge');
     const calls = readFileSync(fixture.runtime.log, 'utf8');
+    for (const [container, id] of [
+      ['kassinao', 'a'.repeat(64)],
+      ['kassinao-router', 'e'.repeat(64)],
+      ['kassinao-tunnel', 'c'.repeat(64)],
+      ['kassinao-public', 'b'.repeat(64)],
+    ] as const) {
+      expect(calls).toContain(`stop --timeout 30 ${id}`);
+      expect(result.stderr).toContain(`Container da tentativa falha contido: ${container}`);
+    }
+  });
+
+  it('recusa split quando o listener host0 não chega ao processo privado', () => {
+    const digest = `sha256:${'7'.repeat(64)}`;
+    const image = `ghcr.io/example/kassinao@${digest}`;
+    const fixture = deploymentFixture(image, { mode: 'split' });
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+        FAKE_LOCAL_SURFACE: 'public',
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('listener host0/DNAT loopback devolveu fingerprint ou superfície divergente');
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    const localSmokeAt = calls.indexOf('curl http://127.0.0.1:8080/health');
+    expect(localSmokeAt).toBeGreaterThanOrEqual(0);
+    expect(calls.slice(localSmokeAt)).not.toContain('curl https://app.example.com/health');
     for (const [container, id] of [
       ['kassinao', 'a'.repeat(64)],
       ['kassinao-router', 'e'.repeat(64)],
@@ -3571,7 +3607,7 @@ printf '%s\n' '{"filesystems":[]}'
         PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
         KASSINAO_DEPLOY_DIR: fixture.directory,
         KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
-        FAKE_ALL_SURFACE: 'private',
+        FAKE_EXTERNAL_SURFACE: 'private',
       },
       encoding: 'utf8',
     });
