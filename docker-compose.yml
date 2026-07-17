@@ -271,15 +271,17 @@ volumes:
   auth-data:
 
 networks:
-  # Rede NAT interna exclusiva do router. Ela materializa a bridge usada pelo
-  # publish loopback sem dar ao processo uma rota externa ou compartilhar o
-  # listener do host com o túnel, core ou processo público.
+  # O Engine só materializa portas publicadas em uma rede não-internal. Esta
+  # bridge NAT é exclusiva do router, IPv4-only e presa ao loopback; a policy
+  # DOCKER-USER permite apenas retornos established e rejeita todo NEW que saia
+  # do router por host0. Core, público e túnel continuam em links separados.
   host_ingress:
-    internal: true
+    internal: false
+    enable_ipv6: false
     driver_opts:
       com.docker.network.bridge.name: kas-host0
+      com.docker.network.bridge.host_binding_ipv4: 127.0.0.1
       com.docker.network.bridge.gateway_mode_ipv4: nat
-      com.docker.network.bridge.gateway_mode_ipv6: isolated
       com.docker.network.bridge.enable_icc: 'false'
   # Cloudflared enxerga somente o listener edge0 do router. O túnel não
   # compartilha rede com core/público; os links de upstream do router são

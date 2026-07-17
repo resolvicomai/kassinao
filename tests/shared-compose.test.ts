@@ -127,7 +127,7 @@ describe('shared-host Compose adapter', () => {
       'tunnel_egress',
     ]);
     expect(base).toMatch(
-      /^  host_ingress:\n    internal: true\n    driver_opts:\n[\s\S]*?com\.docker\.network\.bridge\.name: kas-host0\n[\s\S]*?com\.docker\.network\.bridge\.gateway_mode_ipv4: nat\n[\s\S]*?com\.docker\.network\.bridge\.gateway_mode_ipv6: isolated\n[\s\S]*?com\.docker\.network\.bridge\.enable_icc: 'false'/m,
+      /^  host_ingress:\n    internal: false\n    enable_ipv6: false\n    driver_opts:\n[\s\S]*?com\.docker\.network\.bridge\.name: kas-host0\n[\s\S]*?com\.docker\.network\.bridge\.host_binding_ipv4: 127\.0\.0\.1\n[\s\S]*?com\.docker\.network\.bridge\.gateway_mode_ipv4: nat\n[\s\S]*?com\.docker\.network\.bridge\.enable_icc: 'false'/m,
     );
     for (const network of ['edge_ingress', 'core_link', 'public_link']) {
       expect(base).toMatch(

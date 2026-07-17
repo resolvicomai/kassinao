@@ -735,9 +735,10 @@ for item in items:
     options = item.get('Options') or {}
     projected = {
         'Id': item.get('Id'), 'Name': item.get('Name'), 'Driver': item.get('Driver'),
-        'Internal': item.get('Internal'),
+        'Internal': item.get('Internal'), 'EnableIPv6': item.get('EnableIPv6', False),
         'IPAM': {'Driver': (item.get('IPAM') or {}).get('Driver'), 'Config': (item.get('IPAM') or {}).get('Config')},
         'BridgeName': options.get('com.docker.network.bridge.name'),
+        'HostBindingIPv4': options.get('com.docker.network.bridge.host_binding_ipv4'),
         'EnableICC': options.get('com.docker.network.bridge.enable_icc'),
         'GatewayModeIPv4': options.get('com.docker.network.bridge.gateway_mode_ipv4'),
         'GatewayModeIPv6': options.get('com.docker.network.bridge.gateway_mode_ipv6'),
@@ -919,11 +920,12 @@ esac
       Id: 'host-ingress-network-id',
       Name: 'kassinao_host_ingress',
       Driver: 'bridge',
-      Internal: true,
+      Internal: false,
+      EnableIPv6: false,
       Options: {
         'com.docker.network.bridge.name': 'kas-host0',
+        'com.docker.network.bridge.host_binding_ipv4': '127.0.0.1',
         'com.docker.network.bridge.gateway_mode_ipv4': 'nat',
-        'com.docker.network.bridge.gateway_mode_ipv6': 'isolated',
         'com.docker.network.bridge.enable_icc': 'false',
       },
       Labels: { 'com.docker.compose.project': 'kassinao', 'com.docker.compose.network': 'host_ingress' },
@@ -2362,7 +2364,13 @@ describe('shared VPS read-only audit', () => {
         (aFixture.networkItems[5].Options['com.docker.network.bridge.enable_icc'] = 'true'),
     ],
     ['Internal de edge_ingress', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[3].Internal = false)],
-    ['Internal de host_ingress', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[6].Internal = false)],
+    ['Internal de host_ingress', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[6].Internal = true)],
+    ['IPv6 de host_ingress', (aFixture: ReturnType<typeof fixture>) => (aFixture.networkItems[6].EnableIPv6 = true)],
+    [
+      'binding de host_ingress',
+      (aFixture: ReturnType<typeof fixture>) =>
+        (aFixture.networkItems[6].Options['com.docker.network.bridge.host_binding_ipv4'] = '0.0.0.0'),
+    ],
     [
       'gateway IPv4 de host_ingress',
       (aFixture: ReturnType<typeof fixture>) =>

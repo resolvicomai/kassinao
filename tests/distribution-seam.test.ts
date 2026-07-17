@@ -947,11 +947,12 @@ exit ${options.rollbackCheckerFails ? '1' : '0'}
     },
     networks: {
       host_ingress: {
-        internal: true,
+        internal: false,
+        enable_ipv6: false,
         driver_opts: {
           'com.docker.network.bridge.name': 'kas-host0',
+          'com.docker.network.bridge.host_binding_ipv4': '127.0.0.1',
           'com.docker.network.bridge.gateway_mode_ipv4': 'nat',
-          'com.docker.network.bridge.gateway_mode_ipv6': 'isolated',
           'com.docker.network.bridge.enable_icc': 'false',
         },
       },
@@ -1408,7 +1409,7 @@ describe('artefatos de distribuição', () => {
     expect(publicProcess).not.toMatch(/^\s*volumes:/m);
     expect(compose.match(/^  (?:edge_ingress|core_link|public_link):\n    internal: true\n/gm)).toHaveLength(3);
     expect(compose).toMatch(
-      /^  host_ingress:\n    internal: true\n    driver_opts:\n[\s\S]*?gateway_mode_ipv4: nat\n[\s\S]*?gateway_mode_ipv6: isolated\n[\s\S]*?enable_icc: 'false'/m,
+      /^  host_ingress:\n    internal: false\n    enable_ipv6: false\n    driver_opts:\n[\s\S]*?host_binding_ipv4: 127\.0\.0\.1\n[\s\S]*?gateway_mode_ipv4: nat\n[\s\S]*?enable_icc: 'false'/m,
     );
     expect(compose).toMatch(/^  core_egress:\n    driver_opts:/m);
     expect(compose).toMatch(/^  tunnel_egress:\n    driver_opts:/m);
@@ -1537,6 +1538,24 @@ describe('artefatos de distribuição', () => {
     expect(routerSmoke).toContain('interface_name: public0');
     expect(routerSmoke).toContain("ports: ['127.0.0.1:${SMOKE_ROUTER_HOST_PORT}:8080']");
     expect(routerSmoke).toContain("listener.bind(('127.0.0.1', 0))");
+    expect(routerSmoke).toMatch(/host_ingress:\n    internal: false\n    enable_ipv6: false/);
+    expect(routerSmoke).toContain('com.docker.network.bridge.host_binding_ipv4: 127.0.0.1');
+    expect(routerSmoke).toContain('-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN');
+    expect(routerSmoke).toContain('-j REJECT --reject-with "$SMOKE_REJECT_WITH"');
+    expect(routerSmoke).not.toContain('--ctstate ESTABLISHED,RELATED');
+    for (const line of routerSmoke.split('\n').filter((candidate) => candidate.includes('-j REJECT'))) {
+      expect(line).toContain('--reject-with');
+    }
+    expect(routerSmoke.indexOf('create --no-build core public router')).toBeLessThan(
+      routerSmoke.indexOf('start core public router'),
+    );
+    expect(routerSmoke).not.toContain('down --volumes --remove-orphans >/dev/null 2>&1 || true');
+    expect(routerSmoke).toContain('docker ps -aq --no-trunc --filter "label=com.docker.compose.project=$project"');
+    expect(routerSmoke).toContain(
+      'docker network ls -q --no-trunc --filter "label=com.docker.compose.project=$project"',
+    );
+    expect(routerSmoke).toContain('preserving firewall seal and artifacts');
+    expect(routerSmoke.indexOf('down --volumes --remove-orphans')).toBeLessThan(routerSmoke.indexOf('-D DOCKER-USER'));
     expect(routerSmoke).toContain('expected_router_endpoint="127.0.0.1:$SMOKE_ROUTER_HOST_PORT"');
     expect(routerSmoke).toContain('port router 8080');
     expect(routerSmoke).toContain("const http = require('node:http');");
@@ -1555,6 +1574,200 @@ describe('artefatos de distribuição', () => {
     }
     expect(routerSmoke).toContain("await mustFail('http://kassinao-core:8082/health')");
     expect(routerSmoke).toContain("await mustFail('http://kassinao-public:8081/health')");
+
+    const cleanupStart = routerSmoke.indexOf('# KASSINAO_ROUTER_SMOKE_CLEANUP_BEGIN');
+    const cleanupEnd = routerSmoke.indexOf('# KASSINAO_ROUTER_SMOKE_CLEANUP_END');
+    expect(cleanupStart).toBeGreaterThanOrEqual(0);
+    expect(cleanupEnd).toBeGreaterThan(cleanupStart);
+    const cleanupSource = routerSmoke.slice(cleanupStart, cleanupEnd);
+    const cleanupFixture = makeTempDir();
+    const cleanupRoot = path.join(cleanupFixture, 'artifacts');
+    const cleanupBin = path.join(cleanupFixture, 'bin');
+    const cleanupLog = path.join(cleanupFixture, 'calls.log');
+    mkdirSync(cleanupRoot);
+    mkdirSync(cleanupBin);
+    writeFileSync(path.join(cleanupRoot, 'compose.yml'), 'services: {}\n');
+    writeFileSync(
+      path.join(cleanupBin, 'docker'),
+      `#!/usr/bin/env bash
+printf 'docker:%s\n' "$*" >> ${shellLiteral(cleanupLog)}
+case " $* " in
+  *' down '*) exit 1 ;;
+  *' ps -aq '*) printf 'residual-container\n' ;;
+  *' network ls '*) printf 'residual-network\n' ;;
+  *' volume ls '*) printf 'residual-volume\n' ;;
+esac
+exit 0
+`,
+    );
+    writeFileSync(
+      path.join(cleanupBin, 'iptables'),
+      `#!/usr/bin/env bash
+printf 'iptables:%s\n' "$*" >> ${shellLiteral(cleanupLog)}
+exit 0
+`,
+    );
+    chmodSync(path.join(cleanupBin, 'docker'), 0o700);
+    chmodSync(path.join(cleanupBin, 'iptables'), 0o700);
+    const cleanupProbe = path.join(cleanupFixture, 'probe.sh');
+    writeFileSync(
+      cleanupProbe,
+      `#!/usr/bin/env bash
+set -Eeuo pipefail
+root=${shellLiteral(cleanupRoot)}
+project=kassinao-router-smoke-fixture
+compose="$root/compose.yml"
+SMOKE_HOST_BRIDGE=ksmfixture
+host_iptables=(iptables -w 10)
+${cleanupSource}
+cleanup
+`,
+    );
+    chmodSync(cleanupProbe, 0o700);
+    const cleanupResult = spawnSync('bash', [cleanupProbe], {
+      encoding: 'utf8',
+      env: { PATH: `${cleanupBin}:${process.env.PATH ?? ''}` },
+    });
+    expect(cleanupResult.status).toBe(1);
+    expect(cleanupResult.stderr).toContain('preserving firewall seal and artifacts');
+    expect(existsSync(cleanupRoot)).toBe(true);
+    expect(readFileSync(cleanupLog, 'utf8')).not.toContain('iptables:');
+
+    const inspectionFixture = makeTempDir();
+    const inspectionRoot = path.join(inspectionFixture, 'artifacts');
+    const inspectionBin = path.join(inspectionFixture, 'bin');
+    const inspectionLog = path.join(inspectionFixture, 'calls.log');
+    mkdirSync(inspectionRoot);
+    mkdirSync(inspectionBin);
+    writeFileSync(path.join(inspectionRoot, 'compose.yml'), 'services: {}\n');
+    writeFileSync(
+      path.join(inspectionBin, 'docker'),
+      `#!/usr/bin/env bash
+printf 'docker:%s\n' "$*" >> ${shellLiteral(inspectionLog)}
+exit 0
+`,
+    );
+    writeFileSync(
+      path.join(inspectionBin, 'iptables'),
+      `#!/usr/bin/env bash
+printf 'iptables:%s\n' "$*" >> ${shellLiteral(inspectionLog)}
+case " $* " in
+  *' -S DOCKER-USER '*) exit 55 ;;
+  *' -D DOCKER-USER '*) exit 91 ;;
+esac
+exit 0
+`,
+    );
+    chmodSync(path.join(inspectionBin, 'docker'), 0o700);
+    chmodSync(path.join(inspectionBin, 'iptables'), 0o700);
+    const inspectionProbe = path.join(inspectionFixture, 'probe.sh');
+    writeFileSync(
+      inspectionProbe,
+      `#!/usr/bin/env bash
+set -Eeuo pipefail
+root=${shellLiteral(inspectionRoot)}
+project=kassinao-router-smoke-inspection-fixture
+compose="$root/compose.yml"
+SMOKE_HOST_BRIDGE=ksminspect
+host_iptables=(iptables -w 10)
+${cleanupSource}
+cleanup
+`,
+    );
+    chmodSync(inspectionProbe, 0o700);
+    const inspectionResult = spawnSync('bash', [inspectionProbe], {
+      encoding: 'utf8',
+      env: { PATH: `${inspectionBin}:${process.env.PATH ?? ''}` },
+    });
+    expect(inspectionResult.status).toBe(1);
+    expect(inspectionResult.stderr).toContain('could not inspect its firewall seal');
+    expect(inspectionResult.stderr).toContain('manual recovery is required');
+    expect(existsSync(inspectionRoot)).toBe(true);
+    expect(readFileSync(inspectionLog, 'utf8')).toContain('iptables:-w 10 -S DOCKER-USER');
+    expect(readFileSync(inspectionLog, 'utf8')).not.toContain(' -D DOCKER-USER ');
+
+    const canonicalFixture = makeTempDir();
+    const canonicalRoot = path.join(canonicalFixture, 'artifacts');
+    const canonicalBin = path.join(canonicalFixture, 'bin');
+    const canonicalLog = path.join(canonicalFixture, 'calls.log');
+    const canonicalState = path.join(canonicalFixture, 'iptables.rules');
+    mkdirSync(canonicalRoot);
+    mkdirSync(canonicalBin);
+    writeFileSync(path.join(canonicalRoot, 'compose.yml'), 'services: {}\n');
+    writeFileSync(
+      canonicalState,
+      [
+        '-N DOCKER-USER',
+        '-A DOCKER-USER -i ksmcanonical -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+        '-A DOCKER-USER -i ksmcanonical -j REJECT --reject-with icmp-port-unreachable',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      path.join(canonicalBin, 'docker'),
+      `#!/usr/bin/env bash
+printf 'docker:%s\n' "$*" >> ${shellLiteral(canonicalLog)}
+exit 0
+`,
+    );
+    writeFileSync(
+      path.join(canonicalBin, 'iptables'),
+      `#!/usr/bin/env bash
+set -eu
+state=${shellLiteral(canonicalState)}
+printf 'iptables:%s\n' "$*" >> ${shellLiteral(canonicalLog)}
+if [ "$1" = -w ]; then shift 2; fi
+case "$1" in
+  -S) cat "$state" ;;
+  -D)
+    chain="$2"
+    shift 2
+    expected="-A $chain $*"
+    temporary="$state.tmp"
+    awk -v expected="$expected" '
+      !removed && $0 == expected { removed = 1; next }
+      { print }
+      END { if (!removed) exit 42 }
+    ' "$state" > "$temporary" || { rm -f "$temporary"; exit 42; }
+    mv "$temporary" "$state"
+    ;;
+  *) exit 80 ;;
+esac
+`,
+    );
+    chmodSync(path.join(canonicalBin, 'docker'), 0o700);
+    chmodSync(path.join(canonicalBin, 'iptables'), 0o700);
+    const canonicalProbe = path.join(canonicalFixture, 'probe.sh');
+    writeFileSync(
+      canonicalProbe,
+      `#!/usr/bin/env bash
+set -Eeuo pipefail
+root=${shellLiteral(canonicalRoot)}
+project=kassinao-router-smoke-canonical-fixture
+compose="$root/compose.yml"
+SMOKE_HOST_BRIDGE=ksmcanonical
+SMOKE_REJECT_WITH=icmp-port-unreachable
+host_iptables=(iptables -w 10)
+${cleanupSource}
+cleanup
+`,
+    );
+    chmodSync(canonicalProbe, 0o700);
+    const canonicalResult = spawnSync('bash', [canonicalProbe], {
+      encoding: 'utf8',
+      env: { PATH: `${canonicalBin}:${process.env.PATH ?? ''}` },
+    });
+    expect(canonicalResult.status, canonicalResult.stderr).toBe(0);
+    expect(existsSync(canonicalRoot)).toBe(false);
+    expect(readFileSync(canonicalState, 'utf8')).not.toContain('ksmcanonical');
+    const canonicalCalls = readFileSync(canonicalLog, 'utf8');
+    expect(canonicalCalls).toContain(
+      'iptables:-w 10 -D DOCKER-USER -i ksmcanonical -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+    );
+    expect(canonicalCalls).toContain(
+      'iptables:-w 10 -D DOCKER-USER -i ksmcanonical -j REJECT --reject-with icmp-port-unreachable',
+    );
+
     expect(workflow).toContain('extract_no_dump_runtime linux/amd64 amd64 "$amd64_image"');
     expect(workflow).toContain('extract_no_dump_runtime linux/arm64 arm64 "$arm64_image"');
     expect(workflow).toContain('dist/native-runtime');
@@ -1630,8 +1843,16 @@ describe('artefatos de distribuição', () => {
     expect(harden).toContain('check_reserved_chain_inventory');
     expect(harden).toContain('check_policy_reference_scopes');
     expect(harden).toContain('canonicalize_positioned_rule');
-    expect(harden).toContain('DOCKER-USER 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-EGRESS');
-    expect(harden).toContain('DOCKER-USER 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-EGRESS');
+    expect(harden).toContain('DOCKER-USER 1 -i "$HOST_INGRESS_BRIDGE"');
+    expect(harden).toContain('--ctstate RELATED,ESTABLISHED -j RETURN');
+    expect(harden).not.toContain('--ctstate ESTABLISHED,RELATED');
+    for (const line of harden.split('\n').filter((candidate) => candidate.includes('-j REJECT'))) {
+      expect(line).toContain('--reject-with');
+    }
+    expect(harden).toContain('DOCKER-USER 2 -i "$HOST_INGRESS_BRIDGE" -j REJECT --reject-with "$IPV4_REJECT_WITH"');
+    expect(harden).toContain('DOCKER-USER 2 -i "$HOST_INGRESS_BRIDGE" -j REJECT --reject-with "$IPV6_REJECT_WITH"');
+    expect(harden).toContain('DOCKER-USER 3 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-EGRESS');
+    expect(harden).toContain('DOCKER-USER 4 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-EGRESS');
     expect(harden).toContain('INPUT 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-HOST');
     expect(harden).toContain('INPUT 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-HOST');
     expect(harden).toContain('INPUT 3 -i "$HOST_INGRESS_BRIDGE" -j KASSINAO-HOST');
@@ -1646,7 +1867,7 @@ describe('artefatos de distribuição', () => {
     expect(harden).toContain('"$tool" -R "$anchor" 1 -j "$replacement"');
     expect(harden).toContain('canonicalize_first_rule ipt FORWARD -j DOCKER-USER');
     expect(harden).toContain('canonicalize_first_rule ip6t FORWARD -j DOCKER-USER');
-    expect(harden).toContain('--ctstate ESTABLISHED,RELATED -j RETURN');
+    expect(harden).toContain('--ctstate RELATED,ESTABLISHED -j RETURN');
     expect(egressUnit).toContain('OnFailure=kassinao-egress-fail-closed.service');
     expect(egressUnit).toContain('Restart=on-failure');
     expect(egressUnit).toContain('BindsTo=docker.service');

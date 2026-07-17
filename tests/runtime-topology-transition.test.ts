@@ -512,8 +512,10 @@ esac
       string,
       {
         bridge: string;
+        enableIpv6: boolean;
         gateway4: string;
         gateway6: string;
+        hostBindingIpv4: string;
         id: string;
         icc: string;
         internal: boolean;
@@ -551,15 +553,19 @@ esac
       kassinao_host_ingress: {
         key: 'host_ingress',
         bridge: 'kas-host0',
-        internal: true,
+        internal: false,
+        enableIpv6: false,
+        hostBindingIpv4: '127.0.0.1',
         gateway4: 'nat',
-        gateway6: 'isolated',
+        gateway6: '',
         icc: 'false',
       },
       kassinao_edge_ingress: {
         key: 'edge_ingress',
         bridge: 'kas-edge0',
         internal: true,
+        enableIpv6: false,
+        hostBindingIpv4: '',
         gateway4: 'isolated',
         gateway6: 'isolated',
         icc: '',
@@ -568,6 +574,8 @@ esac
         key: 'core_link',
         bridge: 'kas-core0',
         internal: true,
+        enableIpv6: false,
+        hostBindingIpv4: '',
         gateway4: 'isolated',
         gateway6: 'isolated',
         icc: '',
@@ -576,6 +584,8 @@ esac
         key: 'public_link',
         bridge: 'kas-public0',
         internal: true,
+        enableIpv6: false,
+        hostBindingIpv4: '',
         gateway4: 'isolated',
         gateway6: 'isolated',
         icc: '',
@@ -584,6 +594,8 @@ esac
         key: 'core_egress',
         bridge: 'kas-core-eg0',
         internal: false,
+        enableIpv6: false,
+        hostBindingIpv4: '',
         gateway4: '',
         gateway6: '',
         icc: 'false',
@@ -592,6 +604,8 @@ esac
         key: 'tunnel_egress',
         bridge: 'kas-tunnel-eg0',
         internal: false,
+        enableIpv6: false,
+        hostBindingIpv4: '',
         gateway4: '',
         gateway6: '',
         icc: 'false',
@@ -693,8 +707,10 @@ def create_legacy():
         }
         state['networks'].setdefault(name, {
             'bridge': bridge,
+            'enableIpv6': False,
             'gateway4': gateway4,
             'gateway6': gateway6,
+            'hostBindingIpv4': '',
             'id': identifier('legacy-network:' + name),
             'icc': icc,
             'internal': internal,
@@ -804,8 +820,9 @@ elif args[0] == 'network' and args[1] == 'inspect':
         print(name)
     elif 'com.docker.compose.network' in template:
         print('|'.join([
-            value['id'], name, 'bridge', str(value['internal']).lower(), 'kassinao',
-            value['key'], value['bridge'], value['gateway4'], value['gateway6'], value['icc'],
+            value['id'], name, 'bridge', str(value['internal']).lower(),
+            str(value.get('enableIpv6', False)).lower(), 'kassinao', value['key'], value['bridge'],
+            value.get('hostBindingIpv4', ''), value['gateway4'], value['gateway6'], value['icc'],
         ]))
     elif '.Containers' in template:
         fail_after('read-network-members:' + name)
@@ -925,6 +942,32 @@ describe('transição pública da topologia runtime', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('topologia current parcialmente running');
   });
+
+  it.each([
+    ['internal', (network: Record<string, unknown>) => (network.internal = true)],
+    ['IPv6 ativo', (network: Record<string, unknown>) => (network.enableIpv6 = true)],
+    ['binding amplo', (network: Record<string, unknown>) => (network.hostBindingIpv4 = '0.0.0.0')],
+    ['gateway IPv6 presente', (network: Record<string, unknown>) => (network.gateway6 = 'nat')],
+  ])(
+    'inspect recusa host_ingress com %s',
+    (_label, mutate) => {
+      const fixture = neutralFixture({ currentRunning: true });
+      const state = JSON.parse(readFileSync(fixture.dockerState, 'utf8')) as {
+        networks: Record<string, Record<string, unknown>>;
+      };
+      mutate(state.networks.kassinao_host_ingress);
+      writeFileSync(fixture.dockerState, JSON.stringify(state));
+
+      const result = spawnSync('bash', [fixture.script, ...fixture.args], {
+        cwd: fixture.current.bundle,
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH ?? '' },
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('rede kassinao_host_ingress diverge');
+    },
+    10_000,
+  );
 
   it.each(['read-name-ps:kassinao', 'read-project-ps-after-stop', 'read-network-members:kassinao_edge_ingress'])(
     'falha fechado quando a API Docker diverge durante containment: %s',

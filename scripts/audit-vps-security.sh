@@ -202,6 +202,11 @@ network_members() {
   docker network inspect -f '{{range .Containers}}{{printf "%s\n" .Name}}{{end}}' "$1" 2>/dev/null |
     grep -ve '^$' | sort -u
 }
+network_option_is_absent() {
+  local network_name="$1" option="$2" value
+  value="$(docker network inspect -f "{{index .Options \"$option\"}}" "$network_name" 2>/dev/null)" || return 1
+  [ -z "$value" ] || [ "$value" = '<no value>' ]
+}
 internal_network_is() {
   local network_name="$1" bridge="$2"
   [ "$(docker network inspect -f '{{.Driver}}' "$network_name" 2>/dev/null || true)" = bridge ] &&
@@ -213,10 +218,12 @@ internal_network_is() {
 host_ingress_network_is() {
   local network_name="$1" bridge="$2"
   [ "$(docker network inspect -f '{{.Driver}}' "$network_name" 2>/dev/null || true)" = bridge ] &&
-    [ "$(docker network inspect -f '{{.Internal}}' "$network_name" 2>/dev/null || true)" = true ] &&
+    [ "$(docker network inspect -f '{{.Internal}}' "$network_name" 2>/dev/null || true)" = false ] &&
+    [ "$(docker network inspect -f '{{.EnableIPv6}}' "$network_name" 2>/dev/null || true)" = false ] &&
     [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.name"}}' "$network_name" 2>/dev/null || true)" = "$bridge" ] &&
+    [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.host_binding_ipv4"}}' "$network_name" 2>/dev/null || true)" = 127.0.0.1 ] &&
     [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.gateway_mode_ipv4"}}' "$network_name" 2>/dev/null || true)" = nat ] &&
-    [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.gateway_mode_ipv6"}}' "$network_name" 2>/dev/null || true)" = isolated ] &&
+    network_option_is_absent "$network_name" com.docker.network.bridge.gateway_mode_ipv6 &&
     [ "$(docker network inspect -f '{{index .Options "com.docker.network.bridge.enable_icc"}}' "$network_name" 2>/dev/null || true)" = false ]
 }
 egress_network_is() {

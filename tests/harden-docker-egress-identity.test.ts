@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const SCRIPT = path.join(process.cwd(), 'scripts', 'harden-docker-egress.sh');
+const REJECT_WITH = { 4: 'icmp-port-unreachable', 6: 'icmp6-port-unreachable' } as const;
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -43,6 +44,7 @@ function hardenerScript(directory: string, runtime: string): string {
 }
 
 function policyRules(family: 4 | 6, extraRule = ''): string {
+  const rejectWith = REJECT_WITH[family];
   const destinations =
     family === 4
       ? ['127.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16']
@@ -58,17 +60,21 @@ function policyRules(family: 4 | 6, extraRule = ''): string {
     '-N KASSINAO-HOST-A',
     '-N KASSINAO-HOST-B',
     '-A FORWARD -j DOCKER-USER',
+    '-A DOCKER-USER -i kas-host0 -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+    `-A DOCKER-USER -i kas-host0 -j REJECT --reject-with ${rejectWith}`,
     '-A DOCKER-USER -i kas-core-eg0 -j KASSINAO-EGRESS',
     '-A DOCKER-USER -i kas-tunnel-eg0 -j KASSINAO-EGRESS',
     '-A INPUT -i kas-core-eg0 -j KASSINAO-HOST',
     '-A INPUT -i kas-tunnel-eg0 -j KASSINAO-HOST',
     '-A INPUT -i kas-host0 -j KASSINAO-HOST',
     '-A KASSINAO-EGRESS -j KASSINAO-EGRESS-A',
-    ...destinations.map((destination) => `-A KASSINAO-EGRESS-A -d ${destination} -j REJECT`),
+    ...destinations.map(
+      (destination) => `-A KASSINAO-EGRESS-A -d ${destination} -j REJECT --reject-with ${rejectWith}`,
+    ),
     '-A KASSINAO-EGRESS-A -j RETURN',
     '-A KASSINAO-HOST -j KASSINAO-HOST-A',
-    '-A KASSINAO-HOST-A -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN',
-    '-A KASSINAO-HOST-A -m addrtype --dst-type LOCAL -j REJECT',
+    '-A KASSINAO-HOST-A -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+    `-A KASSINAO-HOST-A -m addrtype --dst-type LOCAL -j REJECT --reject-with ${rejectWith}`,
     '-A KASSINAO-HOST-A -j RETURN',
     extraRule,
     '',
@@ -82,6 +88,7 @@ function basePolicyRules(): string {
 }
 
 function legacyPolicyRules(family: 4 | 6, extraRule = ''): string {
+  const rejectWith = REJECT_WITH[family];
   const destinations =
     family === 4
       ? ['127.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16']
@@ -101,11 +108,13 @@ function legacyPolicyRules(family: 4 | 6, extraRule = ''): string {
     '-A INPUT -i kas-private0 -j KASSINAO-HOST',
     '-A KASSINAO-EGRESS -j KASSINAO-EGRESS-A',
     '-A KASSINAO-EGRESS-A -o kas-private0 -j RETURN',
-    ...destinations.map((destination) => `-A KASSINAO-EGRESS-A -d ${destination} -j REJECT`),
+    ...destinations.map(
+      (destination) => `-A KASSINAO-EGRESS-A -d ${destination} -j REJECT --reject-with ${rejectWith}`,
+    ),
     '-A KASSINAO-EGRESS-A -j RETURN',
     '-A KASSINAO-HOST -j KASSINAO-HOST-A',
-    '-A KASSINAO-HOST-A -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN',
-    '-A KASSINAO-HOST-A -m addrtype --dst-type LOCAL -j REJECT',
+    '-A KASSINAO-HOST-A -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+    `-A KASSINAO-HOST-A -m addrtype --dst-type LOCAL -j REJECT --reject-with ${rejectWith}`,
     '-A KASSINAO-HOST-A -j RETURN',
     extraRule,
     '',
@@ -115,10 +124,11 @@ function legacyPolicyRules(family: 4 | 6, extraRule = ''): string {
 }
 
 function inactivePolicyRules(kind: 'current' | 'legacy', family: 4 | 6, role: 'egress' | 'host'): string[] {
+  const rejectWith = REJECT_WITH[family];
   if (role === 'host') {
     return [
-      '-A KASSINAO-HOST-B -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN',
-      '-A KASSINAO-HOST-B -m addrtype --dst-type LOCAL -j REJECT',
+      '-A KASSINAO-HOST-B -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+      `-A KASSINAO-HOST-B -m addrtype --dst-type LOCAL -j REJECT --reject-with ${rejectWith}`,
       '-A KASSINAO-HOST-B -j RETURN',
     ];
   }
@@ -128,7 +138,9 @@ function inactivePolicyRules(kind: 'current' | 'legacy', family: 4 | 6, role: 'e
       : ['::1/128', 'fc00::/7', 'fe80::/10'];
   return [
     ...(kind === 'legacy' ? ['-A KASSINAO-EGRESS-B -o kas-private0 -j RETURN'] : []),
-    ...destinations.map((destination) => `-A KASSINAO-EGRESS-B -d ${destination} -j REJECT`),
+    ...destinations.map(
+      (destination) => `-A KASSINAO-EGRESS-B -d ${destination} -j REJECT --reject-with ${rejectWith}`,
+    ),
     '-A KASSINAO-EGRESS-B -j RETURN',
   ];
 }
@@ -209,6 +221,14 @@ state=${shellLiteral(state)}
 counter=${shellLiteral(counter)}
 fault=${shellLiteral(fault)}
 log=${shellLiteral(log)}
+reject_with=${shellLiteral(command === 'iptables' ? REJECT_WITH[4] : REJECT_WITH[6])}
+serialize_rule() {
+  rule="$(printf '%s\n' "$1" | sed 's/--ctstate ESTABLISHED,RELATED/--ctstate RELATED,ESTABLISHED/g')"
+  case "$rule" in
+    *' -j REJECT') rule="$rule --reject-with $reject_with" ;;
+  esac
+  printf '%s\n' "$rule"
+}
 [ "\${1:-}" != -w ] || shift 2
 printf '%s:%s\\n' ${shellLiteral(command)} "$*" >> "$log"
 mutated=false
@@ -219,17 +239,93 @@ case "\${1:-}" in
     else
       chain="$2"
       exists=false
-      case "$chain" in INPUT|FORWARD|OUTPUT|DOCKER-USER) exists=true ;; esac
+      case "$chain" in INPUT|FORWARD|OUTPUT) exists=true ;; esac
       if grep -Fqx -- "-N $chain" "$state"; then exists=true; fi
       [ "$exists" = true ] || exit 1
       awk -v chain="$chain" '($1 == "-N" && $2 == chain) || ($1 == "-A" && $2 == chain)' "$state"
     fi
     ;;
+  -N)
+    chain="$2"
+    case "$chain" in INPUT|FORWARD|OUTPUT) exit 41 ;; esac
+    grep -Fqx -- "-N $chain" "$state" && exit 41
+    printf '%s\n' "-N $chain" >> "$state"
+    mutated=true
+    ;;
+  -A)
+    chain="$2"
+    shift 2
+    exists=false
+    case "$chain" in INPUT|FORWARD|OUTPUT) exists=true ;; esac
+    grep -Fqx -- "-N $chain" "$state" && exists=true
+    [ "$exists" = true ] || exit 43
+    rule="-A $chain"
+    [ "$#" -eq 0 ] || rule="$rule $*"
+    rule="$(serialize_rule "$rule")"
+    printf '%s\n' "$rule" >> "$state"
+    mutated=true
+    ;;
+  -I)
+    chain="$2"
+    position="$3"
+    shift 3
+    [[ "$position" =~ ^[1-9][0-9]*$ ]] || exit 46
+    rule="-A $chain"
+    [ "$#" -eq 0 ] || rule="$rule $*"
+    rule="$(serialize_rule "$rule")"
+    temporary="$state.tmp.$$"
+    awk -v chain="$chain" -v position="$position" -v rule="$rule" '
+      $1 == "-A" && $2 == chain {
+        count++
+        if (!inserted && count == position) { print rule; inserted = 1 }
+      }
+      { print }
+      END { if (!inserted) print rule }
+    ' "$state" > "$temporary"
+    mv "$temporary" "$state"
+    mutated=true
+    ;;
+  -R)
+    chain="$2"
+    position="$3"
+    shift 3
+    [[ "$position" =~ ^[1-9][0-9]*$ ]] || exit 46
+    rule="-A $chain"
+    [ "$#" -eq 0 ] || rule="$rule $*"
+    rule="$(serialize_rule "$rule")"
+    temporary="$state.tmp.$$"
+    awk -v chain="$chain" -v position="$position" -v rule="$rule" '
+      $1 == "-A" && $2 == chain {
+        count++
+        if (count == position) { print rule; replaced = 1; next }
+      }
+      { print }
+      END { if (!replaced) exit 47 }
+    ' "$state" > "$temporary" || { rm -f "$temporary"; exit 47; }
+    mv "$temporary" "$state"
+    mutated=true
+    ;;
   -D)
     chain="$2"
     shift 2
+    if [[ "\${1:-}" =~ ^[1-9][0-9]*$ ]] && [ "$#" -eq 1 ]; then
+      position="$1"
+      temporary="$state.tmp.$$"
+      awk -v chain="$chain" -v position="$position" '
+        $1 == "-A" && $2 == chain {
+          count++
+          if (count == position) { removed = 1; next }
+        }
+        { print }
+        END { if (!removed) exit 42 }
+      ' "$state" > "$temporary" || { rm -f "$temporary"; exit 42; }
+      mv "$temporary" "$state"
+      mutated=true
+      shift
+    else
     expected="-A $chain"
     [ "$#" -eq 0 ] || expected="$expected $*"
+    expected="$(serialize_rule "$expected")"
     temporary="$state.tmp.$$"
     awk -v expected="$expected" '
       !removed && $0 == expected { removed = 1; next }
@@ -238,6 +334,7 @@ case "\${1:-}" in
     ' "$state" > "$temporary" || { rm -f "$temporary"; exit 42; }
     mv "$temporary" "$state"
     mutated=true
+    fi
     ;;
   -F)
     chain="$2"
@@ -278,6 +375,72 @@ if [ "$mutated" = true ]; then
   [ "$expected" != "$count" ] || exit 97
 fi
 `;
+}
+
+function runOfflineBootstrap() {
+  const directory = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'kassinao-hardener-offline-')));
+  tempDirs.push(directory);
+  const bin = path.join(directory, 'bin');
+  const runtime = path.join(directory, 'runtime');
+  const v4 = path.join(directory, 'v4.rules');
+  const v6 = path.join(directory, 'v6.rules');
+  const v4Counter = path.join(directory, 'v4.counter');
+  const v6Counter = path.join(directory, 'v6.counter');
+  const v4Fault = path.join(directory, 'v4.fault');
+  const v6Fault = path.join(directory, 'v6.fault');
+  const firewallLog = path.join(directory, 'firewall.log');
+  mkdirSync(bin);
+  mkdirSync(runtime, { mode: 0o700 });
+  const script = hardenerScript(directory, runtime);
+  const cleanBoot = ['-P INPUT ACCEPT', '-P FORWARD DROP', ''].join('\n');
+  writeFileSync(v4, cleanBoot);
+  writeFileSync(v6, cleanBoot);
+  for (const file of [v4Counter, v6Counter, v4Fault, v6Fault, firewallLog]) writeFileSync(file, '');
+
+  executable(path.join(bin, 'id'), "#!/usr/bin/env bash\nprintf '0\\n'\n");
+  executable(path.join(bin, 'flock'), '#!/usr/bin/env bash\nexit 0\n');
+  executable(
+    path.join(bin, 'stat'),
+    `#!/usr/bin/env bash
+case "\${!#}" in
+  ${shellLiteral(runtime)}) printf '700:0:0\n' ;;
+  ${shellLiteral(path.join(runtime, 'docker-egress.lock'))}) printf '600:0:0:1\n' ;;
+  *) exit 1 ;;
+esac
+`,
+  );
+  executable(path.join(bin, 'readlink'), '#!/usr/bin/env bash\nprintf "%s\\n" "${!#}"\n');
+  executable(path.join(bin, 'iptables'), mutableFirewall('iptables', v4, v4Counter, v4Fault, firewallLog));
+  executable(path.join(bin, 'ip6tables'), mutableFirewall('ip6tables', v6, v6Counter, v6Fault, firewallLog));
+
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH ?? ''}`,
+  };
+  for (const name of [
+    'DOCKER_HOST',
+    'DOCKER_CONTEXT',
+    'DOCKER_CONFIG',
+    'DOCKER_TLS_VERIFY',
+    'DOCKER_CERT_PATH',
+    'DOCKER_API_VERSION',
+  ]) {
+    delete environment[name];
+  }
+
+  return {
+    log: firewallLog,
+    read(family: 4 | 6): string {
+      return readFileSync(family === 4 ? v4 : v6, 'utf8');
+    },
+    runFirewall(family: 4 | 6, args: string[]) {
+      return spawnSync(path.join(bin, family === 4 ? 'iptables' : 'ip6tables'), args, { encoding: 'utf8' });
+    },
+    result: spawnSync('bash', [script, '--offline-preload'], {
+      encoding: 'utf8',
+      env: environment,
+    }),
+  };
 }
 
 function removalHarness(
@@ -433,6 +596,10 @@ function runTopologyCheck(
     extraNetworkRole?: 'core' | 'router' | 'public' | 'tunnel';
     missingPublic?: boolean;
     wrongGateway?: boolean;
+    wrongHostBinding?: boolean;
+    wrongHostGateway6?: boolean;
+    wrongHostInternal?: boolean;
+    wrongHostIpv6?: boolean;
     wrongIcc?: boolean;
     wrongInternal?: boolean;
     withoutTunnel?: boolean;
@@ -485,10 +652,10 @@ esac
   const edgeMembers = options.withoutTunnel
     ? `${routerId}|kassinao-router`
     : `${routerId}|kassinao-router\\n${tunnelId}|kassinao-tunnel`;
-  const coreLinkMetadata = `bridge|${options.wrongInternal ? 'false' : 'true'}|kas-core0|${
+  const coreLinkMetadata = `bridge|${options.wrongInternal ? 'false' : 'true'}|false|kas-core0||${
     options.wrongGateway ? 'nat' : 'isolated'
   }|isolated|true`;
-  const coreEgressMetadata = `bridge|false|kas-core-eg0|||${options.wrongIcc ? 'true' : 'false'}`;
+  const coreEgressMetadata = `bridge|false|false|kas-core-eg0||||${options.wrongIcc ? 'true' : 'false'}`;
   executable(
     path.join(bin, 'docker'),
     `#!/usr/bin/env bash
@@ -532,14 +699,18 @@ if [ "\${1:-}" = network ] && [ "\${2:-}" = inspect ] && [ "\${3:-}" = -f ]; the
     case "\${5:-}" in
       kassinao_core_link) printf '${coreLinkMetadata}\\n' ;;
       kassinao_core_egress) printf '${coreEgressMetadata}\\n' ;;
-      kassinao_host_ingress) printf 'bridge|true|kas-host0|nat|isolated|false\\n' ;;
-      kassinao_edge_ingress) printf 'bridge|true|kas-edge0|isolated|isolated|true\\n' ;;
-      kassinao_public_link) printf 'bridge|true|kas-public0|isolated|isolated|true\\n' ;;
-      kassinao_tunnel_egress) printf 'bridge|false|kas-tunnel-eg0|||false\\n' ;;
-      foreign_core) printf 'bridge|false|foreign-core-eg0|||false\\n' ;;
-      foreign_router) printf 'bridge|true|foreign-router0|isolated|isolated|true\\n' ;;
-      foreign_public) printf 'bridge|true|foreign-public0|isolated|isolated|true\\n' ;;
-      foreign_tunnel) printf 'bridge|false|foreign-tunnel-eg0|||false\\n' ;;
+      kassinao_host_ingress) printf 'bridge|${options.wrongHostInternal ? 'true' : 'false'}|${
+        options.wrongHostIpv6 ? 'true' : 'false'
+      }|kas-host0|${options.wrongHostBinding ? '0.0.0.0' : '127.0.0.1'}|nat|${
+        options.wrongHostGateway6 ? 'nat' : ''
+      }|false\\n' ;;
+      kassinao_edge_ingress) printf 'bridge|true|false|kas-edge0||isolated|isolated|true\\n' ;;
+      kassinao_public_link) printf 'bridge|true|false|kas-public0||isolated|isolated|true\\n' ;;
+      kassinao_tunnel_egress) printf 'bridge|false|false|kas-tunnel-eg0||||false\\n' ;;
+      foreign_core) printf 'bridge|false|false|foreign-core-eg0||||false\\n' ;;
+      foreign_router) printf 'bridge|true|false|foreign-router0||isolated|isolated|true\\n' ;;
+      foreign_public) printf 'bridge|true|false|foreign-public0||isolated|isolated|true\\n' ;;
+      foreign_tunnel) printf 'bridge|false|false|foreign-tunnel-eg0||||false\\n' ;;
       *) exit 1 ;;
     esac
   fi
@@ -592,6 +763,51 @@ function shellLiteral(value: string): string {
 }
 
 describe('identidade da topologia no hardener de egress', () => {
+  it('pré-carrega um boot dedicated limpo ainda sem DOCKER-USER', () => {
+    const bootstrap = runOfflineBootstrap();
+
+    expect(bootstrap.result.status, bootstrap.result.stderr).toBe(0);
+    expect(bootstrap.result.stdout).toContain('pré-carregada antes do daemon Docker');
+    for (const family of [4, 6] as const) {
+      const rules = bootstrap.read(family);
+      const rejectWith = REJECT_WITH[family];
+      expect(rules).toContain('-N DOCKER-USER');
+      expect(rules).toContain('-A FORWARD -j DOCKER-USER');
+      expect(rules).toContain('-A DOCKER-USER -i kas-host0 -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN');
+      expect(rules).toContain(`-A DOCKER-USER -i kas-host0 -j REJECT --reject-with ${rejectWith}`);
+      expect(rules).toContain('-A DOCKER-USER -i kas-core-eg0 -j KASSINAO-EGRESS');
+      expect(rules).toContain('-A DOCKER-USER -i kas-tunnel-eg0 -j KASSINAO-EGRESS');
+      expect(rules).toContain(
+        `-A KASSINAO-EGRESS-A -d ${family === 4 ? '127.0.0.0/8' : '::1/128'} -j REJECT --reject-with ${rejectWith}`,
+      );
+      expect(rules).toContain(`-A KASSINAO-HOST-A -m addrtype --dst-type LOCAL -j REJECT --reject-with ${rejectWith}`);
+
+      expect(bootstrap.runFirewall(family, ['-N', 'SERIALIZATION-PROBE']).status).toBe(0);
+      expect(
+        bootstrap.runFirewall(family, [
+          '-A',
+          'SERIALIZATION-PROBE',
+          '-m',
+          'conntrack',
+          '--ctstate',
+          'ESTABLISHED,RELATED',
+          '-j',
+          'RETURN',
+        ]).status,
+      ).toBe(0);
+      expect(bootstrap.runFirewall(family, ['-A', 'SERIALIZATION-PROBE', '-j', 'REJECT']).status).toBe(0);
+      expect(bootstrap.read(family)).toContain(
+        '-A SERIALIZATION-PROBE -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN',
+      );
+      expect(bootstrap.read(family)).toContain(`-A SERIALIZATION-PROBE -j REJECT --reject-with ${rejectWith}`);
+    }
+    const log = readFileSync(bootstrap.log, 'utf8');
+    expect(log).toContain('iptables:-S DOCKER-USER');
+    expect(log).toContain('iptables:-N DOCKER-USER');
+    expect(log).toContain('ip6tables:-S DOCKER-USER');
+    expect(log).toContain('ip6tables:-N DOCKER-USER');
+  });
+
   it('aprova anchors com uma única referência no hook e bridge exatos', () => {
     const result = runPolicyCheck();
     expect(result.status, result.stderr).toBe(0);
@@ -638,6 +854,17 @@ describe('identidade da topologia no hardener de egress', () => {
     const result = runTopologyCheck({ wrongIcc: true });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('bridge de egress kas-core-eg0 não está selada');
+  });
+
+  it.each([
+    ['internal', { wrongHostInternal: true }],
+    ['IPv6 ativo', { wrongHostIpv6: true }],
+    ['binding amplo', { wrongHostBinding: true }],
+    ['gateway IPv6', { wrongHostGateway6: true }],
+  ] as const)('recusa host ingress %s', (_label, options) => {
+    const result = runTopologyCheck(options);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('bridge host ingress kas-host0 precisa ser externa');
   });
 
   it('recusa topologia parcial em vez de aplicar policy ambígua', () => {
@@ -824,6 +1051,8 @@ describe('identidade da topologia no hardener de egress', () => {
   });
 
   it.each([
+    ['current', '-A DOCKER-USER -i kas-host0 -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN'],
+    ['current', '-A DOCKER-USER -i kas-host0 -j REJECT --reject-with icmp-port-unreachable'],
     ['current', '-A DOCKER-USER -i kas-core-eg0 -j KASSINAO-EGRESS'],
     ['current', '-A DOCKER-USER -i kas-tunnel-eg0 -j KASSINAO-EGRESS'],
     ['current', '-A INPUT -i kas-core-eg0 -j KASSINAO-HOST'],
@@ -832,7 +1061,7 @@ describe('identidade da topologia no hardener de egress', () => {
     ['legacy', '-A DOCKER-USER -i kas-private0 -j KASSINAO-EGRESS'],
     ['legacy', '-A INPUT -i kas-private0 -j KASSINAO-HOST'],
   ] as const)(
-    'retoma policy %s com hook owned ainda ausente',
+    'retoma policy %s com hook owned ainda ausente: %s',
     (kind, hook) => {
       const harness = removalHarness({ kind });
       harness.remove(4, hook);

@@ -709,16 +709,25 @@ topology_services() {
 topology_networks() {
   local topology="$1"
   if [ "$topology" = current ]; then
-    printf 'edge_ingress:kas-edge0:true:isolated:isolated:any\n'
-    printf 'host_ingress:kas-host0:true:nat:isolated:false\n'
-    printf 'core_link:kas-core0:true:isolated:isolated:any\n'
-    printf 'public_link:kas-public0:true:isolated:isolated:any\n'
-    printf 'core_egress:kas-core-eg0:false:any:any:false\n'
-    [ "$TUNNEL" = false ] || printf 'tunnel_egress:kas-tunnel-eg0:false:any:any:false\n'
+    printf 'edge_ingress:kas-edge0:true:any:any:isolated:isolated:any\n'
+    printf 'host_ingress:kas-host0:false:false:127.0.0.1:nat:absent:false\n'
+    printf 'core_link:kas-core0:true:any:any:isolated:isolated:any\n'
+    printf 'public_link:kas-public0:true:any:any:isolated:isolated:any\n'
+    printf 'core_egress:kas-core-eg0:false:any:any:any:any:false\n'
+    [ "$TUNNEL" = false ] || printf 'tunnel_egress:kas-tunnel-eg0:false:any:any:any:any:false\n'
   else
-    printf 'private:kas-private0:false:any:any:any\n'
-    printf 'public:kas-public0:true:isolated:isolated:any\n'
+    printf 'private:kas-private0:false:any:any:any:any:any\n'
+    printf 'public:kas-public0:true:any:any:isolated:isolated:any\n'
   fi
+}
+
+network_contract_value_matches() {
+  local expected="$1" actual="$2"
+  case "$expected" in
+    any) return 0 ;;
+    absent) [ -z "$actual" ] || [ "$actual" = '<no value>' ] ;;
+    *) [ "$actual" = "$expected" ] ;;
+  esac
 }
 
 container_id_by_name() {
@@ -807,9 +816,11 @@ validate_container() {
 }
 
 validate_network() {
-  local topology="$1" key="$2" bridge="$3" internal="$4" gateway4="$5" gateway6="$6" icc="$7" mode="$8"
+  local topology="$1" key="$2" bridge="$3" internal="$4" enable_ipv6="$5" host_binding_ipv4="$6"
+  local gateway4="$7" gateway6="$8" icc="$9" mode="${10}"
   local name="kassinao_$key" candidate details
-  local actual_id actual_name driver actual_internal project actual_key actual_bridge actual_gateway4 actual_gateway6 actual_icc
+  local actual_id actual_name driver actual_internal actual_enable_ipv6 project actual_key actual_bridge
+  local actual_host_binding_ipv4 actual_gateway4 actual_gateway6 actual_icc
   local extra member member_id member_name members
   candidate="$(network_id_by_name "$name")" || die "inventário da rede $name falhou"
   if [ -z "$candidate" ]; then
@@ -819,17 +830,19 @@ validate_network() {
   [[ "$candidate" =~ ^[0-9a-f]{64}$ ]] || die "rede $name não possui ID completo"
   details="$(
     docker network inspect -f \
-      '{{.Id}}|{{.Name}}|{{.Driver}}|{{.Internal}}|{{index .Labels "com.docker.compose.project"}}|{{index .Labels "com.docker.compose.network"}}|{{index .Options "com.docker.network.bridge.name"}}|{{index .Options "com.docker.network.bridge.gateway_mode_ipv4"}}|{{index .Options "com.docker.network.bridge.gateway_mode_ipv6"}}|{{index .Options "com.docker.network.bridge.enable_icc"}}' \
+      '{{.Id}}|{{.Name}}|{{.Driver}}|{{.Internal}}|{{.EnableIPv6}}|{{index .Labels "com.docker.compose.project"}}|{{index .Labels "com.docker.compose.network"}}|{{index .Options "com.docker.network.bridge.name"}}|{{index .Options "com.docker.network.bridge.host_binding_ipv4"}}|{{index .Options "com.docker.network.bridge.gateway_mode_ipv4"}}|{{index .Options "com.docker.network.bridge.gateway_mode_ipv6"}}|{{index .Options "com.docker.network.bridge.enable_icc"}}' \
       "$candidate" 2>/dev/null
   )" || die "não foi possível provar rede $name"
-  IFS='|' read -r actual_id actual_name driver actual_internal project actual_key actual_bridge \
-    actual_gateway4 actual_gateway6 actual_icc extra <<<"$details"
+  IFS='|' read -r actual_id actual_name driver actual_internal actual_enable_ipv6 project actual_key actual_bridge \
+    actual_host_binding_ipv4 actual_gateway4 actual_gateway6 actual_icc extra <<<"$details"
   [ -z "$extra" ] && [ "$actual_id" = "$candidate" ] && [ "$actual_name" = "$name" ] &&
     [ "$driver" = bridge ] && [ "$actual_internal" = "$internal" ] &&
     [ "$project" = kassinao ] && [ "$actual_key" = "$key" ] && [ "$actual_bridge" = "$bridge" ] &&
-    { [ "$gateway4" = any ] || [ "$actual_gateway4" = "$gateway4" ]; } &&
-    { [ "$gateway6" = any ] || [ "$actual_gateway6" = "$gateway6" ]; } &&
-    { [ "$icc" = any ] || [ "$actual_icc" = "$icc" ]; } ||
+    network_contract_value_matches "$enable_ipv6" "$actual_enable_ipv6" &&
+    network_contract_value_matches "$host_binding_ipv4" "$actual_host_binding_ipv4" &&
+    network_contract_value_matches "$gateway4" "$actual_gateway4" &&
+    network_contract_value_matches "$gateway6" "$actual_gateway6" &&
+    network_contract_value_matches "$icc" "$actual_icc" ||
     die "rede $name diverge de ID/nome/labels/bridge/opções/topologia"
   members="$(
     docker network inspect -f '{{range $id, $member := .Containers}}{{printf "%s|%s\n" $id $member.Name}}{{end}}' "$candidate" |
@@ -852,7 +865,8 @@ validate_network() {
 }
 
 validate_project_inventory() {
-  local topology="$1" mode="$2" id name allowed=false service network_key _bridge _internal _gateway4 _gateway6 _icc
+  local topology="$1" mode="$2" id name allowed=false service network_key _bridge _internal
+  local _enable_ipv6 _host_binding_ipv4 _gateway4 _gateway6 _icc
   local container_inventory network_inventory
   local -a project_ids=()
   container_inventory="$(docker ps -aq --no-trunc --filter label=com.docker.compose.project=kassinao)" ||
@@ -873,7 +887,7 @@ validate_project_inventory() {
     [ -z "$id" ] && continue
     name="$(docker network inspect -f '{{.Name}}' "$id" 2>/dev/null)" || die 'inventário de redes mudou'
     allowed=false
-    while IFS=: read -r network_key _bridge _internal _gateway4 _gateway6 _icc; do
+    while IFS=: read -r network_key _bridge _internal _enable_ipv6 _host_binding_ipv4 _gateway4 _gateway6 _icc; do
       [ "$name" = "kassinao_$network_key" ] && allowed=true
     done < <(topology_networks "$topology")
     [ "$allowed" = true ] || die "rede Compose inesperada no projeto: $name"
@@ -883,7 +897,8 @@ validate_project_inventory() {
 }
 
 validate_topology() {
-  local topology="$1" mode="$2" health_mode="${3:-healthy}" service key bridge internal gateway4 gateway6 icc
+  local topology="$1" mode="$2" health_mode="${3:-healthy}" service key bridge internal
+  local enable_ipv6 host_binding_ipv4 gateway4 gateway6 icc
   LIVE_IDS=()
   LIVE_NETWORK_IDS=()
   LIVE_RUNNING=0
@@ -893,8 +908,9 @@ validate_topology() {
   while IFS= read -r service; do
     validate_container "$topology" "$service" "$mode" "$health_mode" || true
   done < <(topology_services "$topology")
-  while IFS=: read -r key bridge internal gateway4 gateway6 icc; do
-    validate_network "$topology" "$key" "$bridge" "$internal" "$gateway4" "$gateway6" "$icc" "$mode" || true
+  while IFS=: read -r key bridge internal enable_ipv6 host_binding_ipv4 gateway4 gateway6 icc; do
+    validate_network "$topology" "$key" "$bridge" "$internal" "$enable_ipv6" "$host_binding_ipv4" \
+      "$gateway4" "$gateway6" "$icc" "$mode" || true
   done < <(topology_networks "$topology")
   validate_project_inventory "$topology" "$mode"
 }
@@ -1075,7 +1091,7 @@ stop_topology() {
 }
 
 remove_topology_objects() {
-  local topology="$1" service key bridge internal gateway4 gateway6 icc id members
+  local topology="$1" service key bridge internal enable_ipv6 host_binding_ipv4 gateway4 gateway6 icc id members
   validate_topology "$topology" subset
   [ "$LIVE_RUNNING" -eq 0 ] || die "topologia $topology precisa estar parada antes da remoção"
   for service in cloudflared kassinao-router kassinao-public kassinao; do
@@ -1084,10 +1100,11 @@ remove_topology_objects() {
   done
   LIVE_IDS=()
   for line in $(topology_networks "$topology"); do
-    IFS=: read -r key bridge internal gateway4 gateway6 icc <<<"$line"
+    IFS=: read -r key bridge internal enable_ipv6 host_binding_ipv4 gateway4 gateway6 icc <<<"$line"
     id="${LIVE_NETWORK_IDS[$key]-}"
     [ -z "$id" ] && continue
-    validate_network "$topology" "$key" "$bridge" "$internal" "$gateway4" "$gateway6" "$icc" subset
+    validate_network "$topology" "$key" "$bridge" "$internal" "$enable_ipv6" "$host_binding_ipv4" \
+      "$gateway4" "$gateway6" "$icc" subset
     [ "${LIVE_NETWORK_IDS[$key]-}" = "$id" ] || die "ID da rede kassinao_$key mudou antes do rm"
     members="$(
       docker network inspect -f \

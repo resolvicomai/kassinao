@@ -1084,19 +1084,24 @@ for name, (bridge, kind) in expected_networks.items():
     options = network.get('driver_opts') or {}
     if options.get('com.docker.network.bridge.name') != bridge:
         raise SystemExit(f'{name}: bridge estável divergente')
-    if kind in {'isolated', 'host'}:
+    if kind == 'isolated':
         if network.get('internal') is not True:
             raise SystemExit(f'{name}: link precisa ser internal')
-    if kind == 'isolated':
         if options.get('com.docker.network.bridge.gateway_mode_ipv4') != 'isolated':
             raise SystemExit(f'{name}: gateway IPv4 precisa ser isolated')
         if options.get('com.docker.network.bridge.gateway_mode_ipv6') != 'isolated':
             raise SystemExit(f'{name}: gateway IPv6 precisa ser isolated')
     elif kind == 'host':
+        if network.get('internal') is not False:
+            raise SystemExit(f'{name}: bridge do publish precisa ser non-internal')
+        if network.get('enable_ipv6') is not False:
+            raise SystemExit(f'{name}: IPv6 precisa ficar desativado')
         if options.get('com.docker.network.bridge.gateway_mode_ipv4') != 'nat':
             raise SystemExit(f'{name}: gateway IPv4 precisa ser nat para o publish loopback')
-        if options.get('com.docker.network.bridge.gateway_mode_ipv6') != 'isolated':
-            raise SystemExit(f'{name}: gateway IPv6 precisa permanecer isolated')
+        if options.get('com.docker.network.bridge.gateway_mode_ipv6') not in (None, ''):
+            raise SystemExit(f'{name}: gateway IPv6 não pode existir')
+        if options.get('com.docker.network.bridge.host_binding_ipv4') != '127.0.0.1':
+            raise SystemExit(f'{name}: binding padrão precisa ficar em 127.0.0.1')
         if options.get('com.docker.network.bridge.enable_icc') != 'false':
             raise SystemExit(f'{name}: comunicação lateral precisa ficar desativada')
     else:

@@ -273,7 +273,7 @@ container_networks() {
 
 network_metadata() {
   docker network inspect \
-    -f '{{.Driver}}|{{.Internal}}|{{index .Options "com.docker.network.bridge.name"}}|{{index .Options "com.docker.network.bridge.gateway_mode_ipv4"}}|{{index .Options "com.docker.network.bridge.gateway_mode_ipv6"}}|{{index .Options "com.docker.network.bridge.enable_icc"}}' \
+    -f '{{.Driver}}|{{.Internal}}|{{.EnableIPv6}}|{{index .Options "com.docker.network.bridge.name"}}|{{index .Options "com.docker.network.bridge.host_binding_ipv4"}}|{{index .Options "com.docker.network.bridge.gateway_mode_ipv4"}}|{{index .Options "com.docker.network.bridge.gateway_mode_ipv6"}}|{{index .Options "com.docker.network.bridge.enable_icc"}}' \
     "$1" 2>/dev/null
 }
 
@@ -286,12 +286,12 @@ normalize_network_option() {
 
 assert_network_metadata() {
   local network="$1" expected_bridge="$2" expected_kind="$3" role="$4"
-  local metadata driver internal configured_bridge gateway4 gateway6 icc extra
+  local metadata driver internal configured_bridge gateway4 gateway6 icc extra enable_ipv6 host_binding_ipv4
   metadata="$(network_metadata "$network")" || {
     echo "ERRO: não foi possível inspecionar rede de $role" >&2
     return 1
   }
-  IFS='|' read -r driver internal configured_bridge gateway4 gateway6 icc extra <<<"$metadata"
+  IFS='|' read -r driver internal enable_ipv6 configured_bridge host_binding_ipv4 gateway4 gateway6 icc extra <<<"$metadata"
   [ -z "$extra" ] || {
     echo "ERRO: metadados de rede de $role são ambíguos" >&2
     return 1
@@ -299,14 +299,16 @@ assert_network_metadata() {
   gateway4="$(normalize_network_option "$gateway4")"
   gateway6="$(normalize_network_option "$gateway6")"
   icc="$(normalize_network_option "$icc")"
+  host_binding_ipv4="$(normalize_network_option "$host_binding_ipv4")"
   [ "$driver" = bridge ] && [ "$configured_bridge" = "$expected_bridge" ] || {
     echo "ERRO: rede de $role não usa a bridge esperada $expected_bridge" >&2
     return 1
   }
   case "$expected_kind" in
     host)
-      [ "$internal" = true ] && [ "$gateway4" = nat ] && [ "$gateway6" = isolated ] && [ "$icc" = false ] || {
-        echo "ERRO: bridge host ingress $expected_bridge precisa ser internal, NAT somente em IPv4 e ICC=false" >&2
+      [ "$internal" = false ] && [ "$enable_ipv6" = false ] && [ "$gateway4" = nat ] && \
+        [ -z "$gateway6" ] && [ "$icc" = false ] && [ "$host_binding_ipv4" = 127.0.0.1 ] || {
+        echo "ERRO: bridge host ingress $expected_bridge precisa ser externa, NAT IPv4 loopback-only, IPv6 desativado e ICC=false" >&2
         return 1
       }
       ;;
@@ -340,7 +342,7 @@ assert_network_metadata() {
 # bypass direto das regras presas a kas-core-eg0/kas-tunnel-eg0.
 container_topology() {
   local cid="$1" role="$2" expected="$3"
-  local network metadata driver internal configured_bridge gateway4 gateway6 icc extra
+  local network metadata driver internal enable_ipv6 configured_bridge host_binding_ipv4 gateway4 gateway6 icc extra
   local expected_bridge expected_kind matched_kind actual='' actual_bridges='' expected_bridges=''
   while IFS='|' read -r expected_bridge expected_kind; do
     [ -n "$expected_bridge" ] || continue
@@ -353,7 +355,7 @@ container_topology() {
       echo "ERRO: não foi possível inspecionar rede de $role" >&2
       return 1
     }
-    IFS='|' read -r driver internal configured_bridge gateway4 gateway6 icc extra <<<"$metadata"
+    IFS='|' read -r driver internal enable_ipv6 configured_bridge host_binding_ipv4 gateway4 gateway6 icc extra <<<"$metadata"
     [ -z "$extra" ] && [ "$driver" = bridge ] && [ -n "$configured_bridge" ] || {
       echo "ERRO: $role participa de rede sem identidade bridge aprovada" >&2
       return 1
@@ -514,6 +516,16 @@ fi
 # a escolha da policy A/B entre chamadas individuais.
 ipt() { command iptables -w 10 "$@"; }
 ip6t() { command ip6tables -w 10 "$@"; }
+IPV4_REJECT_WITH=icmp-port-unreachable
+IPV6_REJECT_WITH=icmp6-port-unreachable
+
+reject_with_for_tool() {
+  case "$1" in
+    ipt) printf '%s\n' "$IPV4_REJECT_WITH" ;;
+    ip6t) printf '%s\n' "$IPV6_REJECT_WITH" ;;
+    *) return 1 ;;
+  esac
+}
 
 ensure_chain() {
   local tool="$1" chain="$2"
@@ -592,6 +604,35 @@ check_anchor_reference_scopes() {
       "-A INPUT -i $HOST_INGRESS_BRIDGE -j KASSINAO-HOST"
 }
 
+check_host_ingress_forward_scope() {
+  local tool="$1" inventory full_inventory reject_with
+  reject_with="$(reject_with_for_tool "$tool")" || return 1
+  if ! inventory="$("$tool" -S DOCKER-USER 2>/dev/null)"; then
+    [ "$OFFLINE" = true ] || return 1
+    full_inventory="$("$tool" -S 2>/dev/null)" || return 1
+    # No bootstrap offline, o inventário global bem-sucedido é a prova de que
+    # DOCKER-USER ainda não existe. Qualquer referência parcial continua sendo
+    # drift, não uma ausência aceitável.
+    ! grep -Fq 'DOCKER-USER' <<<"$full_inventory"
+    return
+  fi
+  awk \
+    -v bridge="$HOST_INGRESS_BRIDGE" \
+    -v established="-A DOCKER-USER -i $HOST_INGRESS_BRIDGE -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN" \
+    -v reject="-A DOCKER-USER -i $HOST_INGRESS_BRIDGE -j REJECT --reject-with $reject_with" '
+    $1 == "-A" && $2 == "DOCKER-USER" {
+      for (i = 3; i < NF; i++) {
+        if ($i == "-i" && $(i + 1) == bridge) {
+          if ($0 == established) established_count++
+          else if ($0 == reject) reject_count++
+          else invalid = 1
+        }
+      }
+    }
+    END { exit (!invalid && established_count <= 1 && reject_count <= 1) ? 0 : 1 }
+  ' <<<"$inventory"
+}
+
 check_policy_reference_scopes() {
   local tool="$1"
   check_reference_scope "$tool" KASSINAO-EGRESS-A '-A KASSINAO-EGRESS -j KASSINAO-EGRESS-A' &&
@@ -660,15 +701,21 @@ check_shared_global_hooks() {
 }
 
 check_policy_family() {
-  local tool="$1" destination index egress_chain egress_inactive host_chain host_inactive inactive_count references
+  local tool="$1" destination index egress_chain egress_inactive host_chain host_inactive inactive_count references reject_with
   shift
   local -a anchor_rules egress_rules host_rules
+  reject_with="$(reject_with_for_tool "$tool")" || return 1
 
   check_unique_first_rule "$tool" FORWARD -j DOCKER-USER || return 1
   check_unique_positioned_rule \
-    "$tool" DOCKER-USER 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-EGRESS || return 1
+    "$tool" DOCKER-USER 1 -i "$HOST_INGRESS_BRIDGE" \
+    -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN || return 1
   check_unique_positioned_rule \
-    "$tool" DOCKER-USER 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-EGRESS || return 1
+    "$tool" DOCKER-USER 2 -i "$HOST_INGRESS_BRIDGE" -j REJECT --reject-with "$reject_with" || return 1
+  check_unique_positioned_rule \
+    "$tool" DOCKER-USER 3 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-EGRESS || return 1
+  check_unique_positioned_rule \
+    "$tool" DOCKER-USER 4 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-EGRESS || return 1
   check_unique_positioned_rule \
     "$tool" INPUT 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-HOST || return 1
   check_unique_positioned_rule \
@@ -706,16 +753,15 @@ check_policy_family() {
   [ "${#egress_rules[@]}" -eq "$(( $# + 1 ))" ] || return 1
   index=0
   for destination in "$@"; do
-    [ "${egress_rules[$index]}" = "-A $egress_chain -d $destination -j REJECT" ] || return 1
+    [ "${egress_rules[$index]}" = "-A $egress_chain -d $destination -j REJECT --reject-with $reject_with" ] || return 1
     index=$((index + 1))
   done
   [ "${egress_rules[$index]}" = "-A $egress_chain -j RETURN" ] || return 1
 
   mapfile -t host_rules < <("$tool" -S "$host_chain" 2>/dev/null | awk '$1 == "-A" {print}')
   [ "${#host_rules[@]}" -eq 3 ] || return 1
-  [[ "${host_rules[0]}" == "-A $host_chain -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN" || \
-     "${host_rules[0]}" == "-A $host_chain -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN" ]] || return 1
-  [ "${host_rules[1]}" = "-A $host_chain -m addrtype --dst-type LOCAL -j REJECT" ] || return 1
+  [ "${host_rules[0]}" = "-A $host_chain -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN" ] || return 1
+  [ "${host_rules[1]}" = "-A $host_chain -m addrtype --dst-type LOCAL -j REJECT --reject-with $reject_with" ] || return 1
   [ "${host_rules[2]}" = "-A $host_chain -j RETURN" ] || return 1
 
   inactive_count="$(rule_count "$tool" "$egress_inactive")" || return 1
@@ -734,7 +780,12 @@ check_policy_family() {
 
 prepare_policy() {
   local tool="$1" family="$2" anchor="$3" policy_a="$4" policy_b="$5" kind="$6"
-  local current inactive destination expected_count
+  local current inactive destination expected_count reject_with
+  case "$family" in
+    4) reject_with="$IPV4_REJECT_WITH" ;;
+    6) reject_with="$IPV6_REJECT_WITH" ;;
+    *) return 1 ;;
+  esac
   ensure_chain "$tool" "$anchor"
   ensure_chain "$tool" "$policy_a"
   ensure_chain "$tool" "$policy_b"
@@ -757,19 +808,19 @@ prepare_policy() {
   if [ "$kind" = egress ]; then
     if [ "$family" = 4 ]; then
       for destination in 127.0.0.0/8 10.0.0.0/8 100.64.0.0/10 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16; do
-        "$tool" -A "$inactive" -d "$destination" -j REJECT
+        "$tool" -A "$inactive" -d "$destination" -j REJECT --reject-with "$reject_with"
       done
       expected_count=7
     else
       for destination in ::1/128 fc00::/7 fe80::/10; do
-        "$tool" -A "$inactive" -d "$destination" -j REJECT
+        "$tool" -A "$inactive" -d "$destination" -j REJECT --reject-with "$reject_with"
       done
       expected_count=4
     fi
     "$tool" -A "$inactive" -j RETURN
   else
-    "$tool" -A "$inactive" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
-    "$tool" -A "$inactive" -m addrtype --dst-type LOCAL -j REJECT
+    "$tool" -A "$inactive" -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+    "$tool" -A "$inactive" -m addrtype --dst-type LOCAL -j REJECT --reject-with "$reject_with"
     "$tool" -A "$inactive" -j RETURN
     expected_count=3
   fi
@@ -883,13 +934,17 @@ delete_exact_rule_if_present() {
 }
 
 allowed_owned_inventory() {
-  local chain destination
+  local tool="$1" chain destination reject_with
+  shift
+  reject_with="$(reject_with_for_tool "$tool")" || return 1
   for chain in \
     KASSINAO-EGRESS KASSINAO-EGRESS-A KASSINAO-EGRESS-B \
     KASSINAO-HOST KASSINAO-HOST-A KASSINAO-HOST-B; do
     printf '%s\n' "-N $chain"
   done
   printf '%s\n' \
+    "-A DOCKER-USER -i $HOST_INGRESS_BRIDGE -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN" \
+    "-A DOCKER-USER -i $HOST_INGRESS_BRIDGE -j REJECT --reject-with $reject_with" \
     "-A DOCKER-USER -i $CORE_EGRESS_BRIDGE -j KASSINAO-EGRESS" \
     "-A DOCKER-USER -i $TUNNEL_EGRESS_BRIDGE -j KASSINAO-EGRESS" \
     "-A INPUT -i $CORE_EGRESS_BRIDGE -j KASSINAO-HOST" \
@@ -901,15 +956,14 @@ allowed_owned_inventory() {
     '-A KASSINAO-HOST -j KASSINAO-HOST-B'
   for chain in KASSINAO-EGRESS-A KASSINAO-EGRESS-B; do
     for destination in "$@"; do
-      printf '%s\n' "-A $chain -d $destination -j REJECT"
+      printf '%s\n' "-A $chain -d $destination -j REJECT --reject-with $reject_with"
     done
     printf '%s\n' "-A $chain -j RETURN"
   done
   for chain in KASSINAO-HOST-A KASSINAO-HOST-B; do
     printf '%s\n' \
-      "-A $chain -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN" \
       "-A $chain -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN" \
-      "-A $chain -m addrtype --dst-type LOCAL -j REJECT" \
+      "-A $chain -m addrtype --dst-type LOCAL -j REJECT --reject-with $reject_with" \
       "-A $chain -j RETURN"
   done
 }
@@ -934,9 +988,10 @@ check_anchor_removal_shape() {
 }
 
 check_egress_removal_shape() {
-  local tool="$1" chain="$2" destination index references source_rules
+  local tool="$1" chain="$2" destination index references source_rules reject_with
   shift 2
   local -a rules expected
+  reject_with="$(reject_with_for_tool "$tool")" || return 1
   if ! chain_exists "$tool" "$chain"; then
     references="$(chain_reference_count "$tool" "$chain")" || return 1
     source_rules="$(chain_source_rule_count "$tool" "$chain")" || return 1
@@ -945,7 +1000,7 @@ check_egress_removal_shape() {
   fi
   mapfile -t rules < <("$tool" -S "$chain" 2>/dev/null | awk '$1 == "-A" {print}')
   for destination in "$@"; do
-    expected+=("-A $chain -d $destination -j REJECT")
+    expected+=("-A $chain -d $destination -j REJECT --reject-with $reject_with")
   done
   expected+=("-A $chain -j RETURN")
   [ "${#rules[@]}" -le "${#expected[@]}" ] || return 1
@@ -959,8 +1014,9 @@ check_egress_removal_shape() {
 }
 
 check_host_removal_shape() {
-  local tool="$1" chain="$2" index references source_rules
+  local tool="$1" chain="$2" index references source_rules reject_with
   local -a rules expected
+  reject_with="$(reject_with_for_tool "$tool")" || return 1
   if ! chain_exists "$tool" "$chain"; then
     references="$(chain_reference_count "$tool" "$chain")" || return 1
     source_rules="$(chain_source_rule_count "$tool" "$chain")" || return 1
@@ -969,8 +1025,8 @@ check_host_removal_shape() {
   fi
   mapfile -t rules < <("$tool" -S "$chain" 2>/dev/null | awk '$1 == "-A" {print}')
   expected=(
-    "-A $chain -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN"
-    "-A $chain -m addrtype --dst-type LOCAL -j REJECT"
+    "-A $chain -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN"
+    "-A $chain -m addrtype --dst-type LOCAL -j REJECT --reject-with $reject_with"
     "-A $chain -j RETURN"
   )
   [ "${#rules[@]}" -le "${#expected[@]}" ] || return 1
@@ -979,18 +1035,14 @@ check_host_removal_shape() {
     [ "$references" -eq 1 ] && [ "${#rules[@]}" -eq "${#expected[@]}" ] || return 1
   fi
   for ((index = 0; index < ${#rules[@]}; index++)); do
-    if [ "$index" -eq 0 ]; then
-      [[ "${rules[0]}" == "${expected[0]}" || \
-         "${rules[0]}" == "-A $chain -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN" ]] || return 1
-    else
-      [ "${rules[$index]}" = "${expected[$index]}" ] || return 1
-    fi
+    [ "${rules[$index]}" = "${expected[$index]}" ] || return 1
   done
 }
 
 check_owned_reference_scope_family() {
   local tool="$1"
   check_reserved_chain_inventory "$tool" &&
+    check_host_ingress_forward_scope "$tool" &&
     check_anchor_reference_scopes "$tool" &&
     check_policy_reference_scopes "$tool"
 }
@@ -1001,8 +1053,9 @@ check_owned_removal_progress_family() {
   check_unique_first_rule "$tool" FORWARD -j DOCKER-USER || return 1
   check_owned_reference_scope_family "$tool" || return 1
 
-  actual_owned="$("$tool" -S 2>/dev/null | grep -F 'KASSINAO-' || true)"
-  allowed="$(allowed_owned_inventory "$@")" || return 1
+  actual_owned="$("$tool" -S 2>/dev/null | awk -v bridge="$HOST_INGRESS_BRIDGE" \
+    'index($0, "KASSINAO-") || index($0, "-i " bridge " ") {print}')"
+  allowed="$(allowed_owned_inventory "$tool" "$@")" || return 1
   duplicates="$(printf '%s\n' "$actual_owned" | sed '/^$/d' | sort | uniq -d)"
   [ -z "$duplicates" ] || return 1
   while IFS= read -r line; do
@@ -1025,7 +1078,8 @@ check_owned_removal_progress_family() {
 policy_family_absent() {
   local tool="$1" inventory
   inventory="$("$tool" -S 2>/dev/null)" || return 1
-  ! grep -Fq 'KASSINAO-' <<<"$inventory"
+  ! grep -Fq 'KASSINAO-' <<<"$inventory" &&
+    ! grep -Fq -- "-i $HOST_INGRESS_BRIDGE " <<<"$inventory"
 }
 
 classify_policy_family() {
@@ -1059,7 +1113,9 @@ check_legacy_owned_reference_scope_family() {
 }
 
 legacy_allowed_owned_inventory() {
-  local chain destination
+  local tool="$1" chain destination reject_with
+  shift
+  reject_with="$(reject_with_for_tool "$tool")" || return 1
   for chain in \
     KASSINAO-EGRESS KASSINAO-EGRESS-A KASSINAO-EGRESS-B \
     KASSINAO-HOST KASSINAO-HOST-A KASSINAO-HOST-B; do
@@ -1075,23 +1131,23 @@ legacy_allowed_owned_inventory() {
   for chain in KASSINAO-EGRESS-A KASSINAO-EGRESS-B; do
     printf '%s\n' "-A $chain -o kas-private0 -j RETURN"
     for destination in "$@"; do
-      printf '%s\n' "-A $chain -d $destination -j REJECT"
+      printf '%s\n' "-A $chain -d $destination -j REJECT --reject-with $reject_with"
     done
     printf '%s\n' "-A $chain -j RETURN"
   done
   for chain in KASSINAO-HOST-A KASSINAO-HOST-B; do
     printf '%s\n' \
-      "-A $chain -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN" \
       "-A $chain -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN" \
-      "-A $chain -m addrtype --dst-type LOCAL -j REJECT" \
+      "-A $chain -m addrtype --dst-type LOCAL -j REJECT --reject-with $reject_with" \
       "-A $chain -j RETURN"
   done
 }
 
 check_legacy_egress_removal_shape() {
-  local tool="$1" chain="$2" destination index references source_rules
+  local tool="$1" chain="$2" destination index references source_rules reject_with
   shift 2
   local -a rules expected
+  reject_with="$(reject_with_for_tool "$tool")" || return 1
   if ! chain_exists "$tool" "$chain"; then
     references="$(chain_reference_count "$tool" "$chain")" || return 1
     source_rules="$(chain_source_rule_count "$tool" "$chain")" || return 1
@@ -1101,7 +1157,7 @@ check_legacy_egress_removal_shape() {
   mapfile -t rules < <("$tool" -S "$chain" 2>/dev/null | awk '$1 == "-A" {print}')
   expected=("-A $chain -o kas-private0 -j RETURN")
   for destination in "$@"; do
-    expected+=("-A $chain -d $destination -j REJECT")
+    expected+=("-A $chain -d $destination -j REJECT --reject-with $reject_with")
   done
   expected+=("-A $chain -j RETURN")
   [ "${#rules[@]}" -le "${#expected[@]}" ] || return 1
@@ -1121,7 +1177,7 @@ check_legacy_owned_removal_progress_family() {
   check_legacy_owned_reference_scope_family "$tool" || return 1
 
   actual_owned="$("$tool" -S 2>/dev/null | grep -F 'KASSINAO-' || true)"
-  allowed="$(legacy_allowed_owned_inventory "$@")" || return 1
+  allowed="$(legacy_allowed_owned_inventory "$tool" "$@")" || return 1
   duplicates="$(printf '%s\n' "$actual_owned" | sed '/^$/d' | sort | uniq -d)"
   [ -z "$duplicates" ] || return 1
   while IFS= read -r line; do
@@ -1232,8 +1288,9 @@ delete_owned_chain_if_present() {
 }
 
 remove_policy_family() {
-  local tool="$1" chain bridge
+  local tool="$1" chain bridge reject_with
   shift
+  reject_with="$(reject_with_for_tool "$tool")" || return 1
 
   policy_family_absent "$tool" && return 0
   check_owned_removal_progress_family "$tool" "$@" || return 1
@@ -1245,6 +1302,11 @@ remove_policy_family() {
     delete_exact_rule_if_present "$tool" DOCKER-USER -i "$bridge" -j KASSINAO-EGRESS || return 1
     delete_exact_rule_if_present "$tool" INPUT -i "$bridge" -j KASSINAO-HOST || return 1
   done
+  delete_exact_rule_if_present \
+    "$tool" DOCKER-USER -i "$HOST_INGRESS_BRIDGE" -j REJECT --reject-with "$reject_with" || return 1
+  delete_exact_rule_if_present \
+    "$tool" DOCKER-USER -i "$HOST_INGRESS_BRIDGE" \
+    -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN || return 1
   delete_exact_rule_if_present \
     "$tool" INPUT -i "$HOST_INGRESS_BRIDGE" -j KASSINAO-HOST || return 1
 
@@ -1445,6 +1507,13 @@ for tool in ipt ip6t; do
   fi
 done
 
+# O boot limpo dedicated pode começar sem DOCKER-USER. Depois de criar a
+# chain, repita a prova read-only antes de preparar ou ativar qualquer policy.
+check_owned_reference_scopes || {
+  echo 'ERRO: chains criadas no bootstrap não passaram na revalidação de ownership' >&2
+  exit 1
+}
+
 # Construa e valide as quatro policies inativas antes de trocar qualquer uma.
 v4_egress="$(prepare_policy ipt 4 KASSINAO-EGRESS KASSINAO-EGRESS-A KASSINAO-EGRESS-B egress)"
 v4_host="$(prepare_policy ipt 4 KASSINAO-HOST KASSINAO-HOST-A KASSINAO-HOST-B host)"
@@ -1465,9 +1534,14 @@ if [ "$HOST_SCOPE" = dedicated ]; then
   canonicalize_first_rule ip6t FORWARD -j DOCKER-USER
 fi
 canonicalize_positioned_rule \
-  ipt DOCKER-USER 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-EGRESS
+  ipt DOCKER-USER 1 -i "$HOST_INGRESS_BRIDGE" \
+  -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
 canonicalize_positioned_rule \
-  ipt DOCKER-USER 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-EGRESS
+  ipt DOCKER-USER 2 -i "$HOST_INGRESS_BRIDGE" -j REJECT --reject-with "$IPV4_REJECT_WITH"
+canonicalize_positioned_rule \
+  ipt DOCKER-USER 3 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-EGRESS
+canonicalize_positioned_rule \
+  ipt DOCKER-USER 4 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-EGRESS
 canonicalize_positioned_rule \
   ipt INPUT 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-HOST
 canonicalize_positioned_rule \
@@ -1475,9 +1549,14 @@ canonicalize_positioned_rule \
 canonicalize_positioned_rule \
   ipt INPUT 3 -i "$HOST_INGRESS_BRIDGE" -j KASSINAO-HOST
 canonicalize_positioned_rule \
-  ip6t DOCKER-USER 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-EGRESS
+  ip6t DOCKER-USER 1 -i "$HOST_INGRESS_BRIDGE" \
+  -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
 canonicalize_positioned_rule \
-  ip6t DOCKER-USER 2 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-EGRESS
+  ip6t DOCKER-USER 2 -i "$HOST_INGRESS_BRIDGE" -j REJECT --reject-with "$IPV6_REJECT_WITH"
+canonicalize_positioned_rule \
+  ip6t DOCKER-USER 3 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-EGRESS
+canonicalize_positioned_rule \
+  ip6t DOCKER-USER 4 -i "$TUNNEL_EGRESS_BRIDGE" -j KASSINAO-EGRESS
 canonicalize_positioned_rule \
   ip6t INPUT 1 -i "$CORE_EGRESS_BRIDGE" -j KASSINAO-HOST
 canonicalize_positioned_rule \

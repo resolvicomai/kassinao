@@ -797,8 +797,10 @@ for item in items:
 network_ids = docker_lines(['network', 'ls', '-q', '--no-trunc'], 'inventário de IDs de redes', r'[0-9a-f]{64}')
 network_projection = (
     r'{"Id":{{json .Id}},"Name":{{json .Name}},"Driver":{{json .Driver}},'
-    r'"Internal":{{json .Internal}},"IPAM":{"Driver":{{json .IPAM.Driver}},"Config":{{json .IPAM.Config}}},'
+    r'"Internal":{{json .Internal}},"EnableIPv6":{{json .EnableIPv6}},'
+    r'"IPAM":{"Driver":{{json .IPAM.Driver}},"Config":{{json .IPAM.Config}}},'
     r'"BridgeName":{{json (index .Options "com.docker.network.bridge.name")}},'
+    r'"HostBindingIPv4":{{json (index .Options "com.docker.network.bridge.host_binding_ipv4")}},'
     r'"EnableICC":{{json (index .Options "com.docker.network.bridge.enable_icc")}},'
     r'"GatewayModeIPv4":{{json (index .Options "com.docker.network.bridge.gateway_mode_ipv4")}},'
     r'"GatewayModeIPv6":{{json (index .Options "com.docker.network.bridge.gateway_mode_ipv6")}},'
@@ -1428,7 +1430,7 @@ if not project_networks:
 
 all_reserved_networks = {
     'kassinao_host_ingress': {
-        'bridge': 'kas-host0', 'label': 'host_ingress', 'internal': True, 'host_ingress': True,
+        'bridge': 'kas-host0', 'label': 'host_ingress', 'internal': False, 'host_ingress': True,
         'members': {'kassinao-router'},
     },
     'kassinao_edge_ingress': {
@@ -1483,9 +1485,10 @@ for network in networks:
     gateway_ipv4 = network.get('GatewayModeIPv4')
     gateway_ipv6 = network.get('GatewayModeIPv6')
     if expected.get('host_ingress'):
-        if (network.get('Internal') is not True or gateway_ipv4 != 'nat' or
-                gateway_ipv6 != 'isolated' or network.get('EnableICC') != 'false'):
-            fail('rede host_ingress precisa ser internal, NAT somente em IPv4 e ICC=false')
+        if (network.get('Internal') is not False or network.get('EnableIPv6') is not False or
+                network.get('HostBindingIPv4') != '127.0.0.1' or gateway_ipv4 != 'nat' or
+                gateway_ipv6 not in (None, '') or network.get('EnableICC') != 'false'):
+            fail('rede host_ingress precisa ser non-internal, NAT IPv4 loopback-only, IPv6-off e ICC=false')
     elif expected['internal']:
         if (network.get('Internal') is not True or gateway_ipv4 != 'isolated' or
                 gateway_ipv6 != 'isolated'):
