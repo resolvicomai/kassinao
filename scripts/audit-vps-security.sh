@@ -929,13 +929,13 @@ def parse(raw):
     if not match:
         raise SystemExit(1)
     return tuple(map(int, match.groups()))
-if parse(sys.argv[1]) < (28, 0, 0) or parse(sys.argv[2]) < (2, 36, 0):
+if parse(sys.argv[1]) < (28, 1, 0) or parse(sys.argv[2]) < (2, 36, 0):
     raise SystemExit(1)
 PY
 then
   pass 'Docker Engine e Compose atendem às versões mínimas seguras'
 else
-  fail 'produção exige Docker Engine >=28.0.0 e Compose >=2.36.0'
+  fail 'produção exige Docker Engine >=28.1.0 e Compose >=2.36.0'
 fi
 
 DOCKER_MAIN_PID="$(systemctl show docker -p MainPID --value 2>/dev/null || true)"

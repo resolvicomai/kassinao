@@ -20,6 +20,7 @@ latest README, documentation, configuration template, and tests.
 
 ### Changed
 
+- Docker Engine 28.1.0 or newer is now required alongside Docker Compose 2.36.0. Engine 28.1 is the first daemon release that applies the named-interface contract used by the split router; deploy and both production audits reject Engine 28.0 before runtime mutation.
 - Docker Compose 2.36.0 or newer is required so each service receives a deterministic interface name. Core, router, public, and tunnel now have exact network membership, isolated internal links, and separate egress bridges.
 - Shared-host upgrades must set the new required `KASSINAO_ROUTER_MEMORY_LIMIT` and `KASSINAO_ROUTER_CPUS` values. The router is now the sole ingress, and the obsolete `KASSINAO_PUBLIC_HOST_PORT` setting has been removed.
 - The local quickstart uses the same split public/private architecture as production. Public and documentation origins may intentionally share the app origin; conflicting synthetic `www` aliases still fail closed.

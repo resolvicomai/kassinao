@@ -5,6 +5,12 @@ import { describe, expect, it } from 'vitest';
 const audit = readFileSync(path.join(process.cwd(), 'scripts', 'audit-vps-security.sh'), 'utf8');
 
 describe('auditoria da topologia dedicated', () => {
+  it('exige Engine 28.1.0 e Compose 2.36.0 antes de aprovar o perímetro', () => {
+    expect(audit).toContain('parse(sys.argv[1]) < (28, 1, 0)');
+    expect(audit).toContain('produção exige Docker Engine >=28.1.0 e Compose >=2.36.0');
+    expect(audit).not.toMatch(/\bdocker\s+(?:start|stop|restart|kill|rm|run|create|update|compose\s+up)\b/);
+  });
+
   it('inclui os quatro processos e reserva somente o router como ingress', () => {
     expect(audit).toContain('ROUTER_CONTAINER=kassinao-router');
     expect(audit).toContain('EXPECTED_CONTAINER_NAMES+=("$ROUTER_CONTAINER" "$PUBLIC_CONTAINER")');

@@ -331,6 +331,8 @@ interface DeploymentFixtureOptions {
   runtimeMemory?: number;
   runtimeMemorySwap?: number;
   runtimeMemorySwappiness?: number | null;
+  dockerEngineVersion?: string;
+  dockerComposeVersion?: string;
 }
 
 function shellLiteral(value: string): string {
@@ -352,6 +354,8 @@ function fakeRuntime(
   runtimeMemory = 536_870_912,
   runtimeMemorySwap = runtimeMemory,
   runtimeMemorySwappiness: number | null = 0,
+  dockerEngineVersion = '29.6.1',
+  dockerComposeVersion = '2.36.0',
 ): { bin: string; log: string } {
   const bin = path.join(directory, 'bin');
   const log = path.join(directory, 'docker.log');
@@ -411,11 +415,11 @@ function fakeRuntime(
 set -eu
 printf '%s\\n' "$*" >> ${shellLiteral(log)}
 if [ "\${1:-}" = version ]; then
-  printf '28.0.1\n'
+  printf '%s\n' ${shellLiteral(dockerEngineVersion)}
   exit 0
 fi
 if [ "\${1:-}" = compose ] && [ "\${2:-}" = version ]; then
-  printf '2.36.1\n'
+  printf '%s\n' ${shellLiteral(dockerComposeVersion)}
   exit 0
 fi
 resolve_container() {
@@ -1060,6 +1064,8 @@ exit ${options.rollbackCheckerFails ? '1' : '0'}
     options.runtimeMemory,
     options.runtimeMemorySwap,
     options.runtimeMemorySwappiness,
+    options.dockerEngineVersion,
+    options.dockerComposeVersion,
   );
   if (hostScope === 'shared') {
     const callerUid = process.getuid?.() ?? 1000;
@@ -1099,17 +1105,36 @@ while :; do
   [ "$parent" != "$cursor" ] || break
   cursor="$parent"
 done
-LOCK_FILE="$ROOT/.deploy.lock"
-[ -e "$LOCK_FILE" ] || : > "$LOCK_FILE"
-chmod 600 "$LOCK_FILE"
-exec 9<>"$LOCK_FILE"
-flock -n 9 || die 'já existe outro deploy em andamento'
 DOCKER_CONFIG="$ROOT/deploy/docker-client"
 DOCKER_CONFIG_FILE="$DOCKER_CONFIG/config.json"
 [ -d "$DOCKER_CONFIG" ] && [ ! -L "$DOCKER_CONFIG" ] && \
   [ -f "$DOCKER_CONFIG_FILE" ] && [ ! -L "$DOCKER_CONFIG_FILE" ] || \
   die 'configuração isolada do cliente Docker está ausente ou irregular'
 export DOCKER_CONFIG
+command -v docker >/dev/null 2>&1 || die 'Docker não encontrado'
+docker compose version >/dev/null 2>&1 || die 'Docker Compose v2 não encontrado'
+command -v python3 >/dev/null 2>&1 || die 'python3 é obrigatório para o gate de deploy'
+engine_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
+compose_version="$(docker compose version --short 2>/dev/null || true)"
+python3 - "$engine_version" "$compose_version" <<'PY' || \
+  die 'produção exige Docker Engine >=28.1.0 e Docker Compose >=2.36.0'
+import re
+import sys
+
+def version(raw):
+    match = re.match(r'^v?(\\d+)\\.(\\d+)\\.(\\d+)', raw)
+    if not match:
+        raise SystemExit(1)
+    return tuple(map(int, match.groups()))
+
+if version(sys.argv[1]) < (28, 1, 0) or version(sys.argv[2]) < (2, 36, 0):
+    raise SystemExit(1)
+PY
+LOCK_FILE="$ROOT/.deploy.lock"
+[ -e "$LOCK_FILE" ] || : > "$LOCK_FILE"
+chmod 600 "$LOCK_FILE"
+exec 9<>"$LOCK_FILE"
+flock -n 9 || die 'já existe outro deploy em andamento'
 RUNTIME_DIR=${shellLiteral(runtimeDirectory)}
 MAINTENANCE_LOCK_FILE="$RUNTIME_DIR/maintenance.lock"
 exec 8<>"$MAINTENANCE_LOCK_FILE"
@@ -1461,12 +1486,22 @@ describe('artefatos de distribuição', () => {
     expect(ciWorkflow).toContain('Smoke-test the isolated single-origin router topology');
     expect(ciWorkflow).toContain('bash scripts/smoke-router-image.sh kassinao:ci sha256:');
     for (const workflowSource of [workflow, ciWorkflow]) {
+      expect(workflowSource).toContain('docker/setup-docker-action@6d7cfa65f60a9dda7b46e5513fa982536f3c9877 # v5.3.0');
+      expect(workflowSource).toContain('version: v29.6.1');
+      expect(workflowSource).toContain('Require the production Docker and Compose minimums');
+      expect(workflowSource).toContain('Docker Engine 28.1.0+ and Docker Compose 2.36.0+ are required');
       expect(workflowSource).toContain('Validate the exact dedicated and shared Compose models');
       expect(workflowSource).toContain('docker compose -f docker-compose.yml config --quiet');
       expect(workflowSource).toContain(
         'docker compose -f docker-compose.yml -f docker-compose.shared.yml config --quiet',
       );
       expect(workflowSource).toContain('COMPOSE_PROFILES: split-public');
+      expect(workflowSource.indexOf('Require the production Docker and Compose minimums')).toBeLessThan(
+        workflowSource.indexOf('Validate the exact dedicated and shared Compose models'),
+      );
+      expect(workflowSource.indexOf('Require the production Docker and Compose minimums')).toBeLessThan(
+        workflowSource.indexOf('smoke-router-image.sh'),
+      );
     }
     const publicSmoke = repositoryFile('scripts/smoke-public-image.sh');
     expect(publicSmoke).toContain('"$image" /usr/local/bin/node dist/public.js');
@@ -2323,6 +2358,55 @@ describe('deploy image-only', () => {
     expect(result.stderr).toContain('daemon local da VPS');
   });
 
+  it.each(['28.0.0', '28.0.99'])('recusa Docker Engine %s antes de criar lock ou mutar runtime', (version) => {
+    const image = `ghcr.io/example/kassinao@sha256:${'0'.repeat(64)}`;
+    const fixture = deploymentFixture(image, {
+      initiallyRunning: true,
+      dockerEngineVersion: version,
+    });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Docker Engine >=28.1.0');
+    expect(existsSync(path.join(fixture.directory, '.deploy.lock'))).toBe(false);
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).toContain('version --format {{.Server.Version}}');
+    expect(calls).not.toMatch(/\b(?:pull|stop|kill|start|rm|up)\b/);
+    expect(existsSync(path.join(fixture.directory, 'hardener.log'))).toBe(false);
+  });
+
+  it('aceita o limite exato Docker Engine 28.1.0 com Compose 2.36.0', () => {
+    const image = `ghcr.io/example/kassinao@sha256:${'1'.repeat(64)}`;
+    const fixture = deploymentFixture(image, {
+      dockerEngineVersion: '28.1.0',
+      dockerComposeVersion: '2.36.0',
+    });
+
+    const result = spawnSync('bash', [fixture.script], {
+      cwd: fixture.directory,
+      env: {
+        ...process.env,
+        PATH: `${fixture.runtime.bin}:${process.env.PATH ?? ''}`,
+        KASSINAO_DEPLOY_DIR: fixture.directory,
+        KASSINAO_RUNTIME_DIR: fixture.runtimeDirectory,
+      },
+      encoding: 'utf8',
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(readFileSync(fixture.runtime.log, 'utf8')).toContain('up -d --no-build');
+  });
+
   it('recusa alias www da landing que colide com a origem privada antes do shutdown', () => {
     const digest = `sha256:${'5'.repeat(64)}`;
     const image = `ghcr.io/example/kassinao@${digest}`;
@@ -2356,7 +2440,9 @@ describe('deploy image-only', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('alias www');
-    expect(existsSync(fixture.runtime.log)).toBe(false);
+    const calls = readFileSync(fixture.runtime.log, 'utf8');
+    expect(calls).toContain('version --format {{.Server.Version}}');
+    expect(calls).not.toMatch(/\b(?:pull|stop|kill|start|rm|up)\b/);
   });
 
   it.each(['0', '2'] as const)('recusa TRUST_PROXY_HOPS=%s antes do shutdown', (trustProxyHops) => {

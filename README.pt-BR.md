@@ -63,9 +63,9 @@ A AGPL se aplica ao software. Quando um operador modifica o programa e permite i
 
 Este caminho serve para avaliação local e desenvolvimento. Ele compila a imagem a partir do checkout; não é o caminho endurecido de produção.
 
-Requisitos: Docker Engine 28.0.0+, Docker Compose 2.36.0+ e um aplicativo
-Discord criado por você. A versão mínima do Compose é necessária para as
-interfaces nomeadas e a seleção determinística de gateway do router.
+Requisitos: Docker Engine 28.1.0+, Docker Compose 2.36.0+ e um aplicativo
+Discord criado por você. As versões mínimas são necessárias para as interfaces
+nomeadas e a seleção determinística de gateway do router.
 
 ```bash
 git clone https://github.com/resolvicomai/kassinao.git
@@ -174,7 +174,7 @@ Use o caminho endurecido somente depois que a release escolhida puder ser verifi
 
 Se algum artefato não existir, use o build por source apenas para avaliação local e aguarde uma release verificável. Não substitua um digest ausente por tag mutável e não compile o produto na VPS de produção.
 
-A topologia endurecida é **somente split**: um router sem segredos recebe todo o ingress, landing/docs/demo rodam num segundo processo sem segredos e bot/app privado/MCP rodam no core privado. O router usa um link interno exclusivo para cada upstream; core e público não compartilham rede entre si, e somente core e túnel possuem egress próprio. Os dois adapters de produção exigem uma VPS Linux amd64 ou arm64 com systemd 249+, Docker Engine 28.0.0+, Docker Compose 2.36.0+, GNU coreutils, iptables/ip6tables, iproute2, util-linux, cryptsetup, e2fsprogs, curl, Python 3, tar/gzip e storage dm-crypt/LUKS. Confira arquitetura e versões antes de criar ou montar storage; o bundle nativo, deploy e audit falham fechados em hosts incompatíveis.
+A topologia endurecida é **somente split**: um router sem segredos recebe todo o ingress, landing/docs/demo rodam num segundo processo sem segredos e bot/app privado/MCP rodam no core privado. O router usa um link interno exclusivo para cada upstream; core e público não compartilham rede entre si, e somente core e túnel possuem egress próprio. Os dois adapters de produção exigem uma VPS Linux amd64 ou arm64 com systemd 249+, Docker Engine 28.1.0+, Docker Compose 2.36.0+, GNU coreutils, iptables/ip6tables, iproute2, util-linux, cryptsetup, e2fsprogs, curl, Python 3, tar/gzip e storage dm-crypt/LUKS. O Engine 28.1 é o primeiro que aplica o `interface_name` do Compose; um cliente Compose mais novo não adiciona essa capacidade ao daemon 28.0. Confira arquitetura e versões antes de criar ou montar storage; o bundle nativo, deploy e audit falham fechados em hosts incompatíveis.
 
 Escolha exatamente um adapter de host:
 

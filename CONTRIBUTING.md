@@ -16,7 +16,7 @@ chmod 600 .env
 npm run dev
 ```
 
-For the Docker source path, Docker Engine 28.0.0+ and Docker Compose 2.36.0+
+For the Docker source path, Docker Engine 28.1.0+ and Docker Compose 2.36.0+
 are required. Then build before starting Compose:
 
 ```bash

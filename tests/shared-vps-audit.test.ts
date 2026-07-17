@@ -243,6 +243,8 @@ function fixture(
     rollbackFails?: boolean;
     trustProxyHops?: string;
     uid?: number;
+    dockerEngineVersion?: string;
+    dockerComposeVersion?: string;
   } = {},
 ) {
   const directory = realpathSync(mkdtempSync(path.join(tmpdir(), 'kassinao-shared-audit-')));
@@ -593,6 +595,11 @@ fi
 set -eu
 printf 'docker:%s\\n' "$*" >> ${shellLiteral(calls)}
 case "\${1:-}" in
+  version) printf '%s\n' ${shellLiteral(options.dockerEngineVersion ?? '29.6.1')} ;;
+  compose)
+    [ "\${2:-}" = version ] || exit 89
+    printf '%s\n' ${shellLiteral(options.dockerComposeVersion ?? '2.36.0')}
+    ;;
   info)
     case "$*" in
       *DockerRootDir*) printf '%s\\n' "\${DOCKER_ROOT_DIR:?}" ;;
@@ -1124,8 +1131,34 @@ describe('shared VPS read-only audit', () => {
     expect(source).not.toContain('{{json $mount.Driver}}');
     expect(source).toContain("type(mount.get('RW')) is not bool");
     expect(source).toContain("mount_type in ('bind', 'volume')");
-    expect(source).not.toMatch(/\bdocker\s+(?:start|stop|restart|kill|rm|run|create|update|compose)\b/);
+    expect(source).not.toMatch(/\bdocker\s+(?:start|stop|restart|kill|rm|run|create|update)\b/);
+    expect(source).not.toMatch(/\bdocker\s+compose\s+(?:up|down|start|stop|restart|kill|rm|run|create)\b/);
     expect(source).not.toMatch(/\b(?:iptables|ip6tables|nft|systemctl)\s/);
+  });
+
+  it.each(['28.0.0', '28.0.99'])('recusa Docker Engine %s antes do inventário e dos controles', (version) => {
+    const aFixture = fixture({ dockerEngineVersion: version });
+
+    const result = run(aFixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Docker Engine >=28.1.0');
+    const calls = readFileSync(aFixture.calls, 'utf8');
+    expect(calls).toContain('docker:version --format {{.Server.Version}}');
+    expect(calls).not.toMatch(/^(?:storage|rollback|hardener):/m);
+    expect(calls).not.toMatch(/^docker:(?:ps|inspect|network|volume|image)\b/m);
+  });
+
+  it('aceita o limite exato Docker Engine 28.1.0 com Compose 2.36.0', () => {
+    const aFixture = fixture({
+      dockerEngineVersion: '28.1.0',
+      dockerComposeVersion: '2.36.0',
+    });
+
+    const result = run(aFixture);
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(result.stdout).toContain('Audit shared aprovado');
   });
 
   it('aprova storage, egress, projeto isolado e vizinho sem privilégio', () => {
@@ -1147,7 +1180,9 @@ describe('shared VPS read-only audit', () => {
     const result = run(aFixture);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('TRUST_PROXY_HOPS precisa ser exatamente 1');
-    expect(existsSync(aFixture.calls)).toBe(false);
+    const calls = readFileSync(aFixture.calls, 'utf8');
+    expect(calls).toContain('docker:version --format {{.Server.Version}}');
+    expect(calls).not.toContain('docker:ps ');
   });
 
   it('aceita Name e Driver ausentes como null quando não são obrigatórios no mount', () => {
@@ -1213,7 +1248,7 @@ describe('shared VPS read-only audit', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('swap ativo sem prova dm-crypt');
     const calls = existsSync(aFixture.calls) ? readFileSync(aFixture.calls, 'utf8') : '';
-    expect(calls).not.toContain('docker:');
+    expect(calls).not.toContain('docker:ps ');
     expect(calls).not.toContain('storage:');
   });
 
@@ -1250,7 +1285,7 @@ describe('shared VPS read-only audit', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/fs\.suid_dumpable/);
     const calls = existsSync(aFixture.calls) ? readFileSync(aFixture.calls, 'utf8') : '';
-    expect(calls).not.toContain('docker:');
+    expect(calls).not.toContain('docker:ps ');
   });
 
   it.each([
@@ -2157,7 +2192,9 @@ describe('shared VPS read-only audit', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('o adapter não altera o hook global');
-    expect(existsSync(aFixture.calls)).toBe(false);
+    const calls = readFileSync(aFixture.calls, 'utf8');
+    expect(calls).toContain('docker:version --format {{.Server.Version}}');
+    expect(calls).not.toContain('docker:ps ');
   });
 
   it.each([

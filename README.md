@@ -63,9 +63,9 @@ The AGPL applies to the software. If an operator modifies the program and lets u
 
 This path is for local evaluation and development. It builds the image from the checked-out source; it is not the hardened production path.
 
-Requirements: Docker Engine 28.0.0+, Docker Compose 2.36.0+, and a Discord
-application owned by you. The minimum Compose version is required by the
-router's named interfaces and deterministic gateway selection.
+Requirements: Docker Engine 28.1.0+, Docker Compose 2.36.0+, and a Discord
+application owned by you. The minimum versions are required by the router's
+named interfaces and deterministic gateway selection.
 
 ```bash
 git clone https://github.com/resolvicomai/kassinao.git
@@ -174,7 +174,7 @@ Only use the hardened path after the selected release is publicly verifiable:
 
 If any artifact is missing, build from source for local evaluation and wait for a verified release. Do not replace the missing digest with a moving tag and do not build the product on the production VPS.
 
-The hardened topology is **split-only**: a secret-free router receives all ingress, landing/docs/demo run in a second secret-free process, and the bot/private app/MCP run in the private core. The router uses one exclusive internal link per upstream; core and public never share a network, and only core and tunnel receive dedicated egress. Both production adapters require an amd64 or arm64 Linux VPS with systemd 249+, Docker Engine 28.0.0+, Docker Compose 2.36.0+, GNU coreutils, iptables/ip6tables, iproute2, util-linux, cryptsetup, e2fsprogs, curl, Python 3, tar/gzip, and dm-crypt/LUKS storage. Check architecture and versions before creating or mounting storage; the native bundle, deploy, and audit fail closed on incompatible hosts.
+The hardened topology is **split-only**: a secret-free router receives all ingress, landing/docs/demo run in a second secret-free process, and the bot/private app/MCP run in the private core. The router uses one exclusive internal link per upstream; core and public never share a network, and only core and tunnel receive dedicated egress. Both production adapters require an amd64 or arm64 Linux VPS with systemd 249+, Docker Engine 28.1.0+, Docker Compose 2.36.0+, GNU coreutils, iptables/ip6tables, iproute2, util-linux, cryptsetup, e2fsprogs, curl, Python 3, tar/gzip, and dm-crypt/LUKS storage. Engine 28.1 is the first release that applies Compose `interface_name`; a newer Compose client cannot add that daemon capability to Engine 28.0. Check architecture and versions before creating or mounting storage; the native bundle, deploy, and audit fail closed on incompatible hosts.
 
 Choose exactly one host adapter:
 

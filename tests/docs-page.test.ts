@@ -183,7 +183,7 @@ describe('documentation page', () => {
     expect(html).toContain('docker build -t kassinao-local:dev .');
     expect(html).toContain('docker compose --profile split-public up -d --no-build');
     expect(html).toContain('COMPOSE_PROFILES=split-public');
-    expect(html).toContain('Quickstart exige Docker Engine 28.0.0+ e Docker Compose 2.36.0+');
+    expect(html).toContain('Quickstart exige Docker Engine 28.1.0+ e Docker Compose 2.36.0+');
     expect(html).toContain('MCP_URL=http://localhost:8080');
     expect(html).toContain('PUBLIC_URL=http://localhost:8080');
     expect(html).toContain('DOCS_URL=http://localhost:8080');

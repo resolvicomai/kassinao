@@ -255,6 +255,28 @@ DOCKER_CONFIG_FILE="$DOCKER_CONFIG/config.json"
   die 'configuração isolada do cliente Docker diverge do objeto vazio selado'
 export DOCKER_CONFIG
 
+# `interface_name` só é aplicado pelo daemon a partir do Engine 28.1. O gate
+# precisa acontecer antes de criar o lock do deploy ou tocar qualquer estado.
+command -v docker >/dev/null 2>&1 || die 'Docker não encontrado'
+docker compose version >/dev/null 2>&1 || die 'Docker Compose v2 não encontrado'
+command -v python3 >/dev/null 2>&1 || die 'python3 é obrigatório para o gate de deploy'
+engine_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
+compose_version="$(docker compose version --short 2>/dev/null || true)"
+python3 - "$engine_version" "$compose_version" <<'PY' || \
+  die 'produção exige Docker Engine >=28.1.0 e Docker Compose >=2.36.0'
+import re
+import sys
+
+def version(raw):
+    match = re.match(r'^v?(\d+)\.(\d+)\.(\d+)', raw)
+    if not match:
+        raise SystemExit(1)
+    return tuple(map(int, match.groups()))
+
+if version(sys.argv[1]) < (28, 1, 0) or version(sys.argv[2]) < (2, 36, 0):
+    raise SystemExit(1)
+PY
+
 LOCK_FILE="$ROOT/.deploy.lock"
 command -v flock >/dev/null 2>&1 || die 'flock não encontrado'
 if [ ! -e "$LOCK_FILE" ] && [ ! -L "$LOCK_FILE" ]; then
@@ -767,9 +789,6 @@ else
     die 'active instance storage failed the dm-crypt/LUKS verification gate'
 fi
 
-command -v docker >/dev/null 2>&1 || die 'Docker não encontrado'
-docker compose version >/dev/null 2>&1 || die 'Docker Compose v2 não encontrado'
-command -v python3 >/dev/null 2>&1 || die 'python3 é obrigatório para o gate de deploy'
 python3 - "$privacy_effective_date" <<'PY' || \
   die 'PRIVACY_EFFECTIVE_DATE precisa ser uma data real e não futura'
 import datetime
@@ -780,22 +799,6 @@ try:
 except ValueError:
     raise SystemExit(1)
 if value > datetime.datetime.now(datetime.timezone.utc).date():
-    raise SystemExit(1)
-PY
-engine_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
-compose_version="$(docker compose version --short 2>/dev/null || true)"
-python3 - "$engine_version" "$compose_version" <<'PY' || \
-  die 'produção exige Docker Engine >=28.0.0 e Docker Compose >=2.36.0'
-import re
-import sys
-
-def version(raw):
-    match = re.match(r'^v?(\d+)\.(\d+)\.(\d+)', raw)
-    if not match:
-        raise SystemExit(1)
-    return tuple(map(int, match.groups()))
-
-if version(sys.argv[1]) < (28, 0, 0) or version(sys.argv[2]) < (2, 36, 0):
     raise SystemExit(1)
 PY
 docker_env=(env -i "PATH=$PATH" "HOME=$HOME" "LC_ALL=$LC_ALL" "LD_PRELOAD=${LD_PRELOAD-}" \

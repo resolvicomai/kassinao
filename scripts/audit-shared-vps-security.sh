@@ -108,6 +108,28 @@ DOCKER_CONFIG_FILE="$DOCKER_CONFIG/config.json"
 [ "$(sha256sum -- "$DOCKER_CONFIG_FILE" | awk '{print $1}')" = ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356 ] || \
   die 'configuração isolada do cliente Docker diverge do objeto vazio selado'
 export DOCKER_CONFIG
+
+# O Compose pode aceitar `interface_name` com um cliente novo, mas o daemon só
+# honra esse contrato a partir do Engine 28.1. Prove os dois lados antes de
+# continuar qualquer modo do audit.
+docker compose version >/dev/null 2>&1 || die 'Docker Compose v2 não encontrado'
+engine_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
+compose_version="$(docker compose version --short 2>/dev/null || true)"
+python3 - "$engine_version" "$compose_version" <<'PY' || \
+  die 'produção exige Docker Engine >=28.1.0 e Docker Compose >=2.36.0'
+import re
+import sys
+
+def version(raw):
+    match = re.match(r'^v?(\d+)\.(\d+)\.(\d+)', raw)
+    if not match:
+        raise SystemExit(1)
+    return tuple(map(int, match.groups()))
+
+if version(sys.argv[1]) < (28, 1, 0) or version(sys.argv[2]) < (2, 36, 0):
+    raise SystemExit(1)
+PY
+
 ENV_FILE="${KASSINAO_ENV_FILE:-$ROOT/.env}"
 [ "$ENV_FILE" = "$ROOT/.env" ] || die 'KASSINAO_ENV_FILE precisa apontar para o .env selado desta release'
 COMPOSE_FILE="$ROOT/docker-compose.yml"

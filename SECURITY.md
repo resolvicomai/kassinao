@@ -98,7 +98,7 @@ Do not infer availability from repository files. Before deploying, independently
 For a verified bundle, run the installer, deployment, and read-only audit that match the configured adapter: `install-host-controls.sh` / `audit-vps-security.sh` for `dedicated`, or `install-shared-host-controls.sh` / `audit-shared-vps-security.sh` for `shared`. Both paths use `deploy-release.sh`. Together with operator verification of host-level settings outside their scope, the selected path's release gates must cover at least:
 
 - SSH key-only access and intentional public listeners;
-- Docker/Compose versions and the rootful local daemon only;
+- Docker Engine 28.1.0+, Docker Compose 2.36.0+, and the rootful local daemon only;
 - host and Docker forwarding firewalls, metadata/private-network egress, and IPv4/IPv6 isolation;
 - loopback bindings, container user/capabilities/read-only filesystem/security options;
 - ownership and modes of release, environment, and data paths;
