@@ -958,7 +958,7 @@ export function buildAskContext(
       meetingId: chunk.meta.id,
       meetingDate: formatInTz(chunk.meta.startedAt, timezone).slice(0, 10),
       link: sourceLink(chunk),
-      label: chunk.atMs === undefined ? 'ata' : msToClock(chunk.atMs),
+      label: chunk.atMs === undefined ? (locale === 'pt' ? 'ata' : 'minutes') : msToClock(chunk.atMs),
       evidence: cleanOneLine(chunk.text, sourceTextLimit(chunk.kind)),
     });
     consumed += headerCost + line.length + 1;

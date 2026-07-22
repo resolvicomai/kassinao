@@ -546,3 +546,37 @@ export function t(locale: Locale, key: string, vars: Record<string, string | num
   }
   return text;
 }
+
+function templateVariables(template: string, value: string): Record<string, string> | undefined {
+  const names: string[] = [];
+  const pattern = template
+    .split(/(\{[^{}]+\})/u)
+    .map((part) => {
+      const variable = part.match(/^\{([^{}]+)\}$/u);
+      if (variable) {
+        names.push(variable[1]);
+        return '(.+?)';
+      }
+      return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    })
+    .join('');
+  const match = value.match(new RegExp(`^${pattern}$`, 'u'));
+  if (!match) return undefined;
+  return Object.fromEntries(names.map((name, index) => [name, match[index + 1]]));
+}
+
+/**
+ * Eventos automáticos ficam persistidos no idioma usado no Discord no momento
+ * da call. A web reconhece somente os templates conhecidos e os reapresenta no
+ * idioma atual; qualquer texto desconhecido continua intacto.
+ */
+export function localizeEvent(text: string, locale: Locale): string {
+  for (const [key, translations] of Object.entries(STRINGS)) {
+    if (!key.startsWith('event.')) continue;
+    for (const sourceLocale of ['pt', 'en'] as const) {
+      const variables = templateVariables(translations[sourceLocale], text);
+      if (variables) return t(locale, key, variables);
+    }
+  }
+  return text;
+}

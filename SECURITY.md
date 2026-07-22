@@ -10,7 +10,7 @@ Report privately through GitHub's **[Private vulnerability reporting](https://gi
 
 ## Good to know
 
-- Secrets live only in `.env` (git-ignored) and never in the repository.
+- Configured secrets live in `.env`; when `COOKIE_SECRET` is omitted, the generated cookie secret lives in `recordings/.cookie-secret`. Both paths are git-ignored and must stay out of backups and logs.
 - Recording access requires Discord OAuth plus current membership in the source server. Private calls stay limited to their participants/starter and current admins; gaining channel access later does not unlock their history.
 - Off-site backups should use an encrypted `rclone crypt` remote. The bundled script excludes cookie secrets and web/MCP session registries so restoring an archive cannot resurrect revoked access.
 - For maximum privacy, run transcription **locally** (`TRANSCRIBE_PROVIDER=command`) or enable **Zero Data Retention** on your cloud provider so audio isn't retained by third parties.

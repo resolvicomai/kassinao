@@ -53,7 +53,7 @@ This stores the token locally. Configure your MCP client just like Option A (the
 
 ## Where the token lives
 
-After first use, the refresh token (rotated on every renewal) is stored under `~/.config/kassinao-mcp/` in a `token-<profile>.json` file with `0600` permissions (`token.json` for the legacy exchange flow). Each generated connection gets an isolated profile automatically, so Claude and Cursor can coexist on the same computer when each uses its own token. Do not paste the same generated token into two clients. No recordings/transcripts are ever copied to your machine — the connector only talks HTTPS to the server. Tokens are pinned to the configured `KASSINAO_URL`; changing instances requires a token issued by the new instance.
+After first use, the refresh token (rotated on every renewal) is stored under `~/.config/kassinao-mcp/` in a `token-<profile>.json` file with `0600` permissions (`token.json` for the legacy exchange flow). Each generated connection gets an isolated profile automatically, so Claude and Cursor can coexist on the same computer when each uses its own token. Do not paste the same generated token into two clients. The connector does not sync or persist the meeting archive: it requests only the data needed for each tool response over HTTPS. Tokens are pinned to the configured `KASSINAO_URL`; changing instances requires a token issued by the new instance.
 
 ## Revoking
 

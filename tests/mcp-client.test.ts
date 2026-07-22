@@ -12,8 +12,8 @@ describe('URL do conector MCP', () => {
     expect(normalizeKassinaoUrl('https://kassinao.example.com/')).toBe('https://kassinao.example.com');
     expect(normalizeKassinaoUrl('http://localhost:8080')).toBe('http://localhost:8080');
     expect(() => normalizeKassinaoUrl('http://kassinao.example.com')).toThrow(/HTTPS/);
-    expect(() => normalizeKassinaoUrl('https://user:pass@example.com')).toThrow(/credenciais/);
-    expect(() => normalizeKassinaoUrl('https://example.com/sub')).toThrow(/caminho/);
+    expect(() => normalizeKassinaoUrl('https://user:pass@example.com')).toThrow(/credentials/);
+    expect(() => normalizeKassinaoUrl('https://example.com/sub')).toThrow(/path/);
   });
 });
 

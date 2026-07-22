@@ -1,8 +1,12 @@
 <div align="center">
 
-# Kassinão 🎙️
+<img src="docs/brand/kassinao-mark-64.png" width="72" height="72" alt="Kassinão logo">
 
-### Every speaker gets their own track. No AI guesswork about who said what.
+# Kassinão
+
+### Turn Discord calls into searchable memory.
+
+Open-source, self-hosted Discord bot with one track per speaker, named transcripts, meeting notes, tasks, and sourced answers.
 
 **🌎 Language:** **English** · [Português (BR)](README.pt-BR.md)
 
@@ -12,22 +16,27 @@
 
 <br/>
 
-[![See the live demo](https://img.shields.io/badge/▶_SEE_THE_LIVE_DEMO-5865F2?style=for-the-badge)](https://kassinao.resolvicomai.app/demo)
+[![View the live demo](https://img.shields.io/badge/VIEW_THE_LIVE_DEMO-5865F2?style=for-the-badge)](https://kassinao.resolvicomai.app/en/demo)
+[![Read the docs](https://img.shields.io/badge/READ_THE_DOCS-313338?style=for-the-badge)](https://kassinao.resolvicomai.app/en/docs)
+[![MCP connector](https://img.shields.io/badge/MCP_CONNECTOR-313338?style=for-the-badge)](https://www.npmjs.com/package/kassinao-mcp)
 
-A real recording page from a fictional 6-person, 1-hour meeting — transcript colored by speaker, AI-generated minutes, and player. No login needed.
+<br/>
 
-<sub>Prefer plain text? Read the same transcript &amp; minutes in [`docs/example/`](docs/example/).</sub>
+<a href="https://kassinao.resolvicomai.app/en/demo"><img src="docs/brand/discord-demo-en.gif" width="900" alt="Fictional Kassinão workflow inside Discord"></a>
+
+<sub>Fictional demo, real commands and product behavior. Meeting data is never taken from a real workspace.</sub>
 
 </div>
 
 ---
 
-Every AI notetaker guesses who's talking from voice patterns alone — and the guess falls apart the moment two people overlap or a name isn't English. Kassinão doesn't guess: each person in the call records to their own audio track, so the transcript, the meeting summary, and `/ask` always know, with certainty, who said what.
+Most meeting bots start from one mixed recording and use diarization to infer who spoke. Kassinão receives a separate Discord audio stream for each person, so speaker attribution comes from the account that produced the track, not a voice-pattern guess.
 
 ## Contents
 
 - [Knows who's talking](#knows-whos-talking)
 - [Becomes memory that answers](#becomes-memory-that-answers)
+- [See the finished meeting](#see-the-finished-meeting)
 - [Yours, with real control](#yours-with-real-control)
 - [Quick start](#quick-start)
 - [How it compares](#how-it-compares)
@@ -38,21 +47,27 @@ Every AI notetaker guesses who's talking from voice patterns alone — and the g
 
 - One separate audio track per speaker — attribution comes from how the call was recorded, not from a voice-pattern guess.
 - Automatic transcription with the right name on every line, via AssemblyAI, Groq, OpenAI, Gemini, or a fully local engine.
-- Real voice activity detection: only speech gets sent to the transcription API, so silence costs nothing and invents nothing.
-- Accents, crosstalk, and non-English names don't confuse it — there's no diarization step to confuse.
+- Voice activity detection normally sends only detected speech. If detection fails, Kassinão uses fixed chunks instead of discarding the call.
+- Crosstalk does not make Kassinão swap speaker identities because there is no diarization step assigning names to a mixed track.
 - Automatic retry and resume if a provider rate-limits mid-transcription.
 
 ## Becomes memory that answers
 
-- AI-generated meeting minutes: summary, decisions, and action items, each with an owner and a due date.
+- AI-generated meeting minutes: summary, decisions, and action items, with owners and due dates when the transcript supports them.
 - `/ask` right inside Discord — ask by topic, person, meeting date, or action deadline (for example, “Ana's actions due today”). The model selects relevant source IDs; the bot itself renders the real minutes/transcript evidence with authorized links. `days` is the fallback meeting window when the question has no period.
 - A web index with full-text search across every transcript, minutes doc, and note you're allowed to see.
 - An optional MCP connector plugs that same memory into Claude Desktop, Cursor, or any MCP-capable assistant.
 - Minutes get posted straight to a Discord channel the moment they're ready — no login required to read that summary.
 
+## See the finished meeting
+
+[![Fictional meeting rendered by the real Kassinão interface](docs/brand/meeting-demo-en.png)](https://kassinao.resolvicomai.app/en/demo)
+
+The public demo uses fictional meeting data and the same renderer as a real recording page. Interface language can change; the original meeting content is never silently translated.
+
 ## Yours, with real control
 
-- Self-hosted: it runs on your own Docker, and your recordings never touch a third-party SaaS.
+- Self-hosted: the bot and files run on your Docker. If you configure an external transcription or minutes provider, the required audio or text is sent to that provider; local processing keeps it on your server.
 - Access requires current Discord-server membership. Private calls stay limited to their participants, starter, and current admins — a leaked link opens nothing for a stranger.
 - Retention is a dial, not a default: expire audio on a schedule, keep the searchable text longer, or turn expiry off entirely.
 - Open source under AGPL-3.0-or-later — read it, fork it, self-host a modified version; just pass the source along too.
@@ -93,18 +108,18 @@ Then **invite the bot** (step 1 below) and run **`/record`** in a Discord voice 
 
 ### 3. (Optional) Turn on transcription + minutes
 
-Best quality for the money (AssemblyAI for speech, any big-context model via OpenRouter for the minutes):
+Recommended hosted setup (AssemblyAI for speech, a large-context model through OpenRouter for the minutes):
 
 ```env
 TRANSCRIBE_PROVIDER=assemblyai
-ASSEMBLYAI_API_KEY=...     # https://www.assemblyai.com — US$50 free credit
+ASSEMBLYAI_API_KEY=...     # https://www.assemblyai.com
 GROQ_API_KEY=gsk_...       # optional fallback engine (https://console.groq.com)
 OPENROUTER_API_KEY=sk-or-...  # https://openrouter.ai — minutes LLM (default: google/gemini-2.5-flash)
 MINUTES_ENABLED=auto
 ```
 
-OpenRouter is a paid LLM gateway (one key, many models, its own credits) — the minutes cost roughly a few cents per meeting.
-Zero-cost path: `TRANSCRIBE_PROVIDER=groq` with just a `GROQ_API_KEY` (free tier: 8 audio-hours/day; minutes then run on Groq's free LLM in map-reduce for long calls).
+OpenRouter is a paid LLM gateway (one key, many models, its own credits). Cost depends on the selected model and transcript size.
+For a lighter setup, use `TRANSCRIBE_PROVIDER=groq` with a `GROQ_API_KEY`; available quotas and pricing depend on the account.
 
 ## How it compares
 
@@ -123,7 +138,7 @@ Craig records. Otter summarizes. Kassinão knows who's talking.
 
 ## Reference
 
-Day-two material for people who already decided to run it — not required reading before you try the demo.
+Day-two material for people who already decided to run it. It is not required reading before installation.
 
 ### Configuration
 
@@ -135,7 +150,7 @@ All options live in [`.env.example`](.env.example). Key ones:
 | `BASE_URL` | `http://localhost:8080` | Public URL for links and OAuth |
 | `GUILD_ID` | — | Registers commands instantly in that server |
 | `TUNNEL_TOKEN` / `COMPOSE_PROFILES` | — | Cloudflare Tunnel token + the `tunnel` profile (recommended HTTPS path) |
-| `REPO_PUBLIC` | `false` | `true` shows the GitHub/source links and the "auditable" claim on the landing page |
+| `REPO_PUBLIC` | `false` | `true` shows source/install links inside private app pages; the public landing always links to this repository |
 | `RETENTION_DAYS` · `MAX_RECORDING_HOURS` | `7` · `6` | Audio retention and max recording length (`0` retention = unlimited: nothing expires, manual delete only) |
 | `TEXT_RETENTION_DAYS` | `90` | How long transcript/minutes/notes outlive the audio (never below `RETENTION_DAYS`; `0` = forever) |
 | `TRANSCRIBE_PROVIDER` | `none` | `none` / `assemblyai` / `openai` / `groq` / `gemini` / `command` |
@@ -173,19 +188,19 @@ The MCP connector applies the exact same access check as the web page, meeting b
 
 ### Transcription backends
 
-| Provider | Cost (per audio hour, **per track**) | pt-BR quality | Privacy | Notes |
+| Provider | Pricing | pt-BR quality | Privacy | Notes |
 |---|---|---|---|---|
-| **AssemblyAI** (`universal-3-5-pro`) | ~US$0.21 (**US$50 free credit**) | Top-3 on the Open ASR Leaderboard | Cloud | Default pick; auto-falls back to Groq if a `GROQ_API_KEY` is set |
-| **Groq** (`whisper-large-v3`) | ~US$0.11 (free tier: 8 audio-h/day) | Excellent | Cloud (enable ZDR) | Best zero-cost option |
-| **OpenAI** (`whisper-1`) | ~US$0.36 | Excellent | Cloud | Timestamped segments |
-| **Gemini** (`gemini-2.0-flash`, default) | ~cents | Good | Cloud (paid tier only) | Free tier trains on your audio — avoid |
+| **AssemblyAI** (`universal-3-5-pro`) | [Current pricing](https://www.assemblyai.com/pricing) | Strong | Cloud | Default pick; auto-falls back to Groq if a `GROQ_API_KEY` is set |
+| **Groq** (`whisper-large-v3`) | [Current pricing](https://groq.com/pricing) | Excellent | Cloud (enable ZDR when available) | Fast hosted Whisper |
+| **OpenAI** (`whisper-1`) | [Current pricing](https://openai.com/api/pricing/) | Excellent | Cloud | Timestamped segments |
+| **Gemini** (`gemini-3.5-flash`, default) | [Current pricing](https://ai.google.dev/gemini-api/docs/pricing) | Good | Cloud | Multimodal transcription through Gemini API |
 | **Local** (`faster-whisper`) | Free | Good (`small`+) | 🔒 Never leaves your server | Slower without a GPU; see [`scripts/transcribe-local.py`](scripts/transcribe-local.py) |
 
-Recording is multi-track, but only **speech** is sent (VAD trims the silence-padded tracks), so a 1-hour call costs roughly the total spoken time — not hours × speakers. AI minutes run once per meeting (OpenRouter or Groq), a few cents each at most.
+Recording is multi-track. VAD normally trims silence before upload; if detection fails, fixed chunks are used so the call is not lost and those chunks may include silence. Actual usage and cost depend on speech time, fallback behavior, provider, and configured model. AI minutes run once per meeting through OpenRouter or Groq.
 
 ## How it works
 
-Opus packets from each speaker are decoded to PCM and fed to **one ffmpeg per speaker** writing **continuous FLAC** (silence between speech compresses to almost nothing and keeps every track in sync). When the recording stops, the single **mix is pre-cooked** right away so the player starts instantly; the other downloads (MP3/FLAC/Audacity) are still cooked on demand and cached. Transcription and minutes run in a **serial queue** after the call: **VAD** (ffmpeg `silencedetect`) trims each track so **only speech segments** are sent to the ASR provider (**AssemblyAI** — with Groq fallback —, **Groq**, **OpenAI**, **Gemini**, or a **local** command), then the minutes LLM runs via **OpenRouter** or **Groq**; the web page refreshes itself until they're ready. The page authenticates with **Discord OAuth** (`identify`) and the backend re-checks with Discord who may open each recording.
+Opus packets from each speaker are decoded to PCM and fed to **one ffmpeg per speaker** writing **continuous FLAC** (silence between speech compresses to almost nothing and keeps every track in sync). When the recording stops, the single **mix is pre-cooked** right away so the player starts instantly; the other downloads (MP3/FLAC/Audacity) are still cooked on demand and cached. Transcription and minutes run in a **serial queue** after the call: **VAD** (ffmpeg `silencedetect`) normally sends speech segments to the ASR provider and falls back to fixed chunks if detection fails, then the minutes LLM runs via **OpenRouter** or **Groq**. The web page refreshes itself until they're ready. The page authenticates with **Discord OAuth** (`identify`) and the backend re-checks with Discord who may open each recording.
 
 ```mermaid
 flowchart LR
