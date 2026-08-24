@@ -5,6 +5,7 @@ import express, { Express, NextFunction, Request, Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { config } from '../config';
 import { freeMB } from '../disk';
+import { client } from '../discord/client';
 import { isClientReady } from '../discord/ready';
 import { Locale } from '../i18n';
 import { operationalError, operationalPii } from '../operationalLog';
@@ -394,6 +395,27 @@ export function webMutationRouteClass(req: Request): WebMutationRouteClass {
 }
 
 /**
+ * A meta guarda a URL do avatar do momento da gravação, com o hash de então.
+ * Quando a pessoa troca de foto no Discord, aquela URL passa a devolver 404.
+ * Se o gateway ainda conhece a pessoa, serve a foto ATUAL: custa nada, porque
+ * só lê cache local, sem chamada REST. Quem não estiver em cache mantém a URL
+ * antiga, e a página cai para a inicial se ela já tiver morrido.
+ */
+function withFreshAvatars<T extends { guildId: string; participants: { id: string; avatar: string | null }[] }>(
+  meta: T,
+): T {
+  if (!isClientReady()) return meta;
+  const guild = client.guilds.cache.get(meta.guildId);
+  for (const participant of meta.participants) {
+    const atual =
+      guild?.members.cache.get(participant.id)?.displayAvatarURL({ size: 128, extension: 'png' }) ??
+      client.users.cache.get(participant.id)?.displayAvatarURL({ size: 128, extension: 'png' });
+    if (atual) participant.avatar = atual;
+  }
+  return meta;
+}
+
+/**
  * Inexistente e sem acesso são deliberadamente indistinguíveis. `switchAccountFor`
  * vem do caminho PEDIDO, nunca da meta, para que os dois casos gerem o mesmo HTML.
  */
@@ -527,7 +549,7 @@ export async function collectWebLibraryPage(
     candidatesScanned++;
     // A cópia acontece só aqui: quem passou pela ACL segue para o template como
     // objeto próprio, e o índice em memória não escapa do escopo desta varredura.
-    if (access.view) items.push({ meta: copyMeta(meta), canDelete: access.delete });
+    if (access.view) items.push({ meta: withFreshAvatars(copyMeta(meta)), canDelete: access.delete });
   }
 
   return {
@@ -1705,7 +1727,7 @@ export function createWebApp(): Express {
       else minutesNotice = result.status === 'too_large' ? MSG.minutesTooLarge[l] : MSG.minutesUnavailable[l];
     }
     res.type('html').send(
-      recordingPage(meta, {
+      recordingPage(withFreshAvatars(meta), {
         live,
         canDelete: access.delete,
         user,

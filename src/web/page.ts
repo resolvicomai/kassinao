@@ -242,6 +242,24 @@ function clockTime(ms: number, lang: Locale): string {
 }
 
 const TZ_SCRIPT = `<script${CSP_NONCE_ATTR}>
+// A URL do avatar guardada na meta congela o hash do Discord. Quando a pessoa
+// troca de foto, aquela URL passa a devolver 404 e a página mostrava um ícone
+// de imagem quebrada. Aqui ela vira a inicial, o mesmo visual de quem nunca
+// teve foto. Cobre também quem saiu do servidor e teve o avatar removido.
+document.querySelectorAll('img[data-initial]').forEach(function(img){
+  var trocar = function(){
+    if (!img.parentNode) return;
+    var s = document.createElement('span');
+    s.className = img.dataset.fallback || '';
+    s.textContent = img.dataset.initial || '';
+    s.setAttribute('aria-hidden', 'true');
+    if (img.title) s.title = img.title;
+    img.replaceWith(s);
+  };
+  img.addEventListener('error', trocar);
+  // Se a imagem já falhou antes deste script rodar, o evento não vem mais.
+  if (img.complete && img.naturalWidth === 0) trocar();
+});
 document.querySelectorAll('time[data-ts]').forEach(function(el){
   try {
     var opts = el.dataset.fmt === 'clock' ? {timeStyle:'short'}
@@ -395,7 +413,7 @@ function shell(
   const themeBtn = `<button type="button" class="thm" aria-pressed="false" data-to-light="${pt ? 'Mudar para tema claro' : 'Switch to light theme'}" data-to-dark="${pt ? 'Mudar para tema escuro' : 'Switch to dark theme'}"><span class="to-light">${pt ? 'Claro' : 'Light'}</span><span class="to-dark">${pt ? 'Escuro' : 'Dark'}</span></button>`;
   const signIn = `<a class="tl" href="/auth/login?next=%2Fapp">${pt ? 'Entrar' : 'Sign in'}</a>`;
   const userIdentity = opts.user
-    ? `<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : `<span class="user-initial" aria-hidden="true">${esc(opts.user.name.slice(0, 1).toUpperCase())}</span>`}<span class="user-name">${esc(opts.user.name)}</span></span>`
+    ? `<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="" data-fallback="user-initial" data-initial="${esc(opts.user.name.slice(0, 1).toUpperCase())}">` : `<span class="user-initial" aria-hidden="true">${esc(opts.user.name.slice(0, 1).toUpperCase())}</span>`}<span class="user-name">${esc(opts.user.name)}</span></span>`
     : '';
   const logout = opts.user
     ? `<form class="logout-form" method="post" action="/app/logout"><button class="tl" type="submit">${pt ? 'Sair' : 'Sign out'}</button></form>`
@@ -561,7 +579,7 @@ export function recordingPage(
       ? `<div class="people">${meta.participants
           .map(
             (pt, i) =>
-              `<span class="person">${pt.avatar ? `<img src="${esc(pt.avatar)}" alt="">` : `<span class="person-initial c${i % SPEAKER_COLORS}" aria-hidden="true">${esc(pt.name.slice(0, 1).toUpperCase())}</span>`}<span class="who c${i % SPEAKER_COLORS}">${esc(pt.name)}</span></span>`,
+              `<span class="person">${pt.avatar ? `<img src="${esc(pt.avatar)}" alt="" data-fallback="person-initial c${i % SPEAKER_COLORS}" data-initial="${esc(pt.name.slice(0, 1).toUpperCase())}">` : `<span class="person-initial c${i % SPEAKER_COLORS}" aria-hidden="true">${esc(pt.name.slice(0, 1).toUpperCase())}</span>`}<span class="who c${i % SPEAKER_COLORS}">${esc(pt.name)}</span></span>`,
           )
           .join('')}</div>`
       : `<p class="muted">${live ? p(l, 'nobody') : p(l, 'nobodyDone')}</p>`;
@@ -1331,7 +1349,7 @@ function renderTranscription(
     const av = avatarOf.get(curSpeaker);
     blocks.push(
       `<div class="tblock" data-sp="${esc(curSpeaker)}">
-        <div class="thead">${av ? `<img src="${esc(av)}" alt="">` : `<span class="speaker-initial c${ci}" aria-hidden="true">${esc(curSpeaker.slice(0, 1).toUpperCase())}</span>`}<span class="who c${ci}">${esc(curSpeaker)}</span></div>
+        <div class="thead">${av ? `<img src="${esc(av)}" alt="" data-fallback="speaker-initial c${ci}" data-initial="${esc(curSpeaker.slice(0, 1).toUpperCase())}">` : `<span class="speaker-initial c${ci}" aria-hidden="true">${esc(curSpeaker.slice(0, 1).toUpperCase())}</span>`}<span class="who c${ci}">${esc(curSpeaker)}</span></div>
         ${curParas.join('')}
       </div>`,
     );
@@ -1580,7 +1598,7 @@ export function recordingsIndexPage(
             .slice(0, 4)
             .map((person, index) =>
               person.avatar
-                ? `<img src="${esc(person.avatar)}" alt="" title="${esc(person.name)}">`
+                ? `<img src="${esc(person.avatar)}" alt="" title="${esc(person.name)}" data-fallback="row-person-initial c${index % SPEAKER_COLORS}" data-initial="${esc(person.name.slice(0, 1).toUpperCase())}">`
                 : `<span class="row-person-initial c${index % SPEAKER_COLORS}" title="${esc(person.name)}">${esc(person.name.slice(0, 1).toUpperCase())}</span>`,
             )
             .join(
