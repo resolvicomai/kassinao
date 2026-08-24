@@ -532,6 +532,79 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(en).toContain('href="http://localhost:8080/en">Back home</a>');
   });
 
+  it('avatar tem inicial de reserva, para não virar imagem quebrada quando a pessoa troca de foto', () => {
+    const user: WebUser = {
+      typ: 'session',
+      id: 'u-av',
+      name: 'Fulano',
+      avatar: 'https://cdn.discordapp.com/avatars/u-av/hash-antigo.png?size=64',
+      scope: 'full',
+      exp: Date.now() + 60_000,
+      jti: 'sid-av',
+    };
+    const meta: RecordingMeta = {
+      id: 'gravacao-avatar',
+      guildId: 'g-av',
+      guildName: 'Servidor',
+      voiceChannelId: 'v1',
+      voiceChannelName: 'Reunião',
+      startedBy: { id: 'u-av', name: 'Fulano' },
+      startedAt: Date.now() - 60_000,
+      endedAt: Date.now(),
+      status: 'done',
+      participants: [
+        {
+          id: 'p1',
+          name: 'Ana',
+          // Hash congelado no momento da gravação: morre quando ela troca a foto.
+          avatar: 'https://cdn.discordapp.com/avatars/p1/hash-que-vai-morrer.png?size=128',
+          trackFile: '1-p1.flac',
+          index: 1,
+        },
+      ],
+      events: [],
+      notes: [],
+    };
+
+    const html = recordingPage(meta, { live: false, canDelete: false, lang: 'pt', user });
+
+    // A imagem carrega normalmente enquanto a URL viver.
+    expect(html).toContain('hash-que-vai-morrer.png');
+    // E carrega junto o que colocar no lugar dela se a URL morrer.
+    expect(html).toContain('data-fallback="person-initial');
+    expect(html).toContain('data-initial="A"');
+    // O mesmo vale para a identidade em sessão no cabeçalho.
+    expect(html).toContain('data-fallback="user-initial"');
+    expect(html).toContain('data-initial="F"');
+    // E o script que faz a troca precisa estar na página.
+    expect(html).toContain('img[data-initial]');
+  });
+
+  it('lista vazia mostra a identidade em sessão e a troca de conta, com ou sem paginação', () => {
+    const user: WebUser = {
+      typ: 'session',
+      id: 'u-vazio',
+      name: 'Conta Errada',
+      avatar: null,
+      scope: 'full',
+      exp: Date.now() + 60_000,
+      jti: 'sid-vazio',
+    };
+
+    // Numa instância populada a PRIMEIRA página já vem com cursor, então é o
+    // estado que a maioria vê. Foi aqui que a dica sumiu numa revisão anterior.
+    const paginada = recordingsIndexPage([], { user, lang: 'pt', nextCursor: 'cursor-opaco' });
+    expect(paginada).toContain('Conta Errada');
+    expect(paginada).toContain('switch=1');
+    // Sem o texto de primeira execução, que contradiria os controles de paginação.
+    expect(paginada).not.toContain('Para começar uma, entre num canal de voz');
+
+    const primeiraVez = recordingsIndexPage([], { user, lang: 'pt' });
+    expect(primeiraVez).toContain('Conta Errada');
+    expect(primeiraVez).toContain('switch=1');
+    expect(primeiraVez).toContain('Para começar uma, entre num canal de voz');
+  });
+
   it('app privado renderiza EN completo e preserva query ao trocar idioma', () => {
     const user: WebUser = {
       typ: 'session',
@@ -1110,7 +1183,11 @@ describe('regressões de privacidade e acessibilidade da web', () => {
       },
     });
     expect(html).toContain('method="post" action="/app/logout"');
-    expect(html).toContain('<span class="mobile-logout"><form class="logout-form"');
+    // No mobile o rodapé da sidebar não é renderizado, então o controle carrega a
+    // identidade em sessão antes do form: é o único lugar onde quem abriu o link
+    // na conta errada consegue ver isso.
+    expect(html).toContain('<span class="mobile-logout"><span class="user">');
+    expect(html).toContain('<span class="user-name">Alice</span></span><form class="logout-form"');
     expect(html).not.toContain('href="/auth/logout"');
   });
 });

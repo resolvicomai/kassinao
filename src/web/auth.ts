@@ -309,7 +309,7 @@ export function redirectUri(): string {
   return `${appOrigin()}/auth/callback`;
 }
 
-export function beginLogin(res: Response, next: string): void {
+export function beginLogin(res: Response, next: string, opts: { forceAccountChoice?: boolean } = {}): void {
   const state = crypto.randomBytes(16).toString('hex');
   // OAuth só pode voltar ao namespace privado. Além de redirects externos, isto
   // impede que um login iniciado pelo app seja usado como ponte para demo/docs.
@@ -340,6 +340,10 @@ export function beginLogin(res: Response, next: string): void {
     // sem prompt:'none' — num app novo ninguém autorizou ainda, e prompt:'none'
     // devolveria consent_required (sem code) e quebraria o 1º login. O Discord
     // mostra o consentimento na 1ª vez e pula automaticamente nas seguintes.
+    // Esse "pular" é o que prende quem está na conta errada: sair e entrar de
+    // novo devolve a mesma conta em silêncio. prompt:'consent' traz de volta a
+    // tela do Discord, que é onde se troca de conta. Só sob pedido explícito.
+    ...(opts.forceAccountChoice ? { prompt: 'consent' } : {}),
   });
   res.redirect(`https://discord.com/oauth2/authorize?${params}`);
 }

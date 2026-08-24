@@ -187,10 +187,19 @@ export class RecordingAdmissionGuard {
     });
   }
 
-  /** Recupera reservas após crash e libera apenas trabalhos comprovadamente terminais. */
+  /**
+   * Recupera reservas após crash e libera apenas trabalhos comprovadamente terminais.
+   *
+   * `reapReservations` só pode ser ligado no boot. Uma reserva órfã só existe
+   * depois de um crash, e uma reserva ainda em voo (entre reserve e commit, que
+   * têm um await no meio) é indistinguível de uma órfã olhando só o estado. Se o
+   * reconcile de runtime recolhesse reservas, um resume do gateway durante a
+   * entrada do bot no canal derrubaria a gravação com "storage-unavailable".
+   */
   reconcile(
     pendingRecordings: ReadonlySet<string> | ReadonlyMap<string, PendingRecordingWork>,
     now = Date.now(),
+    opts: { reapReservations?: boolean } = {},
   ): boolean {
     if (!this.storageHealthy || !Number.isFinite(now)) return false;
     const pendingRecordingIds =
@@ -198,6 +207,7 @@ export class RecordingAdmissionGuard {
     const candidate = cloneState(this.state);
     candidate.entries = candidate.entries.flatMap((entry) => {
       if (entry.status === 'reserved') {
+        if (!opts.reapReservations) return [entry];
         if (!entry.recordingId || !pendingRecordingIds.has(entry.recordingId)) return [];
         return [{ ...entry, status: 'started' as const, startedAt: entry.createdAt, processingPending: true }];
       }

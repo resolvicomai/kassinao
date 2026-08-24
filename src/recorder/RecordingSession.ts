@@ -678,9 +678,24 @@ export class RecordingSession {
       this.silenceWarned = false;
       track.write(chunk);
     });
-    decoder.on('error', (err) =>
-      operationalFailure(`Erro no decoder user=${operationalPii(userId)} error=${operationalError(err)}.`),
-    );
+    decoder.on('error', (err) => {
+      operationalFailure(`Erro no decoder user=${operationalPii(userId)} error=${operationalError(err)}.`);
+      // O decoder morto para de escrever na faixa, então o resto da fala some da
+      // gravação. Sem marcar, a reunião é entregue como completa e ninguém tem
+      // como saber que faltou áudio (a transcrição e a ata só herdam o buraco).
+      if (!this.meta.audioIncomplete) {
+        this.meta.audioIncomplete = true;
+        this.addEvent(t(this.locale, 'event.audio-incomplete'), true);
+        // Persistir na hora, como o aviso de teto de faixas: enquanto a call segue,
+        // o disco e o painel do Discord não podem continuar mostrando uma gravação
+        // saudável. A guarda acima faz isto rodar no máximo uma vez por sessão.
+        saveMeta(this.meta);
+        this.schedulePanelUpdate();
+      }
+      // Derruba a subscription para o cleanup rodar agora: a próxima fala reassina
+      // com um decoder limpo em vez de esperar a janela de 1s de silêncio.
+      opusStream.destroy();
+    });
     opusStream.on('error', (err) =>
       operationalFailure(`Erro no stream de voz user=${operationalPii(userId)} error=${operationalError(err)}.`),
     );

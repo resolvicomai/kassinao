@@ -1102,7 +1102,12 @@ export const APP_CSS = `
     }
     .sidebar-nav .nav-icon { height: 17px; }
     .app-topbar { height: 56px; padding-inline: 18px; }
-    .mobile-logout { display: inline-flex; }
+    .mobile-logout { display: inline-flex; align-items: center; gap: 8px; }
+    /* A identidade em sessão é o que resolve "por que não vejo esta gravação?" —
+       no mobile o rodapé da sidebar some, então ela precisa aparecer aqui. */
+    .mobile-logout .user { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+    .mobile-logout .user img, .mobile-logout .user-initial { height: 22px; width: 22px; }
+    .mobile-logout .user-name { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .page-frame { padding: 24px 18px 44px; }
     .meeting-layout:has(.meeting-context), .recording-layout:has(.recording-context), .connect-layout { grid-template-columns: minmax(0, 1fr); }
     .meeting-context, .recording-context, .context-rail, .connect-aside { position: static; }

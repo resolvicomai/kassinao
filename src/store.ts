@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
 import { t } from './i18n';
-import { operationalInfo, operationalPii } from './operationalLog';
+import { operationalError, operationalInfo, operationalPii, operationalWarn } from './operationalLog';
 import {
   MAX_MINUTES_BYTES,
   MAX_MINUTES_ITEMS_PER_COLLECTION,
@@ -295,6 +295,16 @@ function sortMetaTimeline(): void {
   metaTimelineIds?.sort(compareMetaIds);
 }
 
+/** Evita inundar o log quando a varredura falha a cada request. */
+let lastScanFailureLogAt = 0;
+
+function logScanFailure(message: string): void {
+  const now = Date.now();
+  if (now - lastScanFailureLogAt < 60_000) return;
+  lastScanFailureLogAt = now;
+  operationalWarn(message);
+}
+
 function ensureMetaCache(): void {
   if (metaCache && guildMetaTimelineIds && metaTimelineIds) return;
   const cache = new Map<string, RecordingMeta>();
@@ -302,9 +312,19 @@ function ensureMetaCache(): void {
   let entries: fs.Dirent[] = [];
   try {
     entries = fs.readdirSync(config.recordingsDir, { withFileTypes: true });
-  } catch {
-    // Diretório ainda inexistente = arquivo vazio; saveMeta o criará depois.
+  } catch (err) {
+    // ENOENT é o diretório ainda inexistente: arquivo vazio de verdade, e saveMeta
+    // o criará depois. Qualquer outro erro (EACCES, EIO, EMFILE) NÃO pode virar um
+    // índice vazio guardado para sempre — seriam zero gravações para todo mundo até
+    // alguém reiniciar. Sai sem cachear, e a próxima chamada varre de novo.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logScanFailure(
+        `Índice de gravações não pôde ser varrido: ${operationalError(err)}. Nova tentativa no próximo uso.`,
+      );
+      return;
+    }
   }
+  let skipped = 0;
   for (const entry of entries) {
     if (!entry.isDirectory() || !VALID_ID.test(entry.name)) continue;
     try {
@@ -315,10 +335,16 @@ function ensureMetaCache(): void {
       const ids = byGuild.get(meta.guildId) ?? [];
       ids.push(meta.id);
       byGuild.set(meta.guildId, ids);
-    } catch {
-      // Diretório incompleto/corrompido não entra no índice.
+    } catch (err) {
+      // Diretório incompleto/corrompido não entra no índice. Silenciar isso já
+      // escondeu gravação intacta que ficou fora por erro transitório de leitura.
+      skipped++;
+      logScanFailure(
+        `Gravação fora do índice recording=${operationalPii(entry.name)}: ${operationalError(err)}. Ela ainda abre pelo id direto.`,
+      );
     }
   }
+  if (skipped > 0) operationalWarn(`Índice de gravações construído com ${skipped} diretório(s) ilegível(is).`);
   metaCache = cache;
   guildMetaTimelineIds = byGuild;
   metaTimelineIds = [...cache.keys()];
@@ -377,19 +403,43 @@ export function saveMeta(meta: RecordingMeta): void {
   cacheMeta(meta);
 }
 
+/**
+ * O índice é cache POSITIVO, nunca a autoridade sobre existência: um miss cai no
+ * disco. Sem isso, qualquer gravação ausente do único scan de boot (symlink de
+ * diretório, erro transitório de leitura, restauração por fora do processo)
+ * responderia 404 até o processo reiniciar.
+ */
 export function readMeta(id: string): RecordingMeta | undefined {
   if (!VALID_ID.test(id)) return undefined;
-  if (metaCache) {
-    const cached = metaCache.get(id);
-    return cached ? cloneMeta(cached) : undefined;
-  }
+  const cached = metaCache?.get(id);
+  if (cached) return cloneMeta(cached);
   try {
     const meta = JSON.parse(fs.readFileSync(metaPath(id), 'utf8')) as RecordingMeta;
+    // Mesma invariante do índice: o diretório manda, um meta.json com outro id não vale.
+    if (meta.id !== id) return undefined;
     meta.notes ??= []; // gravações de versões antigas
+    cacheMeta(meta);
     return meta;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Leitura SEM cópia, só para a varredura de ACL da listagem: ela descarta a maioria
+ * das candidatas, então clonar todas antes de filtrar é trabalho jogado fora. Quem
+ * recebe isto não pode guardar nem mutar o objeto (é o próprio item do índice);
+ * `readMeta` continua sendo o caminho normal, com cópia.
+ */
+export function peekMeta(id: string): Readonly<RecordingMeta> | undefined {
+  if (!VALID_ID.test(id)) return undefined;
+  ensureMetaCache();
+  return metaCache?.get(id) ?? readMeta(id);
+}
+
+/** Cópia defensiva para quem for guardar ou mutar uma meta vinda de `peekMeta`. */
+export function copyMeta(meta: Readonly<RecordingMeta>): RecordingMeta {
+  return cloneMeta(meta as RecordingMeta);
 }
 
 export function transcriptPath(id: string): string {
@@ -584,9 +634,7 @@ export function saveMinutes(id: string, minutes: MeetingMinutes): void {
   writePrivateJsonAtomic(minutesPath(id), minutes);
 }
 
-export function deleteRecording(id: string): void {
-  if (!VALID_ID.test(id)) return;
-  fs.rmSync(recordingDir(id), { recursive: true, force: true });
+function forgetMetaFromIndex(id: string): void {
   const previous = metaCache?.get(id);
   if (previous) {
     const guildTimeline = guildMetaTimelineIds?.get(previous.guildId);
@@ -595,6 +643,59 @@ export function deleteRecording(id: string): void {
   }
   metaCache?.delete(id);
   removeTimelineId(metaTimelineIds, id);
+}
+
+/**
+ * Prova de ausência. ENOENT é o caso normal; ENOTDIR significa que o caminho do
+ * diretório da gravação deixou de ser diretório, então o meta.json também não
+ * existe mais. Qualquer outro errno (EACCES, EIO) significa "não sei", e aí a
+ * gravação continua no índice: tratar ilegível como inexistente já fez gravação
+ * intacta sumir do acervo inteiro.
+ */
+function metaFileMissing(id: string): boolean {
+  try {
+    fs.statSync(metaPath(id));
+    return false;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR';
+  }
+}
+
+/**
+ * Remove a gravação. Propaga o erro do filesystem: quem pediu para apagar precisa
+ * saber que não deu, então a rota web responde 500 em vez de fingir sucesso.
+ *
+ * O índice, porém, é atualizado pela pós-condição REAL (o meta.json sumiu), e não
+ * por "rmSync retornou". Uma remoção parcial que derrubou o meta.json e parou num
+ * EACCES deixava a listagem e a página renderizando título, participantes e ata
+ * de uma gravação cujos arquivos já não existem.
+ */
+export function deleteRecording(id: string): void {
+  if (!VALID_ID.test(id)) return;
+  const dir = recordingDir(id);
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // EBUSY/ENOTEMPTY costumam ser corrida com um download ou com o cook ainda
+    // fechando arquivo, e uma segunda tentativa resolve. EACCES/EPERM não.
+    if (code === 'EBUSY' || code === 'ENOTEMPTY') {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+        forgetMetaFromIndex(id);
+        return;
+      } catch {
+        // segue para o tratamento de falha abaixo
+      }
+    }
+    // Só sai do índice com ausência PROVADA. existsSync devolve false também para
+    // EACCES/EIO, e tratar "não consegui ler" como "não existe mais" faria a
+    // gravação intacta desaparecer do acervo de todo mundo até o próximo restart.
+    if (metaFileMissing(id)) forgetMetaFromIndex(id);
+    throw err;
+  }
+  forgetMetaFromIndex(id);
 }
 
 export function listMetas(): RecordingMeta[] {

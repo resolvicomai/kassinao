@@ -196,43 +196,70 @@ function p(l: Locale, key: string, vars: Record<string, string> = {}): string {
 // (CSP: sem fonte/CSS/JS/imagem externa); respeita prefers-reduced-motion.
 
 /**
+ * Formatadores de data reusados entre chamadas. Passar opções para toLocaleString
+ * constrói um Intl.DateTimeFormat a cada timestamp, e uma listagem renderiza um
+ * por cartão (uma gravação com muitos eventos, um por evento). A chave cobre tudo
+ * que varia: idioma, estilo e o fuso do servidor.
+ */
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function formatter(dateLocale: string, style: 'full' | 'day' | 'clock'): Intl.DateTimeFormat {
+  const key = `${dateLocale}|${style}|${config.timezone}`;
+  let dtf = dateFormatters.get(key);
+  if (!dtf) {
+    const options: Intl.DateTimeFormatOptions =
+      style === 'clock'
+        ? { hour: '2-digit', minute: '2-digit', timeZone: config.timezone }
+        : style === 'day'
+          ? { day: 'numeric', month: 'long', year: 'numeric', timeZone: config.timezone }
+          : { dateStyle: 'long', timeStyle: 'short', timeZone: config.timezone };
+    dtf = new Intl.DateTimeFormat(dateLocale, options);
+    dateFormatters.set(key, dtf);
+  }
+  return dtf;
+}
+
+/**
  * Data localizada: renderiza no fuso do SERVIDOR como fallback (config.timezone,
  * default UTC) e marca o epoch para o script no navegador reescrever
  * no fuso de quem abre a página - como o Discord faz.
  */
 function datetime(ms: number, lang: Locale): string {
-  const dateLocale = lang === 'pt' ? 'pt-BR' : 'en-US';
-  const fallback = new Date(ms).toLocaleString(dateLocale, {
-    dateStyle: 'long',
-    timeStyle: 'short',
-    timeZone: config.timezone,
-  });
+  const fallback = formatter(lang === 'pt' ? 'pt-BR' : 'en-US', 'full').format(new Date(ms));
   return `<time data-ts="${ms}">${esc(fallback)}</time>`;
 }
 
 /** Data sem hora ("2 de julho de 2026"), reescrita pro fuso do navegador. */
 function dateOnly(ms: number, lang: Locale): string {
-  const fallback = new Date(ms).toLocaleDateString(lang === 'pt' ? 'pt-BR' : 'en-US', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: config.timezone,
-  });
+  const fallback = formatter(lang === 'pt' ? 'pt-BR' : 'en-US', 'day').format(new Date(ms));
   return `<time data-ts="${ms}" data-fmt="day">${esc(fallback)}</time>`;
 }
 
 /** Hora do relógio (HH:MM) no fuso do servidor, reescrita pro fuso do navegador via data-fmt="clock". */
 function clockTime(ms: number, lang: Locale): string {
-  const dateLocale = lang === 'pt' ? 'pt-BR' : 'en-US';
-  const fallback = new Date(ms).toLocaleTimeString(dateLocale, {
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: config.timezone,
-  });
+  const fallback = formatter(lang === 'pt' ? 'pt-BR' : 'en-US', 'clock').format(new Date(ms));
   return `<time class="wall" data-ts="${ms}" data-fmt="clock">${esc(fallback)}</time>`;
 }
 
 const TZ_SCRIPT = `<script${CSP_NONCE_ATTR}>
+// A URL do avatar guardada na meta congela o hash do Discord. Quando a pessoa
+// troca de foto, aquela URL passa a devolver 404 e a página mostrava um ícone
+// de imagem quebrada. Aqui ela vira a inicial, o mesmo visual de quem nunca
+// teve foto. Cobre também quem saiu do servidor e teve o avatar removido.
+document.querySelectorAll('img[data-initial]').forEach(function(img){
+  var trocar = function(){
+    if (!img.parentNode) return;
+    var s = document.createElement('span');
+    s.className = img.dataset.fallback || '';
+    s.textContent = img.dataset.initial || '';
+    s.setAttribute('aria-hidden', 'true');
+    if (img.title) s.title = img.title;
+    img.replaceWith(s);
+  };
+  img.addEventListener('error', trocar);
+  // Se a imagem já falhou antes deste script rodar, o evento não vem mais.
+  if (img.complete && img.naturalWidth === 0) trocar();
+});
 document.querySelectorAll('time[data-ts]').forEach(function(el){
   try {
     var opts = el.dataset.fmt === 'clock' ? {timeStyle:'short'}
@@ -386,7 +413,7 @@ function shell(
   const themeBtn = `<button type="button" class="thm" aria-pressed="false" data-to-light="${pt ? 'Mudar para tema claro' : 'Switch to light theme'}" data-to-dark="${pt ? 'Mudar para tema escuro' : 'Switch to dark theme'}"><span class="to-light">${pt ? 'Claro' : 'Light'}</span><span class="to-dark">${pt ? 'Escuro' : 'Dark'}</span></button>`;
   const signIn = `<a class="tl" href="/auth/login?next=%2Fapp">${pt ? 'Entrar' : 'Sign in'}</a>`;
   const userIdentity = opts.user
-    ? `<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="">` : `<span class="user-initial" aria-hidden="true">${esc(opts.user.name.slice(0, 1).toUpperCase())}</span>`}<span class="user-name">${esc(opts.user.name)}</span></span>`
+    ? `<span class="user">${opts.user.avatar ? `<img src="${esc(opts.user.avatar)}" alt="" data-fallback="user-initial" data-initial="${esc(opts.user.name.slice(0, 1).toUpperCase())}">` : `<span class="user-initial" aria-hidden="true">${esc(opts.user.name.slice(0, 1).toUpperCase())}</span>`}<span class="user-name">${esc(opts.user.name)}</span></span>`
     : '';
   const logout = opts.user
     ? `<form class="logout-form" method="post" action="/app/logout"><button class="tl" type="submit">${pt ? 'Sair' : 'Sign out'}</button></form>`
@@ -423,7 +450,7 @@ function shell(
         <header class="app-topbar">
           <span class="topbar-context">${opts.active === 'ai' ? (pt ? 'Conectar IA' : 'Connect AI') : pt ? 'Reuniões' : 'Meetings'}</span>
           <span class="topbar-product">${pt ? 'Memória das suas calls no Discord' : 'Memory for your Discord calls'}</span>
-          <span class="app-topbar-actions">${themeBtn}${langToggle}<span class="mobile-logout">${logout}</span></span>
+          <span class="app-topbar-actions">${themeBtn}${langToggle}<span class="mobile-logout">${userIdentity}${logout}</span></span>
         </header>`
     : `<div class="public-shell">${userbar}`;
   const shellClose = privateApp ? `${foot}</section></div>` : `${foot}</div>`;
@@ -552,7 +579,7 @@ export function recordingPage(
       ? `<div class="people">${meta.participants
           .map(
             (pt, i) =>
-              `<span class="person">${pt.avatar ? `<img src="${esc(pt.avatar)}" alt="">` : `<span class="person-initial c${i % SPEAKER_COLORS}" aria-hidden="true">${esc(pt.name.slice(0, 1).toUpperCase())}</span>`}<span class="who c${i % SPEAKER_COLORS}">${esc(pt.name)}</span></span>`,
+              `<span class="person">${pt.avatar ? `<img src="${esc(pt.avatar)}" alt="" data-fallback="person-initial c${i % SPEAKER_COLORS}" data-initial="${esc(pt.name.slice(0, 1).toUpperCase())}">` : `<span class="person-initial c${i % SPEAKER_COLORS}" aria-hidden="true">${esc(pt.name.slice(0, 1).toUpperCase())}</span>`}<span class="who c${i % SPEAKER_COLORS}">${esc(pt.name)}</span></span>`,
           )
           .join('')}</div>`
       : `<p class="muted">${live ? p(l, 'nobody') : p(l, 'nobodyDone')}</p>`;
@@ -1322,7 +1349,7 @@ function renderTranscription(
     const av = avatarOf.get(curSpeaker);
     blocks.push(
       `<div class="tblock" data-sp="${esc(curSpeaker)}">
-        <div class="thead">${av ? `<img src="${esc(av)}" alt="">` : `<span class="speaker-initial c${ci}" aria-hidden="true">${esc(curSpeaker.slice(0, 1).toUpperCase())}</span>`}<span class="who c${ci}">${esc(curSpeaker)}</span></div>
+        <div class="thead">${av ? `<img src="${esc(av)}" alt="" data-fallback="speaker-initial c${ci}" data-initial="${esc(curSpeaker.slice(0, 1).toUpperCase())}">` : `<span class="speaker-initial c${ci}" aria-hidden="true">${esc(curSpeaker.slice(0, 1).toUpperCase())}</span>`}<span class="who c${ci}">${esc(curSpeaker)}</span></div>
         ${curParas.join('')}
       </div>`,
     );
@@ -1571,7 +1598,7 @@ export function recordingsIndexPage(
             .slice(0, 4)
             .map((person, index) =>
               person.avatar
-                ? `<img src="${esc(person.avatar)}" alt="" title="${esc(person.name)}">`
+                ? `<img src="${esc(person.avatar)}" alt="" title="${esc(person.name)}" data-fallback="row-person-initial c${index % SPEAKER_COLORS}" data-initial="${esc(person.name.slice(0, 1).toUpperCase())}">`
                 : `<span class="row-person-initial c${index % SPEAKER_COLORS}" title="${esc(person.name)}">${esc(person.name.slice(0, 1).toUpperCase())}</span>`,
             )
             .join(
@@ -1634,13 +1661,31 @@ export function recordingsIndexPage(
     )
     .join('');
 
+  // Numa página do meio do arquivo, o texto de primeira execução contradiz os
+  // controles de paginação ao lado dele. A condição olha só a posição da varredura
+  // de quem pediu, que essa pessoa já conhece, e não o tamanho do acervo.
+  const paginating = opts.nextCursor !== undefined || opts.hasPreviousPage === true;
+  // A identidade em sessão acompanha os dois estados vazios. Numa instância com
+  // mais de uma página, a primeira já vem paginada, então deixar a dica só no
+  // estado de primeira execução esconderia justamente da maioria a informação
+  // que resolve o caso mais comum: a conta do Discord errada.
+  const emptyPage =
+    `<div class="empty-state compact"><strong>${pt ? 'Nenhuma gravação que você possa abrir nesta página' : 'No recordings you can open on this page'}</strong><span class="muted">${pt ? 'O arquivo é verificado em páginas limitadas. Siga para a próxima para continuar.' : 'The archive is checked in bounded pages. Continue to the next one.'}</span>` +
+    `<span class="muted">${pt ? `Você vê uma gravação se iniciou, esteve na call ou tem Gerenciar Servidor. Logado como <strong>${esc(opts.user.name)}</strong>.` : `You see a recording if you started it, were in the call, or have Manage Server. Signed in as <strong>${esc(opts.user.name)}</strong>.`} <a href="/auth/login?next=%2Fapp&amp;switch=1">${pt ? 'Usar outra conta' : 'Use a different account'}</a></span></div>`;
+
   const cards =
     items.length === 0
-      ? `<div class="empty-state library-empty"><span class="empty-kicker">${pt ? 'COMECE NO DISCORD' : 'START IN DISCORD'}</span><strong>${pt ? 'Sua primeira reunião aparece aqui' : 'Your first meeting appears here'}</strong><span class="muted">${
-          pt
-            ? 'Entre num canal de voz e use /gravar. Ao encerrar, o app organiza as faixas, o mix, as notas e a linha do tempo. Transcrição, ata, decisões e tarefas aparecem somente se o operador habilitar IA.'
-            : 'Join a voice channel and use /record. After it ends, the app organizes tracks, mix, notes, and timeline events. Transcript, meeting notes, decisions, and tasks appear only if the operator enables AI.'
-        }</span><div class="empty-actions"><code>${pt ? '/gravar' : '/record'}</code><a class="btn secondary" href="${publicSite('docs', l, config).canonicalUrl}">${pt ? 'Ver como funciona' : 'See how it works'}</a></div></div>`
+      ? paginating
+        ? emptyPage
+        : // Lista vazia significa "nada que VOCÊ possa abrir", e isso quase sempre é
+          // a conta do Discord errada em sessão. O texto enuncia a regra e a
+          // identidade em vez de afirmar que ninguém gravou nada: fica igual para um
+          // acervo realmente vazio e para quem só não tem grant, sem virar oráculo.
+          `<div class="empty-state library-empty"><span class="empty-kicker">${pt ? 'COMECE NO DISCORD' : 'START IN DISCORD'}</span><strong>${pt ? 'Nenhuma gravação que você possa abrir' : 'No recordings you can open'}</strong><span class="muted">${
+            pt
+              ? `Você vê uma gravação se iniciou, esteve na call ou tem Gerenciar Servidor. Logado como <strong>${esc(opts.user.name)}</strong>. Para começar uma, entre num canal de voz e use /gravar: ao encerrar, o app organiza as faixas, o mix, as notas e a linha do tempo. Transcrição, ata, decisões e tarefas aparecem somente se o operador habilitar IA.`
+              : `You see a recording if you started it, were in the call, or have Manage Server. Signed in as <strong>${esc(opts.user.name)}</strong>. To make one, join a voice channel and use /record: after it ends, the app organizes tracks, mix, notes, and timeline events. Transcript, meeting notes, decisions, and tasks appear only if the operator enables AI.`
+          }</span><div class="empty-actions"><code>${pt ? '/gravar' : '/record'}</code><a class="btn secondary" href="/auth/login?next=%2Fapp&amp;switch=1">${pt ? 'Usar outra conta' : 'Use a different account'}</a><a class="btn secondary" href="${publicSite('docs', l, config).canonicalUrl}">${pt ? 'Ver como funciona' : 'See how it works'}</a></div></div>`
       : `<div class="recording-groups">${groupedCards}</div>
         <div class="empty-state compact" id="channel-filter-empty" role="status" hidden><strong>${pt ? 'Nenhuma gravação nos canais selecionados' : 'No recordings in the selected channels'}</strong><span class="muted">${pt ? 'Ative outro canal no filtro acima.' : 'Enable another channel in the filter above.'}</span></div>
         <script${CSP_NONCE_ATTR}>
@@ -1705,6 +1750,12 @@ export function messagePage(
     backLabel?: string;
     active?: 'rec' | 'ai';
     lockLocale?: boolean;
+    /**
+     * Mostra "logado como X / usar outra conta" abaixo da mensagem, apontando o
+     * login para este caminho. Só é montado a partir da própria sessão de quem
+     * pediu, então não diz nada sobre a gravação existir ou não.
+     */
+    switchAccountFor?: string;
   } = {},
 ): string {
   // Páginas de mensagem/erro (404/403/etc.) nunca são beco sem saída - e nunca
@@ -1723,9 +1774,21 @@ export function messagePage(
   const back = user
     ? `<a class="btn" href="${esc(backHref)}">${esc(backLabel)}</a>`
     : `<a class="btn" href="/auth/login?next=${encodeURIComponent(backHref)}">${pt ? 'Entrar com Discord' : 'Sign in with Discord'}</a>`;
+  // Acesso depende de QUAL conta do Discord está em sessão. Sem dizer isso, um
+  // link legítimo aberto na conta errada é lido como "a gravação sumiu".
+  const switchAccount =
+    user && opts.switchAccountFor
+      ? `<p class="muted" style="margin-top:14px">${
+          pt
+            ? `Você vê uma gravação se iniciou, esteve na call ou tem Gerenciar Servidor. Logado como <strong>${esc(user.name)}</strong>.`
+            : `You see a recording if you started it, were in the call, or have Manage Server. Signed in as <strong>${esc(user.name)}</strong>.`
+        } <a href="/auth/login?next=${encodeURIComponent(opts.switchAccountFor)}&amp;switch=1">${
+          pt ? 'Usar outra conta' : 'Use a different account'
+        }</a></p>`
+      : '';
   const body =
     `<section class="message-page"><h1>${esc(title)}</h1><p class="muted" style="margin-top:12px">${esc(message)}</p>` +
-    `<div class="downloads" style="margin-top:18px">${back}</div></section>`;
+    `${switchAccount}<div class="downloads" style="margin-top:18px">${back}</div></section>`;
   return shell(title, body, {
     user,
     lang,

@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { guildConfigStore } from '../src/guildConfig';
-import { RecordingMeta, saveMeta, saveMinutes, saveTranscript } from '../src/store';
+import { MAX_MINUTES_BYTES } from '../src/securityLimits';
+import { readMinutes, RecordingMeta, saveMeta, saveMinutes, saveTranscript } from '../src/store';
 import { searchRecordings } from '../src/web/search';
 import { shortError } from '../src/util';
 
@@ -49,6 +50,26 @@ describe('searchRecordings', () => {
     const hits = searchRecordings([makeMeta('busca-teste-1')], 'orcamento');
     expect(hits.length).toBeGreaterThan(0);
     expect(hits.some((h) => h.kind === 'transcript' && h.snippet.includes('orçamento'))).toBe(true);
+  });
+
+  it('não devolve trecho de ata maior que o teto que a página da gravação usa', () => {
+    // Acima de MAX_MINUTES_BYTES a página responde "ata grande demais". Se a busca
+    // lesse com um teto maior, ela devolveria um trecho que o clique não consegue abrir.
+    const id = 'busca-ata-grande';
+    const big = makeMeta(id);
+    saveMeta(big);
+    saveMinutes(id, {
+      resumo: `orçamento ${'x'.repeat(MAX_MINUTES_BYTES + 1024)}`,
+      decisoes: [],
+      acoes: [],
+      topicos: [],
+      porParticipante: [],
+    });
+
+    expect(readMinutes(id)).toBeUndefined();
+    expect(searchRecordings([big], 'orçamento').some((h) => h.kind === 'minutes')).toBe(false);
+
+    fs.rmSync(path.join(DIR, id), { recursive: true, force: true });
   });
 
   it('acha na ata e na nota, com link pro momento nos trechos', () => {

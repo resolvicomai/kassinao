@@ -589,6 +589,65 @@ describe('app privado por HTTP real', () => {
     revokeWebSession(session.sid);
   });
 
+  // Duas coisas variam entre dois 404 sem dizer nada sobre existência: o nonce do
+  // CSP (novo por resposta) e o id que o próprio cliente pediu, ecoado no link de
+  // trocar de conta. Fora esses dois, as páginas têm de ser idênticas.
+  const normalize404 = (body: string, requestedId: string): string =>
+    body
+      .replace(/nonce="[^"]*"/g, 'nonce="N"')
+      .split(requestedId)
+      .join('ID-PEDIDO');
+
+  it('responde 404 idêntico para gravação inexistente e para gravação sem acesso', async () => {
+    const session = signedSession();
+    const id = `denied-${crypto.randomUUID().slice(0, 8)}`;
+    createdRecordingIds.add(id);
+    // Ninguém dentro da meta: sem grant de iniciador, participante ou presença.
+    saveMeta({ ...recording(id), startedBy: { id: 'outra-pessoa', name: 'Outra' } });
+
+    const denied = await request('GET', `/app/rec/${id}`, { cookie: session.cookie });
+    const missing = await request('GET', '/app/rec/nao-existe-mesmo', { cookie: session.cookie });
+
+    expect(denied.status).toBe(404);
+    expect(missing.status).toBe(404);
+    // O corpo não pode diferir: é o que impede enumerar quais gravações existem.
+    expect(normalize404(denied.body, id)).toBe(normalize404(missing.body, 'nao-existe-mesmo'));
+    revokeWebSession(session.sid);
+  });
+
+  it('falha transitória do Discord vira 503 para quem está na meta, e 404 igual para terceiros', async () => {
+    const session = signedSession();
+    const previous = client.guilds.cache.get(TEST_GUILD_ID);
+    client.guilds.cache.set(TEST_GUILD_ID, {
+      members: {
+        fetch: async () => {
+          throw new Error('429 do Discord');
+        },
+      },
+    } as never);
+
+    const own = `transient-own-${crypto.randomUUID().slice(0, 8)}`;
+    const other = `transient-other-${crypto.randomUUID().slice(0, 8)}`;
+    createdRecordingIds.add(own);
+    createdRecordingIds.add(other);
+    saveMeta(recording(own)); // startedBy = TEST_USER_ID
+    saveMeta({ ...recording(other), startedBy: { id: 'outra-pessoa', name: 'Outra' } });
+
+    const mine = await request('GET', `/app/rec/${own}`, { cookie: session.cookie });
+    const theirs = await request('GET', `/app/rec/${other}`, { cookie: session.cookie });
+    const missing = await request('GET', '/app/rec/nao-existe-mesmo', { cookie: session.cookie });
+
+    // Quem já sabe que a gravação existe recebe um erro retriável, não "não existe".
+    expect(mine.status).toBe(503);
+    expect(mine.headers['retry-after']).toBe('5');
+    // Para terceiros o 503 diferenciado seria um oráculo de existência.
+    expect(theirs.status).toBe(404);
+    expect(normalize404(theirs.body, other)).toBe(normalize404(missing.body, 'nao-existe-mesmo'));
+
+    if (previous) client.guilds.cache.set(TEST_GUILD_ID, previous as never);
+    revokeWebSession(session.sid);
+  });
+
   it('renderiza o rate limit global do app dentro da interface e sem cache privado', async () => {
     const session = signedSession();
     let limited: HttpResponse | undefined;

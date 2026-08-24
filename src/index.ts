@@ -2398,6 +2398,14 @@ function reconcileOperationalProcessingAdmission(): void {
       .filter((meta) => guildRuntime.isOperational(meta.guildId) && needsRecoveredProcessing(meta))
       .map((meta) => [meta.id, { guildId: meta.guildId, startedAt: meta.startedAt }] as const),
   );
+  // needsRecoveredProcessing só enxerga gravação com status 'done', então uma call
+  // em andamento ficaria de fora e teria a vaga de pipeline liberada no meio da
+  // captura. As sessões vivas deste processo entram explicitamente.
+  for (const session of [...sessionManager.all(), ...sessionManager.allStopping()]) {
+    if (!pending.has(session.id)) {
+      pending.set(session.id, { guildId: session.meta.guildId, startedAt: session.meta.startedAt });
+    }
+  }
   if (!recordingAdmission.reconcile(pending)) {
     console.error('A proteção durável de gravações não pôde ser reconciliada; novos inícios permanecerão bloqueados.');
   }
@@ -2816,7 +2824,9 @@ const recoveredProcessing = new Map(
     .filter((meta) => needsRecoveredProcessing(meta))
     .map((meta) => [meta.id, { guildId: meta.guildId, startedAt: meta.startedAt }] as const),
 );
-if (!recordingAdmission.reconcile(recoveredProcessing)) {
+// Único ponto que recolhe reservas: no boot não há gravação em voo, então uma
+// reserva sem processamento pendente é comprovadamente órfã de um crash.
+if (!recordingAdmission.reconcile(recoveredProcessing, Date.now(), { reapReservations: true })) {
   console.error('A proteção durável de gravações não pôde ser reconciliada; novos inícios permanecerão bloqueados.');
 }
 startWebServer();

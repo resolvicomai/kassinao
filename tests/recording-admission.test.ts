@@ -141,6 +141,8 @@ describe('admissão durável de gravações', () => {
           ['rec-legacy', { guildId: 'guild-legacy', startedAt: 2_500 }],
         ]),
         4_000,
+        // Recuperação de crash: é o único momento em que recolher reserva é seguro.
+        { reapReservations: true },
       ),
     ).toBe(true);
     expect(afterCrash.pendingProcessingCount()).toBe(3);
@@ -201,5 +203,34 @@ describe('admissão durável de gravações', () => {
       reason: 'storage-unavailable',
     });
     expect(fs.readFileSync(target, 'utf8')).toBe('{"version":1,"entries":[]}');
+  });
+
+  it('reconcile de runtime preserva reserva em voo e a vaga de quem ainda está gravando', () => {
+    const admission = guard();
+    // Reserva em voo: existe o await de session.start entre reserve e commit, e é
+    // exatamente aí que um resume do gateway dispara o reconcile.
+    const inFlight = admission.reserve('guild-a', 'auto', 1_000);
+    if (!inFlight.ok) throw new Error('expected admission');
+    expect(inFlight.reservation.bindRecording('rec-em-voo')).toBe(true);
+
+    // Uma gravação ao vivo não aparece em needsRecoveredProcessing (status != done),
+    // então chega aqui como conjunto vazio de pendentes.
+    expect(admission.reconcile(new Map(), 2_000)).toBe(true);
+
+    // A reserva sobreviveu, então o commit ainda funciona em vez de virar
+    // "storage-unavailable" e derrubar a gravação que estava começando.
+    expect(inFlight.reservation.commit(2_500)).toBe(true);
+    expect(admission.pendingProcessingCount()).toBe(1);
+  });
+
+  it('reconcile de runtime não libera a vaga de pipeline de uma gravação conhecida como ativa', () => {
+    const admission = guard();
+    commit(admission, 'guild-a', 'auto', 1_000, 'rec-ao-vivo');
+    expect(admission.pendingProcessingCount()).toBe(1);
+
+    // O chamador semeia as sessões vivas do processo; sem isso a vaga seria
+    // liberada no meio da captura e o teto de processamento passaria a contar menos.
+    expect(admission.reconcile(new Map([['rec-ao-vivo', { guildId: 'guild-a', startedAt: 1_000 }]]), 2_000)).toBe(true);
+    expect(admission.pendingProcessingCount()).toBe(1);
   });
 });

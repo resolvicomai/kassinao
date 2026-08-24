@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
+import { operationalError, operationalPii, operationalWarn } from './operationalLog';
 import { isTranscribing } from './processing/transcribe';
 import {
   audioExpiryOf,
@@ -48,9 +49,17 @@ export function startCleanupJob(): void {
       if (!config.textRetentionUnlimited) {
         const textExpiresAt = textExpiryOf(meta);
         if (textExpiresAt && textExpiresAt < now) {
-          deleteRecording(meta.id);
-          forgetAudioBytes(meta.id);
-          removed++;
+          // Um EACCES numa gravação não pode abortar a varredura e deixar todo o
+          // resto do acervo sem expirar. Falhou nesta, tenta as outras.
+          try {
+            deleteRecording(meta.id);
+            forgetAudioBytes(meta.id);
+            removed++;
+          } catch (err) {
+            operationalWarn(
+              `Retenção não conseguiu apagar recording=${operationalPii(meta.id)}: ${operationalError(err)}.`,
+            );
+          }
           continue;
         }
       }

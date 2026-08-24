@@ -36,19 +36,37 @@ interface Civil {
   d: number;
 }
 
+/**
+ * Construir um Intl.DateTimeFormat custa ~14x mais que usá-lo, e estas funções
+ * são chamadas por reunião numa listagem. O formatador é imutável, então pode ser
+ * reusado. A chave é o fuso: hoje sempre config.timezone (vem de TZ, nunca do
+ * request) e, no limite, só um fuso IANA válido entra no Map porque o construtor
+ * lança RangeError em qualquer outro valor.
+ */
+const dateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+const civilFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function dateTimeFormatter(tz: string): Intl.DateTimeFormat {
+  let dtf = dateTimeFormatters.get(tz);
+  if (!dtf) {
+    dtf = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    dateTimeFormatters.set(tz, dtf);
+  }
+  return dtf;
+}
+
 /** Offset do fuso (ms que o fuso está à frente do UTC) no instante dado. */
 function offsetMsAt(tz: string, utcMs: number): number {
-  const dtf = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-  const parts = dtf.formatToParts(new Date(utcMs));
+  const parts = dateTimeFormatter(tz).formatToParts(new Date(utcMs));
   const g = (t: string): number => Number(parts.find((p) => p.type === t)?.value);
   const asUTC = Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute'), g('second'));
   return asUTC - utcMs;
@@ -64,12 +82,16 @@ function zonedWallToEpoch(y: number, mo: number, d: number, h: number, mi: numbe
 
 /** A data civil (Y-M-D no fuso) do instante dado. */
 function civilOf(tz: string, utcMs: number): Civil {
-  const dtf = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
+  let dtf = civilFormatters.get(tz);
+  if (!dtf) {
+    dtf = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    civilFormatters.set(tz, dtf);
+  }
   const p = dtf.formatToParts(new Date(utcMs));
   const g = (t: string): number => Number(p.find((x) => x.type === t)?.value);
   return { y: g('year'), mo: g('month'), d: g('day') };
@@ -97,17 +119,7 @@ function pad(n: number): string {
 
 /** ISO-8601 com offset numérico do fuso (ex.: 2026-06-01T00:00:00-03:00). */
 export function formatInTz(ms: number, tz: string = config.timezone): string {
-  const dtf = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
-  const p = dtf.formatToParts(new Date(ms));
+  const p = dateTimeFormatter(tz).formatToParts(new Date(ms));
   const g = (t: string): string => p.find((x) => x.type === t)?.value ?? '00';
   const offMin = Math.round(offsetMsAt(tz, ms) / 60000);
   const sign = offMin >= 0 ? '+' : '-';
