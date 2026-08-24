@@ -286,6 +286,33 @@ function fetchMemberForCheck(
 }
 
 /**
+ * Aquece o requestContext com as guilds de uma página, em paralelo e respeitando
+ * o mesmo teto de concorrência do orçamento. Não decide acesso nem guarda nada
+ * entre requests: só troca N confirmações REST em série por lotes, porque o laço
+ * de ACL depois consome exatamente as mesmas promessas pelo dedupe guild+usuário.
+ */
+export async function prefetchGuildMemberships(
+  userId: string,
+  guildIds: Iterable<string>,
+  requestContext: AccessRequestContext,
+  batchSize = 8,
+): Promise<void> {
+  const pending: Promise<unknown>[] = [];
+  for (const guildId of new Set(guildIds)) {
+    if (!client.guilds.cache.has(guildId)) continue;
+    const check = fetchMemberForCheck(guildId, userId, { requestContext });
+    // A rejeição é tratada por quem aguardar a promessa no laço de ACL. Este
+    // catch existe só para ela não virar unhandledRejection enquanto espera.
+    check.catch(() => undefined);
+    pending.push(check);
+    if (pending.length >= batchSize) {
+      await Promise.allSettled(pending.splice(0));
+    }
+  }
+  if (pending.length > 0) await Promise.allSettled(pending);
+}
+
+/**
  * Pré-valida o escopo explícito de uma consulta MCP antes de olhar o arquivo
  * daquela guild. `false` significa definitivamente "não é membro"; qualquer
  * estado incerto continua sendo 503, nunca uma resposta vazia enganosa.

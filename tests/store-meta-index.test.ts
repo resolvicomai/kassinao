@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { config } from '../src/config';
 import { deleteRecording, listMetas, readMeta, recordingDir, RecordingMeta, saveMeta } from '../src/store';
 
@@ -56,6 +56,36 @@ describe('índice de metas é cache positivo, não autoridade de existência', (
     expect(readMeta(dirName)).toBeUndefined();
 
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('tira do índice a gravação cujo meta.json já sumiu, mesmo quando a remoção falha no meio', () => {
+    const id = 'index-parcial-dddddddd';
+    saveMeta(meta(id));
+    expect(listMetas().map((m) => m.id)).toContain(id);
+
+    // Remoção parcial: o meta.json cai e o resto trava num EACCES.
+    const realRmSync = fs.rmSync;
+    const target = path.resolve(recordingDir(id));
+    const spy = vi.spyOn(fs, 'rmSync').mockImplementation((entry, options) => {
+      if (path.resolve(String(entry)) === target) {
+        fs.rmSync(path.join(target, 'meta.json'), { force: true });
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      }
+      realRmSync(entry, options);
+    });
+
+    try {
+      // Quem pediu para apagar continua sabendo que falhou.
+      expect(() => deleteRecording(id)).toThrow();
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Sem meta.json ela não abre mais, então não pode seguir anunciada na listagem.
+    expect(listMetas().map((m) => m.id)).not.toContain(id);
+    expect(readMeta(id)).toBeUndefined();
+
+    fs.rmSync(recordingDir(id), { recursive: true, force: true });
   });
 
   it('continua devolvendo undefined para id inexistente e para id fora do formato', () => {

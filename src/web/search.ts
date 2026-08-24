@@ -1,4 +1,4 @@
-import { RecordingMeta, readMinutes, readTranscriptForSearch, transcriptReady } from '../store';
+import { RecordingMeta, readMinutesBounded, readTranscriptForSearch, transcriptReady } from '../store';
 import { MAX_NOTES_PER_RECORDING } from '../securityLimits';
 
 /**
@@ -23,6 +23,8 @@ export interface WebSearchLimits {
   maxTranscriptBytesPerRequest: number;
   maxSegmentsPerMeeting: number;
   maxSegmentsPerRequest: number;
+  /** Teto agregado das atas, espelhando o que a transcrição já tinha por request. */
+  maxMinutesBytesPerRequest: number;
 }
 
 export const DEFAULT_WEB_SEARCH_LIMITS: WebSearchLimits = {
@@ -30,6 +32,7 @@ export const DEFAULT_WEB_SEARCH_LIMITS: WebSearchLimits = {
   maxTranscriptBytesPerRequest: 5 * 1024 * 1024,
   maxSegmentsPerMeeting: 5_000,
   maxSegmentsPerRequest: 10_000,
+  maxMinutesBytesPerRequest: 5 * 1024 * 1024,
 };
 
 function norm(s: string): string {
@@ -69,11 +72,19 @@ export function searchRecordings(
   const limits = { ...DEFAULT_WEB_SEARCH_LIMITS, ...overrides };
   let transcriptBytesScanned = 0;
   let transcriptSegmentsScanned = 0;
+  let minutesBytesScanned = 0;
 
   for (const meta of metas) {
     if (hits.length >= limit) break;
 
-    const minutes = readMinutes(meta.id);
+    // Sem a guarda de status, um lote de 100 reuniões abria e parseava 100 arquivos
+    // de ata de forma síncrona no event loop. A página individual já checava isso.
+    const minutesRead =
+      meta.minutes?.status === 'done' && minutesBytesScanned < limits.maxMinutesBytesPerRequest
+        ? readMinutesBounded(meta.id, limits.maxMinutesBytesPerRequest - minutesBytesScanned)
+        : { status: 'unavailable' as const };
+    if (minutesRead.status === 'ok') minutesBytesScanned += minutesRead.bytes;
+    const minutes = minutesRead.status === 'ok' ? minutesRead.minutes : undefined;
     if (minutes) {
       const fields = [minutes.resumo, ...minutes.decisoes, ...minutes.acoes.map((a) => a.tarefa)];
       for (const f of fields) {

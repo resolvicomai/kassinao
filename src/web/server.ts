@@ -22,6 +22,8 @@ import {
   forgetAudioBytes,
   listMetaIdsPage,
   MetaTimelineCursor,
+  copyMeta,
+  peekMeta,
   readMeta,
   readMinutes,
   readMinutesBounded,
@@ -35,6 +37,7 @@ import {
   checkAccess,
   createAccessRequestContext,
   currentGuildMembership,
+  prefetchGuildMemberships,
   recordingIdentityGrant,
   TransientAccessError,
 } from './access';
@@ -504,6 +507,17 @@ export async function collectWebLibraryPage(
   let candidatesScanned = 0;
   let index = Number.isSafeInteger(cursor) && cursor >= 0 ? Math.min(cursor, metas.length) : 0;
 
+  // As guilds da janela desta página resolvem em lotes antes do laço. O laço
+  // continua idêntico e apenas reaproveita as promessas do requestContext, então
+  // 25 idas ao Discord em série viram ~4 lotes sem mudar nenhuma regra de acesso.
+  const windowGuildIds: string[] = [];
+  for (let ahead = index; ahead < metas.length && windowGuildIds.length < MAX_WEB_LIBRARY_GUILDS_PER_PAGE; ahead++) {
+    const candidate = metas[ahead];
+    if (candidate.demo || !config.guildPolicy.allows(candidate.guildId)) continue;
+    if (!windowGuildIds.includes(candidate.guildId)) windowGuildIds.push(candidate.guildId);
+  }
+  if (windowGuildIds.length > 1) await prefetchGuildMemberships(user.id, windowGuildIds, requestContext);
+
   while (
     index < metas.length &&
     candidatesScanned < MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE &&
@@ -523,7 +537,9 @@ export async function collectWebLibraryPage(
     // transitória aborta a página e a rota não emite cursor além desta meta.
     index++;
     candidatesScanned++;
-    if (access.view) items.push({ meta, canDelete: access.delete });
+    // A cópia acontece só aqui: quem passou pela ACL segue para o template como
+    // objeto próprio, e o índice em memória não escapa do escopo desta varredura.
+    if (access.view) items.push({ meta: copyMeta(meta), canDelete: access.delete });
   }
 
   return {
@@ -1600,8 +1616,10 @@ export function createWebApp(): Express {
     // pelas candidatas, não só pelas autorizadas, para nenhuma faixa do arquivo
     // ficar permanentemente escondida atrás de ruído recente.
     const candidatePage = listMetaIdsPage(cursor, MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE);
+    // Sem cópia: a maioria destas candidatas some no filtro de acesso logo abaixo,
+    // e só as aprovadas são copiadas em collectWebLibraryPage.
     const candidates = candidatePage.ids.flatMap((id) => {
-      const meta = readMeta(id);
+      const meta = peekMeta(id);
       if (!meta) return [];
       return [meta];
     });

@@ -196,39 +196,48 @@ function p(l: Locale, key: string, vars: Record<string, string> = {}): string {
 // (CSP: sem fonte/CSS/JS/imagem externa); respeita prefers-reduced-motion.
 
 /**
+ * Formatadores de data reusados entre chamadas. Passar opções para toLocaleString
+ * constrói um Intl.DateTimeFormat a cada timestamp, e uma listagem renderiza um
+ * por cartão (uma gravação com muitos eventos, um por evento). A chave cobre tudo
+ * que varia: idioma, estilo e o fuso do servidor.
+ */
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function formatter(dateLocale: string, style: 'full' | 'day' | 'clock'): Intl.DateTimeFormat {
+  const key = `${dateLocale}|${style}|${config.timezone}`;
+  let dtf = dateFormatters.get(key);
+  if (!dtf) {
+    const options: Intl.DateTimeFormatOptions =
+      style === 'clock'
+        ? { hour: '2-digit', minute: '2-digit', timeZone: config.timezone }
+        : style === 'day'
+          ? { day: 'numeric', month: 'long', year: 'numeric', timeZone: config.timezone }
+          : { dateStyle: 'long', timeStyle: 'short', timeZone: config.timezone };
+    dtf = new Intl.DateTimeFormat(dateLocale, options);
+    dateFormatters.set(key, dtf);
+  }
+  return dtf;
+}
+
+/**
  * Data localizada: renderiza no fuso do SERVIDOR como fallback (config.timezone,
  * default UTC) e marca o epoch para o script no navegador reescrever
  * no fuso de quem abre a página - como o Discord faz.
  */
 function datetime(ms: number, lang: Locale): string {
-  const dateLocale = lang === 'pt' ? 'pt-BR' : 'en-US';
-  const fallback = new Date(ms).toLocaleString(dateLocale, {
-    dateStyle: 'long',
-    timeStyle: 'short',
-    timeZone: config.timezone,
-  });
+  const fallback = formatter(lang === 'pt' ? 'pt-BR' : 'en-US', 'full').format(new Date(ms));
   return `<time data-ts="${ms}">${esc(fallback)}</time>`;
 }
 
 /** Data sem hora ("2 de julho de 2026"), reescrita pro fuso do navegador. */
 function dateOnly(ms: number, lang: Locale): string {
-  const fallback = new Date(ms).toLocaleDateString(lang === 'pt' ? 'pt-BR' : 'en-US', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: config.timezone,
-  });
+  const fallback = formatter(lang === 'pt' ? 'pt-BR' : 'en-US', 'day').format(new Date(ms));
   return `<time data-ts="${ms}" data-fmt="day">${esc(fallback)}</time>`;
 }
 
 /** Hora do relógio (HH:MM) no fuso do servidor, reescrita pro fuso do navegador via data-fmt="clock". */
 function clockTime(ms: number, lang: Locale): string {
-  const dateLocale = lang === 'pt' ? 'pt-BR' : 'en-US';
-  const fallback = new Date(ms).toLocaleTimeString(dateLocale, {
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: config.timezone,
-  });
+  const fallback = formatter(lang === 'pt' ? 'pt-BR' : 'en-US', 'clock').format(new Date(ms));
   return `<time class="wall" data-ts="${ms}" data-fmt="clock">${esc(fallback)}</time>`;
 }
 
@@ -1634,17 +1643,25 @@ export function recordingsIndexPage(
     )
     .join('');
 
+  // Numa página do meio do arquivo, o texto de primeira execução contradiz os
+  // controles de paginação ao lado dele. A condição olha só a posição da varredura
+  // de quem pediu, que essa pessoa já conhece, e não o tamanho do acervo.
+  const paginating = opts.nextCursor !== undefined || opts.hasPreviousPage === true;
+  const emptyPage = `<div class="empty-state compact"><strong>${pt ? 'Nenhuma gravação que você possa abrir nesta página' : 'No recordings you can open on this page'}</strong><span class="muted">${pt ? 'O arquivo é verificado em páginas limitadas. Siga para a próxima para continuar.' : 'The archive is checked in bounded pages. Continue to the next one.'}</span></div>`;
+
   const cards =
     items.length === 0
-      ? // Lista vazia significa "nada que VOCÊ possa abrir", e isso quase sempre é
-        // a conta do Discord errada em sessão. O texto enuncia a regra e a
-        // identidade em vez de afirmar que ninguém gravou nada: fica igual para um
-        // acervo realmente vazio e para quem só não tem grant, sem virar oráculo.
-        `<div class="empty-state library-empty"><span class="empty-kicker">${pt ? 'COMECE NO DISCORD' : 'START IN DISCORD'}</span><strong>${pt ? 'Nenhuma gravação que você possa abrir' : 'No recordings you can open'}</strong><span class="muted">${
-          pt
-            ? `Você vê uma gravação se iniciou, esteve na call ou tem Gerenciar Servidor. Logado como <strong>${esc(opts.user.name)}</strong>. Para começar uma, entre num canal de voz e use /gravar: ao encerrar, o app organiza as faixas, o mix, as notas e a linha do tempo. Transcrição, ata, decisões e tarefas aparecem somente se o operador habilitar IA.`
-            : `You see a recording if you started it, were in the call, or have Manage Server. Signed in as <strong>${esc(opts.user.name)}</strong>. To make one, join a voice channel and use /record: after it ends, the app organizes tracks, mix, notes, and timeline events. Transcript, meeting notes, decisions, and tasks appear only if the operator enables AI.`
-        }</span><div class="empty-actions"><code>${pt ? '/gravar' : '/record'}</code><a class="btn secondary" href="/auth/login?next=%2Fapp&amp;switch=1">${pt ? 'Usar outra conta' : 'Use a different account'}</a><a class="btn secondary" href="${publicSite('docs', l, config).canonicalUrl}">${pt ? 'Ver como funciona' : 'See how it works'}</a></div></div>`
+      ? paginating
+        ? emptyPage
+        : // Lista vazia significa "nada que VOCÊ possa abrir", e isso quase sempre é
+          // a conta do Discord errada em sessão. O texto enuncia a regra e a
+          // identidade em vez de afirmar que ninguém gravou nada: fica igual para um
+          // acervo realmente vazio e para quem só não tem grant, sem virar oráculo.
+          `<div class="empty-state library-empty"><span class="empty-kicker">${pt ? 'COMECE NO DISCORD' : 'START IN DISCORD'}</span><strong>${pt ? 'Nenhuma gravação que você possa abrir' : 'No recordings you can open'}</strong><span class="muted">${
+            pt
+              ? `Você vê uma gravação se iniciou, esteve na call ou tem Gerenciar Servidor. Logado como <strong>${esc(opts.user.name)}</strong>. Para começar uma, entre num canal de voz e use /gravar: ao encerrar, o app organiza as faixas, o mix, as notas e a linha do tempo. Transcrição, ata, decisões e tarefas aparecem somente se o operador habilitar IA.`
+              : `You see a recording if you started it, were in the call, or have Manage Server. Signed in as <strong>${esc(opts.user.name)}</strong>. To make one, join a voice channel and use /record: after it ends, the app organizes tracks, mix, notes, and timeline events. Transcript, meeting notes, decisions, and tasks appear only if the operator enables AI.`
+          }</span><div class="empty-actions"><code>${pt ? '/gravar' : '/record'}</code><a class="btn secondary" href="/auth/login?next=%2Fapp&amp;switch=1">${pt ? 'Usar outra conta' : 'Use a different account'}</a><a class="btn secondary" href="${publicSite('docs', l, config).canonicalUrl}">${pt ? 'Ver como funciona' : 'See how it works'}</a></div></div>`
       : `<div class="recording-groups">${groupedCards}</div>
         <div class="empty-state compact" id="channel-filter-empty" role="status" hidden><strong>${pt ? 'Nenhuma gravação nos canais selecionados' : 'No recordings in the selected channels'}</strong><span class="muted">${pt ? 'Ative outro canal no filtro acima.' : 'Enable another channel in the filter above.'}</span></div>
         <script${CSP_NONCE_ATTR}>

@@ -5,7 +5,7 @@ import { config } from '../config';
 import { freeMB } from '../disk';
 import { operationalFailure, operationalPii, operationalWarn } from '../operationalLog';
 import { formatDuration, sanitizeFilename, formatOffset } from '../recorder/RecordingSession';
-import { cacheDir, RecordingMeta, tracksDir } from '../store';
+import { cacheDir, forgetAudioBytes, RecordingMeta, tracksDir } from '../store';
 import { runFfmpeg } from './ffmpeg';
 import { createZip, ZipEntry } from './zip';
 
@@ -215,6 +215,9 @@ async function doCook(meta: RecordingMeta, format: CookFormat, live: boolean): P
     const finalPath = path.join(cacheDir(meta.id), fileName);
     fs.renameSync(outPath, finalPath);
     fs.rmSync(work, { recursive: true, force: true });
+    // O mix/zip entra em cache/ e conta no tamanho em disco que o dono vê. Sem
+    // invalidar, a listagem segue mostrando o tamanho de antes deste arquivo.
+    forgetAudioBytes(meta.id);
     return { filePath: finalPath, fileName };
   } catch (err) {
     fs.rmSync(work, { recursive: true, force: true });
