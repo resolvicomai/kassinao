@@ -1110,7 +1110,11 @@ describe('regressões de privacidade e acessibilidade da web', () => {
       },
     });
     expect(html).toContain('method="post" action="/app/logout"');
-    expect(html).toContain('<span class="mobile-logout"><form class="logout-form"');
+    // No mobile o rodapé da sidebar não é renderizado, então o controle carrega a
+    // identidade em sessão antes do form: é o único lugar onde quem abriu o link
+    // na conta errada consegue ver isso.
+    expect(html).toContain('<span class="mobile-logout"><span class="user">');
+    expect(html).toContain('<span class="user-name">Alice</span></span><form class="logout-form"');
     expect(html).not.toContain('href="/auth/logout"');
   });
 });

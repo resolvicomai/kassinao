@@ -31,7 +31,13 @@ import {
   transcriptionNeedsAudio,
   transcriptReady,
 } from '../store';
-import { checkAccess, createAccessRequestContext, currentGuildMembership, TransientAccessError } from './access';
+import {
+  checkAccess,
+  createAccessRequestContext,
+  currentGuildMembership,
+  recordingIdentityGrant,
+  TransientAccessError,
+} from './access';
 import { ApiRateLimiters, FixedWindowRateLimiter, mountMcpApi } from './api';
 import {
   beginLogin,
@@ -385,12 +391,60 @@ export function webMutationRouteClass(req: Request): WebMutationRouteClass {
   return 'other-app';
 }
 
-/** Inexistente e sem acesso são deliberadamente indistinguíveis. */
-function sendRecordingUnavailable(res: Response, l: Locale, user: WebUser): void {
+/**
+ * Inexistente e sem acesso são deliberadamente indistinguíveis. `switchAccountFor`
+ * vem do caminho PEDIDO, nunca da meta, para que os dois casos gerem o mesmo HTML.
+ */
+function sendRecordingUnavailable(res: Response, l: Locale, user: WebUser, switchAccountFor = '/app'): void {
   res
     .status(404)
     .type('html')
-    .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l));
+    .send(messagePage(MSG.notFoundTitle[l], MSG.notFound[l], user, l, { switchAccountFor }));
+}
+
+/**
+ * O 404 sozinho não diz ao operador que houve negação: uma linha por usuário a
+ * cada 10 min basta para ver o padrão sem virar canal de amplificação. A mesma
+ * linha vale para "não existe" e "sem acesso", então o log também não carrega o
+ * bit de existência, e nunca leva o id da gravação.
+ */
+const recordingDenialLogLimiter = new FixedWindowRateLimiter();
+
+function logRecordingDenial(userId: string, outcome: 'denied' | 'transient'): void {
+  if (recordingDenialLogLimiter.consume(`rec-denied:${userId}`, 1, 600_000)) return;
+  console.warn(`Acesso web negado: route_class=recording-view outcome=${outcome} user=${operationalPii(userId)}`);
+}
+
+/**
+ * Veredito de acesso a UMA gravação. Uma falha transitória do Discord (429/5xx,
+ * orçamento de membership saturado) não pode virar "esta gravação não existe":
+ * quem está escrito na própria meta recebe 503 retriável. Para terceiros a
+ * resposta continua byte-a-byte igual ao 404 de inexistente, então o 503
+ * diferenciado nunca revela existência a quem não estava na call.
+ */
+async function resolveRecordingView(
+  res: Response,
+  l: Locale,
+  user: WebUser,
+  meta: RecordingMeta,
+  opts?: Parameters<typeof messagePage>[4],
+  switchAccountFor?: string,
+): Promise<{ view: boolean; delete: boolean } | undefined> {
+  try {
+    const access = await checkAccess(user, meta, { throwOnTransient: true });
+    if (access.view) return access;
+    logRecordingDenial(user.id, 'denied');
+    sendRecordingUnavailable(res, l, user, switchAccountFor);
+    return undefined;
+  } catch (err) {
+    if (!(err instanceof TransientAccessError)) throw err;
+    logRecordingDenial(user.id, 'transient');
+    // Só quem está escrito na própria meta recebe o 503 diferenciado: para essa
+    // pessoa a existência já é conhecida. Terceiros seguem no 404 idêntico.
+    if (recordingIdentityGrant(user.id, meta).view) sendAccessTemporarilyUnavailable(res, l, user, opts);
+    else sendRecordingUnavailable(res, l, user, switchAccountFor);
+    return undefined;
+  }
 }
 
 /**
@@ -1402,7 +1456,9 @@ export function createWebApp(): Express {
   }
 
   app.get('/auth/login', (req, res) => {
-    beginLogin(res, String(req.query.next ?? '/app'));
+    // ?switch=1 é o único caminho que força a tela do Discord (troca de conta).
+    // Fica fora do login normal para não pedir consentimento a cada entrada.
+    beginLogin(res, String(req.query.next ?? '/app'), { forceAccountChoice: req.query.switch === '1' });
   });
 
   // Compatibilidade com favoritos antigos: GET nunca muda estado nem encerra a
@@ -1600,6 +1656,7 @@ export function createWebApp(): Express {
   app.get('/app/rec/:id', async (req, res) => {
     const l = pageLang(req);
     const messageOpts = recordingMessageOptions(req.params.id, l);
+    const recPath = `/app/rec/${encodeURIComponent(req.params.id)}`;
     // login ANTES de checar existência: não vaza quais IDs existem a quem não logou
     const user = getWebUser(req);
     if (!user) {
@@ -1609,14 +1666,12 @@ export function createWebApp(): Express {
     if (notReady(res, l, user, messageOpts)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
-      sendRecordingUnavailable(res, l, user);
+      logRecordingDenial(user.id, 'denied');
+      sendRecordingUnavailable(res, l, user, recPath);
       return;
     }
-    const access = await checkAccess(user, meta);
-    if (!access.view) {
-      sendRecordingUnavailable(res, l, user);
-      return;
-    }
+    const access = await resolveRecordingView(res, l, user, meta, messageOpts, recPath);
+    if (!access) return;
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
     let transcript: TranscriptSegment[] | undefined;
     let transcriptNotice: string | undefined;
@@ -1661,6 +1716,7 @@ export function createWebApp(): Express {
   app.get('/app/rec/:id/audio', async (req, res, next) => {
     const l = pageLang(req);
     const messageOpts = recordingMessageOptions(req.params.id, l);
+    const recPath = `/app/rec/${encodeURIComponent(req.params.id)}`;
     const user = getWebUser(req);
     if (!user) {
       sendPrivateLoginRequired(res, l, `/app/rec/${req.params.id}`);
@@ -1669,16 +1725,14 @@ export function createWebApp(): Express {
     if (notReady(res, l, user, messageOpts)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
-      sendRecordingUnavailable(res, l, user);
+      logRecordingDenial(user.id, 'denied');
+      sendRecordingUnavailable(res, l, user, recPath);
       return;
     }
     // checkAccess ANTES de qualquer checagem de estado (ao-vivo) — não vaza a
     // quem não tem acesso se a gravação existe/está ao vivo (oráculo de enumeração).
-    const access = await checkAccess(user, meta);
-    if (!access.view) {
-      sendRecordingUnavailable(res, l, user);
-      return;
-    }
+    const access = await resolveRecordingView(res, l, user, meta, messageOpts, recPath);
+    if (!access) return;
     if (meta.participants.length === 0) {
       res
         .status(404)
@@ -1765,6 +1819,7 @@ export function createWebApp(): Express {
   app.get('/app/rec/:id/ata.md', async (req, res) => {
     const l = pageLang(req);
     const messageOpts = recordingMessageOptions(req.params.id, l);
+    const recPath = `/app/rec/${encodeURIComponent(req.params.id)}`;
     const user = getWebUser(req);
     if (!user) {
       sendPrivateLoginRequired(res, l, `/app/rec/${req.params.id}`);
@@ -1773,15 +1828,13 @@ export function createWebApp(): Express {
     if (notReady(res, l, user, messageOpts)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
-      sendRecordingUnavailable(res, l, user);
+      logRecordingDenial(user.id, 'denied');
+      sendRecordingUnavailable(res, l, user, recPath);
       return;
     }
     // checkAccess ANTES de olhar o estado da ata — senão vaza a terceiros se a ata já ficou pronta
-    const access = await checkAccess(user, meta);
-    if (!access.view) {
-      sendRecordingUnavailable(res, l, user);
-      return;
-    }
+    const access = await resolveRecordingView(res, l, user, meta, messageOpts, recPath);
+    if (!access) return;
     if (meta.minutes?.status !== 'done') {
       res
         .status(404)
@@ -1823,6 +1876,7 @@ export function createWebApp(): Express {
   app.get('/app/rec/:id/transcricao.:ext(md|txt)', async (req, res) => {
     const l = pageLang(req);
     const messageOpts = recordingMessageOptions(req.params.id, l);
+    const recPath = `/app/rec/${encodeURIComponent(req.params.id)}`;
     const user = getWebUser(req);
     if (!user) {
       sendPrivateLoginRequired(res, l, `/app/rec/${req.params.id}`);
@@ -1831,15 +1885,13 @@ export function createWebApp(): Express {
     if (notReady(res, l, user, messageOpts)) return;
     const meta = readMeta(req.params.id);
     if (!meta) {
-      sendRecordingUnavailable(res, l, user);
+      logRecordingDenial(user.id, 'denied');
+      sendRecordingUnavailable(res, l, user, recPath);
       return;
     }
     // checkAccess ANTES do estado da transcrição — não vaza a terceiros se já ficou pronta
-    const access = await checkAccess(user, meta);
-    if (!access.view) {
-      sendRecordingUnavailable(res, l, user);
-      return;
-    }
+    const access = await resolveRecordingView(res, l, user, meta, messageOpts, recPath);
+    if (!access) return;
     if (!transcriptReady(meta)) {
       res
         .status(404)
@@ -1885,6 +1937,7 @@ export function createWebApp(): Express {
   app.get('/app/rec/:id/download/:format', async (req, res, next) => {
     const l = pageLang(req);
     const messageOpts = recordingMessageOptions(req.params.id, l);
+    const recPath = `/app/rec/${encodeURIComponent(req.params.id)}`;
     const user = getWebUser(req);
     if (!user) {
       sendPrivateLoginRequired(res, l, `/app/rec/${req.params.id}`);
@@ -1901,14 +1954,12 @@ export function createWebApp(): Express {
     }
     const meta = readMeta(req.params.id);
     if (!meta) {
-      sendRecordingUnavailable(res, l, user);
+      logRecordingDenial(user.id, 'denied');
+      sendRecordingUnavailable(res, l, user, recPath);
       return;
     }
-    const access = await checkAccess(user, meta);
-    if (!access.view) {
-      sendRecordingUnavailable(res, l, user);
-      return;
-    }
+    const access = await resolveRecordingView(res, l, user, meta, messageOpts, recPath);
+    if (!access) return;
     // ao vivo: cada formato cozinharia um snapshot completo dos masters (sem dedupe
     // entre formatos), enchendo o disco. Bloqueia igual à rota /audio até encerrar.
     const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
@@ -2001,6 +2052,7 @@ export function createWebApp(): Express {
   app.post('/app/rec/:id/liberar-audio', async (req, res, next) => {
     const l = pageLang(req);
     const messageOpts = recordingMessageOptions(req.params.id, l);
+    const recPath = `/app/rec/${encodeURIComponent(req.params.id)}`;
     const user = getWebUser(req);
     if (!user) {
       res.redirect(303, `/app/rec/${encodeURIComponent(req.params.id)}`);
@@ -2011,19 +2063,19 @@ export function createWebApp(): Express {
       await withRecordingMutationLock(req.params.id, async () => {
         const meta = readMeta(req.params.id);
         if (!meta) {
-          sendRecordingUnavailable(res, l, user);
+          sendRecordingUnavailable(res, l, user, recPath);
           return;
         }
         const access = await checkAccess(user, meta, { freshMember: true });
         if (!access.delete) {
-          sendRecordingUnavailable(res, l, user);
+          sendRecordingUnavailable(res, l, user, recPath);
           return;
         }
         // checkAccess faz REST e cede o event loop. Cleanup ou outra rotina pode
         // ter removido a gravação nesse intervalo; nunca grave usando a meta stale.
         const current = readMeta(req.params.id);
         if (!current) {
-          sendRecordingUnavailable(res, l, user);
+          sendRecordingUnavailable(res, l, user, recPath);
           return;
         }
         if (current.status === 'recording') {
@@ -2068,6 +2120,7 @@ export function createWebApp(): Express {
   app.post('/app/rec/:id/delete', async (req, res, next) => {
     const l = pageLang(req);
     const messageOpts = recordingMessageOptions(req.params.id, l);
+    const recPath = `/app/rec/${encodeURIComponent(req.params.id)}`;
     const user = getWebUser(req);
     if (!user) {
       res.redirect(303, `/app/rec/${encodeURIComponent(req.params.id)}`);
@@ -2078,17 +2131,17 @@ export function createWebApp(): Express {
       await withRecordingMutationLock(req.params.id, async () => {
         const meta = readMeta(req.params.id);
         if (!meta) {
-          sendRecordingUnavailable(res, l, user);
+          sendRecordingUnavailable(res, l, user, recPath);
           return;
         }
         const access = await checkAccess(user, meta, { freshMember: true });
         if (!access.delete) {
-          sendRecordingUnavailable(res, l, user);
+          sendRecordingUnavailable(res, l, user, recPath);
           return;
         }
         const current = readMeta(req.params.id);
         if (!current) {
-          sendRecordingUnavailable(res, l, user);
+          sendRecordingUnavailable(res, l, user, recPath);
           return;
         }
         if (current.status === 'recording') {

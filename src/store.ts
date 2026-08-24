@@ -377,15 +377,22 @@ export function saveMeta(meta: RecordingMeta): void {
   cacheMeta(meta);
 }
 
+/**
+ * O índice é cache POSITIVO, nunca a autoridade sobre existência: um miss cai no
+ * disco. Sem isso, qualquer gravação ausente do único scan de boot (symlink de
+ * diretório, erro transitório de leitura, restauração por fora do processo)
+ * responderia 404 até o processo reiniciar.
+ */
 export function readMeta(id: string): RecordingMeta | undefined {
   if (!VALID_ID.test(id)) return undefined;
-  if (metaCache) {
-    const cached = metaCache.get(id);
-    return cached ? cloneMeta(cached) : undefined;
-  }
+  const cached = metaCache?.get(id);
+  if (cached) return cloneMeta(cached);
   try {
     const meta = JSON.parse(fs.readFileSync(metaPath(id), 'utf8')) as RecordingMeta;
+    // Mesma invariante do índice: o diretório manda, um meta.json com outro id não vale.
+    if (meta.id !== id) return undefined;
     meta.notes ??= []; // gravações de versões antigas
+    cacheMeta(meta);
     return meta;
   } catch {
     return undefined;

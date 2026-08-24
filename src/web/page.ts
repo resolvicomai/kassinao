@@ -423,7 +423,7 @@ function shell(
         <header class="app-topbar">
           <span class="topbar-context">${opts.active === 'ai' ? (pt ? 'Conectar IA' : 'Connect AI') : pt ? 'Reuniões' : 'Meetings'}</span>
           <span class="topbar-product">${pt ? 'Memória das suas calls no Discord' : 'Memory for your Discord calls'}</span>
-          <span class="app-topbar-actions">${themeBtn}${langToggle}<span class="mobile-logout">${logout}</span></span>
+          <span class="app-topbar-actions">${themeBtn}${langToggle}<span class="mobile-logout">${userIdentity}${logout}</span></span>
         </header>`
     : `<div class="public-shell">${userbar}`;
   const shellClose = privateApp ? `${foot}</section></div>` : `${foot}</div>`;
@@ -1636,11 +1636,15 @@ export function recordingsIndexPage(
 
   const cards =
     items.length === 0
-      ? `<div class="empty-state library-empty"><span class="empty-kicker">${pt ? 'COMECE NO DISCORD' : 'START IN DISCORD'}</span><strong>${pt ? 'Sua primeira reunião aparece aqui' : 'Your first meeting appears here'}</strong><span class="muted">${
+      ? // Lista vazia significa "nada que VOCÊ possa abrir", e isso quase sempre é
+        // a conta do Discord errada em sessão. O texto enuncia a regra e a
+        // identidade em vez de afirmar que ninguém gravou nada: fica igual para um
+        // acervo realmente vazio e para quem só não tem grant, sem virar oráculo.
+        `<div class="empty-state library-empty"><span class="empty-kicker">${pt ? 'COMECE NO DISCORD' : 'START IN DISCORD'}</span><strong>${pt ? 'Nenhuma gravação que você possa abrir' : 'No recordings you can open'}</strong><span class="muted">${
           pt
-            ? 'Entre num canal de voz e use /gravar. Ao encerrar, o app organiza as faixas, o mix, as notas e a linha do tempo. Transcrição, ata, decisões e tarefas aparecem somente se o operador habilitar IA.'
-            : 'Join a voice channel and use /record. After it ends, the app organizes tracks, mix, notes, and timeline events. Transcript, meeting notes, decisions, and tasks appear only if the operator enables AI.'
-        }</span><div class="empty-actions"><code>${pt ? '/gravar' : '/record'}</code><a class="btn secondary" href="${publicSite('docs', l, config).canonicalUrl}">${pt ? 'Ver como funciona' : 'See how it works'}</a></div></div>`
+            ? `Você vê uma gravação se iniciou, esteve na call ou tem Gerenciar Servidor. Logado como <strong>${esc(opts.user.name)}</strong>. Para começar uma, entre num canal de voz e use /gravar: ao encerrar, o app organiza as faixas, o mix, as notas e a linha do tempo. Transcrição, ata, decisões e tarefas aparecem somente se o operador habilitar IA.`
+            : `You see a recording if you started it, were in the call, or have Manage Server. Signed in as <strong>${esc(opts.user.name)}</strong>. To make one, join a voice channel and use /record: after it ends, the app organizes tracks, mix, notes, and timeline events. Transcript, meeting notes, decisions, and tasks appear only if the operator enables AI.`
+        }</span><div class="empty-actions"><code>${pt ? '/gravar' : '/record'}</code><a class="btn secondary" href="/auth/login?next=%2Fapp&amp;switch=1">${pt ? 'Usar outra conta' : 'Use a different account'}</a><a class="btn secondary" href="${publicSite('docs', l, config).canonicalUrl}">${pt ? 'Ver como funciona' : 'See how it works'}</a></div></div>`
       : `<div class="recording-groups">${groupedCards}</div>
         <div class="empty-state compact" id="channel-filter-empty" role="status" hidden><strong>${pt ? 'Nenhuma gravação nos canais selecionados' : 'No recordings in the selected channels'}</strong><span class="muted">${pt ? 'Ative outro canal no filtro acima.' : 'Enable another channel in the filter above.'}</span></div>
         <script${CSP_NONCE_ATTR}>
@@ -1705,6 +1709,12 @@ export function messagePage(
     backLabel?: string;
     active?: 'rec' | 'ai';
     lockLocale?: boolean;
+    /**
+     * Mostra "logado como X / usar outra conta" abaixo da mensagem, apontando o
+     * login para este caminho. Só é montado a partir da própria sessão de quem
+     * pediu, então não diz nada sobre a gravação existir ou não.
+     */
+    switchAccountFor?: string;
   } = {},
 ): string {
   // Páginas de mensagem/erro (404/403/etc.) nunca são beco sem saída - e nunca
@@ -1723,9 +1733,21 @@ export function messagePage(
   const back = user
     ? `<a class="btn" href="${esc(backHref)}">${esc(backLabel)}</a>`
     : `<a class="btn" href="/auth/login?next=${encodeURIComponent(backHref)}">${pt ? 'Entrar com Discord' : 'Sign in with Discord'}</a>`;
+  // Acesso depende de QUAL conta do Discord está em sessão. Sem dizer isso, um
+  // link legítimo aberto na conta errada é lido como "a gravação sumiu".
+  const switchAccount =
+    user && opts.switchAccountFor
+      ? `<p class="muted" style="margin-top:14px">${
+          pt
+            ? `Você vê uma gravação se iniciou, esteve na call ou tem Gerenciar Servidor. Logado como <strong>${esc(user.name)}</strong>.`
+            : `You see a recording if you started it, were in the call, or have Manage Server. Signed in as <strong>${esc(user.name)}</strong>.`
+        } <a href="/auth/login?next=${encodeURIComponent(opts.switchAccountFor)}&amp;switch=1">${
+          pt ? 'Usar outra conta' : 'Use a different account'
+        }</a></p>`
+      : '';
   const body =
     `<section class="message-page"><h1>${esc(title)}</h1><p class="muted" style="margin-top:12px">${esc(message)}</p>` +
-    `<div class="downloads" style="margin-top:18px">${back}</div></section>`;
+    `${switchAccount}<div class="downloads" style="margin-top:18px">${back}</div></section>`;
   return shell(title, body, {
     user,
     lang,
