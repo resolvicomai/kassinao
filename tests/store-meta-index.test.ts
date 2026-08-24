@@ -88,6 +88,39 @@ describe('índice de metas é cache positivo, não autoridade de existência', (
     fs.rmSync(recordingDir(id), { recursive: true, force: true });
   });
 
+  it('mantém no índice a gravação intacta que apenas não pôde ser lida', () => {
+    const id = 'index-ilegivel-eeeeeeee';
+    saveMeta(meta(id));
+    expect(listMetas().map((m) => m.id)).toContain(id);
+
+    // Diretório ilegível: nada foi apagado, só não deu para acessar. Tratar isso
+    // como "não existe mais" sumiria com uma gravação íntegra do acervo inteiro.
+    const target = path.resolve(recordingDir(id));
+    const rmSpy = vi.spyOn(fs, 'rmSync').mockImplementation((entry) => {
+      if (path.resolve(String(entry)) === target) {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      }
+    });
+    const statSpy = vi.spyOn(fs, 'statSync').mockImplementation((entry) => {
+      if (path.resolve(String(entry)).startsWith(target)) {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      }
+      throw Object.assign(new Error('unexpected'), { code: 'ENOENT' });
+    });
+
+    try {
+      expect(() => deleteRecording(id)).toThrow();
+    } finally {
+      rmSpy.mockRestore();
+      statSpy.mockRestore();
+    }
+
+    expect(listMetas().map((m) => m.id)).toContain(id);
+    expect(readMeta(id)?.id).toBe(id);
+
+    deleteRecording(id);
+  });
+
   it('continua devolvendo undefined para id inexistente e para id fora do formato', () => {
     expect(readMeta('nao-existe-nem-no-disco')).toBeUndefined();
     expect(readMeta('../fora-do-diretorio')).toBeUndefined();

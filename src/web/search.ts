@@ -1,5 +1,5 @@
 import { RecordingMeta, readMinutesBounded, readTranscriptForSearch, transcriptReady } from '../store';
-import { MAX_NOTES_PER_RECORDING } from '../securityLimits';
+import { MAX_MINUTES_BYTES, MAX_NOTES_PER_RECORDING } from '../securityLimits';
 
 /**
  * Busca simples (sem índice) nas gravações ACESSÍVEIS ao usuário — a lista de
@@ -23,6 +23,8 @@ export interface WebSearchLimits {
   maxTranscriptBytesPerRequest: number;
   maxSegmentsPerMeeting: number;
   maxSegmentsPerRequest: number;
+  /** Teto por ata, igual ao de todos os outros leitores (MAX_MINUTES_BYTES). */
+  maxMinutesBytesPerMeeting: number;
   /** Teto agregado das atas, espelhando o que a transcrição já tinha por request. */
   maxMinutesBytesPerRequest: number;
 }
@@ -32,6 +34,7 @@ export const DEFAULT_WEB_SEARCH_LIMITS: WebSearchLimits = {
   maxTranscriptBytesPerRequest: 5 * 1024 * 1024,
   maxSegmentsPerMeeting: 5_000,
   maxSegmentsPerRequest: 10_000,
+  maxMinutesBytesPerMeeting: MAX_MINUTES_BYTES,
   maxMinutesBytesPerRequest: 5 * 1024 * 1024,
 };
 
@@ -81,7 +84,12 @@ export function searchRecordings(
     // de ata de forma síncrona no event loop. A página individual já checava isso.
     const minutesRead =
       meta.minutes?.status === 'done' && minutesBytesScanned < limits.maxMinutesBytesPerRequest
-        ? readMinutesBounded(meta.id, limits.maxMinutesBytesPerRequest - minutesBytesScanned)
+        ? readMinutesBounded(
+            meta.id,
+            // O teto por ata continua o mesmo dos outros leitores: sem isto a busca
+            // devolveria trecho de uma ata que a página da gravação se recusa a abrir.
+            Math.min(limits.maxMinutesBytesPerMeeting, limits.maxMinutesBytesPerRequest - minutesBytesScanned),
+          )
         : { status: 'unavailable' as const };
     if (minutesRead.status === 'ok') minutesBytesScanned += minutesRead.bytes;
     const minutes = minutesRead.status === 'ok' ? minutesRead.minutes : undefined;

@@ -37,7 +37,6 @@ import {
   checkAccess,
   createAccessRequestContext,
   currentGuildMembership,
-  prefetchGuildMemberships,
   recordingIdentityGrant,
   TransientAccessError,
 } from './access';
@@ -506,17 +505,6 @@ export async function collectWebLibraryPage(
   const checkedGuilds = new Set<string>();
   let candidatesScanned = 0;
   let index = Number.isSafeInteger(cursor) && cursor >= 0 ? Math.min(cursor, metas.length) : 0;
-
-  // As guilds da janela desta página resolvem em lotes antes do laço. O laço
-  // continua idêntico e apenas reaproveita as promessas do requestContext, então
-  // 25 idas ao Discord em série viram ~4 lotes sem mudar nenhuma regra de acesso.
-  const windowGuildIds: string[] = [];
-  for (let ahead = index; ahead < metas.length && windowGuildIds.length < MAX_WEB_LIBRARY_GUILDS_PER_PAGE; ahead++) {
-    const candidate = metas[ahead];
-    if (candidate.demo || !config.guildPolicy.allows(candidate.guildId)) continue;
-    if (!windowGuildIds.includes(candidate.guildId)) windowGuildIds.push(candidate.guildId);
-  }
-  if (windowGuildIds.length > 1) await prefetchGuildMemberships(user.id, windowGuildIds, requestContext);
 
   while (
     index < metas.length &&

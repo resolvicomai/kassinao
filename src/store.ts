@@ -645,6 +645,16 @@ function forgetMetaFromIndex(id: string): void {
   removeTimelineId(metaTimelineIds, id);
 }
 
+/** ENOENT é prova de ausência; qualquer outro errno significa "não sei". */
+function metaFileMissing(id: string): boolean {
+  try {
+    fs.statSync(metaPath(id));
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+}
+
 /**
  * Remove a gravação. Propaga o erro do filesystem: quem pediu para apagar precisa
  * saber que não deu, então a rota web responde 500 em vez de fingir sucesso.
@@ -672,7 +682,10 @@ export function deleteRecording(id: string): void {
         // segue para o tratamento de falha abaixo
       }
     }
-    if (!fs.existsSync(metaPath(id))) forgetMetaFromIndex(id);
+    // Só sai do índice com ausência PROVADA. existsSync devolve false também para
+    // EACCES/EIO, e tratar "não consegui ler" como "não existe mais" faria a
+    // gravação intacta desaparecer do acervo de todo mundo até o próximo restart.
+    if (metaFileMissing(id)) forgetMetaFromIndex(id);
     throw err;
   }
   forgetMetaFromIndex(id);
