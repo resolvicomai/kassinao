@@ -1444,7 +1444,7 @@ describe('artefatos de distribuição', () => {
     expect(workflow).toMatch(/^\s*attestations:\s*write\s*$/m);
     expect(actions.length).toBeGreaterThanOrEqual(5);
     expect(actions.every((action) => /@[0-9a-f]{40}$/.test(action))).toBe(true);
-    expect(workflow).toContain('docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0');
+    expect(workflow).toContain('docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0');
     expect(workflow).toContain(
       'image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0',
     );
