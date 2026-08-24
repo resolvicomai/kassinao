@@ -1647,7 +1647,13 @@ export function recordingsIndexPage(
   // controles de paginação ao lado dele. A condição olha só a posição da varredura
   // de quem pediu, que essa pessoa já conhece, e não o tamanho do acervo.
   const paginating = opts.nextCursor !== undefined || opts.hasPreviousPage === true;
-  const emptyPage = `<div class="empty-state compact"><strong>${pt ? 'Nenhuma gravação que você possa abrir nesta página' : 'No recordings you can open on this page'}</strong><span class="muted">${pt ? 'O arquivo é verificado em páginas limitadas. Siga para a próxima para continuar.' : 'The archive is checked in bounded pages. Continue to the next one.'}</span></div>`;
+  // A identidade em sessão acompanha os dois estados vazios. Numa instância com
+  // mais de uma página, a primeira já vem paginada, então deixar a dica só no
+  // estado de primeira execução esconderia justamente da maioria a informação
+  // que resolve o caso mais comum: a conta do Discord errada.
+  const emptyPage =
+    `<div class="empty-state compact"><strong>${pt ? 'Nenhuma gravação que você possa abrir nesta página' : 'No recordings you can open on this page'}</strong><span class="muted">${pt ? 'O arquivo é verificado em páginas limitadas. Siga para a próxima para continuar.' : 'The archive is checked in bounded pages. Continue to the next one.'}</span>` +
+    `<span class="muted">${pt ? `Você vê uma gravação se iniciou, esteve na call ou tem Gerenciar Servidor. Logado como <strong>${esc(opts.user.name)}</strong>.` : `You see a recording if you started it, were in the call, or have Manage Server. Signed in as <strong>${esc(opts.user.name)}</strong>.`} <a href="/auth/login?next=%2Fapp&amp;switch=1">${pt ? 'Usar outra conta' : 'Use a different account'}</a></span></div>`;
 
   const cards =
     items.length === 0

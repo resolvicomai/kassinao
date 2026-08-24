@@ -645,13 +645,20 @@ function forgetMetaFromIndex(id: string): void {
   removeTimelineId(metaTimelineIds, id);
 }
 
-/** ENOENT é prova de ausência; qualquer outro errno significa "não sei". */
+/**
+ * Prova de ausência. ENOENT é o caso normal; ENOTDIR significa que o caminho do
+ * diretório da gravação deixou de ser diretório, então o meta.json também não
+ * existe mais. Qualquer outro errno (EACCES, EIO) significa "não sei", e aí a
+ * gravação continua no índice: tratar ilegível como inexistente já fez gravação
+ * intacta sumir do acervo inteiro.
+ */
 function metaFileMissing(id: string): boolean {
   try {
     fs.statSync(metaPath(id));
     return false;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'ENOENT';
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR';
   }
 }
 

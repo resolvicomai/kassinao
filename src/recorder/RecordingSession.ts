@@ -686,6 +686,11 @@ export class RecordingSession {
       if (!this.meta.audioIncomplete) {
         this.meta.audioIncomplete = true;
         this.addEvent(t(this.locale, 'event.audio-incomplete'), true);
+        // Persistir na hora, como o aviso de teto de faixas: enquanto a call segue,
+        // o disco e o painel do Discord não podem continuar mostrando uma gravação
+        // saudável. A guarda acima faz isto rodar no máximo uma vez por sessão.
+        saveMeta(this.meta);
+        this.schedulePanelUpdate();
       }
       // Derruba a subscription para o cleanup rodar agora: a próxima fala reassina
       // com um decoder limpo em vez de esperar a janela de 1s de silêncio.

@@ -532,6 +532,31 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(en).toContain('href="http://localhost:8080/en">Back home</a>');
   });
 
+  it('lista vazia mostra a identidade em sessão e a troca de conta, com ou sem paginação', () => {
+    const user: WebUser = {
+      typ: 'session',
+      id: 'u-vazio',
+      name: 'Conta Errada',
+      avatar: null,
+      scope: 'full',
+      exp: Date.now() + 60_000,
+      jti: 'sid-vazio',
+    };
+
+    // Numa instância populada a PRIMEIRA página já vem com cursor, então é o
+    // estado que a maioria vê. Foi aqui que a dica sumiu numa revisão anterior.
+    const paginada = recordingsIndexPage([], { user, lang: 'pt', nextCursor: 'cursor-opaco' });
+    expect(paginada).toContain('Conta Errada');
+    expect(paginada).toContain('switch=1');
+    // Sem o texto de primeira execução, que contradiria os controles de paginação.
+    expect(paginada).not.toContain('Para começar uma, entre num canal de voz');
+
+    const primeiraVez = recordingsIndexPage([], { user, lang: 'pt' });
+    expect(primeiraVez).toContain('Conta Errada');
+    expect(primeiraVez).toContain('switch=1');
+    expect(primeiraVez).toContain('Para começar uma, entre num canal de voz');
+  });
+
   it('app privado renderiza EN completo e preserva query ao trocar idioma', () => {
     const user: WebUser = {
       typ: 'session',
