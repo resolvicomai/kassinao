@@ -65,7 +65,7 @@ import {
   endCollisionEpisode,
   recordCollision,
 } from './recorder/collisionStats';
-import { sessionManager } from './recorder/manager';
+import { StartingInfo, sessionManager } from './recorder/manager';
 import { ManualRecordingStartLimiter } from './recorder/manualStartLimiter';
 import { reportManualRecordingStartFailure } from './recorder/manualStartFailure';
 import {
@@ -549,7 +549,9 @@ async function startSession(opts: {
     if (sessionManager.isChannelBusy(opts.guild.id, opts.voiceChannel.id)) {
       throw currentBusyError(opts.guild.id, opts.voiceChannel.id);
     }
-    if (sessionManager.isBusy(opts.guild.id)) throw currentBusyError(opts.guild.id);
+    // A identidade foi escolhida livre e o canal está livre: a recusa só pode
+    // ter vindo de corrida na MESMA identidade ou do teto global do processo.
+    if (sessionManager.busyLabels(opts.guild.id).has(identity.label)) throw currentBusyError(opts.guild.id);
     throw new RecordingGlobalCapacityError();
   }
   let session: RecordingSession | undefined;
@@ -1451,17 +1453,20 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
   }
   if (!identityPool.choose(interaction.guild.id, sessionManager.busyLabels(interaction.guild.id))) {
     // Sem identidade livre: responde apontando uma sala ocupada que o membro
-    // pode ver, com o mesmo cuidado de não vazar canal invisível.
+    // pode ver, com a MENSAGEM DA FASE certa. "Já estou gravando, use /parar"
+    // durante um início sugeriria cancelar a gravação que está nascendo.
     const busy = sessionManager.busyChannels(interaction.guild.id)[0];
     const busyChannel = busy ? interaction.guild.channels.cache.get(busy.channelId) : undefined;
     const canSeeBusy = busyChannel?.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel) ?? false;
-    await interaction.reply({
-      content:
-        busy && canSeeBusy
-          ? t(l, 'err.already-recording', { channel: `#${busy.channelName}` })
-          : t(l, 'err.recording-busy'),
-      ephemeral: true,
-    });
+    const busyContent =
+      !busy || !canSeeBusy
+        ? t(l, 'err.recording-busy')
+        : busy.phase === 'starting'
+          ? t(l, 'err.recording-starting', { channel: `#${busy.channelName}` })
+          : busy.phase === 'stopping'
+            ? t(l, 'err.recording-stopping')
+            : t(l, 'err.already-recording', { channel: `#${busy.channelName}` });
+    await interaction.reply({ content: busyContent, ephemeral: true });
     return;
   }
   const manualAccess = {
@@ -1528,27 +1533,33 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
     } else if (err instanceof RecordingStartCancelledError) {
       await interaction.editReply(t(l, 'record.start-cancelled'));
     } else if (err instanceof RecordingBusyError) {
-      const info = sessionManager.startingInfo(interaction.guild.id);
+      // Corrida: alguém ocupou entre o pré-check e o startSession. A sala citada
+      // é a do canal PEDIDO quando for ele o ocupado; senão, a primeira do guild.
       if (err.phase === 'recording') {
-        const active = sessionManager.get(interaction.guild.id);
+        const active =
+          sessionManager.getByChannel(interaction.guild.id, voiceChannel.id) ??
+          sessionManager.get(interaction.guild.id);
         await interaction.editReply(
           active && canAnnotate(active, member)
             ? t(l, 'err.already-recording', { channel: `#${active.voiceChannel.name}` })
             : t(l, 'err.recording-busy'),
         );
+      } else if (err.phase === 'starting') {
+        const infos = sessionManager.startingInfos(interaction.guild.id);
+        const info = infos.find((candidate) => candidate.channelId === voiceChannel.id) ?? infos[0];
+        const channel = info ? interaction.guild.channels.cache.get(info.channelId) : undefined;
+        const canSee = channel?.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel) ?? false;
+        await interaction.editReply(
+          info && canSee
+            ? t(l, 'err.recording-starting', { channel: `#${info.channelName}` })
+            : t(l, 'err.recording-busy'),
+        );
       } else {
-        if (err.phase === 'starting' && info) {
-          const channel = interaction.guild.channels.cache.get(info.channelId);
-          const canSee = channel?.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel) ?? false;
-          await interaction.editReply(
-            canSee ? t(l, 'err.recording-starting', { channel: `#${info.channelName}` }) : t(l, 'err.recording-busy'),
-          );
-        } else {
-          const stopping = sessionManager.stoppingSession(interaction.guild.id);
-          await interaction.editReply(
-            stopping && canAnnotate(stopping, member) ? t(l, 'err.recording-stopping') : t(l, 'err.recording-busy'),
-          );
-        }
+        const stoppings = sessionManager.stoppingSessions(interaction.guild.id);
+        const stopping = stoppings.find((candidate) => candidate.currentChannelId === voiceChannel.id) ?? stoppings[0];
+        await interaction.editReply(
+          stopping && canAnnotate(stopping, member) ? t(l, 'err.recording-stopping') : t(l, 'err.recording-busy'),
+        );
       }
     } else {
       await interaction.editReply(reportManualRecordingStartFailure(err, l));
@@ -1570,81 +1581,78 @@ async function handleParar(interaction: ChatInputCommandInteraction | ButtonInte
     return;
   }
 
-  // Com mais de uma gravação no servidor, cada painel controla a SUA sessão pelo
-  // controlToken; o slash sem botão resolve pela sala de voz de quem pediu.
+  // Resolução em duas regras, nesta ordem de autoridade:
+  //   BOTÃO: o controlToken identifica a sessão exata, em qualquer fase. Token
+  //   que não corresponde a nada é painel antigo.
+  //   SLASH: a sala de voz de quem pediu decide, em qualquer fase. Fora de sala
+  //   ocupada, só age quando existe UMA coisa acontecendo no servidor inteiro;
+  //   com mais de uma, pede desambiguação em vez de adivinhar — adivinhar já
+  //   derrubou a sala errada.
   const activeSessions = sessionManager.listByGuild(interaction.guild.id);
+  const startingInfos = sessionManager.startingInfos(interaction.guild.id);
+  const stoppingSessions = sessionManager.stoppingSessions(interaction.guild.id);
   const requester = interaction.member as GuildMember | null;
+
   let session: RecordingSession | undefined;
+  let starting: StartingInfo<RecordingSession> | undefined;
+  let stoppingTarget: RecordingSession | undefined;
+
   if (expectedControlToken !== undefined) {
     session = activeSessions.find((active) => active.controlToken === expectedControlToken);
-  } else if (activeSessions.length <= 1) {
-    session = activeSessions[0];
-  } else {
-    session = activeSessions.find((active) => active.currentChannelId === requester?.voice.channelId);
-    if (!session) {
-      await interaction.reply({ content: t(l, 'err.which-recording'), ephemeral: true });
-      return;
-    }
-  }
-  if (!session && expectedControlToken !== undefined && activeSessions.length > 0) {
-    // Botão de um painel que não corresponde a nenhuma ativa: pode ser de um
-    // início ainda em andamento (tratado abaixo) ou painel antigo.
-    const startingByToken = sessionManager
-      .startingInfos(interaction.guild.id)
-      .find((info) => info.session?.controlToken === expectedControlToken);
-    const stoppingByToken = sessionManager
-      .stoppingSessions(interaction.guild.id)
-      .find((stopping) => stopping.controlToken === expectedControlToken);
-    if (!startingByToken && !stoppingByToken) {
+    starting = session ? undefined : startingInfos.find((info) => info.session?.controlToken === expectedControlToken);
+    stoppingTarget =
+      session || starting
+        ? undefined
+        : stoppingSessions.find((candidate) => candidate.controlToken === expectedControlToken);
+    if (!session && !starting && !stoppingTarget) {
       await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
       return;
     }
-  }
-  if (!session) {
-    const startingInfos = sessionManager.startingInfos(interaction.guild.id);
-    const starting = interaction.isButton()
-      ? startingInfos.find((info) => info.session?.controlToken === expectedControlToken)
-      : (startingInfos.find((info) => info.channelId === requester?.voice.channelId) ??
-        (startingInfos.length === 1 ? startingInfos[0] : undefined));
-    if (starting) {
-      const allowed = starting.session
-        ? canControlStarting(starting.session, requester)
-        : !!requester &&
-          (requester.voice.channelId === starting.channelId ||
-            requester.permissions.has(PermissionFlagsBits.ManageGuild));
-      if (!allowed) {
-        await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
+  } else {
+    const requesterChannelId = requester?.voice.channelId ?? null;
+    if (requesterChannelId !== null) {
+      session = activeSessions.find((active) => active.currentChannelId === requesterChannelId);
+      starting = session ? undefined : startingInfos.find((info) => info.channelId === requesterChannelId);
+      stoppingTarget =
+        session || starting
+          ? undefined
+          : stoppingSessions.find((candidate) => candidate.currentChannelId === requesterChannelId);
+    }
+    if (!session && !starting && !stoppingTarget) {
+      const busyTotal = activeSessions.length + startingInfos.length + stoppingSessions.length;
+      if (busyTotal > 1) {
+        await interaction.reply({ content: t(l, 'err.which-recording'), ephemeral: true });
         return;
       }
-      const cancelled = sessionManager.cancelStart(interaction.guild.id, starting.channelId);
-      if (cancelled?.session) void cancelled.session.abortStart().catch(() => {});
-      await interaction.reply({ content: t(l, 'record.start-cancelled'), ephemeral: true });
+      session = activeSessions[0];
+      starting = session ? undefined : startingInfos[0];
+      stoppingTarget = session || starting ? undefined : stoppingSessions[0];
+    }
+  }
+
+  if (starting) {
+    const allowed = starting.session
+      ? canControlStarting(starting.session, requester)
+      : !!requester &&
+        (requester.voice.channelId === starting.channelId ||
+          requester.permissions.has(PermissionFlagsBits.ManageGuild));
+    if (!allowed) {
+      await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
       return;
     }
-    if (startingInfos.length > 0 && interaction.isButton()) {
-      await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
-      return;
-    }
-    const stoppingSessions = sessionManager.stoppingSessions(interaction.guild.id);
-    const stopping = interaction.isButton()
-      ? stoppingSessions.find((candidate) => candidate.controlToken === expectedControlToken)
-      : (stoppingSessions.find((candidate) => candidate.currentChannelId === requester?.voice.channelId) ??
-        (stoppingSessions.length === 1 ? stoppingSessions[0] : undefined));
-    if (interaction.isButton() && !stopping && stoppingSessions.length > 0) {
-      await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
-      return;
-    }
-    if (stopping) {
-      await interaction.reply({
-        content: canAnnotate(stopping, requester) ? t(l, 'record.stopping') : t(l, 'err.no-recording'),
-        ephemeral: true,
-      });
-      return;
-    }
-    if (interaction.isButton()) {
-      await interaction.reply({ content: t(l, 'err.stale-control'), ephemeral: true });
-      return;
-    }
+    const cancelled = sessionManager.cancelStart(interaction.guild.id, starting.channelId);
+    if (cancelled?.session) void cancelled.session.abortStart().catch(() => {});
+    await interaction.reply({ content: t(l, 'record.start-cancelled'), ephemeral: true });
+    return;
+  }
+  if (stoppingTarget) {
+    await interaction.reply({
+      content: canAnnotate(stoppingTarget, requester) ? t(l, 'record.stopping') : t(l, 'err.no-recording'),
+      ephemeral: true,
+    });
+    return;
+  }
+  if (!session) {
     await interaction.reply({ content: t(l, 'err.no-recording'), ephemeral: true });
     return;
   }
@@ -2021,7 +2029,8 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
     activeSessions[0];
   if (!session) {
     const member = interaction.member as GuildMember | null;
-    const starting = sessionManager.startingInfo(interaction.guild.id);
+    const startingList = sessionManager.startingInfos(interaction.guild.id);
+    const starting = startingList.find((info) => info.channelId === statusMember?.voice?.channelId) ?? startingList[0];
     if (starting) {
       const channel = interaction.guild.channels.cache.get(starting.channelId);
       const startingSession = starting.session;
@@ -2037,7 +2046,10 @@ async function handleStatus(interaction: ChatInputCommandInteraction): Promise<v
       }
       return;
     }
-    const stopping = sessionManager.stoppingSession(interaction.guild.id);
+    const stoppingList = sessionManager.stoppingSessions(interaction.guild.id);
+    const stopping =
+      stoppingList.find((candidate) => candidate.currentChannelId === statusMember?.voice?.channelId) ??
+      stoppingList[0];
     if (stopping) {
       await interaction.editReply(
         member && memberCanAccessRecording(member, stopping.meta) ? t(l, 'record.stopping') : t(l, 'status.none'),
