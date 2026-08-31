@@ -1035,6 +1035,30 @@ const transcribeProvider = choiceEnv('TRANSCRIBE_PROVIDER', 'none', [
   'command',
 ] as const);
 const transcribeFallbackProvider = choiceEnv('TRANSCRIBE_FALLBACK_PROVIDER', 'none', ['none', 'groq'] as const);
+// Tokens dos bots AJUDANTES (gravar em mais de uma sala do mesmo servidor ao
+// mesmo tempo: um bot user = uma conexão de voz por guild, regra do Discord).
+// Opcional e dormente: sem a variável, o pool tem só o bot principal e nada muda.
+const helperTokens = (process.env.HELPER_DISCORD_TOKENS || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+{
+  const seen = new Set<string>();
+  for (const token of helperTokens) {
+    if (seen.has(token)) {
+      console.error('Configuração inválida: HELPER_DISCORD_TOKENS contém token repetido.');
+      process.exit(1);
+    }
+    seen.add(token);
+    // Reutilizar o token principal criaria duas conexões do MESMO bot user, e a
+    // segunda derrubaria a voz da primeira — exatamente o que o pool evita.
+    if (process.env.DISCORD_TOKEN && token === process.env.DISCORD_TOKEN) {
+      console.error('Configuração inválida: HELPER_DISCORD_TOKENS não pode repetir o DISCORD_TOKEN.');
+      process.exit(1);
+    }
+  }
+}
+
 const transcribeCommandEnvAllowlist = (process.env.TRANSCRIBE_COMMAND_ENV_ALLOWLIST || '')
   .split(',')
   .map((value) => value.trim())
@@ -1085,6 +1109,8 @@ if (process.env.MINUTES_WEBHOOK_URL?.trim()) {
 
 export const config = {
   token: required('DISCORD_TOKEN'),
+  /** Tokens dos bots ajudantes (HELPER_DISCORD_TOKENS, lista separada por vírgula). */
+  helperTokens: helperTokens as readonly string[],
   applicationId: required('APPLICATION_ID'),
   /** Client Secret do OAuth2 (Developer Portal > OAuth2) — usado no login da página de downloads. */
   clientSecret: required('DISCORD_CLIENT_SECRET'),

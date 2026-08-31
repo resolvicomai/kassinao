@@ -622,6 +622,14 @@ const STRINGS: Strings = {
     pt: '✅ Auto-record ligado em **{channel}**: começo com **{min}+** pessoa(s) e paro quando ficar abaixo desse mínimo. Se passar de {hours}h, encerro e recomeço automaticamente pra cobrir o resto.',
     en: '✅ Auto-record enabled in **{channel}**: I start with **{min}+** person(s) and stop when it drops below that minimum. Past {hours}h I stop and restart automatically to cover the rest.',
   },
+  'err.which-recording': {
+    pt: 'Há mais de uma gravação em andamento neste servidor. Entre na sala da gravação que você quer controlar, ou use os botões do painel daquela sala.',
+    en: 'More than one recording is running in this server. Join the room of the recording you want to control, or use the buttons on that room’s panel.',
+  },
+  'status.also-recording': {
+    pt: '🎙️ Também gravando agora em: {channels}.',
+    en: '🎙️ Also recording right now in: {channels}.',
+  },
   'autorecord.busy-elsewhere': {
     pt: '⚠️ Esta conversa **não está sendo gravada**: já estou gravando em **{channel}** e o Discord só permite um canal de voz por vez. Se a sala ainda estiver cheia quando aquela gravação terminar, começo aqui automaticamente.',
     en: '⚠️ This conversation is **not being recorded**: I am already recording in **{channel}** and Discord allows only one voice channel at a time. If this room is still full when that recording ends, I will start here automatically.',
