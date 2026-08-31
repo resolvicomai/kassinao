@@ -2158,13 +2158,12 @@ const AUTO_DEBOUNCE_MS = 2000;
 async function notifyAutoRecordCollision(
   guild: Guild,
   channel: VoiceBasedChannel,
-  activeSession: RecordingSession | undefined,
+  busyChannelId: string,
 ): Promise<void> {
   if (!beginCollisionEpisode(guild.id, channel.id)) return; // já avisado neste episódio
-  const busyChannelId = activeSession?.currentChannelId ?? sessionManager.startingInfo(guild.id)?.channelId ?? null;
   const { total30d } = recordCollision(guild.id, channel.id, busyChannelId);
   const locale: Locale = guild.preferredLocale?.toLowerCase().startsWith('pt') ? 'pt' : config.defaultLocale;
-  const busyName = busyChannelId ? guild.channels.cache.get(busyChannelId)?.name : undefined;
+  const busyName = guild.channels.cache.get(busyChannelId)?.name;
   const message = busyName
     ? t(locale, 'autorecord.busy-elsewhere', { channel: `#${safeName(busyName)}` })
     : t(locale, 'autorecord.busy-elsewhere-generic');
@@ -2215,12 +2214,12 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
   const session = sessionManager.get(guild.id);
 
   // rearma quando a população cai abaixo do mínimo
-  if (rule && humans < rule.minimum) {
-    setArmed(guild.id, channelId, true);
-    // sala esvaziou: a colisão (se houve) terminou sem gravação; o próximo
-    // enchimento com o bot ocupado é um episódio novo e merece novo aviso
-    endCollisionEpisode(guild.id, channelId);
-  }
+  if (rule && humans < rule.minimum) setArmed(guild.id, channelId, true);
+  // sala esvaziou OU regra removida: a colisão (se houve) terminou sem gravação;
+  // o próximo enchimento com o bot ocupado é episódio novo e merece novo aviso.
+  // Sem o caso !rule, um /autorecord off durante a colisão deixaria o episódio
+  // aberto para sempre e o aviso seguinte seria suprimido.
+  if (!rule || humans < rule.minimum) endCollisionEpisode(guild.id, channelId);
 
   // compara com o canal onde o bot ESTÁ (ele pode ter sido arrastado)
   if (session && session.currentChannelId === channelId) {
@@ -2237,7 +2236,22 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
   // sendo gravado. Avisa a sala uma vez por episódio e registra para o operador
   // medir a frequência antes de decidir se um segundo bot vale a pena.
   if (guildBusy(guild.id) && rule && humans >= rule.minimum && isArmed(guild.id, channelId)) {
-    await notifyAutoRecordCollision(guild, channel, session);
+    // "Ocupado" inclui as fases starting/stopping, e sessionManager.get() não as
+    // enxerga. Sem resolver ONDE o bot está, um /gravar manual nesta mesma sala
+    // (a regra só desarma depois do commit) ou uma reentrada durante o stop
+    // geraria o aviso falso "estou gravando em outra sala" dentro da própria
+    // sala, além de colisão fantasma na estatística.
+    const busyChannelId =
+      session?.currentChannelId ??
+      sessionManager.startingInfo(guild.id)?.channelId ??
+      sessionManager.stoppingSession(guild.id)?.currentChannelId ??
+      null;
+    if (busyChannelId !== null && busyChannelId !== channelId) {
+      await notifyAutoRecordCollision(guild, channel, busyChannelId);
+    }
+    // busyChannelId null = fase de transição sem dono conhecido; não dá para
+    // provar que é outra sala, então não avisa. A regra segue armada e o
+    // próximo evento de voz reavalia.
     return;
   }
 
@@ -2253,7 +2267,9 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
       const started = await startSession({ guild, voiceChannel: channel, startedBy: null, locale, auto: true });
       if (collidedSince !== undefined) {
         endCollisionEpisode(guild.id, channelId);
-        notifyLateStart(started, locale);
+        // Espera de segundos (ex.: a outra gravação estava encerrando) não é
+        // "início tardio" de verdade; a nota só entra quando perdeu conversa.
+        if (Date.now() - collidedSince > 60_000) notifyLateStart(started, locale);
       }
     } catch (err) {
       // rearma para tentar de novo no próximo movimento do canal

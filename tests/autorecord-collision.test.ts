@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { config } from '../src/config';
+import { autoRecordStore } from '../src/recorder/autorecord';
 import {
   beginCollisionEpisode,
   collisionEpisodeStart,
@@ -61,6 +62,16 @@ describe('colisões de auto-record', () => {
     expect(collisionsLast30d('g1')).toBe(0);
     const { total30d } = recordCollision('g1', 'c1', null);
     expect(total30d).toBe(1);
+  });
+
+  it('remover a regra fecha o episódio na hora, sem depender de evento de voz futuro', () => {
+    // Sem isso, religar a regra semanas depois encontraria o episódio velho
+    // aberto e o primeiro aviso legítimo de colisão seria suprimido.
+    autoRecordStore.set('g1', { channelId: 'c1', minimum: 2, createdBy: 'admin' });
+    expect(beginCollisionEpisode('g1', 'c1')).toBe(true);
+    autoRecordStore.remove('g1', 'c1');
+    expect(collisionEpisodeStart('g1', 'c1')).toBeUndefined();
+    expect(beginCollisionEpisode('g1', 'c1')).toBe(true);
   });
 
   it('não cresce sem limite: descarta o excedente mais antigo', () => {
