@@ -23,6 +23,71 @@ describe('SessionRegistry — concorrência do ciclo de gravação', () => {
     expect(manager.startingInfo('g1')).toMatchObject({ channelId: 'c1', channelName: 'daily' });
   });
 
+  it('duas salas do mesmo servidor coexistem quando cada uma usa uma identidade de voz', () => {
+    const manager = new SessionRegistry<FakeSession>();
+    const daily = manager.reserveStart('g1', 'c1', 'daily', 4)!;
+    const extra = manager.reserveStart('g1', 'c2', 'suporte', 4, { identityLabel: 'helper-1' });
+
+    expect(extra).toBeDefined();
+    const s1 = { id: 'rec-1' };
+    const s2 = { id: 'rec-2' };
+    expect(manager.attachStarting(daily, s1)).toBe(true);
+    expect(manager.commitStart(daily, s1)).toBe(true);
+    expect(manager.attachStarting(extra!, s2)).toBe(true);
+    expect(manager.commitStart(extra!, s2)).toBe(true);
+
+    expect(manager.getByChannel('g1', 'c1')).toBe(s1);
+    expect(manager.getByChannel('g1', 'c2')).toBe(s2);
+    expect(manager.listByGuild('g1')).toHaveLength(2);
+    expect(manager.busyLabels('g1')).toEqual(new Set(['default', 'helper-1']));
+  });
+
+  it('a mesma identidade de voz não grava duas salas: é uma conexão por bot user', () => {
+    const manager = new SessionRegistry<FakeSession>();
+    expect(manager.reserveStart('g1', 'c1', 'daily')).toBeDefined();
+    expect(manager.reserveStart('g1', 'c2', 'suporte')).toBeUndefined(); // ambas 'default'
+    expect(manager.reserveStart('g1', 'c2', 'suporte', undefined, { identityLabel: 'helper-1' })).toBeDefined();
+  });
+
+  it('o mesmo canal nunca tem duas gravações, nem com identidades diferentes', () => {
+    const manager = new SessionRegistry<FakeSession>();
+    expect(manager.reserveStart('g1', 'c1', 'daily')).toBeDefined();
+    expect(manager.reserveStart('g1', 'c1', 'daily', undefined, { identityLabel: 'helper-1' })).toBeUndefined();
+  });
+
+  it('getById acha a sessão ativa certa e ignora as que estão encerrando', () => {
+    const manager = new SessionRegistry<FakeSession>();
+    const r1 = manager.reserveStart('g1', 'c1', 'daily')!;
+    const r2 = manager.reserveStart('g2', 'c9', 'retro')!;
+    const s1 = { id: 'rec-1' };
+    const s2 = { id: 'rec-2' };
+    manager.attachStarting(r1, s1);
+    manager.commitStart(r1, s1);
+    manager.attachStarting(r2, s2);
+    manager.commitStart(r2, s2);
+
+    expect(manager.getById('rec-1')).toBe(s1);
+    expect(manager.getById('rec-2')).toBe(s2);
+    // encerrando deixa de ser "ao vivo" — mesmo contrato do get() histórico
+    manager.beginStop('g1', s1);
+    expect(manager.getById('rec-1')).toBeUndefined();
+  });
+
+  it('busyChannels lista as salas ocupadas com a fase certa', () => {
+    const manager = new SessionRegistry<FakeSession>();
+    manager.reserveStart('g1', 'c1', 'daily'); // starting
+    const r2 = manager.reserveStart('g1', 'c2', 'suporte', undefined, { identityLabel: 'helper-1' })!;
+    const s2 = { id: 'rec-2' };
+    manager.attachStarting(r2, s2);
+    manager.commitStart(r2, s2); // recording
+
+    const busy = manager.busyChannels('g1');
+    expect(busy).toHaveLength(2);
+    expect(busy.find((b) => b.channelId === 'c1')?.phase).toBe('starting');
+    expect(busy.find((b) => b.channelId === 'c2')?.phase).toBe('recording');
+    expect(busy.find((b) => b.channelId === 'c2')?.channelName).toBe('suporte');
+  });
+
   it('mantém servidores diferentes independentes', () => {
     const manager = new SessionRegistry<FakeSession>();
     expect(manager.reserveStart('g1', 'c1', 'daily')).toBeDefined();

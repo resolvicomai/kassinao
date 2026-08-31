@@ -1700,7 +1700,9 @@ export function createWebApp(): Express {
     }
     const access = await resolveRecordingView(res, l, user, meta, messageOpts, recPath);
     if (!access) return;
-    const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
+    // Por id, não por guild: com mais de uma gravação no mesmo servidor, o lookup
+    // por guild acharia "uma" delas e deixaria baixar a outra em plena captura.
+    const live = meta.status === 'recording' && sessionManager.getById(meta.id) !== undefined;
     let transcript: TranscriptSegment[] | undefined;
     let transcriptNotice: string | undefined;
     if (transcriptReady(meta)) {
@@ -1769,7 +1771,9 @@ export function createWebApp(): Express {
       return;
     }
     // ao vivo: o mix seria parcial e não-cacheável (re-cozinha a cada hit) — bloqueia
-    const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
+    // Por id, não por guild: com mais de uma gravação no mesmo servidor, o lookup
+    // por guild acharia "uma" delas e deixaria baixar a outra em plena captura.
+    const live = meta.status === 'recording' && sessionManager.getById(meta.id) !== undefined;
     if (live) {
       res
         .status(409)
@@ -1990,7 +1994,9 @@ export function createWebApp(): Express {
     if (!access) return;
     // ao vivo: cada formato cozinharia um snapshot completo dos masters (sem dedupe
     // entre formatos), enchendo o disco. Bloqueia igual à rota /audio até encerrar.
-    const live = meta.status === 'recording' && sessionManager.get(meta.guildId)?.id === meta.id;
+    // Por id, não por guild: com mais de uma gravação no mesmo servidor, o lookup
+    // por guild acharia "uma" delas e deixaria baixar a outra em plena captura.
+    const live = meta.status === 'recording' && sessionManager.getById(meta.id) !== undefined;
     if (live) {
       res
         .status(409)

@@ -13,6 +13,7 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  Client,
   EmbedBuilder,
   Guild,
   Message,
@@ -82,6 +83,13 @@ export class RecordingSession {
   readonly controlToken: string;
   readonly guild: Guild;
   readonly voiceChannel: VoiceBasedChannel;
+  /**
+   * Identidade de VOZ: o bot user que entra no canal e recebe o áudio. Painel,
+   * DMs, presença e metadados continuam SEMPRE no client principal (this.guild).
+   * Default = principal, com o group 'default' do @discordjs/voice — byte a byte
+   * o comportamento histórico.
+   */
+  readonly identity: { readonly client: Client; readonly label: string };
   startedAt: number;
   readonly meta: RecordingMeta;
   readonly locale: Locale;
@@ -119,11 +127,13 @@ export class RecordingSession {
     locale: Locale;
     auto: boolean;
     capabilities?: Pick<DiscordCapabilities, 'transcription' | 'minutes'>;
+    identity?: { client: Client; label: string };
   }) {
     this.id = `${new Date().toISOString().slice(0, 10)}-${crypto.randomBytes(5).toString('hex')}`;
     this.controlToken = crypto.randomBytes(12).toString('hex');
     this.guild = opts.guild;
     this.voiceChannel = opts.voiceChannel;
+    this.identity = opts.identity ?? { client: opts.guild.client, label: 'default' };
     this.locale = opts.locale;
     this.auto = opts.auto;
     this.capabilities = opts.capabilities ?? { transcription: false, minutes: false };
@@ -184,13 +194,26 @@ export class RecordingSession {
   private async doStart(signal?: AbortSignal): Promise<void> {
     try {
       throwIfStartCancelled(signal);
-      // Defesa em profundidade: @discordjs/voice mantém UMA conexão por guild —
-      // entrar de novo moveria a conexão de uma gravação em andamento.
-      if (getVoiceConnection(this.guild.id)) {
+      // Defesa em profundidade: @discordjs/voice mantém UMA conexão por
+      // (guild, group) — entrar de novo no MESMO group moveria a conexão de uma
+      // gravação em andamento. O group é o rótulo da identidade, então cada bot
+      // user tem a própria vaga e um não derruba o outro.
+      if (getVoiceConnection(this.guild.id, this.identity.label)) {
         throw new Error(
           this.locale === 'pt'
             ? 'já existe uma conexão de voz neste servidor'
             : 'there is already a voice connection in this server',
+        );
+      }
+
+      // O adapter envia o VOICE_STATE_UPDATE pelo gateway do client dono do
+      // objeto Guild: para o ajudante entrar no canal, o Guild tem de vir DELE.
+      const identityGuild = this.identityGuild();
+      if (!identityGuild) {
+        throw new Error(
+          this.locale === 'pt'
+            ? 'o bot ajudante não está neste servidor (convide-o primeiro)'
+            : 'the helper bot is not in this server (invite it first)',
         );
       }
 
@@ -199,7 +222,8 @@ export class RecordingSession {
       const connection = joinVoiceChannel({
         channelId: this.voiceChannel.id,
         guildId: this.guild.id,
-        adapterCreator: this.guild.voiceAdapterCreator,
+        group: this.identity.label,
+        adapterCreator: identityGuild.voiceAdapterCreator,
         selfDeaf: false,
         selfMute: true,
       });
@@ -514,10 +538,19 @@ export class RecordingSession {
     this.persistPresenceOrStop(false);
   }
 
+  /** O Guild visto pelo client da identidade de voz (o principal quando default). */
+  private identityGuild(): Guild | undefined {
+    // Identidade padrão usa o MESMO objeto Guild de sempre — comportamento
+    // histórico exato, sem depender de lookup em cache.
+    if (this.identity.client === this.guild.client) return this.guild;
+    return this.identity.client.guilds.cache.get(this.guild.id);
+  }
+
   /** Indicador visual extra: tenta usar "[GRAVANDO] ..." enquanto grava. */
   private async setRecordingNickname(): Promise<void> {
     try {
-      const me = this.guild.members.me;
+      // O apelido precisa ficar no bot que está DENTRO do canal.
+      const me = this.identityGuild()?.members.me;
       if (!me) return;
       this.originalNickname = me.nickname;
       const tag = this.locale === 'pt' ? '[GRAVANDO]' : '[RECORDING]';
@@ -538,7 +571,7 @@ export class RecordingSession {
   private async restoreNickname(): Promise<void> {
     if (this.originalNickname === undefined) return;
     try {
-      await this.guild.members.me?.setNickname(this.originalNickname);
+      await this.identityGuild()?.members.me?.setNickname(this.originalNickname);
     } catch {
       // paciência — melhor apelido preso que gravação travada
     }
