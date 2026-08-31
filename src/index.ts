@@ -57,6 +57,12 @@ import { alertOwners, startMonitor } from './monitor';
 import { enqueueMinutesWebhook, pauseMinutesWebhooksForGuild, resumeMinutesWebhooksForGuild } from './minutesWebhook';
 import { DiscordCapabilities, Locale, localeOf, t, tCapability } from './i18n';
 import { autoRecordStore, isArmed, setArmed } from './recorder/autorecord';
+import {
+  beginCollisionEpisode,
+  collisionEpisodeStart,
+  endCollisionEpisode,
+  recordCollision,
+} from './recorder/collisionStats';
 import { sessionManager } from './recorder/manager';
 import { ManualRecordingStartLimiter } from './recorder/manualStartLimiter';
 import { reportManualRecordingStartFailure } from './recorder/manualStartFailure';
@@ -2149,6 +2155,42 @@ async function handleMcp(interaction: ChatInputCommandInteraction): Promise<void
 const pendingChecks = new Map<string, NodeJS.Timeout>(); // `${guildId}:${channelId}`
 const AUTO_DEBOUNCE_MS = 2000;
 
+async function notifyAutoRecordCollision(
+  guild: Guild,
+  channel: VoiceBasedChannel,
+  busyChannelId: string,
+): Promise<void> {
+  if (!beginCollisionEpisode(guild.id, channel.id)) return; // já avisado neste episódio
+  const { total30d } = recordCollision(guild.id, channel.id, busyChannelId);
+  const locale: Locale = guild.preferredLocale?.toLowerCase().startsWith('pt') ? 'pt' : config.defaultLocale;
+  const busyName = guild.channels.cache.get(busyChannelId)?.name;
+  const message = busyName
+    ? t(locale, 'autorecord.busy-elsewhere', { channel: `#${safeName(busyName)}` })
+    : t(locale, 'autorecord.busy-elsewhere-generic');
+  try {
+    if ('send' in channel) await channel.send(message);
+  } catch {
+    // sem permissão de mensagem no chat do canal — o alerta ao dono abaixo cobre
+  }
+  void alertOwners(
+    `autorecord-collision:${guild.id}:${channel.id}`,
+    `Duas reuniões coincidiram em **${safeName(guild.name)}**: **#${safeName(channel.name)}** encheu enquanto eu gravava${
+      busyName ? ` em **#${safeName(busyName)}**` : ' em outra sala'
+    }. Avisei a sala de que ela NÃO está sendo gravada; se seguir cheia quando a outra gravação terminar, começo lá automaticamente. É a ${total30d}ª colisão nos últimos 30 dias.`,
+  );
+}
+
+/** Chat + nota na linha do tempo: sem isso a gravação parcial parece completa. */
+function notifyLateStart(started: RecordingSession, locale: Locale): void {
+  started.addNote('Kassinão', t(locale, 'autorecord.late-start-note'));
+  const channel = started.voiceChannel;
+  if ('send' in channel) {
+    void channel.send(t(locale, 'autorecord.late-start')).catch(() => {
+      // sem permissão de mensagem — a nota na linha do tempo já registra
+    });
+  }
+}
+
 function scheduleAutoRecordCheck(guild: Guild, channelId: string): void {
   if (shuttingDown || !guildRuntime.isOperational(guild.id)) return;
   const key = `${guild.id}:${channelId}`;
@@ -2173,6 +2215,11 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
 
   // rearma quando a população cai abaixo do mínimo
   if (rule && humans < rule.minimum) setArmed(guild.id, channelId, true);
+  // sala esvaziou OU regra removida: a colisão (se houve) terminou sem gravação;
+  // o próximo enchimento com o bot ocupado é episódio novo e merece novo aviso.
+  // Sem o caso !rule, um /autorecord off durante a colisão deixaria o episódio
+  // aberto para sempre e o aviso seguinte seria suprimido.
+  if (!rule || humans < rule.minimum) endCollisionEpisode(guild.id, channelId);
 
   // compara com o canal onde o bot ESTÁ (ele pode ter sido arrastado)
   if (session && session.currentChannelId === channelId) {
@@ -2183,13 +2230,47 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
     return;
   }
 
+  // Sala cheia + regra armada + bot preso em OUTRA sala = colisão. O Discord só
+  // permite uma conexão de voz por servidor, então esta conversa não será
+  // gravada agora. O pior desfecho seria o silêncio: o time acharia que está
+  // sendo gravado. Avisa a sala uma vez por episódio e registra para o operador
+  // medir a frequência antes de decidir se um segundo bot vale a pena.
+  if (guildBusy(guild.id) && rule && humans >= rule.minimum && isArmed(guild.id, channelId)) {
+    // "Ocupado" inclui as fases starting/stopping, e sessionManager.get() não as
+    // enxerga. Sem resolver ONDE o bot está, um /gravar manual nesta mesma sala
+    // (a regra só desarma depois do commit) ou uma reentrada durante o stop
+    // geraria o aviso falso "estou gravando em outra sala" dentro da própria
+    // sala, além de colisão fantasma na estatística.
+    const busyChannelId =
+      session?.currentChannelId ??
+      sessionManager.startingInfo(guild.id)?.channelId ??
+      sessionManager.stoppingSession(guild.id)?.currentChannelId ??
+      null;
+    if (busyChannelId !== null && busyChannelId !== channelId) {
+      await notifyAutoRecordCollision(guild, channel, busyChannelId);
+    }
+    // busyChannelId null = fase de transição sem dono conhecido; não dá para
+    // provar que é outra sala, então não avisa. A regra segue armada e o
+    // próximo evento de voz reavalia.
+    return;
+  }
+
   if (!guildBusy(guild.id) && rule && humans >= rule.minimum && isArmed(guild.id, channelId)) {
     setArmed(guild.id, channelId, false);
+    // Se houve colisão enquanto a sala esperava, esta gravação começa no meio da
+    // conversa: o aviso vira nota na linha do tempo e mensagem no chat.
+    const collidedSince = collisionEpisodeStart(guild.id, channelId);
     // preferredLocale só é real em servidores Community (nos demais é sempre en-US);
     // pro auto-record, DEFAULT_LOCALE do operador é um sinal muito melhor
     const locale: Locale = guild.preferredLocale?.toLowerCase().startsWith('pt') ? 'pt' : config.defaultLocale;
     try {
-      await startSession({ guild, voiceChannel: channel, startedBy: null, locale, auto: true });
+      const started = await startSession({ guild, voiceChannel: channel, startedBy: null, locale, auto: true });
+      if (collidedSince !== undefined) {
+        endCollisionEpisode(guild.id, channelId);
+        // Espera de segundos (ex.: a outra gravação estava encerrando) não é
+        // "início tardio" de verdade; a nota só entra quando perdeu conversa.
+        if (Date.now() - collidedSince > 60_000) notifyLateStart(started, locale);
+      }
     } catch (err) {
       // rearma para tentar de novo no próximo movimento do canal
       setArmed(guild.id, channelId, true);

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
+import { endCollisionEpisode } from './collisionStats';
 
 export interface AutoRecordRule {
   channelId: string;
@@ -46,6 +47,7 @@ export const autoRecordStore = {
     all[guildId] = (all[guildId] ?? []).filter((r) => r.channelId !== channelId);
     save(all);
     armed.delete(`${guildId}:${channelId}`); // não deixa entrada órfã no Map
+    endCollisionEpisode(guildId, channelId); // idem para o episódio de colisão
     return (all[guildId]?.length ?? 0) < before;
   },
 };
