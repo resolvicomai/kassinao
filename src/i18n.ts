@@ -622,6 +622,22 @@ const STRINGS: Strings = {
     pt: '✅ Auto-record ligado em **{channel}**: começo com **{min}+** pessoa(s) e paro quando ficar abaixo desse mínimo. Se passar de {hours}h, encerro e recomeço automaticamente pra cobrir o resto.',
     en: '✅ Auto-record enabled in **{channel}**: I start with **{min}+** person(s) and stop when it drops below that minimum. Past {hours}h I stop and restart automatically to cover the rest.',
   },
+  'autorecord.busy-elsewhere': {
+    pt: '⚠️ Esta conversa **não está sendo gravada**: já estou gravando em **{channel}** e o Discord só permite um canal de voz por vez. Se a sala ainda estiver cheia quando aquela gravação terminar, começo aqui automaticamente.',
+    en: '⚠️ This conversation is **not being recorded**: I am already recording in **{channel}** and Discord allows only one voice channel at a time. If this room is still full when that recording ends, I will start here automatically.',
+  },
+  'autorecord.busy-elsewhere-generic': {
+    pt: '⚠️ Esta conversa **não está sendo gravada**: já estou gravando em outra sala e o Discord só permite um canal de voz por vez. Se a sala ainda estiver cheia quando aquela gravação terminar, começo aqui automaticamente.',
+    en: '⚠️ This conversation is **not being recorded**: I am already recording in another room and Discord allows only one voice channel at a time. If this room is still full when that recording ends, I will start here automatically.',
+  },
+  'autorecord.late-start': {
+    pt: '⚠️ Gravação iniciada **com a conversa já em andamento**: o trecho anterior não foi gravado porque eu estava ocupado em outra sala.',
+    en: '⚠️ Recording started **mid-conversation**: the earlier part was not recorded because I was busy in another room.',
+  },
+  'autorecord.late-start-note': {
+    pt: 'Gravação começou com a conversa já em andamento (o bot estava ocupado em outra sala até agora).',
+    en: 'Recording started mid-conversation (the bot was busy in another room until now).',
+  },
   'autorecord.updated': {
     pt: '✅ Regra de auto-record atualizada em **{channel}**: agora o mínimo é **{min}**. Uma gravação já ativa não será reiniciada por esta alteração.',
     en: '✅ Auto-record rule updated in **{channel}**: the minimum is now **{min}**. An active recording will not be restarted by this change.',
