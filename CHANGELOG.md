@@ -10,8 +10,15 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+### Fixed
+
+- Minutes that fail no longer fail silently: the queue retries up to 3 times (5 minutes apart), the completion DM waits for the final outcome and says "transcript ready, minutes failed" instead of "Transcript ready!", and owners receive one alert per recording.
+- The minutes DM says when it truncates a list: field names read "Decisions (5 of 7)" and "Action items (8 of 13)" instead of silently showing a partial list. The embed builder moved to `src/discord/minutesEmbed.ts` with tests.
+
 ### Changed
 
+- Web sessions last 30 days (was 7) and renew on use when fewer than 15 days remain. Access control is still re-checked on every request.
+- After downloading a transcript from AssemblyAI, the bot deletes the remote copy (`DELETE /v2/transcript/{id}`, best effort), so the declared local retention is the only retention.
 - The public landing/docs/demo process no longer loads discord.js and the voice stack: time formatting moved to `src/time.ts` and Markdown escaping is imported from `@discordjs/formatters` (now a direct dependency). A boundary test fails if any Discord module reaches `src/web/publicServer.ts` again.
 - `.env.example` defaults follow the Compose topology the README documents: `PUBLIC_SURFACES_ENABLED=false`, `TRUST_PROXY_HOPS=1`, `COMPOSE_PROFILES=split-public`. A bare-node single process is the exception, not the template default.
 - Dependabot ignores minor and major bumps of `libsodium-wrappers` (pre-1.0 minors change the audio stack API; #95 and #126 were closed for that reason).

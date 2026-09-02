@@ -45,6 +45,7 @@ import { freeMB } from './disk';
 import { client } from './discord/client';
 import { currentDiscordCapabilities } from './discord/capabilities';
 import { buildCommands } from './discord/commands';
+import { buildMinutesEmbed } from './discord/minutesEmbed';
 import { GuildRuntimeBoundary } from './discord/guildRuntime';
 import { observeClientReadiness } from './discord/ready';
 import {
@@ -130,7 +131,6 @@ import {
   pageUrl,
   readDiscordSurfaceInventory,
   readMeta,
-  readMinutes,
   readTranscript,
   RecordingMeta,
   recoverInterruptedRecordings,
@@ -521,12 +521,16 @@ async function notifyTranscriptionOnce(meta: RecordingMeta, locale: Locale): Pro
   const minutesDone = meta.minutes?.status === 'done';
   // gravação curtinha sem fala detectada: não prometer "transcrição pronta!"
   const emptyDone = state.status === 'done' && (readTranscript(meta.id)?.length ?? 0) === 0;
-  const text = emptyDone
+  const minutesFailed = (state.status === 'done' || state.status === 'partial') && meta.minutes?.status === 'error';
+  const attempts = String(meta.minutes?.attempts ?? 1);
+  const baseText = emptyDone
     ? t(locale, 'transcript.empty-note', { url: pageUrl(meta.id) })
     : state.status === 'done'
       ? minutesDone
         ? t(locale, 'minutes.ready', { url: pageUrl(meta.id) }) // ata + transcrição prontas
-        : t(locale, 'transcript.ready', { url: pageUrl(meta.id) })
+        : minutesFailed
+          ? t(locale, 'minutes.failed', { url: pageUrl(meta.id), attempts }) // não fingir que deu tudo certo
+          : t(locale, 'transcript.ready', { url: pageUrl(meta.id) })
       : state.status === 'partial'
         ? t(locale, 'transcript.partial', {
             names:
@@ -535,9 +539,23 @@ async function notifyTranscriptionOnce(meta: RecordingMeta, locale: Locale): Pro
             url: pageUrl(meta.id),
           })
         : t(locale, 'transcript.failed', { error: shortError(state.error, locale) });
+  // transcrição parcial + ata falhada: a DM precisa dizer as duas coisas
+  const text =
+    state.status === 'partial' && minutesFailed
+      ? `${baseText}\n${t(locale, 'minutes.failed-short', { attempts })}`
+      : baseText;
 
   const embeds = minutesDone ? buildMinutesEmbed(meta, locale) : [];
   const privatePayload = { content: text, embeds };
+  // Um alerta por gravação: o marcador persistido sobrevive a retries da DM e a reinícios.
+  if (minutesFailed && !persisted.minutesFailureAlertedAt) {
+    persisted.minutesFailureAlertedAt = Date.now();
+    saveMeta(persisted);
+    void alertOwners(
+      `minutes-failed:${meta.id}`,
+      `A **ata** da gravação \`${meta.id}\` falhou após ${attempts} tentativa(s): ${shortError(meta.minutes?.error, 'pt')}. A transcrição está na página: ${pageUrl(meta.id)}`,
+    );
+  }
   const publicNotice = buildPublicTranscriptionNotice(locale);
   if (minutesDone) enqueueMinutesWebhook(meta.id);
 
@@ -884,47 +902,6 @@ function startDiscordSurfaceMigrationSweep(): void {
   void migrateNextDiscordSurface().catch(() =>
     console.warn('Sweep inicial da neutralização histórica falhou; será tentado novamente.'),
   );
-}
-
-/** Embed com o essencial da ata (resumo + decisões + ações), truncado com folga. */
-function buildMinutesEmbed(meta: RecordingMeta, locale: Locale): EmbedBuilder[] {
-  const minutes = readMinutes(meta.id);
-  if (!minutes) return [];
-  const embed = new EmbedBuilder()
-    .setColor(0x5865f2)
-    .setTitle(safeSlice(`📋 ${t(locale, 'minutes.embed-title', { channel: safeName(meta.voiceChannelName) })}`, 256))
-    .setURL(pageUrl(meta.id));
-  if (minutes.resumo) embed.setDescription(safeSlice(safeName(minutes.resumo), 2000));
-  if (minutes.decisoes.length > 0) {
-    embed.addFields({
-      name: t(locale, 'minutes.embed-decisions'),
-      value: safeSlice(
-        minutes.decisoes
-          .slice(0, 5)
-          .map((d) => `• ${safeName(d)}`)
-          .join('\n'),
-        1024,
-      ),
-    });
-  }
-  if (minutes.acoes.length > 0) {
-    embed.addFields({
-      name: t(locale, 'minutes.embed-actions'),
-      value: safeSlice(
-        minutes.acoes
-          .slice(0, 8)
-          .map((a) => {
-            const extra = [a.responsavel && safeName(a.responsavel), a.prazo && safeName(a.prazo)]
-              .filter(Boolean)
-              .join(' — ');
-            return `☐ ${safeName(a.tarefa)}${extra ? ` *(${extra})*` : ''}`;
-          })
-          .join('\n'),
-        1024,
-      ),
-    });
-  }
-  return [embed];
 }
 
 // ---------- /config (por servidor, admin) ----------
@@ -1924,6 +1901,7 @@ function recordingBadge(m: RecordingMeta, l: Locale): string {
     ms === 'running'
   )
     return t(l, 'recordings.badge-processing');
+  if (ms === 'error' && (ts === 'done' || ts === 'partial')) return t(l, 'recordings.badge-minutes-failed');
   if (ts === 'partial') return t(l, 'recordings.badge-partial');
   if (ts === 'done') return t(l, 'recordings.badge-transcript');
   return t(l, 'recordings.badge-none');
@@ -2450,7 +2428,8 @@ function enqueueRecoveredProcessing(meta: RecordingMeta): void {
     enqueueMinutesOnly(
       meta.id,
       (fresh) => {
-        if (fresh.minutes?.status === 'done') notifyTranscription(fresh, locale);
+        // o aviso agora espera o resultado final da ata; falha definitiva também avisa
+        if (fresh.minutes?.status === 'done' || fresh.minutes?.status === 'error') notifyTranscription(fresh, locale);
       },
       settled,
     );
@@ -2510,7 +2489,13 @@ client.once(Events.ClientReady, async () => {
       pendingTranscriptionNotificationIds.add(meta.id);
     }
     enqueueRecoveredProcessing(meta);
-    if ((st === 'done' || st === 'partial') && shouldRecoverTranscriptionNotification(meta)) {
+    // Ata ainda pendente/em retry: o onDone da recuperação avisa no resultado final;
+    // avisar agora gravaria o checkpoint e engoliria a DM da ata.
+    if (
+      (st === 'done' || st === 'partial') &&
+      !needsRecoveredProcessing(meta) &&
+      shouldRecoverTranscriptionNotification(meta)
+    ) {
       const locale: Locale = meta.locale === 'en' ? 'en' : meta.locale === 'pt' ? 'pt' : config.defaultLocale;
       void notifyTranscription(meta, locale);
     }

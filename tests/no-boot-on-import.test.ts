@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
  * num processo Node real e o teste falha se src/index.ts entrar no require.cache
  * ou se o processo tentar sair. A lista cresce um módulo por PR do refactor.
  */
-const MODULES = ['src/discord/capabilities.ts', 'src/discord/commands.ts'];
+const MODULES = ['src/discord/capabilities.ts', 'src/discord/commands.ts', 'src/discord/minutesEmbed.ts'];
 
 describe('módulos extraídos do index não disparam o boot ao serem importados', () => {
   it.each(MODULES)(
