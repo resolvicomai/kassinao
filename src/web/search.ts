@@ -29,7 +29,7 @@ export interface WebSearchLimits {
   maxMinutesBytesPerRequest: number;
 }
 
-export const DEFAULT_WEB_SEARCH_LIMITS: WebSearchLimits = {
+const DEFAULT_WEB_SEARCH_LIMITS: WebSearchLimits = {
   maxTranscriptBytesPerMeeting: 1024 * 1024,
   maxTranscriptBytesPerRequest: 5 * 1024 * 1024,
   maxSegmentsPerMeeting: 5_000,

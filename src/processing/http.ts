@@ -99,7 +99,7 @@ function abortReason(signal: AbortSignal, fallback?: Error): Error {
     : (fallback ?? new DOMException('The operation was aborted', 'AbortError'));
 }
 
-export function throwIfAborted(signal: AbortSignal | null | undefined): void {
+function throwIfAborted(signal: AbortSignal | null | undefined): void {
   if (signal?.aborted) throw abortReason(signal);
 }
 

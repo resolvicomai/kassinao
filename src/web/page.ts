@@ -1,8 +1,7 @@
 import { config } from '../config';
 import { localizeEvent, Locale } from '../i18n';
-import { msToClock } from '../processing/transcribe';
 import { MCP_NPX_PACKAGE } from '../productVersions';
-import { formatDuration, formatOffset } from '../recorder/RecordingSession';
+import { formatDuration, formatOffset, msToClock } from '../time';
 import { MAX_NOTES_PER_RECORDING, MAX_PRESENCE_IDENTITIES_PER_RESPONSE } from '../securityLimits';
 import {
   audioExpiryOf,

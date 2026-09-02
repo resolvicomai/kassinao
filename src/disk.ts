@@ -10,7 +10,7 @@ import { config } from './config';
  */
 
 /** Espaço livre em bytes (Infinity se não der pra medir). */
-export function freeBytes(dir: string = config.recordingsDir): number {
+function freeBytes(dir: string = config.recordingsDir): number {
   try {
     const s = statfsSync(dir);
     return s.bavail * s.bsize;

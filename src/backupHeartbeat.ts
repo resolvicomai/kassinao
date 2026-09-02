@@ -9,8 +9,8 @@ import path from 'node:path';
  * Foi assim que 60 execuções falharam em sequência em 2026 sem ninguém saber:
  * o erro só ia para um log do host que ninguém lê. Este arquivo é a ponte.
  */
-export const BACKUP_HEARTBEAT_FILE = 'backup-heartbeat.json';
-export const BACKUP_STALE_AFTER_MS = 48 * 60 * 60 * 1000;
+const BACKUP_HEARTBEAT_FILE = 'backup-heartbeat.json';
+const BACKUP_STALE_AFTER_MS = 48 * 60 * 60 * 1000;
 
 export interface BackupHeartbeat {
   /** ISO-8601 do fim do último upload verificado. */

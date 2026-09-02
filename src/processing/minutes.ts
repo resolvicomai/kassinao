@@ -9,7 +9,7 @@ import {
   fetchWithRetry,
   GuildWorkContext,
 } from './http';
-import { msToClock } from './transcribe';
+import { msToClock } from '../time';
 
 /**
  * Tetos conservadores de texto por caminho. O fluxo OpenRouter aceita mais

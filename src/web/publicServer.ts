@@ -28,7 +28,6 @@ const PUBLIC_VISUALS = [
   ['discord-demo-en-v2.gif', 'image/gif'],
   ['meeting-demo-pt.png', 'image/png'],
   ['meeting-demo-en.png', 'image/png'],
-  ['producthunt.svg', 'image/svg+xml'],
 ] as const;
 
 function requestHost(req: Request): string {

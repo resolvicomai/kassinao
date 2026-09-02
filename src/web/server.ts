@@ -84,7 +84,7 @@ import { localeCookie, localeFromValue, resolveWebLocale } from './site';
 import { acquireDownload, hasActiveDownloads } from './tracker';
 import { isOpaqueCursorToken, OpaqueCursorError, openOpaqueCursor, sealOpaqueCursor } from './opaqueCursor';
 import { revokeWebSessionsForUser } from './webSessions';
-
+// Re-export usado pelos testes de membership (a API importa direto de ./access).
 export { currentGuildMembership } from './access';
 
 const SPACE_GROTESK_FONT =
@@ -102,19 +102,18 @@ const PUBLIC_VISUALS = [
   ['discord-demo-en-v2.gif', 'image/gif'],
   ['meeting-demo-pt.png', 'image/png'],
   ['meeting-demo-en.png', 'image/png'],
-  ['producthunt.svg', 'image/svg+xml'],
 ] as const;
 
 const mcpConnectionCreationLimiter = new FixedWindowRateLimiter();
 const webHeavyReadLimiters = new ApiRateLimiters();
 
-export const WEB_DIRECT_TRANSCRIPT_MAX_BYTES = 5 * 1024 * 1024;
-export const WEB_DIRECT_TRANSCRIPT_MAX_SEGMENTS = 5_000;
+const WEB_DIRECT_TRANSCRIPT_MAX_BYTES = 5 * 1024 * 1024;
+const WEB_DIRECT_TRANSCRIPT_MAX_SEGMENTS = 5_000;
 export const MAX_WEB_LIBRARY_CANDIDATES_PER_PAGE = 100;
 const MAX_WEB_LIBRARY_GUILDS_PER_PAGE = 25;
 const MAX_WEB_LIBRARY_ITEMS_PER_PAGE = 100;
 
-export function webHeavyReadRateLimited(userId: string): boolean {
+function webHeavyReadRateLimited(userId: string): boolean {
   return (
     webHeavyReadLimiters.consumeKey(`web-heavy-user:${userId}`, 12, 60_000) ||
     webHeavyReadLimiters.consumeGlobal('web-heavy-global', 30, 60_000)
@@ -188,7 +187,6 @@ const MSG = {
     en: 'Could not confirm your Discord login. Try opening the recording link again.',
   },
   errorTitle: { pt: 'Erro', en: 'Error' },
-  loginError: { pt: 'Erro inesperado no login. Tente de novo.', en: 'Unexpected login error. Try again.' },
   invalidOriginTitle: { pt: 'Não foi possível confirmar a ação', en: 'Could not confirm the action' },
   invalidOrigin: {
     pt: 'A página não conseguiu comprovar que este envio veio do Kassinão. Volte às reuniões, abra a gravação e tente de novo.',
@@ -205,11 +203,6 @@ const MSG = {
   deleteBusy: {
     pt: 'Alguém está baixando esta gravação agora. Tente apagar de novo em instantes.',
     en: 'Someone is downloading this recording right now. Try deleting again in a moment.',
-  },
-  deletedTitle: { pt: 'Gravação apagada', en: 'Recording deleted' },
-  deleted: {
-    pt: 'Pronto — os arquivos foram removidos para sempre. 🗑️',
-    en: 'Done — the files were removed forever. 🗑️',
   },
   freedFlash: {
     pt: '🔇 Espaço liberado — o áudio foi apagado; transcrição, ata e notas continuam.',
@@ -587,7 +580,7 @@ export type WebHostRoutingDecision =
  * origem única compatíveis: sem as novas variáveis, todas as superfícies seguem
  * vivendo sob BASE_URL, exatamente como antes.
  */
-export function configuredWebOrigins(source: DomainConfig = config as DomainConfig): WebOrigins {
+function configuredWebOrigins(source: DomainConfig = config as DomainConfig): WebOrigins {
   const app = source.appUrl ?? source.baseUrl;
   const publicUrl = source.publicUrl ?? source.baseUrl;
   return {
