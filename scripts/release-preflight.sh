@@ -98,7 +98,11 @@ if command -v gh >/dev/null 2>&1; then
 fi
 
 if [ "$fail" = 0 ]; then
-  printf '\nPronto para: git tag -a %s && git tag -a v%s (nessa ordem, com espera pelo npm entre elas).\n' "$mcp_tag" "$app_version"
+  if git rev-parse -q --verify "refs/tags/$mcp_tag" >/dev/null 2>&1; then
+    printf '\nPronto para: git tag -a v%s -m "Kassinão v%s" origin/main && git push origin v%s\n' "$app_version" "$app_version" "$app_version"
+  else
+    printf '\nPronto para: git tag -a %s (publicar e esperar o npm) e depois git tag -a v%s, nessa ordem.\n' "$mcp_tag" "$app_version"
+  fi
 else
   printf '\nCorrija os itens FALTA antes de criar qualquer tag.\n'
   exit 1

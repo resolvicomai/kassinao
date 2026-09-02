@@ -17,7 +17,7 @@ function serviceBlock(source: string, service: string): string {
   if (start < 0) throw new Error(`serviço ${service} não encontrado`);
   const bodyStart = start + marker.length;
   const rest = source.slice(bodyStart);
-  const nextService = rest.search(/^  [A-Za-z0-9_.-]+:\s*$/m);
+  const nextService = rest.search(/^ {2}[A-Za-z0-9_.-]+:\s*$/m);
   const nextSection = rest.search(/^(?:volumes|networks):\s*$/m);
   const ends = [nextService, nextSection].filter((value) => value >= 0);
   return rest.slice(0, ends.length > 0 ? Math.min(...ends) : rest.length);
@@ -25,7 +25,7 @@ function serviceBlock(source: string, service: string): string {
 
 describe('shared-host Compose adapter', () => {
   it('desliga restart autônomo nos quatro processos da instância', () => {
-    expect(shared.match(/^    restart: 'no'$/gm)).toHaveLength(4);
+    expect(shared.match(/^ {4}restart: 'no'$/gm)).toHaveLength(4);
   });
 
   it('sela memória e exige a sentinel do mount sem criar caminho no host', () => {
@@ -46,7 +46,7 @@ describe('shared-host Compose adapter', () => {
     expect(shared.match(/create_host_path: false/g)).toHaveLength(4);
     expect(shared.match(/memswap_limit:/g)).toHaveLength(4);
     expect(shared.match(/mem_swappiness: 0/g)).toHaveLength(4);
-    expect(shared.match(/^    cpus:/gm)).toHaveLength(4);
+    expect(shared.match(/^ {4}cpus:/gm)).toHaveLength(4);
   });
 
   it('carrega segredos somente por binds cifrados read-only', () => {
@@ -69,8 +69,8 @@ describe('shared-host Compose adapter', () => {
     expect(shared).not.toMatch(/\bdevices?\s*:/);
     expect(shared).not.toContain('docker.sock');
     expect(shared).not.toMatch(/^\s+ports\s*:/m);
-    expect(shared.match(/^    user: '\$\{KASSINAO_UID:\?/gm)).toHaveLength(3);
-    expect(shared.match(/^    user: '65532:65532'$/gm)).toHaveLength(1);
+    expect(shared.match(/^ {4}user: '\$\{KASSINAO_UID:\?/gm)).toHaveLength(3);
+    expect(shared.match(/^ {4}user: '65532:65532'$/gm)).toHaveLength(1);
 
     expect(base).toContain("user: '${KASSINAO_UID:-1000}:${KASSINAO_GID:-1000}'");
     expect(base).toContain('- no-new-privileges:true');
@@ -114,7 +114,7 @@ describe('shared-host Compose adapter', () => {
     const publicProcess = serviceBlock(base, 'kassinao-public');
     const core = serviceBlock(base, 'kassinao');
     const tunnel = serviceBlock(base, 'cloudflared');
-    const networkNames = [...base.matchAll(/^  ([a-z][a-z0-9_]+):\n(?=\s{4}(?:internal|driver_opts):)/gm)].map(
+    const networkNames = [...base.matchAll(/^ {2}([a-z][a-z0-9_]+):\n(?=\s{4}(?:internal|driver_opts):)/gm)].map(
       (match) => match[1],
     );
 
@@ -127,7 +127,7 @@ describe('shared-host Compose adapter', () => {
       'tunnel_egress',
     ]);
     expect(base).toMatch(
-      /^  host_ingress:\n    internal: false\n    enable_ipv6: false\n    driver_opts:\n[\s\S]*?com\.docker\.network\.bridge\.name: kas-host0\n[\s\S]*?com\.docker\.network\.bridge\.host_binding_ipv4: 127\.0\.0\.1\n[\s\S]*?com\.docker\.network\.bridge\.gateway_mode_ipv4: nat\n[\s\S]*?com\.docker\.network\.bridge\.enable_icc: 'false'/m,
+      /^ {2}host_ingress:\n {4}internal: false\n {4}enable_ipv6: false\n {4}driver_opts:\n[\s\S]*?com\.docker\.network\.bridge\.name: kas-host0\n[\s\S]*?com\.docker\.network\.bridge\.host_binding_ipv4: 127\.0\.0\.1\n[\s\S]*?com\.docker\.network\.bridge\.gateway_mode_ipv4: nat\n[\s\S]*?com\.docker\.network\.bridge\.enable_icc: 'false'/m,
     );
     for (const network of ['edge_ingress', 'core_link', 'public_link']) {
       expect(base).toMatch(

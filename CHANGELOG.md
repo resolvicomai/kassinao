@@ -10,6 +10,20 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+### Changed
+
+- The public landing/docs/demo process no longer loads discord.js and the voice stack: time formatting moved to `src/time.ts` and Markdown escaping is imported from `@discordjs/formatters` (now a direct dependency). A boundary test fails if any Discord module reaches `src/web/publicServer.ts` again.
+- `.env.example` defaults follow the Compose topology the README documents: `PUBLIC_SURFACES_ENABLED=false`, `TRUST_PROXY_HOPS=1`, `COMPOSE_PROFILES=split-public`. A bare-node single process is the exception, not the template default.
+- Dependabot ignores minor and major bumps of `libsodium-wrappers` (pre-1.0 minors change the audio stack API; #95 and #126 were closed for that reason).
+- The test suite finds a modern bash on its own (Homebrew or /usr/local) when the system bash is older than 4.4, warns clearly when none exists, and fails hard on CI instead of skipping the shell suites. ESLint now covers `tests/`.
+
+### Removed
+
+- The unreachable legacy transcription path (`transcribeTrackLegacy`, `chunkHasAudio`): when speech detection fails, the whole track is treated as one speech interval and follows the normal batching.
+- 27 exports without any importer (now file-private) and three functions without any caller (`stopMonitor`, `revokeSession`, `countUserSessions`); dead message keys and the unused `/assets/producthunt.svg` route.
+
+## [1.4.19] — 2026-09-02
+
 ### Added
 
 - Helper bots: `HELPER_DISCORD_TOKENS` accepts extra bot tokens so one server can record more than one voice room at the same time. Discord allows one voice connection per bot user per server; each helper is a second application invited with the same permissions, joins voice only, and registers no commands. Panels, notices, and minutes keep coming from the main bot. The owner is alerted at boot when a configured helper is in none of the authorized servers, and at collision time when a helper is missing from the affected server.

@@ -473,7 +473,7 @@ export function resolveOperatorPrivacyConfig(
   };
 }
 
-export function normalizeSourceUrl(raw: string): string {
+function normalizeSourceUrl(raw: string): string {
   let url: URL;
   try {
     url = new URL(raw);
@@ -491,7 +491,7 @@ export function normalizeSourceUrl(raw: string): string {
 }
 
 /** Fingerprint público do artefato em execução; nunca contém identidade da instância. */
-export function normalizeReleaseDigest(raw: string | undefined): string {
+function normalizeReleaseDigest(raw: string | undefined): string {
   const value = raw?.trim() || '';
   if (value && !/^sha256:[0-9a-f]{64}$/.test(value)) {
     throw new Error('KASSINAO_RELEASE_DIGEST precisa usar sha256:<64 hex>');
@@ -500,7 +500,7 @@ export function normalizeReleaseDigest(raw: string | undefined): string {
 }
 
 /** Identificador aleatório e público do deploy; não codifica domínio, guild ou operador. */
-export function normalizeDeploymentFingerprint(raw: string | undefined): string {
+function normalizeDeploymentFingerprint(raw: string | undefined): string {
   const value = raw?.trim() || '';
   if (value && !/^[0-9a-f]{32}$/.test(value)) {
     throw new Error('KASSINAO_DEPLOYMENT_FINGERPRINT precisa usar 32 hex minúsculos');

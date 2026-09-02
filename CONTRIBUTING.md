@@ -40,7 +40,7 @@ Never use production credentials, recordings, domains, IDs, auth state, or backu
 - pt-BR and English user-facing copy must remain behaviorally equivalent. Shared bot strings belong in [`src/i18n.ts`](src/i18n.ts); page-specific copy stays next to its renderer.
 - Code changes served over the network must preserve the AGPL Corresponding Source path. Secrets, runtime configuration, and meeting data stay out of source and release artifacts.
 
-Use [`docs/research/2026-07-14-product-truth.md`](docs/research/2026-07-14-product-truth.md) as the current claim boundary and verify the implementation whenever behavior changes.
+The current claim boundary is the README, the public docs (`src/web/docs.ts`), `.env.example` and the tests; verify the implementation whenever behavior changes. [`docs/research/2026-07-14-product-truth.md`](docs/research/2026-07-14-product-truth.md) is a historical pre-implementation snapshot from the launch, kept for context.
 
 ## Before opening a pull request
 

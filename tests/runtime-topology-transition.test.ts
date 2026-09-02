@@ -487,10 +487,6 @@ PY
 esac
 `,
   );
-  const currentServices = ['kassinao', 'kassinao-public', 'kassinao-router', 'cloudflared'];
-  const currentNetworks = ['core_egress', 'core_link', 'edge_ingress', 'host_ingress', 'public_link', 'tunnel_egress'];
-  const legacyServices = ['kassinao', 'kassinao-public', 'cloudflared'];
-  const legacyNetworks = ['private', 'public'];
   function identifier(value: string): string {
     return createHash('sha256').update(value).digest('hex');
   }

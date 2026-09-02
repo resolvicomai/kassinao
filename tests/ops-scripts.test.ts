@@ -50,7 +50,7 @@ function retentionFixture(root: string, bin: string) {
 
 function runRetention(script: ReturnType<typeof retentionFixture>, environment: NodeJS.ProcessEnv) {
   script.setInventory(environment);
-  return spawnSync('/bin/bash', [script.script], { encoding: 'utf8', env: environment });
+  return spawnSync('bash', [script.script], { encoding: 'utf8', env: environment });
 }
 
 afterEach(() => {

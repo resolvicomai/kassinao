@@ -76,11 +76,8 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_LOGIN_NEXT_BYTES = 2_048;
 const MAX_LOGIN_NEXT_JSON_BYTES = MAX_LOGIN_NEXT_BYTES + 2;
 
-type DomainConfig = typeof config & { appUrl?: string };
-
 function appOrigin(): string {
-  const domainConfig = config as DomainConfig;
-  return domainConfig.appUrl ?? domainConfig.baseUrl;
+  return config.appUrl;
 }
 
 export function webCookieSettings(origin: string): {
@@ -210,7 +207,7 @@ export function getWebUser(req: Request): WebUser | undefined {
   return user;
 }
 
-export function clearStateCookie(res: Response): void {
+function clearStateCookie(res: Response): void {
   setCookie(res, STATE_COOKIE, '', 0, STATE_PATH);
   // Migração das versões sem prefixo __Host- e dos caminhos antigos.
   setCookie(res, LEGACY_STATE_COOKIE, '', 0, '/auth');
@@ -305,7 +302,7 @@ export function isAllowedWebMutation(req: Request, expectedBaseUrl = appOrigin()
 
 // ---------- fluxo OAuth2 do Discord ----------
 
-export function redirectUri(): string {
+function redirectUri(): string {
   return `${appOrigin()}/auth/callback`;
 }
 

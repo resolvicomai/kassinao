@@ -8,7 +8,7 @@ import type {
 } from './store';
 
 export const DISCORD_SURFACE_POLICY_VERSION = 1;
-export const DISCORD_HISTORY_PAGE_SIZE = 100;
+const DISCORD_HISTORY_PAGE_SIZE = 100;
 const START_TIME_MARGIN_MS = 5 * 60_000;
 
 export interface DiscordSurfaceMessage {

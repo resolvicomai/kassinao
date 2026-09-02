@@ -1,5 +1,8 @@
 import crypto from 'node:crypto';
-import { escapeMarkdown } from 'discord.js';
+// @discordjs/formatters é a origem do escapeMarkdown do discord.js. Importar
+// daqui (e não de 'discord.js') evita carregar o client inteiro em quem só quer
+// sanitizar texto: operationalLog, API, páginas e o processo público.
+import { escapeMarkdown } from '@discordjs/formatters';
 
 /**
  * Neutralização de conteúdo controlado por TERCEIROS antes de ele entrar num

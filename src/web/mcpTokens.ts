@@ -171,7 +171,7 @@ function persist(): void {
 }
 
 /** Descarta sessões expiradas. Retorna quantas saíram. */
-export function gcSessions(): number {
+function gcSessions(): number {
   const now = Date.now();
   let removed = 0;
   for (const [sid, s] of sessions) {
@@ -267,14 +267,6 @@ export function rotateSession(sid: string, presentedGen: number, attemptId?: str
   return { ok: true, gen: s.gen, userId: s.userId, name: s.name, exp: s.exp, replayed: false };
 }
 
-/** Revoga uma sessão específica pelo sid. */
-export function revokeSession(sid: string): boolean {
-  load();
-  const had = sessions.delete(sid);
-  if (had) persist();
-  return had;
-}
-
 /** Revoga TODAS as sessões de um usuário (ex.: saiu do servidor). Retorna quantas. */
 export function revokeUser(userId: string): number {
   load();
@@ -295,15 +287,6 @@ export function revokeAll(): number {
   const n = sessions.size;
   sessions.clear();
   persist();
-  return n;
-}
-
-/** Quantas sessões ativas um usuário tem (para exibir no /conectar-ia). */
-export function countUserSessions(userId: string): number {
-  load();
-  gcSessions();
-  let n = 0;
-  for (const s of sessions.values()) if (s.userId === userId) n++;
   return n;
 }
 

@@ -35,8 +35,8 @@ export function destroyHelpers(): void {
   }
 }
 
-/** Decisão pura de perímetro, extraída para teste: ajudante sai de guild não autorizada. */
-export function helperGuildAllowed(allows: (guildId: string) => boolean, guildId: string): boolean {
+/** Perímetro do ajudante: fora de guild autorizada ele sai (mesma regra do bot principal). */
+function helperGuildAllowed(allows: (guildId: string) => boolean, guildId: string): boolean {
   return allows(guildId);
 }
 

@@ -2,7 +2,7 @@ import { escapeMarkdown } from 'discord.js';
 import { config } from './config';
 import { Locale } from './i18n';
 import { llmChat } from './processing/minutes';
-import { msToClock } from './processing/transcribe';
+import { msToClock } from './time';
 import { cleanInline, cleanText, fenceUntrusted, UNTRUSTED_GUARD } from './sanitize';
 import {
   MeetingMinutes,

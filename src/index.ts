@@ -158,7 +158,7 @@ observeClientReadiness(client);
 const guildRuntime = new GuildRuntimeBoundary(config.guildPolicy, (guildId) => client.guilds.cache.has(guildId));
 setProcessingGuildGuard((guildId) => guildRuntime.isOperational(guildId));
 
-export function currentDiscordCapabilities(): DiscordCapabilities {
+function currentDiscordCapabilities(): DiscordCapabilities {
   const transcription = transcriptionEnabled();
   const minutes = minutesEnabled();
   return {
@@ -1923,10 +1923,7 @@ function helpRetention(l: Locale, privacy: boolean): string {
   });
 }
 
-export function buildHelpEmbed(
-  l: Locale,
-  capabilities: DiscordCapabilities = currentDiscordCapabilities(),
-): EmbedBuilder {
+function buildHelpEmbed(l: Locale, capabilities: DiscordCapabilities = currentDiscordCapabilities()): EmbedBuilder {
   const askCommand = capabilities.ask ? t(l, 'help.cmd-ask') : '';
   const askPermission = capabilities.ask ? t(l, 'help.perms-ask') : '';
   const embed = new EmbedBuilder()

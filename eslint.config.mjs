@@ -5,7 +5,7 @@ import prettier from 'eslint-config-prettier';
 
 export default tseslint.config(
   {
-    ignores: ['dist', 'node_modules', 'recordings', 'scratchpad', 'tests', 'mcp'],
+    ignores: ['dist', 'node_modules', 'recordings', 'scratchpad', 'mcp', 'mcp/dist'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

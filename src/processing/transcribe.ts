@@ -648,14 +648,13 @@ async function transcribeTrack(
   assertGuildWorkActive(guildWork);
   const intervals = await detectSpeechIntervals(masterFlac, durationSec);
   assertGuildWorkActive(guildWork);
-  if (intervals === undefined) {
-    // detecção falhou — caminho antigo (chunks de 20 min com filtro de silêncio grosseiro)
-    return transcribeTrackLegacy(masterFlac, participant, durationSec, work, guildWork);
-  }
-  if (intervals.length === 0) return []; // ninguém falou nesta faixa — nada a enviar
+  // Detecção de fala falhou (ffmpeg transitório): a faixa inteira vira um único
+  // intervalo e segue pelo mesmo caminho; batchIntervals já corta em lotes.
+  const speech = intervals ?? [{ start: 0, end: durationSec }];
+  if (speech.length === 0) return []; // ninguém falou nesta faixa — nada a enviar
 
   const out: TranscriptSegment[] = [];
-  const batches = batchIntervals(intervals, chunkSeconds());
+  const batches = batchIntervals(speech, chunkSeconds());
 
   for (let i = 0; i < batches.length; i++) {
     assertGuildWorkActive(guildWork);
@@ -715,93 +714,6 @@ async function transcribeTrack(
   return filterHallucinations(out);
 }
 
-/** Caminho antigo (sem VAD): chunks fixos de 20 min. Usado só se o silencedetect falhar. */
-async function transcribeTrackLegacy(
-  masterFlac: string,
-  participant: Participant,
-  durationSec: number,
-  work: string,
-  guildWork: GuildWorkContext,
-): Promise<TranscriptSegment[]> {
-  const out: TranscriptSegment[] = [];
-  const CHUNK = chunkSeconds();
-  const chunks = Math.max(1, Math.ceil(durationSec / CHUNK));
-
-  for (let i = 0; i < chunks; i++) {
-    assertGuildWorkActive(guildWork);
-    const offset = i * CHUNK;
-    const thisChunkSec = Math.min(CHUNK, Math.max(1, durationSec - offset));
-    const chunkFile = path.join(work, `chunk-${participant.index}-${i}.mp3`);
-    // mono 16 kHz 48 kbps: ótimo para ASR e pequeno o bastante para qualquer API
-    await runFfmpeg([
-      '-ss',
-      String(offset),
-      '-t',
-      String(CHUNK),
-      '-i',
-      masterFlac,
-      '-ac',
-      '1',
-      '-ar',
-      '16000',
-      '-b:a',
-      '48k',
-      '-y',
-      chunkFile,
-    ]);
-    assertGuildWorkActive(guildWork);
-
-    // Guarda dupla contra chunk-fantasma: -ss perto/além do fim gera um MP3 só de
-    // header (~260 bytes, mp3 de 48kbps tem >5KB por segundo real). E chunks que
-    // são só o padding de silêncio da faixa não vão para a API: custo à toa, e o
-    // Whisper ALUCINA texto em silêncio (atribuiria falas falsas a quem calou).
-    const size = fs.statSync(chunkFile).size;
-    if (size < 1024 || !(await chunkHasAudio(chunkFile, size))) {
-      fs.rmSync(chunkFile, { force: true });
-      continue;
-    }
-    assertGuildWorkActive(guildWork);
-
-    let raw: RawSegment[];
-    try {
-      raw = await transcribeChunk(chunkFile, work, thisChunkSec, guildWork);
-      assertGuildWorkActive(guildWork);
-    } catch (err) {
-      fs.rmSync(chunkFile, { force: true });
-      // conteúdo bloqueado/incodificável de UM chunk vira lacuna, não mata a faixa
-      if (err instanceof ChunkContentError) {
-        out.push({
-          startMs: Math.round(offset * 1000),
-          endMs: Math.round((offset + thisChunkSec) * 1000),
-          speaker: participant.name,
-          text: '[trecho não transcrito]',
-        });
-        continue;
-      }
-      throw err; // erro sistêmico (rede/timeout): propaga para marcar a faixa
-    }
-    fs.rmSync(chunkFile, { force: true });
-
-    // modelo sem timestamps (start=end=0 num bloco único): ancora no chunk
-    // inteiro para a cronologia se manter ao menos na granularidade do chunk
-    if (raw.length === 1 && raw[0].start === 0 && raw[0].end === 0) {
-      raw[0].end = thisChunkSec;
-    }
-
-    for (const seg of raw) {
-      const text = seg.text.trim();
-      if (!text) continue;
-      out.push({
-        startMs: Math.round((offset + seg.start) * 1000),
-        endMs: Math.round((offset + seg.end) * 1000),
-        speaker: participant.name,
-        text,
-      });
-    }
-  }
-  return filterHallucinations(out);
-}
-
 /** Duração real de um arquivo de áudio em segundos; undefined quando não deu para medir. */
 async function probeDurationSec(file: string): Promise<number | undefined> {
   try {
@@ -815,24 +727,6 @@ async function probeDurationSec(file: string): Promise<number | undefined> {
     return h * 3600 + mm * 60 + ss;
   } catch {
     return undefined;
-  }
-}
-
-/**
- * Detecção real de silêncio via ffmpeg volumedetect. O padding das faixas é
- * silêncio DIGITAL puro (amostras zero → max_volume abaixo de ~-90 dB), então
- * o limiar de -80 dB descarta só o padding e nunca fala real (mesmo baixinha).
- */
-async function chunkHasAudio(file: string, size: number): Promise<boolean> {
-  try {
-    const stderr = await runFfmpeg(['-i', file, '-af', 'volumedetect', '-f', 'null', '-'], 'info');
-    const match = stderr.match(/max_volume:\s*(-?[\d.]+)\s*dB/);
-    if (!match) return true; // não deu para medir — na dúvida, transcreve
-    return Number(match[1]) > -80; // acima de -80 dB há sinal real; padding é ~-91 dB
-  } catch {
-    // volumedetect falhou (ex.: arquivo indecodificável): se é minúsculo, é
-    // chunk-fantasma → trata como silêncio; se tem tamanho plausível, transcreve
-    return size >= 4096;
   }
 }
 
@@ -919,7 +813,7 @@ export function buildAaiKeyterms(meta: RecordingMeta): string[] {
 }
 
 /** Define/limpa o contexto de keyterms da gravação em transcrição (fila serial). */
-export function setAaiRecordingContext(meta: RecordingMeta | undefined): void {
+function setAaiRecordingContext(meta: RecordingMeta | undefined): void {
   aaiKeyterms = meta ? buildAaiKeyterms(meta) : [];
 }
 
@@ -1271,10 +1165,5 @@ export function transcriptToMarkdown(meta: RecordingMeta, segments: TranscriptSe
   return lines.join('\n');
 }
 
-export function msToClock(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-}
+export { msToClock } from '../time';
+import { msToClock } from '../time';

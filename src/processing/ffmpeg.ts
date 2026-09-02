@@ -1,7 +1,7 @@
 import { ChildProcess, spawn } from 'node:child_process';
 import { buildSafeChildEnvironment } from './childEnvironment';
 
-export function ffmpegPath(): string {
+function ffmpegPath(): string {
   return process.env.FFMPEG_PATH?.trim() || 'ffmpeg';
 }
 
