@@ -20,9 +20,9 @@ vi.mock('../src/store', async (importOriginal) => ({
   listMetas: vi.fn(() => []),
 }));
 
+import { buildCommands } from '../src/discord/commands';
 import {
   buildAboutEmbed,
-  buildCommands,
   buildHelpPayload,
   buildHelpTopicContent,
   buildPrivacyCommandContent,
