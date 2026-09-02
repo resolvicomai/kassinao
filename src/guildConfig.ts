@@ -1,6 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
+import { readJsonState, writeJsonStateAtomic } from './stateFile';
 
 /** Configurações por servidor (persistidas no volume de estado operacional). */
 export interface GuildConfig {
@@ -14,19 +14,16 @@ type ConfigFile = Record<string, GuildConfig>; // guildId -> config
 
 const FILE = () => path.join(config.stateDir, 'guildconfig.json');
 
+function validConfigFile(value: unknown): value is ConfigFile {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 function load(): ConfigFile {
-  try {
-    return JSON.parse(fs.readFileSync(FILE(), 'utf8')) as ConfigFile;
-  } catch {
-    return {};
-  }
+  return readJsonState<ConfigFile>(FILE(), {}, validConfigFile);
 }
 
 function save(all: ConfigFile): void {
-  fs.mkdirSync(config.stateDir, { recursive: true });
-  const tmp = FILE() + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(all, null, 2));
-  fs.renameSync(tmp, FILE());
+  writeJsonStateAtomic(FILE(), all);
 }
 
 export const guildConfigStore = {

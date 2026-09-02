@@ -131,6 +131,22 @@ describe('interpretação temporal do /perguntar', () => {
     expect(forDate.deadlineLabel).toBe('2026-07-15');
   });
 
+  it('dia da semana sem pista temporal é ordinal, não data', () => {
+    const ordinal = resolveAskTemporalIntent('qual foi a segunda decisão da reunião?', NOW, TZ, 'pt');
+    expect(ordinal.range).toBeUndefined();
+    expect(ordinal.label).toBeUndefined();
+    expect(resolveAskTemporalIntent('qual era a quarta opção discutida?', NOW, TZ, 'pt').range).toBeUndefined();
+    expect(resolveAskTemporalIntent('na segunda, o que decidimos?', NOW, TZ, 'pt').label).toBe('segunda');
+    expect(resolveAskTemporalIntent('o que houve na sexta-feira?', NOW, TZ, 'pt').label).toBe('sexta feira');
+  });
+
+  it('fração ou razão com barra não vira data; dia/mês com pista continua valendo', () => {
+    expect(resolveAskTemporalIntent('3/4 das pessoas concordaram?', NOW, TZ, 'pt').range).toBeUndefined();
+    expect(resolveAskTemporalIntent('placar 20/20 na votação?', NOW, TZ, 'pt').range).toBeUndefined();
+    expect(resolveAskTemporalIntent('o que decidimos na reunião de 09/07?', NOW, TZ, 'pt').range).toBeDefined();
+    expect(resolveAskTemporalIntent('o que decidimos em 09/07/2026?', NOW, TZ, 'pt').range).toBeDefined();
+  });
+
   it('usa o último dia da semana para calls e o próximo para prazos', () => {
     const monday = Date.parse('2026-07-13T15:00:00Z');
     const meeting = resolveAskTemporalIntent('o que houve nas calls de sexta?', monday, TZ, 'pt');

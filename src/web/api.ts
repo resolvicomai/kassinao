@@ -885,7 +885,10 @@ export function mountMcpApi(app: Express): void {
   api.post(
     '/mcp/exchange',
     handle(async (req, res) => {
-      if (rateLimited(`ip:${clientIp(req)}`, 20, 60_000)) {
+      // Bucket próprio: o teto de 20/min do exchange não pode ser consumido pelas
+      // leituras autenticadas do mesmo IP (ipRateGate usa `ip:`), senão um
+      // conector ativo recebe 429 na hora de trocar o código.
+      if (rateLimited(`exchange-ip:${clientIp(req)}`, 20, 60_000)) {
         res.status(429).set('Retry-After', '30').json({ error: 'rate_limited' });
         return;
       }
@@ -936,7 +939,7 @@ export function mountMcpApi(app: Express): void {
   api.post(
     '/mcp/refresh',
     handle(async (req, res) => {
-      if (rateLimited(`ip:${clientIp(req)}`, 30, 60_000)) {
+      if (rateLimited(`refresh-ip:${clientIp(req)}`, 30, 60_000)) {
         res.status(429).set('Retry-After', '30').json({ error: 'rate_limited' });
         return;
       }

@@ -52,6 +52,13 @@ npm test
 npm run format:check
 ```
 
+About half of the suite runs the operational shell scripts for real (with fake
+`docker`, `systemctl` and `iptables`) and needs GNU bash 4.4+ plus GNU coreutils
+on `PATH`. A stock macOS ships bash 3.2, so those files fail there with errors
+such as `mapfile: command not found`. On a Mac, install `brew install bash
+coreutils findutils` and run the suite with Homebrew's bin first on `PATH`; the
+Linux CI job remains the source of truth for the script suites.
+
 Also:
 
 - keep changes focused and explain the user/security impact;

@@ -1913,6 +1913,14 @@ sudo "$RELEASE_ROOT/scripts/uninstall-shared-host-controls.sh" --confirm-remove-
           },
         },
         {
+          name: 'HELPER_DISCORD_TOKENS',
+          fallback: { pt: 'vazio (uma sala por servidor por vez)', en: 'empty (one room per server at a time)' },
+          description: {
+            pt: 'Tokens de bots ajudantes, separados por vírgula, para gravar mais de uma sala do mesmo servidor ao mesmo tempo. O Discord permite uma conexão de voz por bot user por servidor; cada ajudante é uma segunda application convidada com as mesmas permissões. O ajudante só entra na voz: sem comandos, mensagens ou DMs. Nunca repita DISCORD_TOKEN; RECORDING_MAX_CONCURRENT continua limitando o total de salas.',
+            en: 'Comma-separated helper bot tokens to record more than one room of the same server at once. Discord allows one voice connection per bot user per server; each helper is a second application invited with the same permissions. Helpers only join voice: no commands, messages, or DMs. Never repeat DISCORD_TOKEN; RECORDING_MAX_CONCURRENT still caps the total number of rooms.',
+          },
+        },
+        {
           name: 'ALLOWED_GUILD_IDS',
           fallback: { pt: 'obrigatória', en: 'required' },
           description: {

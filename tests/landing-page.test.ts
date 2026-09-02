@@ -41,7 +41,6 @@ describe('landing page do Kassinão', () => {
       expect(html).toContain("url('/assets/space-grotesk.woff2')");
       expect(html).toContain('/assets/discord-demo-');
       expect(html).toContain('/assets/meeting-demo-');
-      expect(html).toContain('/assets/producthunt.svg');
       expect(html).toContain('prefers-reduced-motion: reduce');
       expect(html).toContain('IntersectionObserver');
       expect(html).not.toContain('#c53f28');
@@ -83,23 +82,23 @@ describe('landing page do Kassinão', () => {
     expect(html).toContain('min-width: 44px;');
   });
 
-  it('leva ao lançamento no Product Hunt com badge local em PT e EN', () => {
+  it('mantém o Product Hunt como link discreto no rodapé, fora do hero', () => {
     const pt = landingPage('pt');
     const en = landingPage('en');
     const trackedUrl =
       'https://www.producthunt.com/products/kassinao?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-kassinao';
 
     for (const html of [pt, en]) {
-      expect(html).toContain(`href="${trackedUrl}"`);
-      expect(html).toContain('class="product-hunt-badge"');
-      expect(html).toContain('<img src="/assets/producthunt.svg" width="36" height="36" alt="" aria-hidden="true">');
-      expect(html).toContain('target="_blank" rel="noopener noreferrer"');
+      const footer = html.slice(html.indexOf('<footer'));
+      expect(footer).toContain(`href="${trackedUrl}" target="_blank" rel="noopener noreferrer">Product Hunt</a>`);
+      expect(html.indexOf(trackedUrl)).toBeGreaterThan(html.indexOf('<footer'));
+      // o selo de lançamento envelheceria a página meses depois da campanha
+      expect(html).not.toContain('product-hunt-badge');
+      expect(html).not.toContain('producthunt.svg');
     }
 
-    expect(pt).toContain('Lançamento no Product Hunt');
-    expect(pt).toContain('Apoiar o Kassinão');
-    expect(en).toContain('Live on Product Hunt');
-    expect(en).toContain('Support Kassinão');
+    expect(pt).not.toContain('Lançamento no Product Hunt');
+    expect(en).not.toContain('Live on Product Hunt');
   });
 
   it('separa o núcleo garantido dos recursos opcionais de IA em PT e EN', () => {

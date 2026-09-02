@@ -32,7 +32,7 @@ Meeting content is untrusted input. A participant can speak malicious text or us
 
 ### Requirements
 
-- Node.js 20+ on the user's computer.
+- Node.js 22+ on the user's computer.
 - `MCP_SECRET` enabled by the instance operator.
 - An account that can sign in to the private app and access at least one allowed guild.
 - HTTPS for a non-local `KASSINAO_URL`.
@@ -123,7 +123,7 @@ Conteúdo de reunião é entrada não confiável. Uma pessoa pode falar texto ma
 
 ### Requisitos
 
-- Node.js 20+ no computador da pessoa.
+- Node.js 22+ no computador da pessoa.
 - `MCP_SECRET` habilitado pelo operador da instância.
 - Conta capaz de entrar no app privado e acessar ao menos uma guild permitida.
 - HTTPS num `KASSINAO_URL` que não seja local.

@@ -340,7 +340,12 @@ interface ExplicitDateMatch {
   end: number;
 }
 
-function explicitDates(question: string, nowMs: number, timezone: string): ExplicitDateMatch[] {
+function explicitDates(
+  question: string,
+  nowMs: number,
+  timezone: string,
+  opts: { requireCueWithoutYear?: boolean } = {},
+): ExplicitDateMatch[] {
   const matches: ExplicitDateMatch[] = [];
   const currentYear = Number(formatInTz(nowMs, timezone).slice(0, 4));
   for (const match of question.matchAll(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g)) {
@@ -355,6 +360,15 @@ function explicitDates(question: string, nowMs: number, timezone: string): Expli
     });
   }
   for (const match of question.matchAll(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/g)) {
+    // "3/4 das pessoas" e "20/20" não são datas. Sem ano, exige uma pista
+    // temporal logo antes (dia, em, de, prazo, até, reunião de...).
+    if (
+      opts.requireCueWithoutYear &&
+      !match[3] &&
+      !NUMERIC_DATE_CUE_BEFORE.test(question.slice(Math.max(0, match.index - 24), match.index))
+    ) {
+      continue;
+    }
     const year = match[3] ? (match[3].length === 2 ? 2000 + Number(match[3]) : Number(match[3])) : currentYear;
     const month = Number(match[2]);
     const day = Number(match[1]);
@@ -369,6 +383,25 @@ function explicitDates(question: string, nowMs: number, timezone: string): Expli
 }
 
 type ExplicitDateRole = 'meeting' | 'deadline';
+
+const NUMERIC_DATE_CUE_BEFORE =
+  /\b(dia|em|no|na|de|desde|at[eé]|prazo\w*|venc\w*|entreg\w*|due|on|by|until|since|from|reuni[aã]o|reuni[oõ]es|calls?|meetings?)\s*$/i;
+
+// Dia da semana só é data com pista temporal: "na segunda", "sexta-feira",
+// "vencem sexta", "última quarta". Sem pista, "a segunda decisão", "quarta opção"
+// e "quinta parte" são ordinais e não podem virar uma janela de um dia.
+const WEEKDAY_CUE_BEFORE =
+  /\b(na|no|nas|nos|de|da|do|desde|at[eé]|em|pra|para|toda|todas|todo|todos|cada|pr[oó]xim[ao]|[uú]ltim[ao]|ess[ae]|est[ae]|on|last|next|this|by|until|since|every|from|for)\s*$/i;
+const WEEKDAY_DEADLINE_CUE_BEFORE =
+  /\b(praz\w*|venc\w*|entreg\w*|deadline\w*|due|termina\w*|acaba\w*|marcad\w*|agendad\w*)\b[^.?!]{0,24}$/i;
+const WEEKDAY_CUE_AFTER = /^\s*(feira|passad[ao]|que vem|retrasad[ao]|last|next|morning|afternoon|night|evening)\b/i;
+
+function weekdayHasTemporalCue(text: string, start: number, end: number): boolean {
+  if (/feira/i.test(text.slice(start, end))) return true;
+  const before = text.slice(Math.max(0, start - 24), start);
+  if (WEEKDAY_CUE_BEFORE.test(before) || WEEKDAY_DEADLINE_CUE_BEFORE.test(before)) return true;
+  return WEEKDAY_CUE_AFTER.test(text.slice(end, end + 16));
+}
 
 const WEEKDAY_PATTERNS: Array<[RegExp, number]> = [
   [/\b(domingo|sunday)\b/, 0],
@@ -471,7 +504,7 @@ export function resolveAskTemporalIntent(
   locale: Locale,
 ): AskTemporalIntent {
   const q = norm(question);
-  const dates = explicitDates(question, nowMs, timezone);
+  const dates = explicitDates(question, nowMs, timezone, { requireCueWithoutYear: true });
   const invalidDate = dates.find((date) => !date.valid);
   if (invalidDate) {
     throw new Error(
@@ -563,6 +596,7 @@ export function resolveAskTemporalIntent(
   for (const [pattern, weekday] of WEEKDAY_PATTERNS) {
     const match = pattern.exec(q);
     if (!match) continue;
+    if (!weekdayHasTemporalCue(q, match.index, match.index + match[0].length)) continue;
     const role = relativeDateRole(q, match.index, match.index + match[0].length);
     // Uma call citada só pelo dia da semana normalmente é a ocorrência mais
     // recente; um prazo é a próxima ocorrência. No próprio dia, ambos são hoje.

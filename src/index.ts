@@ -34,7 +34,7 @@ import {
   VoiceBasedChannel,
 } from 'discord.js';
 import { config } from './config';
-import { operationalError, operationalPii } from './operationalLog';
+import { operationalError, operationalFailure, operationalPii, operationalWarn } from './operationalLog';
 import { answerQuestion, authorizeAskMetas, resolveAskTemporalIntent } from './ask';
 import { AskLimiter, AskRateLimitError } from './askLimiter';
 import { guildConfigStore } from './guildConfig';
@@ -439,6 +439,22 @@ class RecordingBusyError extends Error {
   }
 }
 
+/**
+ * Recusa de início com uma causa que a pessoa pode entender e agir (disco
+ * cheio, bot movido). A mensagem bilíngue continua alimentando os alertas ao
+ * dono; o /gravar mapeia `reason` para uma chave do i18n em vez da genérica.
+ */
+class RecordingStartRefusedError extends Error {
+  constructor(
+    readonly reason: 'disk-low' | 'moved-during-start',
+    message: string,
+    readonly detail: { free?: number } = {},
+  ) {
+    super(message);
+    this.name = 'RecordingStartRefusedError';
+  }
+}
+
 class RecordingGlobalCapacityError extends Error {
   constructor() {
     super('recording capacity unavailable');
@@ -561,10 +577,12 @@ async function startSession(opts: {
     // Guarda de disco: não começa uma gravação que vai corromper por falta de espaço.
     const free = freeMB();
     if (free < config.minFreeMbStart) {
-      throw new Error(
+      throw new RecordingStartRefusedError(
+        'disk-low',
         opts.locale === 'pt'
           ? `sem espaço em disco suficiente no servidor (${free} MB livres) — apague gravações antigas primeiro`
           : `not enough disk space on the server (${free} MB free) — delete old recordings first`,
+        { free },
       );
     }
 
@@ -590,7 +608,8 @@ async function startSession(opts: {
     if (shuttingDown || reservation.signal.aborted) throw new RecordingStartCancelledError();
     const identityGuild = identity.client.guilds.cache.get(opts.guild.id);
     if (identityGuild?.members.me?.voice.channelId !== opts.voiceChannel.id) {
-      throw new Error(
+      throw new RecordingStartRefusedError(
+        'moved-during-start',
         opts.locale === 'pt'
           ? 'fui movido para outro canal durante o início; não gravei nenhum dos dois'
           : 'I was moved to another channel while starting; neither channel was recorded',
@@ -1532,6 +1551,15 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
       await interaction.editReply(protectionMessage);
     } else if (err instanceof RecordingStartCancelledError) {
       await interaction.editReply(t(l, 'record.start-cancelled'));
+    } else if (err instanceof RecordingStartRefusedError) {
+      // Causa acionável pela pessoa: dizer "tenta de novo" para disco cheio é
+      // conselho errado. O detalhe interno continua indo só para o log.
+      reportManualRecordingStartFailure(err, l);
+      await interaction.editReply(
+        err.reason === 'disk-low'
+          ? t(l, 'record.refused-disk-low', { free: String(err.detail.free ?? '?') })
+          : t(l, 'record.refused-moved'),
+      );
     } else if (err instanceof RecordingBusyError) {
       // Corrida: alguém ocupou entre o pré-check e o startSession. A sala citada
       // é a do canal PEDIDO quando for ele o ocupado; senão, a primeira do guild.
@@ -1669,6 +1697,11 @@ async function handleParar(interaction: ChatInputCommandInteraction | ButtonInte
     id: interaction.user.id,
     name: member?.displayName ?? interaction.user.username,
   });
+  // Se o deferReply abaixo rejeitar (interação expirada, 5xx), a função sai
+  // pelo catch do InteractionCreate e `stopping` ficaria sem ninguém para
+  // aguardar: uma rejeição dela viraria unhandledRejection. O await no try
+  // continua tratando o erro de verdade.
+  stopping.catch(() => {});
   await interaction.deferReply({ ephemeral: true });
   try {
     await stopping;
@@ -2290,11 +2323,19 @@ async function notifyAutoRecordCollision(
   } catch {
     // sem permissão de mensagem no chat do canal — o alerta ao dono abaixo cobre
   }
+  // Um ajudante configurado que não está neste servidor (não convidado, expulso,
+  // token inválido) é silêncio operacional: a colisão continua contada como se
+  // faltasse um bot, quando na verdade falta só o convite.
+  const idleHelpers = identityPool.size() - identityPool.readyCountFor(guild.id);
+  const helperHint =
+    idleHelpers > 0
+      ? ` Atenção: ${idleHelpers} bot(s) ajudante(s) configurado(s) não está(ão) disponível(is) neste servidor (não convidado ou fora do ar). Convide o ajudante para ele assumir a segunda sala.`
+      : '';
   void alertOwners(
     `autorecord-collision:${guild.id}:${channel.id}`,
     `Duas reuniões coincidiram em **${safeName(guild.name)}**: **#${safeName(channel.name)}** encheu enquanto eu gravava${
       busyName ? ` em **#${safeName(busyName)}**` : ' em outra sala'
-    }. Avisei a sala de que ela NÃO está sendo gravada; se seguir cheia quando a outra gravação terminar, começo lá automaticamente. É a ${total30d}ª colisão nos últimos 30 dias.`,
+    }. Avisei a sala de que ela NÃO está sendo gravada; se seguir cheia quando a outra gravação terminar, começo lá automaticamente. É a ${total30d}ª colisão nos últimos 30 dias.${helperHint}`,
   );
 }
 
@@ -2331,8 +2372,13 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
   const rule = autoRecordStore.get(guild.id, channelId);
   const session = sessionManager.getByChannel(guild.id, channelId);
 
-  // rearma quando a população cai abaixo do mínimo
-  if (rule && humans < rule.minimum) setArmed(guild.id, channelId, true);
+  // Rearma quando a população cai abaixo do mínimo. Com uma gravação MANUAL viva
+  // na sala, não: a regra desarmou no início dela e só pode voltar depois do
+  // /parar, quando a sala esvaziar de verdade. Senão uma oscilação (2 pessoas
+  // caem e voltam) rearmaria no meio da reunião e o /parar religaria a gravação
+  // segundos depois. Sessão automática mantém o rearme imediato: ela mesma
+  // encerra por 'abaixo-minimo' logo abaixo e precisa voltar se a sala reencher.
+  if (rule && humans < rule.minimum && (!session || session.auto)) setArmed(guild.id, channelId, true);
   // sala esvaziou OU regra removida: a colisão (se houve) terminou sem gravação;
   // o próximo enchimento com o bot ocupado é episódio novo e merece novo aviso.
   // Sem o caso !rule, um /autorecord off durante a colisão deixaria o episódio
@@ -2419,9 +2465,13 @@ function pauseGuildWork(guildId: string, detached = true): void {
     clearTimeout(timeout);
     pendingChecks.delete(key);
   }
-  for (const rule of autoRecordStore.list(guildId)) setArmed(guildId, rule.channelId, false);
   pauseMinutesWebhooksForGuild(guildId);
   if (!detached) return;
+  // Só a saída definitiva do perímetro desarma as regras. Numa indisponibilidade
+  // transitória (GuildUnavailable) as regras precisam continuar armadas: uma sala
+  // que encheu durante a queda deve ser gravada assim que a guild voltar, e
+  // evaluateChannel só rearmaria quando ela esvaziasse.
+  for (const rule of autoRecordStore.list(guildId)) setArmed(guildId, rule.channelId, false);
   pendingDiscordGuildSurfaceMigrationIds.delete(guildId);
   for (const recordingId of [...pendingTranscriptionNotificationIds]) {
     if (readMeta(recordingId)?.guildId === guildId) pendingTranscriptionNotificationIds.delete(recordingId);
@@ -2654,7 +2704,10 @@ client.once(Events.ClientReady, async () => {
   console.log(
     `Configuração ativa: guilds=${guildScope}; ASR=${config.transcribeProvider}; fallback=${config.transcribeFallbackProvider}; atas=${config.minutesEnabled}/${config.minutesProvider}; webhook=${config.minutesWebhookUrl ? 'ativo' : 'inativo'}; MCP=${config.mcpEnabled ? 'ativo' : 'inativo'}.`,
   );
-  startMonitor(); // alertas por DM ao dono (disco, etc.)
+  startMonitor(); // alertas por DM ao dono (disco, backup, auto-record)
+  if (config.ownerIds.length === 0) {
+    operationalWarn('OWNER_IDS vazio: os alertas de disco, backup e auto-record não têm destinatário no Discord.');
+  }
   await repairRecoveredSurfaces();
   await registerCommands().catch((err) => console.error(`Falha ao registrar comandos: ${operationalError(err)}`));
   // canais que já estavam cheios quando o bot subiu disparam o auto-record
@@ -3009,6 +3062,12 @@ async function gracefulShutdown(signal: string): Promise<void> {
 }
 process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
+// Uma promise rejeitada sem tratamento (listener async do discord.js, timer)
+// derrubaria o processo no meio de uma gravação, com o áudio em voo. Registra o
+// evento sem PII e segue; exceções síncronas continuam fatais como antes.
+process.on('unhandledRejection', (reason) => {
+  operationalFailure(`Rejeição de promise sem tratamento: ${operationalError(reason)}`);
+});
 
 // ---------- boot ----------
 

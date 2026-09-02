@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createGuildPolicy } from './guildPolicy';
-import { operationalError, operationalFailure } from './operationalLog';
+import { operationalError, operationalFailure, operationalPiiEnabled } from './operationalLog';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -1190,7 +1190,7 @@ export const config = {
    */
   publicSurfacesEnabled: booleanEnv('PUBLIC_SURFACES_ENABLED', true),
   /** true quando o repo do GitHub está público — libera os links "GitHub"/access.ts e a afirmação "auditável" na landing. Padrão false pra nunca servir link 404. */
-  repoPublic: process.env.REPO_PUBLIC === 'true',
+  repoPublic: booleanEnv('REPO_PUBLIC', false),
   recordingsDir,
   /** Estado operacional que pode ser restaurado sem restaurar credenciais. */
   stateDir,
@@ -1234,7 +1234,9 @@ export const config = {
   /** Idioma padrão onde não há locale do usuário (ex.: DM). 'pt' se DEFAULT_LOCALE começar com "pt", senão 'en'. */
   defaultLocale: ((process.env.DEFAULT_LOCALE || '').toLowerCase().startsWith('pt') ? 'pt' : 'en') as 'pt' | 'en',
   /** Expõe na política se identificadores e mensagens privadas entraram nos logs. */
-  logPiiEnabled: booleanEnv('LOG_PII', false),
+  // Mesma regra do log (só o valor exato `true` liga): a página de privacidade
+  // não pode declarar PII nos logs enquanto o log continua redigindo.
+  logPiiEnabled: operationalPiiEnabled(),
 
   /**
    * Motor de transcrição: 'none' | 'assemblyai' | 'openai' | 'groq' | 'gemini' | 'command'.

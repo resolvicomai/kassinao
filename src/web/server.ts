@@ -2100,7 +2100,17 @@ export function createWebApp(): Express {
           sendRecordingUnavailable(res, l, user, recPath);
           return;
         }
-        const access = await checkAccess(user, meta, { freshMember: true });
+        // throwOnTransient: falha momentânea do Discord (429/5xx, orçamento de
+        // members.fetch) vira 503 com Retry-After, como nas leituras. Sem isso o
+        // dono clicava em apagar e lia "gravação não existe" para uma gravação viva.
+        let access;
+        try {
+          access = await checkAccess(user, meta, { freshMember: true, throwOnTransient: true });
+        } catch (err) {
+          if (!(err instanceof TransientAccessError)) throw err;
+          sendAccessTemporarilyUnavailable(res, l, user, messageOpts);
+          return;
+        }
         if (!access.delete) {
           sendRecordingUnavailable(res, l, user, recPath);
           return;
@@ -2168,7 +2178,17 @@ export function createWebApp(): Express {
           sendRecordingUnavailable(res, l, user, recPath);
           return;
         }
-        const access = await checkAccess(user, meta, { freshMember: true });
+        // throwOnTransient: falha momentânea do Discord (429/5xx, orçamento de
+        // members.fetch) vira 503 com Retry-After, como nas leituras. Sem isso o
+        // dono clicava em apagar e lia "gravação não existe" para uma gravação viva.
+        let access;
+        try {
+          access = await checkAccess(user, meta, { freshMember: true, throwOnTransient: true });
+        } catch (err) {
+          if (!(err instanceof TransientAccessError)) throw err;
+          sendAccessTemporarilyUnavailable(res, l, user, messageOpts);
+          return;
+        }
         if (!access.delete) {
           sendRecordingUnavailable(res, l, user, recPath);
           return;

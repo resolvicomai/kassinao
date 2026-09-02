@@ -405,7 +405,7 @@ function shell(
             ? `<a href="/app"${opts.active === 'rec' ? ' aria-current="page"' : ''}>${pt ? 'Reuniões' : 'Meetings'}</a>`
             : ''
         }${
-          config.mcpEnabled
+          config.mcpEnabled && (opts.navAi || opts.active === 'ai')
             ? `<a href="/app/conectar-ia"${opts.active === 'ai' ? ' aria-current="page"' : ''}>${pt ? 'Conectar IA' : 'Connect AI'}</a>`
             : ''
         }</nav>`

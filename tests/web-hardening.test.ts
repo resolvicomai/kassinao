@@ -461,7 +461,7 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).toContain('https://github.com/resolvicomai/kassinao');
     expect(html).toContain('/assets/discord-demo-pt-v2.webm');
     expect(html).toContain('/assets/meeting-demo-pt.png');
-    expect(html).toContain('/assets/producthunt.svg');
+    expect(html).not.toContain('/assets/producthunt.svg');
     expect(html).toContain(
       'href="https://www.producthunt.com/products/kassinao?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-kassinao"',
     );
@@ -578,6 +578,35 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     expect(html).toContain('data-initial="F"');
     // E o script que faz a troca precisa estar na página.
     expect(html).toContain('img[data-initial]');
+  });
+
+  it("esconde 'Conectar IA' na página da gravação e mostra na central e no próprio conectar (pedido do #37)", () => {
+    const user: WebUser = {
+      typ: 'session',
+      id: 'u-nav',
+      name: 'Pessoa',
+      scope: 'full',
+      exp: Date.now() + 60_000,
+      jti: 'sid-nav',
+    };
+    const meta: RecordingMeta = {
+      id: 'gravacao-navai',
+      guildId: 'g-nav',
+      guildName: 'Servidor',
+      voiceChannelId: 'v1',
+      voiceChannelName: 'Reunião',
+      startedBy: { id: 'u-nav', name: 'Pessoa' },
+      startedAt: Date.now() - 60_000,
+      endedAt: Date.now(),
+      status: 'done',
+      participants: [],
+      events: [],
+      notes: [],
+    };
+    const recordingHtml = recordingPage(meta, { live: false, canDelete: false, lang: 'pt', user });
+    const indexHtml = recordingsIndexPage([], { user, lang: 'pt' });
+    expect(indexHtml).toContain('href="/app/conectar-ia"');
+    expect(recordingHtml).not.toContain('href="/app/conectar-ia"');
   });
 
   it('lista vazia mostra a identidade em sessão e a troca de conta, com ou sem paginação', () => {
