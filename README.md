@@ -25,7 +25,8 @@ Kassinão is an independent project and is not affiliated with or endorsed by Di
 - presence, meeting metadata, and timestamped notes;
 - a recording panel in the voice channel's chat before capture begins;
 - a private meeting page with playback and downloads after recording stops;
-- retention and per-meeting access controls.
+- retention and per-meeting access controls;
+- one room per server per bot user (a Discord limit); optional helper bots record more rooms at once.
 
 **Optional capabilities**
 
@@ -142,6 +143,7 @@ Create a new application in the [Discord Developer Portal](https://discord.com/d
 5. Under **OAuth2 → Redirects**, register exactly `${APP_URL}/auth/callback`.
 6. Under **General Information → Privacy Policy URL**, register `${APP_URL}/privacy`. The page must be publicly reachable and describe this operator's real deployment.
 7. The web login requests only OAuth scope `identify`. Membership in an allowed guild is checked separately with the bot.
+8. Optional, to record two rooms of the same server at once: create a **second application** (the helper bot), invite it to the same servers with the same `68242432` bitfield, and put its token in `HELPER_DISCORD_TOKENS`. The helper only joins voice: it registers no commands and sends no messages or DMs; panels, notices, and minutes keep coming from the main bot. Each extra helper unlocks one more room, up to `RECORDING_MAX_CONCURRENT`. When every identity is busy, the bot warns the unrecorded room in chat and counts the collision for the owner.
 
 Install URL template:
 

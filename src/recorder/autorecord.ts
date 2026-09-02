@@ -1,6 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
+import { readJsonState, writeJsonStateAtomic } from '../stateFile';
 import { endCollisionEpisode } from './collisionStats';
 
 export interface AutoRecordRule {
@@ -14,17 +14,18 @@ type RulesFile = Record<string, AutoRecordRule[]>; // guildId -> regras
 
 const FILE = () => path.join(config.stateDir, 'autorecord.json');
 
+function validRulesFile(value: unknown): value is RulesFile {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+// Arquivo ausente = nenhuma regra. Arquivo corrompido fica em quarentena com log,
+// em vez de virar {} calado e ser sobrescrito no próximo /autorecord.
 function load(): RulesFile {
-  try {
-    return JSON.parse(fs.readFileSync(FILE(), 'utf8')) as RulesFile;
-  } catch {
-    return {};
-  }
+  return readJsonState<RulesFile>(FILE(), {}, validRulesFile);
 }
 
 function save(rules: RulesFile): void {
-  fs.mkdirSync(config.stateDir, { recursive: true });
-  fs.writeFileSync(FILE(), JSON.stringify(rules, null, 2));
+  writeJsonStateAtomic(FILE(), rules);
 }
 
 export const autoRecordStore = {

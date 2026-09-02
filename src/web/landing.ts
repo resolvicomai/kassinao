@@ -268,60 +268,6 @@ video {
   line-height: 1.5;
 }
 
-.product-hunt-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 11px;
-  width: min(100%, 250px);
-  min-height: 54px;
-  margin-top: 18px;
-  padding: 8px 14px 8px 9px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-control);
-  background: var(--surface);
-  color: var(--text);
-  text-decoration: none;
-  transition:
-    transform 160ms ease,
-    background 160ms ease,
-    border-color 160ms ease;
-}
-
-.product-hunt-badge img {
-  width: 36px;
-  height: 36px;
-  flex: none;
-}
-
-.product-hunt-copy {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
-.product-hunt-copy span {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 650;
-  line-height: 1.2;
-}
-
-.product-hunt-copy strong {
-  font-size: 13px;
-  line-height: 1.25;
-}
-
-.product-hunt-badge:hover {
-  transform: translateY(-2px);
-  border-color: rgb(218 85 47 / .8);
-  background: var(--surface-2);
-}
-
-.product-hunt-badge:active,
-.button:active {
-  transform: scale(.98);
-}
-
 .button {
   display: inline-flex;
   align-items: center;
@@ -343,6 +289,9 @@ video {
 
 .button:hover {
   transform: translateY(-2px);
+}
+.button:active {
+  transform: scale(.98);
 }
 
 .button-primary {
@@ -1130,10 +1079,6 @@ video {
     width: 100%;
   }
 
-  .product-hunt-badge {
-    width: 100%;
-  }
-
   .meeting-frame {
     margin-inline: -8px;
   }
@@ -1314,10 +1259,6 @@ export function landingPage(lang: Locale = 'pt'): string {
         <a class="button button-secondary" href="${site.links.docs}">${esc(T('Fazer self-host do Kassinão', 'Self-host Kassinão'))}</a>
       </div>
       <p class="hero-note">${esc(T('Demo pública com dados fictícios e IA habilitada, sem login. Para avaliar localmente, basta Docker e um app Discord de teste; produção pública exige HTTPS, domínio e app próprios.', 'Public demo with fictional data and AI enabled, with no login. Local evaluation needs Docker and a test Discord app; public production requires HTTPS, a domain, and its own app.'))}</p>
-      <a class="product-hunt-badge" href="${esc(productHuntUrl)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(T('Abrir o lançamento do Kassinão no Product Hunt', 'Open the Kassinão launch on Product Hunt'))}">
-        <img src="/assets/producthunt.svg" width="36" height="36" alt="" aria-hidden="true">
-        <span class="product-hunt-copy"><span>${esc(T('Lançamento no Product Hunt', 'Live on Product Hunt'))}</span><strong>${esc(T('Apoiar o Kassinão', 'Support Kassinão'))}</strong></span>
-      </a>
     </div>
     <div class="hero-proof">
       <div class="media-frame">
@@ -1465,6 +1406,7 @@ export function landingPage(lang: Locale = 'pt'): string {
       <a href="${site.links.docs}">Docs</a>
       <a href="${site.links.mcp}">MCP</a>
       <a href="${site.links.github}" target="_blank" rel="noopener noreferrer">GitHub</a>
+      <a href="${esc(productHuntUrl)}" target="_blank" rel="noopener noreferrer">Product Hunt</a>
     </div>
     ${language}
   </div>

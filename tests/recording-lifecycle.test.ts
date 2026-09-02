@@ -5,6 +5,7 @@ import {
   controlSessionId,
   MarkClickDeduper,
   shouldRearmAutoRecord,
+  shouldRearmOnPopulationDrop,
 } from '../src/recorder/lifecycle';
 import { SessionRegistry } from '../src/recorder/manager';
 
@@ -228,5 +229,28 @@ describe('rearme e deduplicação', () => {
     expect(clicks.accept('s1', 'u1', 1200)).toBe(false);
     expect(clicks.accept('s1', 'u2', 1200)).toBe(true);
     expect(clicks.accept('s1', 'u1', 2500)).toBe(true);
+  });
+});
+
+describe('shouldRearmOnPopulationDrop — rearme por queda de população', () => {
+  const rule = { minimum: 3 };
+
+  it('sem sessão na sala, cair abaixo do mínimo rearma', () => {
+    expect(shouldRearmOnPopulationDrop(rule, 2, undefined)).toBe(true);
+  });
+
+  it('sessão automática viva mantém o rearme imediato (ela encerra por abaixo-minimo)', () => {
+    expect(shouldRearmOnPopulationDrop(rule, 2, { auto: true })).toBe(true);
+  });
+
+  it('sessão MANUAL viva ou encerrando nunca rearma: o /parar não pode religar a gravação', () => {
+    expect(shouldRearmOnPopulationDrop(rule, 2, { auto: false })).toBe(false);
+    expect(shouldRearmOnPopulationDrop(rule, 0, { auto: false })).toBe(false);
+  });
+
+  it('sala no mínimo ou acima, ou sem regra, nunca rearma', () => {
+    expect(shouldRearmOnPopulationDrop(rule, 3, undefined)).toBe(false);
+    expect(shouldRearmOnPopulationDrop(rule, 5, { auto: true })).toBe(false);
+    expect(shouldRearmOnPopulationDrop(undefined, 0, undefined)).toBe(false);
   });
 });

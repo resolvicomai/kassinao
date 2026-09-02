@@ -22,6 +22,22 @@ export function shouldRearmAutoRecord(eligible: boolean, reason: StopReason): bo
   return eligible && reason === 'tempo-maximo';
 }
 
+/**
+ * Rearme por queda de população: a regra volta a poder disparar quando a sala
+ * cai abaixo do mínimo, EXCETO enquanto uma gravação MANUAL está viva (ou
+ * encerrando) naquela sala. Sem essa exceção, uma oscilação de presença no meio
+ * da reunião rearmava a regra e o /parar religava a gravação segundos depois.
+ * Sessão automática mantém o rearme imediato: ela mesma encerra por
+ * 'abaixo-minimo' e precisa voltar se a sala reencher.
+ */
+export function shouldRearmOnPopulationDrop(
+  rule: { minimum: number } | undefined,
+  humans: number,
+  live: { auto: boolean } | undefined,
+): boolean {
+  return !!rule && humans < rule.minimum && (!live || live.auto);
+}
+
 /** Set de deduplicação com descarte do item mais antigo, sem janelas de `clear()` total. */
 export class BoundedIdSet {
   private readonly ids = new Set<string>();

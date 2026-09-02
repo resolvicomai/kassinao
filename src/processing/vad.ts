@@ -38,10 +38,12 @@ export async function detectSpeechIntervals(file: string, durationSec: number): 
   try {
     // -nostats: sem spam de progresso; fullStderr: a saída é PARSEADA linha a linha
     // (o buffer padrão de 8 KB perderia os primeiros silêncios de faixas longas)
+    // nice: a transcrição roda em segundo plano e não pode competir de igual
+    // com uma gravação ao vivo (decode Opus + FLAC por falante) na mesma VPS.
     stderr = await runFfmpeg(
       ['-nostats', '-i', file, '-af', 'silencedetect=noise=-70dB:d=1.0', '-f', 'null', '-'],
       'info',
-      { fullStderr: true },
+      { fullStderr: true, nice: true },
     );
   } catch {
     return undefined;
@@ -138,20 +140,24 @@ export function batchIntervals(intervals: SpeechInterval[], maxBatchSec: number)
  */
 export async function extractBatch(masterFile: string, batch: SpeechBatch, outFile: string): Promise<void> {
   const expr = batch.intervals.map((i) => `between(t,${i.start.toFixed(3)},${i.end.toFixed(3)})`).join('+');
-  await runFfmpeg([
-    '-i',
-    masterFile,
-    '-af',
-    `aselect='${expr}',asetpts=N/SR/TB,aresample=async=1`,
-    '-ac',
-    '1',
-    '-ar',
-    '16000',
-    '-b:a',
-    '48k',
-    '-y',
-    outFile,
-  ]);
+  await runFfmpeg(
+    [
+      '-i',
+      masterFile,
+      '-af',
+      `aselect='${expr}',asetpts=N/SR/TB,aresample=async=1`,
+      '-ac',
+      '1',
+      '-ar',
+      '16000',
+      '-b:a',
+      '48k',
+      '-y',
+      outFile,
+    ],
+    'error',
+    { nice: true },
+  );
 }
 
 /**

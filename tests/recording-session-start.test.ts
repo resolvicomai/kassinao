@@ -200,6 +200,58 @@ describe('RecordingSession.start — transação real de início', () => {
     await vi.waitFor(() => expect(f.message.delete).toHaveBeenCalledTimes(1));
   });
 
+  it('queda irrecuperável da conexão (Destroyed) encerra a gravação em vez de deixá-la zumbi', async () => {
+    const f = fixture();
+    voice.joinVoiceChannel.mockReturnValue(f.connection);
+    voice.entersState.mockResolvedValue(f.connection);
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: null,
+      locale: 'pt',
+      auto: true,
+    });
+    await session.start();
+    const autoStop = vi.fn();
+    session.onAutoStop = autoStop;
+
+    const destroyed = f.connection.on.mock.calls.find(([event]) => event === 'destroyed')?.[1] as
+      (() => void) | undefined;
+    expect(destroyed).toBeTypeOf('function');
+    destroyed!();
+
+    expect(autoStop).toHaveBeenCalledTimes(1);
+    expect(autoStop).toHaveBeenCalledWith(session, 'desconectado');
+
+    await session.stop('desconectado');
+    fs.rmSync(recordingDir(session), { recursive: true, force: true });
+  });
+
+  it('o Destroyed emitido pelo próprio encerramento não reentra no stop', async () => {
+    const f = fixture();
+    voice.joinVoiceChannel.mockReturnValue(f.connection);
+    voice.entersState.mockResolvedValue(f.connection);
+    const session = new RecordingSession({
+      guild: f.guild as never,
+      voiceChannel: f.channel as never,
+      startedBy: null,
+      locale: 'pt',
+      auto: false,
+    });
+    await session.start();
+    const autoStop = vi.fn();
+    session.onAutoStop = autoStop;
+    await session.stop('manual', { id: 'u1', name: 'Ana' });
+    expect(f.connection.destroy).toHaveBeenCalledTimes(1);
+
+    const destroyed = f.connection.on.mock.calls.find(([event]) => event === 'destroyed')?.[1] as () => void;
+    destroyed();
+
+    expect(autoStop).not.toHaveBeenCalled();
+    expect(f.connection.destroy).toHaveBeenCalledTimes(1);
+    fs.rmSync(recordingDir(session), { recursive: true, force: true });
+  });
+
   it('finaliza uma única vez quando dois gatilhos de parada concorrem', async () => {
     const f = fixture();
     voice.joinVoiceChannel.mockReturnValue(f.connection);

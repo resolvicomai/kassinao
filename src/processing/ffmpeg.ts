@@ -20,8 +20,9 @@ const FFMPEG_TIMEOUT_MS = 30 * 60 * 1000;
 export function runFfmpeg(
   args: string[],
   loglevel = 'error',
-  opts: { fullStderr?: boolean; nice?: boolean } = {},
+  opts: { fullStderr?: boolean; nice?: boolean; timeoutMs?: number } = {},
 ): Promise<string> {
+  const timeoutMs = opts.timeoutMs ?? FFMPEG_TIMEOUT_MS;
   const cap = opts.fullStderr ? 8 * 1024 * 1024 : 8192;
   const ffArgs = ['-hide_banner', '-loglevel', loglevel, ...args];
   const [cmd, spawnArgs] = opts.nice ? ['nice', ['-n', '15', ffmpegPath(), ...ffArgs]] : [ffmpegPath(), ffArgs];
@@ -34,8 +35,8 @@ export function runFfmpeg(
     proc.stderr.on('data', (d) => (stderr = (stderr + d).slice(-cap)));
     const timeout = setTimeout(() => {
       proc.kill('SIGKILL');
-      reject(new Error('ffmpeg excedeu o tempo limite (30 min) e foi morto'));
-    }, FFMPEG_TIMEOUT_MS);
+      reject(new Error(`ffmpeg excedeu o tempo limite (${Math.round(timeoutMs / 60_000)} min) e foi morto`));
+    }, timeoutMs);
     proc.on('error', (err) => {
       clearTimeout(timeout);
       reject(err);

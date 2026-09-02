@@ -53,7 +53,7 @@ Before a deployment handles Discord API data or records a real call, the operato
 >
 > **Data processed**
 >
-> The instance may process Discord user/account identifiers and profile names; current guild membership; voice-channel presence and historical meeting access grants; audio for accounts that speak; mixed audio; timestamps; notes; meeting/channel metadata; and web session/security records. If enabled, it also processes transcripts, AI minutes, decisions, action items, webhook deliveries, MCP tokens, and MCP query results.
+> The instance may process Discord user/account identifiers and profile names; current guild membership; voice-channel presence and historical meeting access grants; audio for accounts that speak; mixed audio; timestamps; notes; meeting/channel metadata; auto-record collision records (guild, channel, and time when a room could not be recorded because every bot was busy, kept for 90 days for capacity planning); and web session/security records. If enabled, it also processes transcripts, AI minutes, decisions, action items, webhook deliveries, MCP tokens, and MCP query results.
 >
 > **Purposes and access**
 >

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { operationalError, operationalFailure } from '../operationalLog';
 import { config } from '../config';
 
 /**
@@ -129,8 +130,13 @@ function load(): void {
       perUser.set(session.userId, owned + 1);
     }
     if (sessions.size !== parsed.length || needsMigration) persist();
-  } catch {
-    // primeiro uso — arquivo ainda não existe
+  } catch (err) {
+    // Primeiro uso: o arquivo ainda não existe. Qualquer outro erro continua
+    // fail-closed (todo token vira 401), mas registrado: "o /perguntar parou
+    // para todo mundo" sem uma linha de log era indiagnosticável.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      operationalFailure(`Sessões MCP ignoradas por arquivo inválido/indisponível: ${operationalError(err)}`);
+    }
   }
 }
 

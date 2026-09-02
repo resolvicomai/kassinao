@@ -480,8 +480,18 @@ async function transcribeRecording(recordingId: string): Promise<void> {
       // derrubar as demais.
       const trackSec = await probeDurationSec(master);
       assertGuildWorkActive(guildWork);
+      if (trackSec === undefined) {
+        // Falha ao MEDIR (ffmpeg travou, FLAC truncado por crash, OOM) não é
+        // faixa vazia: marcar como concluída faria a pessoa sumir da transcrição,
+        // da ata e do /perguntar sem aviso. Fica pendente para a próxima rodada.
+        operationalFailure(
+          `Não foi possível medir a faixa recording=${operationalPii(meta.id)} track=${operationalPii(participant.trackFile)}; faixa fica pendente.`,
+        );
+        failed.push(participant.name);
+        continue;
+      }
       if (trackSec <= 0) {
-        doneTrackIds.add(participant.id);
+        doneTrackIds.add(participant.id); // faixa realmente vazia
         continue;
       }
       try {
@@ -792,17 +802,19 @@ async function transcribeTrackLegacy(
   return filterHallucinations(out);
 }
 
-/** Duração real de um arquivo de áudio em segundos (0 se não der para medir). */
-async function probeDurationSec(file: string): Promise<number> {
+/** Duração real de um arquivo de áudio em segundos; undefined quando não deu para medir. */
+async function probeDurationSec(file: string): Promise<number | undefined> {
   try {
-    const stderr = await runFfmpeg(['-i', file, '-f', 'null', '-'], 'info');
+    // Medir dura segundos; 5 min já é anomalia. Sem teto próprio, um ffmpeg
+    // travado seguraria a fila serial pelos 30 min do watchdog a cada rodada.
+    const stderr = await runFfmpeg(['-i', file, '-f', 'null', '-'], 'info', { nice: true, timeoutMs: 5 * 60_000 });
     const m = stderr.match(/time=(\d+):(\d+):([\d.]+)/g);
     if (!m || m.length === 0) return 0;
     const last = m[m.length - 1].slice(5);
     const [h, mm, ss] = last.split(':').map(Number);
     return h * 3600 + mm * 60 + ss;
   } catch {
-    return 0;
+    return undefined;
   }
 }
 
@@ -1050,7 +1062,8 @@ async function whisperApi(
   const form = new FormData();
   form.append('file', new Blob([fs.readFileSync(file)], { type: 'audio/mpeg' }), path.basename(file));
   form.append('model', model);
-  form.append('language', config.transcribeLanguage);
+  // ISO-639-1: OpenAI e Groq recusam 'pt-BR'; a AssemblyAI já recebe só 2 letras.
+  form.append('language', config.transcribeLanguage.slice(0, 2));
   form.append('response_format', 'verbose_json');
   // temperature 0 + prompt de contexto: menos alucinação e melhor grafia de jargão
   form.append('temperature', '0');
@@ -1086,10 +1099,12 @@ async function geminiTranscribe(file: string, guildWork: GuildWorkContext): Prom
     `no formato [{"start": segundos, "end": segundos, "text": "..."}] com um item por trecho de fala.`;
 
   const resp = await fetchWithRetry(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.geminiApiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      // A chave vai no header, como nos outros providers: URL acaba em mensagem
+      // de erro de biblioteca e log de proxy; header não.
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.geminiApiKey },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: 'audio/mpeg', data: audio } }] }],
         generationConfig: { temperature: 0, maxOutputTokens: 8192, responseMimeType: 'application/json' },

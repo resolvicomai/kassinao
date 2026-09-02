@@ -245,6 +245,21 @@ export class RecordingSession {
         ),
       );
 
+      // Queda IRRECUPERÁVEL do gateway da identidade (token regenerado, intents
+      // alteradas, aplicação removida): o discord.js destrói o adapter e a
+      // conexão salta direto para Destroyed, sem passar por Disconnected. Sem
+      // este listener a sessão viraria zumbi: painel vivo, nenhum áudio, e a
+      // gravação entregue como completa. Com ajudantes, o token deles tem ciclo
+      // de vida próprio e o cenário deixa de ser teórico.
+      connection.on(VoiceConnectionStatus.Destroyed, () => {
+        if (this.stopping) return; // doStop/abortStart destroem a conexão de propósito
+        if (!this.captureStarted) {
+          void this.abortStart().catch(() => {});
+          return;
+        }
+        this.requestAutoStop('desconectado');
+      });
+
       // Se o bot for desconectado (kick, canal apagado...), tenta se recuperar;
       // se não conseguir em 5 s, finaliza a gravação para não perder o áudio.
       connection.on(VoiceConnectionStatus.Disconnected, async () => {

@@ -64,7 +64,18 @@ export function bootHelpers(
     };
     helper.on(Events.ClientReady, () => {
       for (const guild of helper.guilds.cache.values()) evict(guild.id, () => guild.leave());
-      console.log(`Identidade de voz ${label} online como ${helper.user?.tag ?? '?'} 🎙️`);
+      const guildCount = [...helper.guilds.cache.keys()].filter((guildId) =>
+        helperGuildAllowed(allows, guildId),
+      ).length;
+      console.log(`Identidade de voz ${label} online como ${helper.user?.tag ?? '?'} em ${guildCount} servidor(es) 🎙️`);
+      // Token válido mas bot não convidado é o erro mais provável de quem configura
+      // o ajudante pela primeira vez, e sem este aviso ele fica inútil em silêncio.
+      if (guildCount === 0) {
+        void alert(
+          `helper-absent:${label}`,
+          `O bot ajudante **${label}** entrou no Discord, mas não está em nenhum servidor autorizado. Convide-o com as mesmas permissões do bot principal para ele gravar a segunda sala.`,
+        );
+      }
     });
     helper.on(Events.GuildCreate, (guild) => evict(guild.id, () => guild.leave()));
 
