@@ -274,10 +274,17 @@ export function scopeWebSessionToApp(req: Request, res: Response): void {
     return;
   }
   const remaining = user.exp - Date.now();
-  const exp = Date.now() + SESSION_TTL_MS;
-  if (remaining < SESSION_RENEW_BELOW_MS && renewWebSession(user.jti, user.id, exp)) {
+  const renewed =
+    remaining < SESSION_RENEW_BELOW_MS ? renewWebSession(user.jti, user.id, Date.now() + SESSION_TTL_MS) : undefined;
+  if (renewed) {
     // A ACL continua conferida a cada abertura; o cookie mais longo só poupa o relogin semanal.
-    setCookie(res, SESSION_COOKIE, sign({ ...user, exp }, config.cookieSecret), SESSION_TTL_MS, SESSION_PATH);
+    setCookie(
+      res,
+      SESSION_COOKIE,
+      sign({ ...user, exp: renewed }, config.cookieSecret),
+      renewed - Date.now(),
+      SESSION_PATH,
+    );
   } else {
     setCookie(res, SESSION_COOKIE, raw, remaining, SESSION_PATH);
   }

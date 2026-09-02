@@ -2379,7 +2379,9 @@ function needsRecoveredProcessing(meta: RecordingMeta, now = Date.now()): boolea
   ) {
     return true;
   }
+  // Ata desligada depois de uma falha: ninguém vai gerar nada, então não há o que esperar.
   return (
+    minutesEnabled() &&
     (transcriptionStatus === 'done' || transcriptionStatus === 'partial') &&
     (meta.minutes?.status === 'pending' || meta.minutes?.status === 'running')
   );

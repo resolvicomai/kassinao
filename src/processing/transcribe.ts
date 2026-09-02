@@ -1002,8 +1002,9 @@ async function assemblyaiTranscribe(
       }));
   } finally {
     // A cópia remota não precisa sobreviver: nem no caminho feliz (texto já é nosso),
-    // nem em timeout/erro/pausa (a retomada cria um job novo). Best-effort, sinal
-    // próprio (o da guild pode já estar abortado), nunca derruba a transcrição.
+    // nem em timeout/erro/pausa (a retomada cria um job novo). Best-effort: um job
+    // ainda em processamento pode ser recusado e fica só no aviso do log. Sinal
+    // próprio (o da guild pode já estar abortado); nunca derruba a transcrição.
     try {
       const del = await fetch(`${AAI_BASE}/transcript/${jobId}`, {
         method: 'DELETE',
