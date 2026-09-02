@@ -29,6 +29,7 @@ describe('sanitize (anti prompt-injection)', () => {
     const evil = `oi${String.fromCharCode(0x1b)}[31m ai${String.fromCharCode(7)}\nlinha\ttab`;
     const out = cleanText(evil);
     expect(out).toBe('oi ai\nlinha\ttab');
+    // eslint-disable-next-line no-control-regex -- o teste procura exatamente caracteres de controle
     expect(/[\x00-\x08\x1b]/.test(out)).toBe(false);
   });
 

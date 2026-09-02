@@ -9,7 +9,7 @@
 
 ## Checklist
 
-- [ ] `npm run lint`, `npm run format:check`, `npm test`, and `npm run build` pass
+- [ ] `npm run lint`, `npm run format:check`, `npm test`, `npm run build`, and `npm run typecheck:preview` pass
 - [ ] User-facing copy is present in both PT-BR and English when applicable
 - [ ] Public fixtures contain only fictional data
 - [ ] Recording, web, and MCP access rules remain aligned

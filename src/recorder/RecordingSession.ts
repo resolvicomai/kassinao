@@ -1082,25 +1082,10 @@ export function joinNames(names: string[], locale: Locale, max = 12): string {
   return shown.join(', ');
 }
 
-export function formatDuration(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  if (h > 0) return `${h}h ${m}min ${s}s`;
-  if (m > 0) return `${m}min ${s}s`;
-  return `${s}s`;
-}
-
-export function formatOffset(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  const mm = String(m).padStart(2, '0');
-  const ss = String(s).padStart(2, '0');
-  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
-}
+// Formatação de tempo mora em src/time.ts (sem dependências); re-exportada aqui
+// por compatibilidade com quem já importava da sessão.
+export { formatDuration, formatOffset } from '../time';
+import { formatDuration } from '../time';
 
 export function sanitizeFilename(name: string): string {
   return (

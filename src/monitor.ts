@@ -70,8 +70,3 @@ export function startMonitor(): void {
   timer = setInterval(check, 10 * 60 * 1000);
   timer.unref?.();
 }
-
-export function stopMonitor(): void {
-  if (timer) clearInterval(timer);
-  timer = undefined;
-}

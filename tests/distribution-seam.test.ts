@@ -37,7 +37,7 @@ function serviceBlock(compose: string, service: string): string {
   if (start < 0) throw new Error(`serviço ${service} não encontrado no Compose`);
   const bodyStart = start + marker.length;
   const rest = compose.slice(bodyStart);
-  const nextService = rest.search(/^  [A-Za-z0-9_.-]+:\s*$/m);
+  const nextService = rest.search(/^ {2}[A-Za-z0-9_.-]+:\s*$/m);
   const nextSection = rest.search(/^(?:volumes|networks):\s*$/m);
   const ends = [nextService, nextSection].filter((value) => value >= 0);
   const end = ends.length > 0 ? Math.min(...ends) : rest.length;
@@ -1407,12 +1407,12 @@ describe('artefatos de distribuição', () => {
     expect(routerProcess).not.toMatch(/^\s*volumes:/m);
     expect(publicProcess).not.toMatch(/^\s*env_file:/m);
     expect(publicProcess).not.toMatch(/^\s*volumes:/m);
-    expect(compose.match(/^  (?:edge_ingress|core_link|public_link):\n    internal: true\n/gm)).toHaveLength(3);
+    expect(compose.match(/^ {2}(?:edge_ingress|core_link|public_link):\n {4}internal: true\n/gm)).toHaveLength(3);
     expect(compose).toMatch(
-      /^  host_ingress:\n    internal: false\n    enable_ipv6: false\n    driver_opts:\n[\s\S]*?host_binding_ipv4: 127\.0\.0\.1\n[\s\S]*?gateway_mode_ipv4: nat\n[\s\S]*?enable_icc: 'false'/m,
+      /^ {2}host_ingress:\n {4}internal: false\n {4}enable_ipv6: false\n {4}driver_opts:\n[\s\S]*?host_binding_ipv4: 127\.0\.0\.1\n[\s\S]*?gateway_mode_ipv4: nat\n[\s\S]*?enable_icc: 'false'/m,
     );
-    expect(compose).toMatch(/^  core_egress:\n    driver_opts:/m);
-    expect(compose).toMatch(/^  tunnel_egress:\n    driver_opts:/m);
+    expect(compose).toMatch(/^ {2}core_egress:\n {4}driver_opts:/m);
+    expect(compose).toMatch(/^ {2}tunnel_egress:\n {4}driver_opts:/m);
     const routerKeys = [...routerProcess.matchAll(/^\s{6}([A-Z][A-Z0-9_]*):/gm)].map((match) => match[1]);
     expect(routerKeys).toEqual([
       'NODE_ENV',
@@ -1572,7 +1572,7 @@ describe('artefatos de distribuição', () => {
     expect(routerSmoke).toContain('interface_name: public0');
     expect(routerSmoke).toContain("ports: ['127.0.0.1:${SMOKE_ROUTER_HOST_PORT}:8080']");
     expect(routerSmoke).toContain("listener.bind(('127.0.0.1', 0))");
-    expect(routerSmoke).toMatch(/host_ingress:\n    internal: false\n    enable_ipv6: false/);
+    expect(routerSmoke).toMatch(/host_ingress:\n {4}internal: false\n {4}enable_ipv6: false/);
     expect(routerSmoke).toContain('com.docker.network.bridge.host_binding_ipv4: 127.0.0.1');
     expect(routerSmoke).toContain('-m conntrack --ctstate RELATED,ESTABLISHED -j RETURN');
     expect(routerSmoke).toContain('-j REJECT --reject-with "$SMOKE_REJECT_WITH"');
@@ -2154,19 +2154,19 @@ cleanup
       encoding: 'utf8',
     });
     expect(manifest.status, manifest.stderr).toBe(0);
-    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/prepare-storage\.sh/);
-    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/validate-legacy-dedicated-installation\.sh/);
-    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/remove-legacy-health-watch\.sh/);
-    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/remove-legacy-dedicated-host-controls\.sh/);
-    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/prepare-legacy-shared-layout\.sh/);
-    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/check-shared-migration-rollback\.sh/);
-    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/scripts\/finalize-shared-migration\.sh/);
-    expect(manifest.stdout.match(/[0-9a-f]{64}  \.\/scripts\/transition-runtime-topology\.sh/g)).toHaveLength(1);
-    expect(manifest.stdout.match(/[0-9a-f]{64}  \.\/scripts\/transition-dedicated-runtime-topology\.sh/g)).toHaveLength(
-      1,
-    );
-    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/runtime\/linux-amd64\/kassinao-no-dump/);
-    expect(manifest.stdout).toMatch(/[0-9a-f]{64}  \.\/runtime\/linux-arm64\/libkassinao-no-dump\.so/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64} {2}\.\/scripts\/prepare-storage\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64} {2}\.\/scripts\/validate-legacy-dedicated-installation\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64} {2}\.\/scripts\/remove-legacy-health-watch\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64} {2}\.\/scripts\/remove-legacy-dedicated-host-controls\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64} {2}\.\/scripts\/prepare-legacy-shared-layout\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64} {2}\.\/scripts\/check-shared-migration-rollback\.sh/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64} {2}\.\/scripts\/finalize-shared-migration\.sh/);
+    expect(manifest.stdout.match(/[0-9a-f]{64} {2}\.\/scripts\/transition-runtime-topology\.sh/g)).toHaveLength(1);
+    expect(
+      manifest.stdout.match(/[0-9a-f]{64} {2}\.\/scripts\/transition-dedicated-runtime-topology\.sh/g),
+    ).toHaveLength(1);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64} {2}\.\/runtime\/linux-amd64\/kassinao-no-dump/);
+    expect(manifest.stdout).toMatch(/[0-9a-f]{64} {2}\.\/runtime\/linux-arm64\/libkassinao-no-dump\.so/);
   });
 
   it('prepara somente os quatro filhos depois de provar o DATA_ROOT criptografado', () => {

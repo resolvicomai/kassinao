@@ -5,6 +5,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # libsodium-wrappers é pré-1.0: 0.7 -> 0.8 muda API da pilha de áudio e já
+    # quebrou antes (#95, #126). Atualização deliberada, com gravação real de teste.
+    ignore:
+      - dependency-name: "libsodium-wrappers"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
     groups:
       production-minor-patch:
         dependency-type: production

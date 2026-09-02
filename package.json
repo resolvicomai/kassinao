@@ -55,6 +55,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@discordjs/formatters": "^0.6.2",
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.0",
     "@fontsource-variable/space-grotesk": "^5.3.0",

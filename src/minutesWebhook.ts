@@ -126,14 +126,14 @@ export function enqueueMinutesWebhook(recordingId: string): void {
   else void deliver(recordingId);
 }
 
-export function cancelMinutesWebhook(recordingId: string): void {
+function cancelMinutesWebhook(recordingId: string): void {
   const timer = timers.get(recordingId);
   if (timer) clearTimeout(timer);
   timers.delete(recordingId);
   abortControllers.get(recordingId)?.abort();
 }
 
-export function cancelMinutesWebhooksForGuild(guildId: string): void {
+function cancelMinutesWebhooksForGuild(guildId: string): void {
   for (const recordingId of new Set([...timers.keys(), ...abortControllers.keys()])) {
     if (readMeta(recordingId)?.guildId === guildId) cancelMinutesWebhook(recordingId);
   }
