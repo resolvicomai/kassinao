@@ -25,7 +25,8 @@ Kassinão é um projeto independente, sem afiliação ou endosso do Discord.
 - presença, metadados da reunião e notas com timestamp;
 - painel de gravação no chat do canal de voz antes da captura;
 - página privada com player e downloads depois que a gravação termina;
-- retenção e controle de acesso por reunião.
+- retenção e controle de acesso por reunião;
+- uma sala por servidor por bot user (limite do Discord); bots ajudantes opcionais gravam mais salas ao mesmo tempo.
 
 **Recursos opcionais**
 
@@ -142,6 +143,7 @@ Crie uma aplicação no [Discord Developer Portal](https://discord.com/developer
 5. Em **OAuth2 → Redirects**, cadastre exatamente `${APP_URL}/auth/callback`.
 6. Em **General Information → Privacy Policy URL**, cadastre `${APP_URL}/privacy`. A página precisa ser publicamente acessível e descrever o deploy real desse operador.
 7. O login web pede apenas o scope OAuth `identify`. O vínculo com uma guild permitida é conferido separadamente pelo bot.
+8. Opcional, para gravar duas salas do mesmo servidor ao mesmo tempo: crie uma **segunda aplicação** (o bot ajudante), convide-a para os mesmos servidores com o mesmo bitfield `68242432` e coloque o token dela em `HELPER_DISCORD_TOKENS`. O ajudante só entra na voz: não registra comandos, não manda mensagem nem DM; painel, avisos e atas continuam vindo do bot principal. Cada ajudante adicional libera mais uma sala, até `RECORDING_MAX_CONCURRENT`. Quando todas as identidades estão ocupadas, o bot avisa no chat da sala que ficou sem gravação e conta a colisão para o dono.
 
 Modelo da URL de instalação:
 

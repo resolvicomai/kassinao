@@ -34,7 +34,7 @@ import {
   VoiceBasedChannel,
 } from 'discord.js';
 import { config } from './config';
-import { operationalError, operationalPii } from './operationalLog';
+import { operationalError, operationalFailure, operationalPii, operationalWarn } from './operationalLog';
 import { answerQuestion, authorizeAskMetas, resolveAskTemporalIntent } from './ask';
 import { AskLimiter, AskRateLimitError } from './askLimiter';
 import { guildConfigStore } from './guildConfig';
@@ -79,6 +79,7 @@ import {
   controlSessionId,
   MarkClickDeduper,
   shouldRearmAutoRecord,
+  shouldRearmOnPopulationDrop,
 } from './recorder/lifecycle';
 import { cook } from './processing/cook';
 import {
@@ -109,7 +110,7 @@ import {
   transcriptionEnabled,
 } from './processing/transcribe';
 import { validateAndCommitRuntimeConfiguration } from './runtimeBootstrap';
-import { safeName } from './sanitize';
+import { cleanInline, safeName } from './sanitize';
 import {
   buildPublicTranscriptionNotice,
   deliverPrivateTranscriptionNotification,
@@ -439,6 +440,23 @@ class RecordingBusyError extends Error {
   }
 }
 
+/**
+ * Recusa de início com uma causa que a pessoa pode entender e agir (disco
+ * cheio, bot movido). O /gravar mapeia `reason` para uma chave do i18n em vez
+ * da genérica, e o alerta ao dono do auto-record explica a causa pelo `reason`
+ * (a mensagem bilíngue fica só para o log).
+ */
+class RecordingStartRefusedError extends Error {
+  constructor(
+    readonly reason: 'disk-low' | 'moved-during-start',
+    message: string,
+    readonly detail: { free?: number } = {},
+  ) {
+    super(message);
+    this.name = 'RecordingStartRefusedError';
+  }
+}
+
 class RecordingGlobalCapacityError extends Error {
   constructor() {
     super('recording capacity unavailable');
@@ -561,10 +579,12 @@ async function startSession(opts: {
     // Guarda de disco: não começa uma gravação que vai corromper por falta de espaço.
     const free = freeMB();
     if (free < config.minFreeMbStart) {
-      throw new Error(
+      throw new RecordingStartRefusedError(
+        'disk-low',
         opts.locale === 'pt'
           ? `sem espaço em disco suficiente no servidor (${free} MB livres) — apague gravações antigas primeiro`
           : `not enough disk space on the server (${free} MB free) — delete old recordings first`,
+        { free },
       );
     }
 
@@ -590,7 +610,8 @@ async function startSession(opts: {
     if (shuttingDown || reservation.signal.aborted) throw new RecordingStartCancelledError();
     const identityGuild = identity.client.guilds.cache.get(opts.guild.id);
     if (identityGuild?.members.me?.voice.channelId !== opts.voiceChannel.id) {
-      throw new Error(
+      throw new RecordingStartRefusedError(
+        'moved-during-start',
         opts.locale === 'pt'
           ? 'fui movido para outro canal durante o início; não gravei nenhum dos dois'
           : 'I was moved to another channel while starting; neither channel was recorded',
@@ -1532,6 +1553,15 @@ async function handleGravar(interaction: ChatInputCommandInteraction): Promise<v
       await interaction.editReply(protectionMessage);
     } else if (err instanceof RecordingStartCancelledError) {
       await interaction.editReply(t(l, 'record.start-cancelled'));
+    } else if (err instanceof RecordingStartRefusedError) {
+      // Causa acionável pela pessoa: dizer "tenta de novo" para disco cheio é
+      // conselho errado. O detalhe interno continua indo só para o log.
+      reportManualRecordingStartFailure(err, l);
+      await interaction.editReply(
+        err.reason === 'disk-low'
+          ? t(l, 'record.refused-disk-low', { free: String(err.detail.free ?? '?') })
+          : t(l, 'record.refused-moved'),
+      );
     } else if (err instanceof RecordingBusyError) {
       // Corrida: alguém ocupou entre o pré-check e o startSession. A sala citada
       // é a do canal PEDIDO quando for ele o ocupado; senão, a primeira do guild.
@@ -1669,6 +1699,11 @@ async function handleParar(interaction: ChatInputCommandInteraction | ButtonInte
     id: interaction.user.id,
     name: member?.displayName ?? interaction.user.username,
   });
+  // Se o deferReply abaixo rejeitar (interação expirada, 5xx), a função sai
+  // pelo catch do InteractionCreate e `stopping` ficaria sem ninguém para
+  // aguardar: uma rejeição dela viraria unhandledRejection. O await no try
+  // continua tratando o erro de verdade.
+  stopping.catch(() => {});
   await interaction.deferReply({ ephemeral: true });
   try {
     await stopping;
@@ -2290,11 +2325,19 @@ async function notifyAutoRecordCollision(
   } catch {
     // sem permissão de mensagem no chat do canal — o alerta ao dono abaixo cobre
   }
+  // Um ajudante configurado que não está neste servidor (não convidado, expulso,
+  // token inválido) é silêncio operacional: a colisão continua contada como se
+  // faltasse um bot, quando na verdade falta só o convite.
+  const idleHelpers = identityPool.size() - identityPool.readyCountFor(guild.id);
+  const helperHint =
+    idleHelpers > 0
+      ? ` Atenção: ${idleHelpers} bot(s) ajudante(s) configurado(s) não está(ão) disponível(is) neste servidor (não convidado ou fora do ar). Convide o ajudante para ele assumir a segunda sala.`
+      : '';
   void alertOwners(
     `autorecord-collision:${guild.id}:${channel.id}`,
     `Duas reuniões coincidiram em **${safeName(guild.name)}**: **#${safeName(channel.name)}** encheu enquanto eu gravava${
       busyName ? ` em **#${safeName(busyName)}**` : ' em outra sala'
-    }. Avisei a sala de que ela NÃO está sendo gravada; se seguir cheia quando a outra gravação terminar, começo lá automaticamente. É a ${total30d}ª colisão nos últimos 30 dias.`,
+    }. Avisei a sala de que ela NÃO está sendo gravada; se seguir cheia quando a outra gravação terminar, começo lá automaticamente. É a ${total30d}ª colisão nos últimos 30 dias.${helperHint}`,
   );
 }
 
@@ -2307,6 +2350,23 @@ function notifyLateStart(started: RecordingSession, locale: Locale): void {
       // sem permissão de mensagem — a nota na linha do tempo já registra
     });
   }
+}
+
+/**
+ * Causa da falha do auto-record em palavras que o dono consegue agir. shortError
+ * é um mapeador de erros de provedor de IA e transformava "disco cheio" em
+ * "o serviço de IA encontrou um erro interno".
+ */
+function describeAutoRecordStartFailure(err: unknown): string {
+  if (err instanceof RecordingStartRefusedError) {
+    return err.reason === 'disk-low'
+      ? `o servidor está sem espaço em disco (${err.detail.free ?? '?'} MB livres). Libere espaço ou apague gravações antigas; tento de novo no próximo movimento da sala.`
+      : 'fui movido para outro canal durante o início; tento de novo no próximo movimento da sala.';
+  }
+  if (err instanceof RecordingBusyError) {
+    return 'o bot já estava ocupado ou entrando nessa sala; tento de novo no próximo movimento da sala.';
+  }
+  return `erro interno (${operationalError(err)}); veja o log do servidor. Tento de novo no próximo movimento da sala.`;
 }
 
 function scheduleAutoRecordCheck(guild: Guild, channelId: string): void {
@@ -2331,8 +2391,13 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
   const rule = autoRecordStore.get(guild.id, channelId);
   const session = sessionManager.getByChannel(guild.id, channelId);
 
-  // rearma quando a população cai abaixo do mínimo
-  if (rule && humans < rule.minimum) setArmed(guild.id, channelId, true);
+  // Rearma quando a população cai abaixo do mínimo, exceto com gravação MANUAL
+  // viva ou encerrando nesta sala (ver shouldRearmOnPopulationDrop). A sessão em
+  // fase 'stopping' já saiu de getByChannel, mas o /parar leva alguns segundos
+  // (FLAC, apelido, painel) e o próprio bot saindo da voz agenda uma reavaliação
+  // dentro dessa janela.
+  const stoppingHere = sessionManager.stoppingSessions(guild.id).find((s) => s.currentChannelId === channelId);
+  if (shouldRearmOnPopulationDrop(rule, humans, session ?? stoppingHere)) setArmed(guild.id, channelId, true);
   // sala esvaziou OU regra removida: a colisão (se houve) terminou sem gravação;
   // o próximo enchimento com o bot ocupado é episódio novo e merece novo aviso.
   // Sem o caso !rule, um /autorecord off durante a colisão deixaria o episódio
@@ -2370,7 +2435,16 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
     return;
   }
 
-  if (identityFree && rule && humans >= rule.minimum && isArmed(guild.id, channelId)) {
+  // isChannelBusy: um /gravar manual em 'starting' nesta sala ainda não desarmou
+  // a regra (isso acontece no commit); com um ajudante livre o ramo entraria e
+  // startSession falharia na reserva, gerando alerta falso ao dono.
+  if (
+    identityFree &&
+    rule &&
+    humans >= rule.minimum &&
+    isArmed(guild.id, channelId) &&
+    !sessionManager.isChannelBusy(guild.id, channelId)
+  ) {
     setArmed(guild.id, channelId, false);
     // Se houve colisão enquanto a sala esperava, esta gravação começa no meio da
     // conversa: o aviso vira nota na linha do tempo e mensagem no chat.
@@ -2401,7 +2475,7 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
         `autorecord-start:${guild.id}:${channelId}`,
         protectionAlert
           ? `${protectionAlert} Canal: **#${safeName(channel.name)}** (${safeName(guild.name)}).`
-          : `O auto-record não conseguiu iniciar em **#${safeName(channel.name)}** (${safeName(guild.name)}): ${shortError((err as Error).message, locale)}`,
+          : `O auto-record não conseguiu iniciar em **#${safeName(channel.name)}** (${safeName(guild.name)}): ${describeAutoRecordStartFailure(err)}`,
       );
     }
   }
@@ -2419,9 +2493,13 @@ function pauseGuildWork(guildId: string, detached = true): void {
     clearTimeout(timeout);
     pendingChecks.delete(key);
   }
-  for (const rule of autoRecordStore.list(guildId)) setArmed(guildId, rule.channelId, false);
   pauseMinutesWebhooksForGuild(guildId);
   if (!detached) return;
+  // Só a saída definitiva do perímetro desarma as regras. Numa indisponibilidade
+  // transitória (GuildUnavailable) as regras precisam continuar armadas: uma sala
+  // que encheu durante a queda deve ser gravada assim que a guild voltar, e
+  // evaluateChannel só rearmaria quando ela esvaziasse.
+  for (const rule of autoRecordStore.list(guildId)) setArmed(guildId, rule.channelId, false);
   pendingDiscordGuildSurfaceMigrationIds.delete(guildId);
   for (const recordingId of [...pendingTranscriptionNotificationIds]) {
     if (readMeta(recordingId)?.guildId === guildId) pendingTranscriptionNotificationIds.delete(recordingId);
@@ -2654,7 +2732,10 @@ client.once(Events.ClientReady, async () => {
   console.log(
     `Configuração ativa: guilds=${guildScope}; ASR=${config.transcribeProvider}; fallback=${config.transcribeFallbackProvider}; atas=${config.minutesEnabled}/${config.minutesProvider}; webhook=${config.minutesWebhookUrl ? 'ativo' : 'inativo'}; MCP=${config.mcpEnabled ? 'ativo' : 'inativo'}.`,
   );
-  startMonitor(); // alertas por DM ao dono (disco, etc.)
+  startMonitor(); // alertas por DM ao dono (disco, backup, auto-record)
+  if (config.ownerIds.length === 0) {
+    operationalWarn('OWNER_IDS vazio: os alertas de disco, backup e auto-record não têm destinatário no Discord.');
+  }
   await repairRecoveredSurfaces();
   await registerCommands().catch((err) => console.error(`Falha ao registrar comandos: ${operationalError(err)}`));
   // canais que já estavam cheios quando o bot subiu disparam o auto-record
@@ -3009,6 +3090,22 @@ async function gracefulShutdown(signal: string): Promise<void> {
 }
 process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
+// Uma promise rejeitada sem tratamento (listener async do discord.js, timer)
+// derrubaria o processo no meio de uma gravação, com o áudio em voo. Registra o
+// evento sem PII e segue; exceções síncronas continuam fatais como antes.
+process.on('unhandledRejection', (reason) => {
+  // Os frames (arquivo:linha do bundle) localizam o bug e não carregam PII; a
+  // linha da mensagem continua sob a política de operationalError.
+  const frames =
+    reason instanceof Error && reason.stack
+      ? reason.stack
+          .split('\n')
+          .slice(1, 4)
+          .map((line) => cleanInline(line.trim()))
+          .join(' | ')
+      : '';
+  operationalFailure(`Rejeição de promise sem tratamento: ${operationalError(reason)}${frames ? ` ${frames}` : ''}`);
+});
 
 // ---------- boot ----------
 

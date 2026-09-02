@@ -938,3 +938,17 @@ clean_child rclone --config "$RCLONE_CONFIG_FILE" check \
 size="$(du -h "$ARCHIVE" | cut -f1)"
 printf 'backup consistente e verificado: %s (%s)\n' "$ARCHIVE_NAME" "$size"
 printf 'retenção: configure lifecycle/object lock no provedor; auth não foi copiado\n'
+
+# Heartbeat para o monitor do bot (mesmo contrato de backup-incremental.sh):
+# com BACKUP_STATUS=enabled o Kassinão avisa o dono quando este arquivo falta
+# ou tem mais de 48 h. Só é gravado depois do upload verificado.
+heartbeat_dir="$DATA_REAL/state"
+if [ -d "$heartbeat_dir" ] && [ ! -L "$heartbeat_dir/backup-heartbeat.json" ]; then
+  heartbeat_tmp="$heartbeat_dir/backup-heartbeat.json.$$.tmp"
+  archive_bytes="$(stat -c '%s' "$ARCHIVE" 2>/dev/null || stat -f '%z' "$ARCHIVE")"
+  printf '{"finishedAt":"%s","files":1,"bytes":%s,"remote":"%s"}\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${archive_bytes:-0}" "${REMOTE_ROOT//\"/}" > "$heartbeat_tmp"
+  chmod 0644 "$heartbeat_tmp"
+  chown "$(stat -c '%u:%g' "$heartbeat_dir" 2>/dev/null || stat -f '%u:%g' "$heartbeat_dir")" "$heartbeat_tmp" 2>/dev/null || true
+  mv -f "$heartbeat_tmp" "$heartbeat_dir/backup-heartbeat.json"
+fi

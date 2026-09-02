@@ -133,6 +133,14 @@ const STRINGS: Strings = {
     pt: '🛑 Cancelei a inicialização. Nenhum áudio foi gravado.',
     en: '🛑 I cancelled startup. No audio was recorded.',
   },
+  'record.refused-disk-low': {
+    pt: '❌ Não consegui iniciar a gravação: o servidor está sem espaço em disco ({free} MB livres). Avise quem administra o Kassinão para liberar espaço ou apagar gravações antigas.',
+    en: '❌ I could not start the recording: the server is out of disk space ({free} MB free). Ask whoever runs Kassinão to free space or delete old recordings.',
+  },
+  'record.refused-moved': {
+    pt: '❌ Fui movido para outro canal enquanto começava, então não gravei nenhum dos dois. Tenta de novo na sala certa.',
+    en: '❌ I was moved to another channel while starting, so neither room was recorded. Try again in the right room.',
+  },
   'record.start-failed': {
     pt: '❌ Não consegui iniciar a gravação. Tenta de novo daqui a pouco.',
     en: "❌ I couldn't start the recording. Try again in a moment.",
@@ -631,12 +639,12 @@ const STRINGS: Strings = {
     en: '🎙️ Also recording right now in: {channels}.',
   },
   'autorecord.busy-elsewhere': {
-    pt: '⚠️ Esta conversa **não está sendo gravada**: já estou gravando em **{channel}** e o Discord só permite um canal de voz por vez. Se a sala ainda estiver cheia quando aquela gravação terminar, começo aqui automaticamente.',
-    en: '⚠️ This conversation is **not being recorded**: I am already recording in **{channel}** and Discord allows only one voice channel at a time. If this room is still full when that recording ends, I will start here automatically.',
+    pt: '⚠️ Esta conversa **não está sendo gravada**: já estou gravando em **{channel}** e não tenho outro bot livre neste servidor. Se a sala ainda estiver cheia quando aquela gravação terminar, começo aqui automaticamente.',
+    en: '⚠️ This conversation is **not being recorded**: I am already recording in **{channel}** and have no free bot in this server. If this room is still full when that recording ends, I will start here automatically.',
   },
   'autorecord.busy-elsewhere-generic': {
-    pt: '⚠️ Esta conversa **não está sendo gravada**: já estou gravando em outra sala e o Discord só permite um canal de voz por vez. Se a sala ainda estiver cheia quando aquela gravação terminar, começo aqui automaticamente.',
-    en: '⚠️ This conversation is **not being recorded**: I am already recording in another room and Discord allows only one voice channel at a time. If this room is still full when that recording ends, I will start here automatically.',
+    pt: '⚠️ Esta conversa **não está sendo gravada**: já estou gravando em outra sala e não tenho outro bot livre neste servidor. Se a sala ainda estiver cheia quando aquela gravação terminar, começo aqui automaticamente.',
+    en: '⚠️ This conversation is **not being recorded**: I am already recording in another room and have no free bot in this server. If this room is still full when that recording ends, I will start here automatically.',
   },
   'autorecord.late-start': {
     pt: '⚠️ Gravação iniciada **com a conversa já em andamento**: o trecho anterior não foi gravado porque eu estava ocupado em outra sala.',

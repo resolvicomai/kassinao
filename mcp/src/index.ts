@@ -136,6 +136,13 @@ async function tryRefresh(token: string, attemptId: string): Promise<unknown | u
     },
     async (response) => {
       if (mayFallbackToEnvToken(response.status)) return undefined;
+      if (response.status === 403) {
+        // The server revoked every session of this account (left the server, or
+        // the operator removed the guild). Retrying cannot fix it.
+        throw new Error(
+          'This Kassinão connection was revoked or your Discord account lost access to the server (HTTP 403). Reconnect from the private app if you still have access.',
+        );
+      }
       if (!response.ok) {
         throw new Error(`Could not refresh the token (HTTP ${response.status}). Try again in a moment.`);
       }
@@ -196,6 +203,21 @@ async function apiGet(pathname: string, params: Record<string, unknown>): Promis
     throw new Error('Kassinão request failed (HTTP 401). Try again in a moment.');
   }
   return result.data;
+}
+
+/** Exchange failures: only 400 means the code itself is expired or used. */
+export function describeExchangeFailure(status: number, retryAfterHeader?: string | null): string {
+  if (status === 403) {
+    return 'Could not exchange the code (HTTP 403): your Discord account is not allowed on this Kassinão instance. Ask the instance operator.';
+  }
+  if (status === 429) {
+    const seconds = Number.parseInt(retryAfterHeader ?? '', 10);
+    return `Could not exchange the code (HTTP 429): too many attempts from this network. Wait ${Number.isFinite(seconds) && seconds > 0 ? seconds : 30} seconds and try again with the same code.`;
+  }
+  if (status === 503) {
+    return 'Could not exchange the code (HTTP 503): Kassinão is starting or Discord is unavailable. Try again in a moment with the same code.';
+  }
+  return `Could not exchange the code (HTTP ${status}). Codes expire in about 5 minutes and can only be used once. Generate another in the private app; instance owners may also use /mcp new.`;
 }
 
 // ---------- tool definitions ----------
@@ -358,9 +380,7 @@ async function runExchange(code: string): Promise<void> {
     },
     async (response) => {
       if (!response.ok) {
-        console.error(
-          `Could not exchange the code (HTTP ${response.status}). Codes expire in about 5 minutes and can only be used once. Generate another in the private app; instance owners may also use /mcp new.`,
-        );
+        console.error(describeExchangeFailure(response.status, response.headers.get('retry-after')));
         process.exit(1);
       }
       return parseCredentialTokenResponse(await readApiJson(response, MAX_TOKEN_RESPONSE_BYTES));

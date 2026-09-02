@@ -10,6 +10,48 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+### Added
+
+- Helper bots: `HELPER_DISCORD_TOKENS` accepts extra bot tokens so one server can record more than one voice room at the same time. Discord allows one voice connection per bot user per server; each helper is a second application invited with the same permissions, joins voice only, and registers no commands. Panels, notices, and minutes keep coming from the main bot. The owner is alerted at boot when a configured helper is in none of the authorized servers, and at collision time when a helper is missing from the affected server.
+- Collision notice: when every identity is busy and another auto-record room fills up, the bot tells that room it is not being recorded, marks a late start in the timeline and chat when it finally joins, and counts collisions (90-day retention) so the owner can decide whether another helper is worth it.
+- Backup heartbeat: `scripts/backup-incremental.sh` uploads only new recordings with `rclone copy` (never deletes remotely); it and `scripts/backup.sh` write `backup-heartbeat.json` into the state volume after a verified upload. With `BACKUP_STATUS=enabled`, the bot DMs `OWNER_IDS` when the heartbeat is missing or older than 48 hours. Upgrade note for hosts: switch the backup cron to a script from this release before enabling the flag, otherwise the first alert is a false one.
+- `kassinao-mcp@1.0.13`: actionable error messages (see Changed) and Node.js 22+; the connector runtime is otherwise unchanged.
+
+### Changed
+
+- The collision notice no longer claims that Discord allows only one voice channel; with helpers the limit is one room per bot user.
+- `/gravar` now explains an out-of-disk refusal (with the free space) and a "moved during start" refusal instead of the generic message.
+- The MCP connector maps 400/403/404/413/429 responses to actionable advice instead of "try again", honours `Retry-After`, and requires Node.js 22+ (Node 20 is end of life).
+- `scripts/transcribe-local.py` takes `--model` and `--language` arguments and defaults to the app's language default (`en`) instead of `pt`; pass `--language pt` explicitly in `TRANSCRIBE_COMMAND`.
+- The landing page keeps a discreet Product Hunt link in the footer instead of the launch badge in the hero.
+- CI cancels superseded runs per pull request and times out after 40 minutes; Dependabot groups `docker/*` actions, updates `/mcp` production dependencies only, and ignores Node major bumps.
+- The release workflow requires an annotated `v*` tag and checks the CHANGELOG before building, so a release without notes cannot burn a version number.
+
+### Fixed
+
+- Stopping a manual recording no longer restarts an automatic one seconds later when the room population had dipped below the minimum during the meeting.
+- A transient Discord outage (`GuildUnavailable`) no longer disarms auto-record rules; a room that filled up during the outage is recorded when the server comes back.
+- `autorecord.json`, `autorecord-collisions.json` and `guildconfig.json` are written atomically; a corrupt file is quarantined and logged instead of silently replaced by an empty one.
+- A recording session now ends cleanly when its voice connection is destroyed by an unrecoverable gateway close (for example a regenerated helper token) instead of becoming a silent zombie.
+- A track whose duration could not be measured is kept pending instead of being marked done, so a participant no longer disappears from the transcript without notice.
+- `TRANSCRIBE_LANGUAGE` values such as `pt-BR` are sent to OpenAI and Groq as ISO-639-1 codes.
+- Freeing audio or deleting a recording during a transient Discord failure answers 503 with `Retry-After`, matching reads, instead of "recording not found".
+- The MCP exchange and refresh rate limits use their own buckets instead of sharing the authenticated read bucket per IP.
+- An unreadable `mcp-sessions.json` is now logged; connectors stay locked out (fail closed) until the file is fixed, but the operator can see why.
+- `/perguntar` no longer treats ordinals ("a segunda decisão", "quarta opção", "na segunda parte") or fractions ("3/4") as dates; weekdays keep working as dates with or without a preposition ("na segunda", "o que rolou sexta?", "sexta-feira").
+- `REPO_PUBLIC` rejects non-boolean values at boot like every other flag, and the privacy page reports `LOG_PII` exactly as the log applies it (only the lowercase value `true` enables PII in logs).
+- The "Connect AI" link is hidden again on the recording page, as requested in #37 and lost in #52.
+- Unhandled promise rejections are logged (with the first stack frames) instead of terminating the process mid-recording; the boot warns when `OWNER_IDS` is empty and alerts have no recipient.
+- The owner alert for a failed automatic start now names the real cause (disk space, bot moved, room busy) instead of an AI-provider error message; an automatic start no longer competes with a manual `/gravar` in progress in the same room when a helper is free.
+- Ghost 404 on the private app, wrong-account diagnosis, and the vanishing avatar (#105).
+- The Prettier check no longer rejects `npm-shrinkwrap.json` as rewritten by npm, the pinned-action test accepts any 40-hex pin with a matching version comment, and the topology transition test no longer times out at 20 seconds (causes of red Dependabot pull requests #109, #115 and #111).
+
+### Security
+
+- Dependency vulnerabilities that failed `npm audit` were zeroed (#106, #107, #108).
+- The Gemini API key travels in the `x-goog-api-key` header instead of the URL query string.
+- Transcription ffmpeg processes run at low priority so they cannot starve a live recording.
+
 ## [1.4.18] — 2026-07-17
 
 ### Fixed

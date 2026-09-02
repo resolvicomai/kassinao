@@ -1,6 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
+import { readJsonState, writeJsonStateAtomic } from '../stateFile';
 
 /**
  * Colisão de auto-record: uma sala com regra encheu enquanto o bot gravava em
@@ -43,18 +43,13 @@ function validRecord(value: unknown): value is CollisionRecord {
 }
 
 function load(): CollisionRecord[] {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(FILE(), 'utf8')) as unknown;
-    return Array.isArray(parsed) ? parsed.filter(validRecord) : [];
-  } catch {
-    // primeiro uso ou arquivo corrompido: estatística recomeça, nada mais depende dela
-    return [];
-  }
+  // primeiro uso: lista vazia; arquivo corrompido: quarentena com log, estatística recomeça
+  const parsed = readJsonState<unknown[]>(FILE(), [], Array.isArray);
+  return parsed.filter(validRecord);
 }
 
 function save(records: CollisionRecord[]): void {
-  fs.mkdirSync(config.stateDir, { recursive: true });
-  fs.writeFileSync(FILE(), JSON.stringify(records, null, 2));
+  writeJsonStateAtomic(FILE(), records);
 }
 
 /** Registra uma colisão e devolve o total do servidor nos últimos 30 dias (incluindo esta). */
