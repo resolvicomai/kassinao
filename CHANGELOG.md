@@ -10,6 +10,8 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.20] — 2026-09-02
+
 ### Fixed
 
 - Minutes that fail no longer fail silently: the queue tries up to 3 times (5 minutes apart), the completion DM waits for the final outcome and says "transcript ready, minutes failed" instead of "Transcript ready!", and owners receive one alert per recording.
