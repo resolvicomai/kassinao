@@ -131,19 +131,41 @@ describe('interpretação temporal do /perguntar', () => {
     expect(forDate.deadlineLabel).toBe('2026-07-15');
   });
 
-  it('dia da semana sem pista temporal é ordinal, não data', () => {
+  it('segunda/quarta/quinta/sexta como ordinal não viram data', () => {
     const ordinal = resolveAskTemporalIntent('qual foi a segunda decisão da reunião?', NOW, TZ, 'pt');
     expect(ordinal.range).toBeUndefined();
     expect(ordinal.label).toBeUndefined();
     expect(resolveAskTemporalIntent('qual era a quarta opção discutida?', NOW, TZ, 'pt').range).toBeUndefined();
-    expect(resolveAskTemporalIntent('na segunda, o que decidimos?', NOW, TZ, 'pt').label).toBe('segunda');
-    expect(resolveAskTemporalIntent('o que houve na sexta-feira?', NOW, TZ, 'pt').label).toBe('sexta feira');
+    expect(
+      resolveAskTemporalIntent('o que discutimos na segunda parte da reunião?', NOW, TZ, 'pt').range,
+    ).toBeUndefined();
+    expect(resolveAskTemporalIntent('qual foi o resultado da segunda votação?', NOW, TZ, 'pt').range).toBeUndefined();
   });
 
-  it('fração ou razão com barra não vira data; dia/mês com pista continua valendo', () => {
+  it('dia da semana como data continua valendo, com ou sem preposição', () => {
+    expect(resolveAskTemporalIntent('na segunda, o que decidimos?', NOW, TZ, 'pt').label).toBe('segunda');
+    expect(resolveAskTemporalIntent('o que houve na sexta-feira?', NOW, TZ, 'pt').label).toBe('sexta feira');
+    // uso adverbial solto: não há ordinal possível aqui
+    expect(resolveAskTemporalIntent('o que rolou sexta?', NOW, TZ, 'pt').range).toBeDefined();
+    expect(resolveAskTemporalIntent('quinta teve reunião?', NOW, TZ, 'pt').range).toBeDefined();
+    // nomes que nunca são ordinais nunca precisam de pista
+    expect(resolveAskTemporalIntent('o que rolou terça?', NOW, TZ, 'pt').range).toBeDefined();
+    expect(resolveAskTemporalIntent('o que aconteceu sábado?', NOW, TZ, 'pt').range).toBeDefined();
+    expect(resolveAskTemporalIntent('what happened friday?', NOW, TZ, 'en').range).toBeDefined();
+    expect(resolveAskTemporalIntent('what did we decide monday?', NOW, TZ, 'en').range).toBeDefined();
+    // ordinal antes não esconde a data depois
+    expect(resolveAskTemporalIntent('a segunda decisão da reunião de segunda-feira?', NOW, TZ, 'pt').label).toBe(
+      'segunda feira',
+    );
+  });
+
+  it('fração ou razão com barra não vira data; dia/mês com pista, ou no início, continua valendo', () => {
     expect(resolveAskTemporalIntent('3/4 das pessoas concordaram?', NOW, TZ, 'pt').range).toBeUndefined();
     expect(resolveAskTemporalIntent('placar 20/20 na votação?', NOW, TZ, 'pt').range).toBeUndefined();
     expect(resolveAskTemporalIntent('o que decidimos na reunião de 09/07?', NOW, TZ, 'pt').range).toBeDefined();
+    expect(resolveAskTemporalIntent('a call do 09/07, o que decidimos?', NOW, TZ, 'pt').range).toBeDefined();
+    expect(resolveAskTemporalIntent('a ata do 15/08, o que tinha?', NOW, TZ, 'pt').range).toBeDefined();
+    expect(resolveAskTemporalIntent('09/07: o que foi decidido?', NOW, TZ, 'pt').range).toBeDefined();
     expect(resolveAskTemporalIntent('o que decidimos em 09/07/2026?', NOW, TZ, 'pt').range).toBeDefined();
   });
 

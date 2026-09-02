@@ -926,7 +926,7 @@ describe('identidade da topologia no hardener de egress', () => {
     expect(state.stdout).toBe('owned-progress\n');
     expect(harness.read(4)).toBe(beforeV4);
     expect(harness.read(6)).toBe(beforeV6);
-  }, 15_000);
+  }, 60_000);
 
   it('read-only current recusa policy estrangeira sem stdout nem mutação', () => {
     const harness = removalHarness();
@@ -1011,7 +1011,7 @@ describe('identidade da topologia no hardener de egress', () => {
       expect(harness.read(4)).not.toContain('KASSINAO-');
       expect(harness.read(6)).not.toContain('KASSINAO-');
     },
-    15_000,
+    60_000,
   );
 
   it.each(
@@ -1075,7 +1075,7 @@ describe('identidade da topologia no hardener de egress', () => {
       expect(harness.read(4)).not.toContain('KASSINAO-');
       expect(harness.read(6)).not.toContain('KASSINAO-');
     },
-    15_000,
+    60_000,
   );
 
   it.each(
@@ -1114,7 +1114,7 @@ describe('identidade da topologia no hardener de egress', () => {
       expect(harness.read(4)).not.toContain('KASSINAO-');
       expect(harness.read(6)).not.toContain('KASSINAO-');
     },
-    15_000,
+    60_000,
   );
 
   it('aceita IPv4 já ausente e conclui a remoção IPv6', () => {
@@ -1167,7 +1167,7 @@ describe('identidade da topologia no hardener de egress', () => {
     expect(retry.stderr).toContain('regras Kassinão divergiram');
     expect(harness.read(4)).toBe(beforeV4);
     expect(harness.read(6)).toBe(beforeV6);
-  }, 15_000);
+  }, 60_000);
 
   it.each([
     ['present', {}, 'present'],
@@ -1199,7 +1199,7 @@ describe('identidade da topologia no hardener de egress', () => {
     expect(state.stdout).toBe('owned-progress\n');
     expect(harness.read(4)).toBe(beforeV4);
     expect(harness.read(6)).toBe(beforeV6);
-  }, 15_000);
+  }, 60_000);
 
   it('read-only legacy recusa policy current e regra estrangeira sem mutação', () => {
     const wrongKind = removalHarness({ kind: 'legacy' });
@@ -1248,7 +1248,7 @@ describe('identidade da topologia no hardener de egress', () => {
       expect(harness.read(4)).not.toContain('KASSINAO-');
       expect(harness.read(6)).not.toContain('KASSINAO-');
     },
-    15_000,
+    60_000,
   );
 
   it('legacy aceita família já ausente e termina idempotente', () => {

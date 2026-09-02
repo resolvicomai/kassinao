@@ -1749,6 +1749,8 @@ export function messagePage(
     backHref?: string;
     backLabel?: string;
     active?: 'rec' | 'ai';
+    /** Páginas de mensagem da central mantêm o link "Conectar IA" na nav. */
+    navAi?: boolean;
     lockLocale?: boolean;
     /**
      * Mostra "logado como X / usar outra conta" abaixo da mensagem, apontando o
@@ -1793,6 +1795,7 @@ export function messagePage(
     user,
     lang,
     active: opts.active,
+    navAi: opts.navAi,
     lockLocale: opts.lockLocale,
     restoreHref: backHref,
   });

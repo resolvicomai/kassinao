@@ -79,6 +79,7 @@ import {
   controlSessionId,
   MarkClickDeduper,
   shouldRearmAutoRecord,
+  shouldRearmOnPopulationDrop,
 } from './recorder/lifecycle';
 import { cook } from './processing/cook';
 import {
@@ -109,7 +110,7 @@ import {
   transcriptionEnabled,
 } from './processing/transcribe';
 import { validateAndCommitRuntimeConfiguration } from './runtimeBootstrap';
-import { safeName } from './sanitize';
+import { cleanInline, safeName } from './sanitize';
 import {
   buildPublicTranscriptionNotice,
   deliverPrivateTranscriptionNotification,
@@ -441,8 +442,9 @@ class RecordingBusyError extends Error {
 
 /**
  * Recusa de início com uma causa que a pessoa pode entender e agir (disco
- * cheio, bot movido). A mensagem bilíngue continua alimentando os alertas ao
- * dono; o /gravar mapeia `reason` para uma chave do i18n em vez da genérica.
+ * cheio, bot movido). O /gravar mapeia `reason` para uma chave do i18n em vez
+ * da genérica, e o alerta ao dono do auto-record explica a causa pelo `reason`
+ * (a mensagem bilíngue fica só para o log).
  */
 class RecordingStartRefusedError extends Error {
   constructor(
@@ -2350,6 +2352,23 @@ function notifyLateStart(started: RecordingSession, locale: Locale): void {
   }
 }
 
+/**
+ * Causa da falha do auto-record em palavras que o dono consegue agir. shortError
+ * é um mapeador de erros de provedor de IA e transformava "disco cheio" em
+ * "o serviço de IA encontrou um erro interno".
+ */
+function describeAutoRecordStartFailure(err: unknown): string {
+  if (err instanceof RecordingStartRefusedError) {
+    return err.reason === 'disk-low'
+      ? `o servidor está sem espaço em disco (${err.detail.free ?? '?'} MB livres). Libere espaço ou apague gravações antigas; tento de novo no próximo movimento da sala.`
+      : 'fui movido para outro canal durante o início; tento de novo no próximo movimento da sala.';
+  }
+  if (err instanceof RecordingBusyError) {
+    return 'o bot já estava ocupado ou entrando nessa sala; tento de novo no próximo movimento da sala.';
+  }
+  return `erro interno (${operationalError(err)}); veja o log do servidor. Tento de novo no próximo movimento da sala.`;
+}
+
 function scheduleAutoRecordCheck(guild: Guild, channelId: string): void {
   if (shuttingDown || !guildRuntime.isOperational(guild.id)) return;
   const key = `${guild.id}:${channelId}`;
@@ -2372,13 +2391,13 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
   const rule = autoRecordStore.get(guild.id, channelId);
   const session = sessionManager.getByChannel(guild.id, channelId);
 
-  // Rearma quando a população cai abaixo do mínimo. Com uma gravação MANUAL viva
-  // na sala, não: a regra desarmou no início dela e só pode voltar depois do
-  // /parar, quando a sala esvaziar de verdade. Senão uma oscilação (2 pessoas
-  // caem e voltam) rearmaria no meio da reunião e o /parar religaria a gravação
-  // segundos depois. Sessão automática mantém o rearme imediato: ela mesma
-  // encerra por 'abaixo-minimo' logo abaixo e precisa voltar se a sala reencher.
-  if (rule && humans < rule.minimum && (!session || session.auto)) setArmed(guild.id, channelId, true);
+  // Rearma quando a população cai abaixo do mínimo, exceto com gravação MANUAL
+  // viva ou encerrando nesta sala (ver shouldRearmOnPopulationDrop). A sessão em
+  // fase 'stopping' já saiu de getByChannel, mas o /parar leva alguns segundos
+  // (FLAC, apelido, painel) e o próprio bot saindo da voz agenda uma reavaliação
+  // dentro dessa janela.
+  const stoppingHere = sessionManager.stoppingSessions(guild.id).find((s) => s.currentChannelId === channelId);
+  if (shouldRearmOnPopulationDrop(rule, humans, session ?? stoppingHere)) setArmed(guild.id, channelId, true);
   // sala esvaziou OU regra removida: a colisão (se houve) terminou sem gravação;
   // o próximo enchimento com o bot ocupado é episódio novo e merece novo aviso.
   // Sem o caso !rule, um /autorecord off durante a colisão deixaria o episódio
@@ -2416,7 +2435,16 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
     return;
   }
 
-  if (identityFree && rule && humans >= rule.minimum && isArmed(guild.id, channelId)) {
+  // isChannelBusy: um /gravar manual em 'starting' nesta sala ainda não desarmou
+  // a regra (isso acontece no commit); com um ajudante livre o ramo entraria e
+  // startSession falharia na reserva, gerando alerta falso ao dono.
+  if (
+    identityFree &&
+    rule &&
+    humans >= rule.minimum &&
+    isArmed(guild.id, channelId) &&
+    !sessionManager.isChannelBusy(guild.id, channelId)
+  ) {
     setArmed(guild.id, channelId, false);
     // Se houve colisão enquanto a sala esperava, esta gravação começa no meio da
     // conversa: o aviso vira nota na linha do tempo e mensagem no chat.
@@ -2447,7 +2475,7 @@ async function evaluateChannel(guild: Guild, channelId: string): Promise<void> {
         `autorecord-start:${guild.id}:${channelId}`,
         protectionAlert
           ? `${protectionAlert} Canal: **#${safeName(channel.name)}** (${safeName(guild.name)}).`
-          : `O auto-record não conseguiu iniciar em **#${safeName(channel.name)}** (${safeName(guild.name)}): ${shortError((err as Error).message, locale)}`,
+          : `O auto-record não conseguiu iniciar em **#${safeName(channel.name)}** (${safeName(guild.name)}): ${describeAutoRecordStartFailure(err)}`,
       );
     }
   }
@@ -3066,7 +3094,17 @@ process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
 // derrubaria o processo no meio de uma gravação, com o áudio em voo. Registra o
 // evento sem PII e segue; exceções síncronas continuam fatais como antes.
 process.on('unhandledRejection', (reason) => {
-  operationalFailure(`Rejeição de promise sem tratamento: ${operationalError(reason)}`);
+  // Os frames (arquivo:linha do bundle) localizam o bug e não carregam PII; a
+  // linha da mensagem continua sob a política de operationalError.
+  const frames =
+    reason instanceof Error && reason.stack
+      ? reason.stack
+          .split('\n')
+          .slice(1, 4)
+          .map((line) => cleanInline(line.trim()))
+          .join(' | ')
+      : '';
+  operationalFailure(`Rejeição de promise sem tratamento: ${operationalError(reason)}${frames ? ` ${frames}` : ''}`);
 });
 
 // ---------- boot ----------

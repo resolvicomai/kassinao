@@ -1234,9 +1234,10 @@ export const config = {
   /** Idioma padrão onde não há locale do usuário (ex.: DM). 'pt' se DEFAULT_LOCALE começar com "pt", senão 'en'. */
   defaultLocale: ((process.env.DEFAULT_LOCALE || '').toLowerCase().startsWith('pt') ? 'pt' : 'en') as 'pt' | 'en',
   /** Expõe na política se identificadores e mensagens privadas entraram nos logs. */
-  // Mesma regra do log (só o valor exato `true` liga): a página de privacidade
-  // não pode declarar PII nos logs enquanto o log continua redigindo.
-  logPiiEnabled: operationalPiiEnabled(),
+  // booleanEnv continua recusando lixo no boot (LOG_PII=yes aborta como as demais
+  // flags); o valor exposto segue a regra exata do log, que só liga com `true`
+  // minúsculo, para a página de privacidade nunca declarar PII que o log redige.
+  logPiiEnabled: booleanEnv('LOG_PII', false) && operationalPiiEnabled(),
 
   /**
    * Motor de transcrição: 'none' | 'assemblyai' | 'openai' | 'groq' | 'gemini' | 'command'.

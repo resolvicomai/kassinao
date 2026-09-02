@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -36,6 +38,20 @@ import { createExchangeCode, createSession, isActiveSession, revokeUser } from '
 import { createWebSession, isActiveWebSession, revokeWebSession } from '../src/web/webSessions';
 
 describe('limites de disponibilidade da API MCP', () => {
+  it('exchange e refresh têm buckets próprios: leituras autenticadas não consomem o teto da troca de código', () => {
+    const limiter = new FixedWindowRateLimiter(100, () => 1_000);
+    for (let i = 0; i < 120; i++) limiter.consume('ip:1.2.3.4', 120, 60_000);
+    expect(limiter.consume('ip:1.2.3.4', 120, 60_000)).toBe(true); // leitura já limitada
+    expect(limiter.consume('exchange-ip:1.2.3.4', 20, 60_000)).toBe(false); // troca de código ainda passa
+    expect(limiter.consume('refresh-ip:1.2.3.4', 30, 60_000)).toBe(false);
+
+    // regressão de código: as três rotas precisam continuar com prefixos distintos
+    const source = readFileSync(path.resolve(__dirname, '../src/web/api.ts'), 'utf8');
+    expect(source).toContain('rateLimited(`ip:${clientIp(req)}`, 120, 60_000)');
+    expect(source).toContain('rateLimited(`exchange-ip:${clientIp(req)}`, 20, 60_000)');
+    expect(source).toContain('rateLimited(`refresh-ip:${clientIp(req)}`, 30, 60_000)');
+  });
+
   it('mantém o registro do rate limit dentro do teto mesmo com chaves distribuídas', () => {
     let now = 1_000;
     const limiter = new FixedWindowRateLimiter(2, () => now);

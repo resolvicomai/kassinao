@@ -776,7 +776,8 @@ describe('fronteira de conteúdo não confiável do conector MCP', () => {
     expect(describeHttpFailure(404)).not.toContain('Try again');
     expect(describeHttpFailure(403)).toContain('retrying will not help');
     expect(describeHttpFailure(400)).toContain('Check the tool arguments');
-    expect(describeHttpFailure(413)).toContain('transcriptLimit');
+    expect(describeHttpFailure(413)).toContain('search_meetings');
+    expect(describeHttpFailure(413)).not.toContain('Try again');
     expect(describeHttpFailure(429, '30')).toContain('Wait 30 seconds');
     expect(describeHttpFailure(429, null)).toContain('Wait 30 seconds');
     expect(describeHttpFailure(502)).toBe('Kassinão request failed (HTTP 502). Try again in a moment.');

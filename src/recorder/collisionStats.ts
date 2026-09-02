@@ -44,8 +44,8 @@ function validRecord(value: unknown): value is CollisionRecord {
 
 function load(): CollisionRecord[] {
   // primeiro uso: lista vazia; arquivo corrompido: quarentena com log, estatística recomeça
-  const parsed = readJsonState<unknown>(FILE(), []);
-  return Array.isArray(parsed) ? parsed.filter(validRecord) : [];
+  const parsed = readJsonState<unknown[]>(FILE(), [], Array.isArray);
+  return parsed.filter(validRecord);
 }
 
 function save(records: CollisionRecord[]): void {

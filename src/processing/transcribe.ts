@@ -805,7 +805,9 @@ async function transcribeTrackLegacy(
 /** Duração real de um arquivo de áudio em segundos; undefined quando não deu para medir. */
 async function probeDurationSec(file: string): Promise<number | undefined> {
   try {
-    const stderr = await runFfmpeg(['-i', file, '-f', 'null', '-'], 'info', { nice: true });
+    // Medir dura segundos; 5 min já é anomalia. Sem teto próprio, um ffmpeg
+    // travado seguraria a fila serial pelos 30 min do watchdog a cada rodada.
+    const stderr = await runFfmpeg(['-i', file, '-f', 'null', '-'], 'info', { nice: true, timeoutMs: 5 * 60_000 });
     const m = stderr.match(/time=(\d+):(\d+):([\d.]+)/g);
     if (!m || m.length === 0) return 0;
     const last = m[m.length - 1].slice(5);

@@ -268,13 +268,6 @@ video {
   line-height: 1.5;
 }
 
-
-
-
-
-
-
-
 .button {
   display: inline-flex;
   align-items: center;
@@ -296,6 +289,9 @@ video {
 
 .button:hover {
   transform: translateY(-2px);
+}
+.button:active {
+  transform: scale(.98);
 }
 
 .button-primary {
@@ -1082,7 +1078,6 @@ video {
   .button {
     width: 100%;
   }
-
 
   .meeting-frame {
     margin-inline: -8px;

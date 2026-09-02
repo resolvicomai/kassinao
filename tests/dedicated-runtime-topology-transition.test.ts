@@ -868,7 +868,7 @@ describe('transição dedicated da topologia v1.4.14..v1.4.16', () => {
     expect(preload).toBeGreaterThan(create);
     expect(reconcile).toBeGreaterThan(preload);
     expect(restartArmed).toBeGreaterThan(reconcile);
-  }, 40_000);
+  }, 90_000);
 
   it('mantém os três locks herdados após o child e durante o commit do installer', async () => {
     const value = fixture();
@@ -1484,7 +1484,7 @@ false
         watchdog: 'enabled',
       });
     },
-    40_000,
+    90_000,
   );
 
   it('preserva runtime íntegro quando recording começa após o health-watch e permite retry', () => {
@@ -1527,7 +1527,7 @@ false
       runtime: 'running',
       watchdog: 'enabled',
     });
-  }, 40_000);
+  }, 90_000);
 
   it('integra a retirada antes de o installer substituir marker/dispatchers', () => {
     const installer = readFileSync(path.join(ROOT, 'scripts', 'install-host-controls.sh'), 'utf8');

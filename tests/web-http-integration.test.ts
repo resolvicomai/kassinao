@@ -648,6 +648,49 @@ describe('app privado por HTTP real', () => {
     revokeWebSession(session.sid);
   });
 
+  it('nos POSTs de apagar e liberar áudio, falha transitória do Discord vira 503 para quem está na meta e 404 igual para terceiros', async () => {
+    const session = signedSession();
+    const previous = client.guilds.cache.get(TEST_GUILD_ID);
+    client.guilds.cache.set(TEST_GUILD_ID, {
+      members: {
+        fetch: async () => {
+          throw new Error('429 do Discord');
+        },
+      },
+    } as never);
+
+    const own = `transient-post-own-${crypto.randomUUID().slice(0, 8)}`;
+    const other = `transient-post-other-${crypto.randomUUID().slice(0, 8)}`;
+    createdRecordingIds.add(own);
+    createdRecordingIds.add(other);
+    saveMeta(recording(own)); // startedBy = TEST_USER_ID
+    saveMeta({ ...recording(other), startedBy: { id: 'outra-pessoa', name: 'Outra' } });
+
+    for (const action of ['delete', 'liberar-audio']) {
+      const mine = await request('POST', `/app/rec/${own}/${action}`, { origin: APP_ORIGIN, cookie: session.cookie });
+      const theirs = await request('POST', `/app/rec/${other}/${action}`, {
+        origin: APP_ORIGIN,
+        cookie: session.cookie,
+      });
+      const missing = await request('POST', `/app/rec/nao-existe-mesmo/${action}`, {
+        origin: APP_ORIGIN,
+        cookie: session.cookie,
+      });
+
+      // Antes, o dono lia "gravação não existe" para uma gravação viva e podia achar que apagou.
+      expect(mine.status).toBe(503);
+      expect(mine.headers['retry-after']).toBe('5');
+      // Terceiros continuam sem oráculo de existência.
+      expect(theirs.status).toBe(404);
+      expect(normalize404(theirs.body, other)).toBe(normalize404(missing.body, 'nao-existe-mesmo'));
+      expect(readMeta(own)).toBeDefined();
+      expect(readMeta(other)).toBeDefined();
+    }
+
+    if (previous) client.guilds.cache.set(TEST_GUILD_ID, previous as never);
+    revokeWebSession(session.sid);
+  });
+
   it('renderiza o rate limit global do app dentro da interface e sem cache privado', async () => {
     const session = signedSession();
     let limited: HttpResponse | undefined;

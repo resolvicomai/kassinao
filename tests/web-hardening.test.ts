@@ -607,6 +607,11 @@ describe('regressões de privacidade e acessibilidade da web', () => {
     const indexHtml = recordingsIndexPage([], { user, lang: 'pt' });
     expect(indexHtml).toContain('href="/app/conectar-ia"');
     expect(recordingHtml).not.toContain('href="/app/conectar-ia"');
+    // páginas de mensagem (429, 503) da central mantêm o link; as da gravação, não
+    expect(messagePage('Título', 'Mensagem', user, 'pt', { active: 'rec', navAi: true })).toContain(
+      'href="/app/conectar-ia"',
+    );
+    expect(messagePage('Título', 'Mensagem', user, 'pt', { active: 'rec' })).not.toContain('href="/app/conectar-ia"');
   });
 
   it('lista vazia mostra a identidade em sessão e a troca de conta, com ou sem paginação', () => {

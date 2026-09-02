@@ -21,7 +21,9 @@ export function readJsonState<T>(file: string, fallback: T, validate?: (parsed: 
     raw = fs.readFileSync(file, 'utf8');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return fallback;
-    operationalFailure(`Estado ilegível em file=${operationalPii(file)}: ${operationalError(err)}; usando o padrão.`);
+    operationalFailure(
+      `Estado ilegível em file=${path.basename(file)} dir=${operationalPii(path.dirname(file))}: ${operationalError(err)}; usando o padrão.`,
+    );
     return fallback;
   }
   try {
@@ -39,11 +41,11 @@ function quarantineCorruptFile(file: string, cause: unknown): void {
   try {
     fs.renameSync(file, quarantine);
     operationalFailure(
-      `Estado corrompido em file=${operationalPii(file)} (${operationalError(cause)}); preservado em quarantine=${operationalPii(quarantine)} e recomeçando do padrão.`,
+      `Estado corrompido em file=${path.basename(file)} dir=${operationalPii(path.dirname(file))} (${operationalError(cause)}); preservado em quarantine=${path.basename(quarantine)} e recomeçando do padrão.`,
     );
   } catch (err) {
     operationalFailure(
-      `Estado corrompido em file=${operationalPii(file)} (${operationalError(cause)}) e não foi possível preservá-lo: ${operationalError(err)}.`,
+      `Estado corrompido em file=${path.basename(file)} dir=${operationalPii(path.dirname(file))} (${operationalError(cause)}) e não foi possível preservá-lo: ${operationalError(err)}.`,
     );
   }
 }

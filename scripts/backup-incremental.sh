@@ -34,6 +34,12 @@
 # Este script não guarda o .env nem o rclone.conf. Sem eles o bot não sobe num
 # servidor novo, e sem as senhas do crypt o backup é indecifrável. Guarde-os num
 # gerenciador de senhas, fora da VPS.
+#
+# Ressalva: uma gravação em andamento na hora do cron faz os FLAC dela crescerem
+# durante o upload; o rclone pode recusar o arquivo mutável e o script termina
+# sem heartbeat naquela noite (a próxima execução completa). Agende o cron fora
+# do horário de reuniões. O estado sobe antes das gravações justamente para não
+# ficar refém dessa janela.
 set -euo pipefail
 umask 077
 
@@ -62,6 +68,12 @@ require_dir() {
 }
 require_dir RECORDINGS_DIR "$REC_DIR"
 [ -z "$STATE" ] || require_dir STATE_DIR "$STATE"
+# No layout legado de volume único, STATE_DIR == RECORDINGS_DIR: copiar o estado
+# para .state/ reenviaria o acervo inteiro (com cache) e recriaria o problema de
+# cota que este script existe para resolver.
+if [ -n "$STATE" ] && [ "$(cd "$STATE" && pwd -P)" = "$(cd "$REC_DIR" && pwd -P)" ]; then
+  die "STATE_DIR não pode ser o mesmo diretório de RECORDINGS_DIR; no layout de volume único deixe STATE_DIR vazio"
+fi
 
 if [ ! -f "$RCLONE_CONFIG_FILE" ] || [ -L "$RCLONE_CONFIG_FILE" ]; then
   die "RCLONE_CONFIG precisa ser um arquivo regular, não um link simbólico"
@@ -121,20 +133,6 @@ STATE_EXCLUDES=(
   --exclude '/backup-heartbeat.json'
 )
 
-rclone --config "$RCLONE_CONFIG_FILE" copy \
-  "$REC_DIR" "$REMOTE_ROOT" \
-  "${REC_EXCLUDES[@]}" \
-  --transfers 4 --checkers 8 \
-  --stats-one-line --stats 0
-
-# Confere que nada ficou para trás. O crypt não expõe hash do conteúdo em claro,
-# então esta checagem compara tamanho, não bytes. A integridade byte a byte de
-# cada arquivo já é garantida na subida, pelo checksum que o provedor valida.
-rclone --config "$RCLONE_CONFIG_FILE" check \
-  "$REC_DIR" "$REMOTE_ROOT" \
-  "${REC_EXCLUDES[@]}" \
-  --one-way --size-only
-
 if [ -n "$STATE" ]; then
   # Regras de auto-record, configuração por servidor e admissão: pequenos, mas
   # sem eles um servidor novo sobe "vazio". Vão para .state/ (nome que nenhum id
@@ -149,6 +147,21 @@ if [ -n "$STATE" ]; then
     "${STATE_EXCLUDES[@]}" \
     --one-way --size-only
 fi
+
+rclone --config "$RCLONE_CONFIG_FILE" copy \
+  "$REC_DIR" "$REMOTE_ROOT" \
+  "${REC_EXCLUDES[@]}" \
+  --transfers 4 --checkers 8 \
+  --stats-one-line --stats 0
+
+# Confere que nada ficou para trás. O crypt não expõe hash do conteúdo em claro,
+# então esta checagem compara tamanho, não bytes. A integridade byte a byte de
+# cada arquivo já é garantida na subida, pelo checksum que o provedor valida.
+rclone --config "$RCLONE_CONFIG_FILE" check \
+  "$REC_DIR" "$REMOTE_ROOT" \
+  "${REC_EXCLUDES[@]}" \
+  --one-way --size-only
+
 
 size_json="$(rclone --config "$RCLONE_CONFIG_FILE" size "$REMOTE_ROOT" --json 2>/dev/null || true)"
 count="$(printf '%s' "$size_json" | sed -n 's/.*"count":[[:space:]]*\([0-9]*\).*/\1/p')"

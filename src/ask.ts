@@ -362,11 +362,12 @@ function explicitDates(
   for (const match of question.matchAll(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/g)) {
     // "3/4 das pessoas" e "20/20" não são datas. Sem ano, exige uma pista
     // temporal logo antes (dia, em, de, prazo, até, reunião de...).
-    if (
-      opts.requireCueWithoutYear &&
-      !match[3] &&
-      !NUMERIC_DATE_CUE_BEFORE.test(question.slice(Math.max(0, match.index - 24), match.index))
-    ) {
+    // "09/07: o que foi decidido?" no começo da frase também é data (a pontuação
+    // logo depois é a pista); "3/4 das pessoas" no começo continua sendo fração.
+    const before = question.slice(Math.max(0, match.index - 24), match.index);
+    const after = question.slice(match.index + match[0].length, match.index + match[0].length + 3);
+    const leadingDate = before.trim() === '' && /^\s*(?:[:;,.!?-]|$)/.test(after);
+    if (opts.requireCueWithoutYear && !match[3] && !leadingDate && !NUMERIC_DATE_CUE_BEFORE.test(before)) {
       continue;
     }
     const year = match[3] ? (match[3].length === 2 ? 2000 + Number(match[3]) : Number(match[3])) : currentYear;
@@ -385,22 +386,38 @@ function explicitDates(
 type ExplicitDateRole = 'meeting' | 'deadline';
 
 const NUMERIC_DATE_CUE_BEFORE =
-  /\b(dia|em|no|na|de|desde|at[eé]|prazo\w*|venc\w*|entreg\w*|due|on|by|until|since|from|reuni[aã]o|reuni[oõ]es|calls?|meetings?)\s*$/i;
+  /\b(dia|em|no|na|de|do|da|dos|das|desde|at[eé]|prazo\w*|venc\w*|entreg\w*|due|on|by|until|since|from|reuni[aã]o|reuni[oõ]es|calls?|meetings?|gravac\w*|grava[cç][aã]o|ata)\s*$/i;
 
-// Dia da semana só é data com pista temporal: "na segunda", "sexta-feira",
-// "vencem sexta", "última quarta". Sem pista, "a segunda decisão", "quarta opção"
-// e "quinta parte" são ordinais e não podem virar uma janela de um dia.
+// Só segunda, quarta, quinta e sexta são também ordinais em português. Para elas,
+// "a segunda decisão", "quarta opção" e "na quinta parte" não podem virar uma
+// janela de um dia; "na segunda", "sexta-feira", "vencem sexta" e o uso adverbial
+// solto ("o que rolou sexta?") continuam sendo datas. terça, sábado, domingo e os
+// nomes em inglês nunca são ordinais.
+const AMBIGUOUS_WEEKDAYS = new Set([1, 3, 4, 5]);
+const ORDINAL_NOUN_AFTER =
+  /^\s*(parte|metade|opc[aã]o|opcoes|decis[aã]o|votac[aã]o|vez|rodada|etapa|fase|linha|pergunta|quest[aã]o|item|ponto|tentativa|edic[aã]o|vers[aã]o|tarefa|ac[aã]o|coluna|pagina|p[aá]gina|sec[aã]o|se[cç][aã]o|semana|volta|chance|colocada|via|instancia|inst[aâ]ncia)\b/i;
+const ORDINAL_ARTICLE_BEFORE =
+  /\b(a|o|as|os|um|uma|uns|umas|ess[ae]s?|est[ae]s?|aquel[ae]s?|minha|nossa|sua|primeira|terceira)\s*$/i;
 const WEEKDAY_CUE_BEFORE =
   /\b(na|no|nas|nos|de|da|do|desde|at[eé]|em|pra|para|toda|todas|todo|todos|cada|pr[oó]xim[ao]|[uú]ltim[ao]|ess[ae]|est[ae]|on|last|next|this|by|until|since|every|from|for)\s*$/i;
 const WEEKDAY_DEADLINE_CUE_BEFORE =
   /\b(praz\w*|venc\w*|entreg\w*|deadline\w*|due|termina\w*|acaba\w*|marcad\w*|agendad\w*)\b[^.?!]{0,24}$/i;
 const WEEKDAY_CUE_AFTER = /^\s*(feira|passad[ao]|que vem|retrasad[ao]|last|next|morning|afternoon|night|evening)\b/i;
 
-function weekdayHasTemporalCue(text: string, start: number, end: number): boolean {
-  if (/feira/i.test(text.slice(start, end))) return true;
+function weekdayIsDate(text: string, start: number, end: number, weekday: number): boolean {
+  const matched = text.slice(start, end);
+  if (/feira/i.test(matched)) return true;
+  const after = text.slice(end, end + 24);
+  // "segunda parte", "quinta linha": ordinal, mesmo com preposição antes
+  if (ORDINAL_NOUN_AFTER.test(after)) return false;
+  if (!AMBIGUOUS_WEEKDAYS.has(weekday)) return true;
   const before = text.slice(Math.max(0, start - 24), start);
   if (WEEKDAY_CUE_BEFORE.test(before) || WEEKDAY_DEADLINE_CUE_BEFORE.test(before)) return true;
-  return WEEKDAY_CUE_AFTER.test(text.slice(end, end + 16));
+  if (WEEKDAY_CUE_AFTER.test(after)) return true;
+  // "a segunda", "uma quarta": artigo antes sem pista temporal é ordinal
+  if (ORDINAL_ARTICLE_BEFORE.test(before)) return false;
+  // uso adverbial solto ("o que rolou sexta?", "quinta teve reunião?")
+  return true;
 }
 
 const WEEKDAY_PATTERNS: Array<[RegExp, number]> = [
@@ -594,9 +611,11 @@ export function resolveAskTemporalIntent(
   const base = formatInTz(nowMs, timezone).slice(0, 10);
   const baseWeekday = new Date(`${base}T00:00:00Z`).getUTCDay();
   for (const [pattern, weekday] of WEEKDAY_PATTERNS) {
-    const match = pattern.exec(q);
+    // "a segunda decisão da reunião de segunda-feira": a primeira é ordinal, a segunda é data
+    const match = [...q.matchAll(new RegExp(pattern.source, 'gi'))].find((candidate) =>
+      weekdayIsDate(q, candidate.index, candidate.index + candidate[0].length, weekday),
+    );
     if (!match) continue;
-    if (!weekdayHasTemporalCue(q, match.index, match.index + match[0].length)) continue;
     const role = relativeDateRole(q, match.index, match.index + match[0].length);
     // Uma call citada só pelo dia da semana normalmente é a ocorrência mais
     // recente; um prazo é a próxima ocorrência. No próprio dia, ambos são hoje.

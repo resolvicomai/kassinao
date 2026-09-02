@@ -327,7 +327,7 @@ function appMessageOptions(req: Request, l: Locale): Parameters<typeof messagePa
   const recording = /^\/app\/rec\/([a-zA-Z0-9-]+)(?:\/|$)/.exec(pathname);
   if (recording) return recordingMessageOptions(recording[1], l);
   if (pathname.startsWith('/app/conectar-ia')) return connectMessageOptions(l);
-  if (pathname === '/app' || pathname.startsWith('/app/')) return { active: 'rec' };
+  if (pathname === '/app' || pathname.startsWith('/app/')) return { active: 'rec', navAi: true };
   return undefined;
 }
 
@@ -1638,7 +1638,7 @@ export function createWebApp(): Express {
       library = await collectWebLibraryPage(user, candidates);
     } catch (err) {
       if (!(err instanceof TransientAccessError)) throw err;
-      sendAccessTemporarilyUnavailable(res, l, user);
+      sendAccessTemporarilyUnavailable(res, l, user, { active: 'rec', navAi: true });
       return;
     }
     const lastProcessed =
@@ -2108,7 +2108,11 @@ export function createWebApp(): Express {
           access = await checkAccess(user, meta, { freshMember: true, throwOnTransient: true });
         } catch (err) {
           if (!(err instanceof TransientAccessError)) throw err;
-          sendAccessTemporarilyUnavailable(res, l, user, messageOpts);
+          // Mesma regra do GET: só quem já consta na meta recebe o 503 retriável.
+          // Para terceiros o 503 seria um oráculo de existência da gravação.
+          logRecordingDenial(user.id, 'transient');
+          if (recordingIdentityGrant(user.id, meta).view) sendAccessTemporarilyUnavailable(res, l, user, messageOpts);
+          else sendRecordingUnavailable(res, l, user, recPath);
           return;
         }
         if (!access.delete) {
@@ -2186,7 +2190,11 @@ export function createWebApp(): Express {
           access = await checkAccess(user, meta, { freshMember: true, throwOnTransient: true });
         } catch (err) {
           if (!(err instanceof TransientAccessError)) throw err;
-          sendAccessTemporarilyUnavailable(res, l, user, messageOpts);
+          // Mesma regra do GET: só quem já consta na meta recebe o 503 retriável.
+          // Para terceiros o 503 seria um oráculo de existência da gravação.
+          logRecordingDenial(user.id, 'transient');
+          if (recordingIdentityGrant(user.id, meta).view) sendAccessTemporarilyUnavailable(res, l, user, messageOpts);
+          else sendRecordingUnavailable(res, l, user, recPath);
           return;
         }
         if (!access.delete) {

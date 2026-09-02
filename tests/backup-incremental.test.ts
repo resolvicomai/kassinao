@@ -26,6 +26,7 @@ printf '%s\\n' "$*" >> "${calls}"
 case " $* " in
   *" listremotes "*) printf 'kassinao-crypt: ${remoteType}\\n'; exit 0 ;;
   *" size "*) printf '{"count":467,"bytes":3482765639}\\n'; exit 0 ;;
+  *" check "*) [ -n "\${FAKE_RCLONE_CHECK_FAILS:-}" ] && { echo 'ERROR : 1 differences found' >&2; exit 1; } ;;
 esac
 exit 0
 `,
@@ -82,6 +83,32 @@ describe('scripts/backup-incremental.sh', () => {
     expect(fs.statSync(path.join(f.state, 'backup-heartbeat.json')).mode & 0o044).toBe(0o044);
     expect(fs.readdirSync(f.state).filter((entry) => entry.endsWith('.tmp'))).toEqual([]);
     expect(result.stdout).toContain('backup incremental verificado');
+  });
+
+  it('quando a verificação falha, o heartbeat NÃO é gravado: falha de backup nunca parece sucesso', () => {
+    const f = fixture();
+    const result = run(f, { FAKE_RCLONE_CHECK_FAILS: '1' });
+    expect(result.status).not.toBe(0);
+    expect(fs.existsSync(path.join(f.state, 'backup-heartbeat.json'))).toBe(false);
+    expect(result.stdout).not.toContain('backup incremental verificado');
+  });
+
+  it('sobe o estado antes das gravações, para uma gravação ao vivo não segurar as regras', () => {
+    const f = fixture();
+    expect(run(f).status).toBe(0);
+    const calls = fs.readFileSync(f.calls, 'utf8');
+    expect(calls.indexOf('kassinao-crypt:live/.state')).toBeLessThan(
+      calls.indexOf(`${f.recordings} kassinao-crypt:live`),
+    );
+  });
+
+  it('recusa STATE_DIR igual a RECORDINGS_DIR (layout legado de volume único)', () => {
+    const f = fixture();
+    const result = run(f, { STATE_DIR: f.recordings });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('STATE_DIR não pode ser o mesmo diretório');
+    // morre antes de chamar o rclone: nenhum byte sai
+    expect(fs.existsSync(f.calls)).toBe(false);
   });
 
   it('recusa um remoto que não é crypt antes de enviar qualquer byte', () => {

@@ -49,6 +49,8 @@ describe('estado em JSON: escrita atômica e arquivo corrompido', () => {
     expect(fs.readFileSync(path.join(config.stateDir, quarantined[0]), 'utf8')).toContain('"c1"');
     expect(failure).toHaveBeenCalledTimes(1);
     expect(String(failure.mock.calls[0][0])).toContain('Estado corrompido');
+    // o nome do arquivo é constante do código e sai em claro mesmo com LOG_PII desligado
+    expect(String(failure.mock.calls[0][0])).toContain('file=autorecord.json');
   });
 
   it('conteúdo com formato errado (array em vez de objeto) também vai para quarentena', () => {
