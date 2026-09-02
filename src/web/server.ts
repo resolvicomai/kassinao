@@ -84,6 +84,8 @@ import { localeCookie, localeFromValue, resolveWebLocale } from './site';
 import { acquireDownload, hasActiveDownloads } from './tracker';
 import { isOpaqueCursorToken, OpaqueCursorError, openOpaqueCursor, sealOpaqueCursor } from './opaqueCursor';
 import { revokeWebSessionsForUser } from './webSessions';
+// Re-export usado pelos testes de membership (a API importa direto de ./access).
+export { currentGuildMembership } from './access';
 
 const SPACE_GROTESK_FONT =
   require.resolve('@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2');
