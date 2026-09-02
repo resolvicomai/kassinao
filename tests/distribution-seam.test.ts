@@ -1444,7 +1444,26 @@ describe('artefatos de distribuição', () => {
     expect(workflow).toMatch(/^\s*attestations:\s*write\s*$/m);
     expect(actions.length).toBeGreaterThanOrEqual(5);
     expect(actions.every((action) => /@[0-9a-f]{40}$/.test(action))).toBe(true);
-    expect(workflow).toContain('docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0');
+    // O Dependabot atualiza o SHA e o comentário de versão juntos. O teste exige o
+    // formato (pin de 40 hex + versão legível) e a coerência entre workflows, sem
+    // fixar o valor: um bump legítimo não pode depender de editar este arquivo.
+    const pinnedActions = new Map<string, Set<string>>();
+    for (const file of ['ci.yml', 'publish-image.yml', 'publish-mcp.yml', 'codeql.yml']) {
+      const source = repositoryFile(`.github/workflows/${file}`);
+      for (const match of source.matchAll(/^\s*-?\s*uses:\s*([^\s@#]+)@([0-9a-f]{40})\s*#\s*v\d+\.\d+\.\d+\s*$/gm)) {
+        const shas = pinnedActions.get(match[1]) ?? new Set<string>();
+        shas.add(match[2]);
+        pinnedActions.set(match[1], shas);
+      }
+      const unpinned = [...source.matchAll(/^\s*-?\s*uses:\s*(\S+)\s*(#.*)?$/gm)].filter(
+        (match) => !/@[0-9a-f]{40}$/.test(match[1]) || !/#\s*v\d+\.\d+\.\d+/.test(match[2] ?? ''),
+      );
+      expect(unpinned.map((match) => `${file}: ${match[0].trim()}`)).toEqual([]);
+    }
+    for (const [action, shas] of pinnedActions) {
+      expect([action, ...shas]).toHaveLength(2);
+    }
+    expect(workflow).toMatch(/docker\/setup-qemu-action@[0-9a-f]{40} # v\d+\.\d+\.\d+$/m);
     expect(workflow).toContain(
       'image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0',
     );
@@ -1526,7 +1545,7 @@ describe('artefatos de distribuição', () => {
     expect(ciWorkflow).toContain('Smoke-test the isolated single-origin router topology');
     expect(ciWorkflow).toContain('bash scripts/smoke-router-image.sh kassinao:ci sha256:');
     for (const workflowSource of [workflow, ciWorkflow]) {
-      expect(workflowSource).toContain('docker/setup-docker-action@6d7cfa65f60a9dda7b46e5513fa982536f3c9877 # v5.3.0');
+      expect(workflowSource).toMatch(/docker\/setup-docker-action@[0-9a-f]{40} # v\d+\.\d+\.\d+$/m);
       expect(workflowSource).toContain('version: v29.6.1');
       expect(workflowSource).toContain('Require the production Docker and Compose minimums');
       expect(workflowSource).toContain('Docker Engine 28.1.0+ and Docker Compose 2.36.0+ are required');
@@ -1789,7 +1808,7 @@ cleanup
     expect(workflow.indexOf('docker run --rm --platform linux/amd64')).toBeLessThan(
       workflow.indexOf('docker pull --platform linux/arm64'),
     );
-    expect(workflow.match(/aquasecurity\/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25/g)).toHaveLength(2);
+    expect(workflow.match(/aquasecurity\/trivy-action@[0-9a-f]{40} # v\d+\.\d+\.\d+$/gm)).toHaveLength(2);
     expect(workflow.match(/version: v0\.70\.0/g)).toHaveLength(2);
     expect(workflow).toContain('gh release delete-asset "$tag" "$extra" --yes');
     expect(workflow).not.toContain('subject-path: dist/release/trivy-image-');
