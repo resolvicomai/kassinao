@@ -50,8 +50,11 @@
     "@modelcontextprotocol/sdk"
   ],
   "devDependencies": {
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.4.1",
     "typescript": "^5.6.0"
   },
-  "license": "AGPL-3.0-or-later"
+  "license": "AGPL-3.0-or-later",
+  "overrides": {
+    "qs": "^6.16.0"
+  }
 }
