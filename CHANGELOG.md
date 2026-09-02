@@ -10,6 +10,8 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.4.19] — 2026-09-02
+
 ### Added
 
 - Helper bots: `HELPER_DISCORD_TOKENS` accepts extra bot tokens so one server can record more than one voice room at the same time. Discord allows one voice connection per bot user per server; each helper is a second application invited with the same permissions, joins voice only, and registers no commands. Panels, notices, and minutes keep coming from the main bot. The owner is alerted at boot when a configured helper is in none of the authorized servers, and at collision time when a helper is missing from the affected server.
