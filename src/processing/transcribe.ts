@@ -67,6 +67,9 @@ const MAX_TRANSCRIPTION_ATTEMPTS = 4;
 const PARTIAL_RETRY_DELAY_MS = 12 * 60 * 1000;
 /** Espera máxima DENTRO de uma chamada quando o provedor pede "try again in Xm". */
 const ASR_MAX_WAIT_MS = 10 * 60 * 1000;
+/** A ata tenta de novo sozinha (queda do provedor às 10h não pode virar daily sem ata). */
+const MAX_MINUTES_ATTEMPTS = 3;
+const MINUTES_RETRY_DELAY_MS = 5 * 60 * 1000;
 
 /** PIDs (grupos) de comandos locais em voo — mortos no shutdown para não virarem órfãos. */
 const commandPids = new Set<number>();
@@ -355,6 +358,7 @@ export function enqueueTranscription(
         enqueueMinutesOnly(recordingId, onDone);
         return;
       }
+      if (scheduleMinutesRetry(recordingId, fresh, onDone)) return;
       // A guild pode pausar durante a ata e voltar antes de este job deixar
       // `queued`. O evento de retomada então não consegue enfileirar nada. Se a
       // transcrição já terminou e a ata voltou a pending/running, rearma aqui
@@ -389,7 +393,10 @@ export function enqueueMinutesOnly(
   }
   if (queued.has(recordingId)) return;
   const meta = readMeta(recordingId);
-  if (!meta || !transcriptReady(meta) || meta.minutes?.status === 'done') {
+  // Erro definitivo (todas as tentativas gastas) é terminal: um timer atrasado não pode
+  // abrir uma 4ª rodada depois que a DM "ata falhou" já saiu.
+  const exhausted = meta?.minutes?.status === 'error' && (meta.minutes.attempts ?? 0) >= MAX_MINUTES_ATTEMPTS;
+  if (!meta || !transcriptReady(meta) || meta.minutes?.status === 'done' || exhausted) {
     settle(recordingId);
     return;
   }
@@ -405,7 +412,7 @@ export function enqueueMinutesOnly(
   }
 
   queued.add(recordingId);
-  meta.minutes = { ...meta.minutes, status: 'pending', model: config.minutesModel };
+  meta.minutes = { ...meta.minutes, status: 'pending', model: config.minutesModel, retryScheduled: false };
   saveMeta(meta);
   queue = queue
     .then(() => generateMinutesStep(recordingId, segments))
@@ -417,6 +424,7 @@ export function enqueueMinutesOnly(
     .then(() => {
       queued.delete(recordingId);
       const fresh = readMeta(recordingId);
+      if (scheduleMinutesRetry(recordingId, fresh, onDone)) return;
       if (fresh?.minutes?.status === 'pending' && guildProcessingAllowed(fresh.guildId)) {
         queueMicrotask(() => enqueueMinutesOnly(recordingId, onDone));
         return;
@@ -597,7 +605,7 @@ async function generateMinutesStep(
   if (!meta || !guildProcessingAllowed(meta.guildId)) return;
   const guildWork = existingWork ?? createGuildWorkContext(meta.guildId, () => guildProcessingAllowed(meta.guildId));
   assertGuildWorkActive(guildWork);
-  meta.minutes = { status: 'running', model: config.minutesModel };
+  meta.minutes = { status: 'running', model: config.minutesModel, attempts: meta.minutes?.attempts };
   saveMeta(meta);
   try {
     const minutes = await generateMinutes(meta, segments, guildWork);
@@ -614,6 +622,7 @@ async function generateMinutesStep(
         fresh.minutes = {
           status: 'pending',
           model: config.minutesModel,
+          attempts: fresh.minutes?.attempts,
           error: undefined,
           finishedAt: undefined,
         };
@@ -621,19 +630,67 @@ async function generateMinutesStep(
       }
       return;
     }
-    operationalFailure(`Ata falhou recording=${operationalPii(recordingId)} error=${operationalError(err)}.`);
     const fresh = readMeta(recordingId);
-    if (fresh) {
+    if (!fresh) return;
+    const attempts = (fresh.minutes?.attempts ?? 0) + 1;
+    const error = String((err as Error).message).slice(0, 300);
+    if (attempts < MAX_MINUTES_ATTEMPTS) {
+      // ponytail: tenta de novo em qualquer erro; um erro determinístico custa duas
+      // chamadas a mais (centavos). Quem enfileirou agenda o timer (scheduleMinutesRetry).
+      operationalInfo(
+        `Ata falhou (tentativa ${attempts}/${MAX_MINUTES_ATTEMPTS}) recording=${operationalPii(recordingId)} error=${operationalError(err)} retry_min=${Math.round(MINUTES_RETRY_DELAY_MS / 60000)}.`,
+      );
       fresh.minutes = {
-        status: 'error',
+        status: 'pending',
         model: config.minutesModel,
-        error: String((err as Error).message).slice(0, 300),
-        finishedAt: Date.now(),
+        attempts,
+        error,
+        finishedAt: undefined,
+        retryScheduled: true,
       };
       saveMeta(fresh);
+      return;
     }
+    operationalFailure(
+      `Ata falhou em definitivo após ${attempts} tentativas recording=${operationalPii(recordingId)} error=${operationalError(err)}.`,
+    );
+    fresh.minutes = {
+      status: 'error',
+      model: config.minutesModel,
+      attempts,
+      error,
+      finishedAt: Date.now(),
+      retryScheduled: false,
+    };
+    saveMeta(fresh);
   }
 }
+
+/**
+ * Ata falhou com tentativa sobrando: agenda a próxima rodada e segura o aviso
+ * (DM/canal) até o resultado final, como a transcrição já faz.
+ */
+function scheduleMinutesRetry(
+  recordingId: string,
+  meta: RecordingMeta | undefined,
+  onDone: ((meta: RecordingMeta) => void) | undefined,
+): boolean {
+  if (!meta || meta.minutes?.status !== 'pending' || meta.minutes.retryScheduled !== true) return false;
+  if (!guildProcessingAllowed(meta.guildId)) {
+    settle(recordingId); // a retomada da guild reenfileira a ata pendente
+    return true;
+  }
+  // um timer por gravação: pausa/retomada da guild no meio da espera não pode duplicar rodadas
+  clearTimeout(minutesRetryTimers.get(recordingId));
+  const timer = setTimeout(() => {
+    minutesRetryTimers.delete(recordingId);
+    enqueueMinutesOnly(recordingId, onDone);
+  }, MINUTES_RETRY_DELAY_MS);
+  timer.unref?.();
+  minutesRetryTimers.set(recordingId, timer);
+  return true;
+}
+const minutesRetryTimers = new Map<string, NodeJS.Timeout>();
 
 async function transcribeTrack(
   masterFlac: string,
@@ -899,48 +956,66 @@ async function assemblyaiTranscribe(
     }
   }
   if (!created.id) throw new Error('AssemblyAI não criou o job (sem id)');
+  const jobId = created.id;
 
-  // poll proporcional à duração do áudio (piso 3 min, teto 30 min — os lotes têm
-  // no máx. 20 min de fala, e um poll sem teto seguraria a fila serial por horas)
-  const deadline = Date.now() + Math.min(30 * 60_000, Math.max(3 * 60_000, chunkSec * 1000));
-  for (;;) {
-    await abortableDelay(3000, guildWork.signal);
-    assertGuildWorkActive(guildWork);
-    const st = await fetchWithRetry(
-      `${AAI_BASE}/transcript/${created.id}`,
+  try {
+    // poll proporcional à duração do áudio (piso 3 min, teto 30 min — os lotes têm
+    // no máx. 20 min de fala, e um poll sem teto seguraria a fila serial por horas)
+    const deadline = Date.now() + Math.min(30 * 60_000, Math.max(3 * 60_000, chunkSec * 1000));
+    for (;;) {
+      await abortableDelay(3000, guildWork.signal);
+      assertGuildWorkActive(guildWork);
+      const st = await fetchWithRetry(
+        `${AAI_BASE}/transcript/${created.id}`,
+        { headers: auth, signal: guildWork.signal },
+        { attempts: 3 },
+      );
+      const job = (await st.json()) as { status?: string; error?: string };
+      assertGuildWorkActive(guildWork);
+      if (job.status === 'completed') break;
+      if (job.status === 'error') {
+        // erro de CONTEÚDO (áudio ilegível) vira lacuna; resto é sistêmico → fallback/retry.
+        // Cuidado pra NÃO classificar transiente como conteúdo (ex.: "unable to
+        // download audio" contém "audio" mas é transiente) — por isso termos estreitos.
+        const msg = job.error ?? '';
+        if (/corrupt|unsupported|decode|too short|duration/i.test(msg)) {
+          throw new ChunkContentError('AssemblyAI recusou ou não decodificou o áudio');
+        }
+        throw new Error('AssemblyAI encerrou o job com erro');
+      }
+      if (Date.now() > deadline) throw new Error('AssemblyAI: transcrição não completou a tempo (poll timeout)');
+    }
+
+    const sent = await fetchWithRetry(
+      `${AAI_BASE}/transcript/${created.id}/sentences`,
       { headers: auth, signal: guildWork.signal },
       { attempts: 3 },
     );
-    const job = (await st.json()) as { status?: string; error?: string };
+    const data = (await sent.json()) as { sentences?: { text?: string; start?: number; end?: number }[] };
     assertGuildWorkActive(guildWork);
-    if (job.status === 'completed') break;
-    if (job.status === 'error') {
-      // erro de CONTEÚDO (áudio ilegível) vira lacuna; resto é sistêmico → fallback/retry.
-      // Cuidado pra NÃO classificar transiente como conteúdo (ex.: "unable to
-      // download audio" contém "audio" mas é transiente) — por isso termos estreitos.
-      const msg = job.error ?? '';
-      if (/corrupt|unsupported|decode|too short|duration/i.test(msg)) {
-        throw new ChunkContentError('AssemblyAI recusou ou não decodificou o áudio');
-      }
-      throw new Error('AssemblyAI encerrou o job com erro');
+    return (data.sentences ?? [])
+      .filter((s) => typeof s.text === 'string' && s.text.trim())
+      .map((s) => ({
+        start: (Number(s.start) || 0) / 1000, // AssemblyAI usa ms; nosso RawSegment usa segundos
+        end: (Number(s.end) || 0) / 1000,
+        text: s.text as string,
+      }));
+  } finally {
+    // A cópia remota não precisa sobreviver: nem no caminho feliz (texto já é nosso),
+    // nem em timeout/erro/pausa (a retomada cria um job novo). Best-effort: um job
+    // ainda em processamento pode ser recusado e fica só no aviso do log. Sinal
+    // próprio (o da guild pode já estar abortado); nunca derruba a transcrição.
+    try {
+      const del = await fetch(`${AAI_BASE}/transcript/${jobId}`, {
+        method: 'DELETE',
+        headers: auth,
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!del.ok) operationalWarn(`AssemblyAI não apagou a transcrição remota (HTTP ${del.status}).`);
+    } catch (err) {
+      operationalWarn(`AssemblyAI não apagou a transcrição remota: ${operationalError(err)}`);
     }
-    if (Date.now() > deadline) throw new Error('AssemblyAI: transcrição não completou a tempo (poll timeout)');
   }
-
-  const sent = await fetchWithRetry(
-    `${AAI_BASE}/transcript/${created.id}/sentences`,
-    { headers: auth, signal: guildWork.signal },
-    { attempts: 3 },
-  );
-  const data = (await sent.json()) as { sentences?: { text?: string; start?: number; end?: number }[] };
-  assertGuildWorkActive(guildWork);
-  return (data.sentences ?? [])
-    .filter((s) => typeof s.text === 'string' && s.text.trim())
-    .map((s) => ({
-      start: (Number(s.start) || 0) / 1000, // AssemblyAI usa ms; nosso RawSegment usa segundos
-      end: (Number(s.end) || 0) / 1000,
-      text: s.text as string,
-    }));
 }
 
 // ---------- OpenAI / Groq (API compatível) ----------

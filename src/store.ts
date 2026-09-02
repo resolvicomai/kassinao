@@ -96,6 +96,10 @@ export interface MinutesState {
   model?: string;
   error?: string;
   finishedAt?: number;
+  /** Tentativas já feitas; a fila tenta de novo sozinha até MAX_MINUTES_ATTEMPTS. */
+  attempts?: number;
+  /** `pending` à espera do timer de retry (não reenfileirar na hora). */
+  retryScheduled?: boolean;
 }
 
 export type DiscordSurfaceAuditSource = 'persisted-panel' | 'discovered-url';
@@ -184,6 +188,8 @@ export interface RecordingMeta {
   audioDeleted?: boolean;
   /** Quando o webhook da ata foi disparado (dedupe entre reinícios). */
   webhookSentAt?: number;
+  /** Dono já foi avisado da falha definitiva da ata (um alerta por gravação). */
+  minutesFailureAlertedAt?: number;
   /** Identidade estável da entrega, preservada em todos os retries. */
   webhookDeliveryId?: string;
   /** Quantas tentativas já foram feitas para a entrega atual. */

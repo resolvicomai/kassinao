@@ -402,9 +402,18 @@ const STRINGS: Strings = {
     pt: '📋 Prontinho! A **ata** e a **transcrição** já estão na página 👉 {url}',
     en: '📋 All done! The **minutes** and **transcript** are on the page 👉 {url}',
   },
+  'minutes.failed': {
+    pt: '📝 Transcrição pronta, mas a **ata falhou** depois de {attempts} tentativa(s). A transcrição está na página 👉 {url}',
+    en: '📝 Transcript ready, but the **minutes failed** after {attempts} attempt(s). The transcript is on the page 👉 {url}',
+  },
+  'minutes.failed-short': {
+    pt: '⚠️ A **ata** também falhou depois de {attempts} tentativa(s).',
+    en: '⚠️ The **minutes** also failed after {attempts} attempt(s).',
+  },
   'minutes.embed-title': { pt: 'Ata — #{channel}', en: 'Minutes — #{channel}' },
   'minutes.embed-decisions': { pt: '✅ Decisões', en: '✅ Decisions' },
   'minutes.embed-actions': { pt: '📌 Itens de ação', en: '📌 Action items' },
+  'minutes.embed-shown': { pt: '{shown} de {total}', en: '{shown} of {total}' },
 
   // sobre / about (autoria + licença + fonte — cumpre a AGPL §13)
   'about.desc': {
@@ -614,6 +623,7 @@ const STRINGS: Strings = {
   'recordings.badge-partial': { pt: '📝 transcrição parcial', en: '📝 partial transcript' },
   'recordings.badge-processing': { pt: '⏳ processando', en: '⏳ processing' },
   'recordings.badge-failed': { pt: '⚠️ transcrição falhou', en: '⚠️ transcription failed' },
+  'recordings.badge-minutes-failed': { pt: '⚠️ ata falhou', en: '⚠️ minutes failed' },
   'recordings.badge-none': { pt: '🔇 sem transcrição', en: '🔇 no transcript' },
   'recordings.more': { pt: '_… e mais {n} mais antiga(s)._', en: '_… and {n} older one(s)._' },
   'recordings.web': {

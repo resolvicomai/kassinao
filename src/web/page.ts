@@ -64,6 +64,10 @@ const P: Record<string, { pt: string; en: string }> = {
   notes: { pt: 'Notas', en: 'Notes' },
   minutes: { pt: 'Ata da reunião', en: 'Meeting minutes' },
   minutesPending: { pt: 'Gerando a ata…', en: 'Generating minutes…' },
+  minutesRetrying: {
+    pt: 'A ata falhou agora há pouco. Vou tentar de novo sozinho em alguns minutos.',
+    en: 'The minutes just failed. I will retry on my own in a few minutes.',
+  },
   minutesRunning: {
     pt: 'Gerando a ata… A página se atualiza sozinha.',
     en: 'Generating minutes… The page refreshes itself.',
@@ -1236,6 +1240,8 @@ function renderMinutes(meta: RecordingMeta, minutes: MeetingMinutes | undefined,
   const state = meta.minutes;
   if (!state || state.status === 'disabled') return '';
   const title = `<h2>${p(l, 'minutes')}</h2>`;
+  if (state.status === 'pending' && state.retryScheduled)
+    return `${title}<p class="tstate" role="status" aria-live="polite">${p(l, 'minutesRetrying')}</p>`;
   if (state.status === 'pending')
     return `${title}<p class="tstate" role="status" aria-live="polite">${p(l, 'minutesPending')}</p>`;
   if (state.status === 'running')
@@ -1388,6 +1394,11 @@ function webBadge(m: RecordingMeta, l: Locale): string {
   if (m.status === 'recording') return `<span class="wb live">${pt ? 'ao vivo' : 'live'}</span>`;
   if (m.minutes?.status === 'done') return `<span class="wb ok">${pt ? 'ata pronta' : 'minutes ready'}</span>`;
   const ts = m.transcription?.status;
+  const ms = m.minutes?.status;
+  if ((ts === 'done' || ts === 'partial') && (ms === 'pending' || ms === 'running'))
+    return `<span class="wb">${pt ? 'processando' : 'processing'}</span>`;
+  if ((ts === 'done' || ts === 'partial') && ms === 'error')
+    return `<span class="wb warn">${pt ? 'ata falhou' : 'minutes failed'}</span>`;
   if (ts === 'partial' && !m.transcription?.retryScheduled)
     return `<span class="wb warn">${pt ? 'transcrição parcial' : 'partial transcript'}</span>`;
   if (ts === 'pending' || ts === 'running' || ((ts === 'partial' || ts === 'error') && m.transcription?.retryScheduled))

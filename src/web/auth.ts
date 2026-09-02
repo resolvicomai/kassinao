@@ -1,7 +1,13 @@
 import crypto from 'node:crypto';
 import type { Request, Response } from 'express';
 import { config } from '../config';
-import { createWebSession, revokeWebSession, webSessionScope, type WebSessionScope } from './webSessions';
+import {
+  createWebSession,
+  renewWebSession,
+  revokeWebSession,
+  webSessionScope,
+  type WebSessionScope,
+} from './webSessions';
 
 export interface WebUser {
   typ: 'session';
@@ -72,7 +78,9 @@ export interface McpRefreshToken {
 
 const LEGACY_SESSION_COOKIE = 'kassinao_session';
 const LEGACY_STATE_COOKIE = 'kassinao_state';
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** Renova por uso quando falta menos que isto; evita reescrever o arquivo de sessões a cada visita. */
+const SESSION_RENEW_BELOW_MS = 15 * 24 * 60 * 60 * 1000;
 const MAX_LOGIN_NEXT_BYTES = 2_048;
 const MAX_LOGIN_NEXT_JSON_BYTES = MAX_LOGIN_NEXT_BYTES + 2;
 
@@ -237,8 +245,9 @@ export function logoutWeb(req: Request, res: Response): void {
 
 /**
  * Mantém uma sessão ativa no namespace privado e remove o cookie legado Path=/.
- * Cookies anteriores ao registro de `jti` são encerrados deliberadamente; tokens
- * novos preservam a expiração original, sem renovar os 7 dias ao navegar.
+ * Cookies anteriores ao registro de `jti` e sessões revogadas são encerrados.
+ * A sessão dura 30 dias e é renovada por uso quando faltam menos de 15
+ * (SESSION_RENEW_BELOW_MS); a ACL continua conferida a cada abertura.
  */
 export function scopeWebSessionToApp(req: Request, res: Response): void {
   const raw = readCookie(req, SESSION_COOKIE);
@@ -264,7 +273,21 @@ export function scopeWebSessionToApp(req: Request, res: Response): void {
     }
     return;
   }
-  setCookie(res, SESSION_COOKIE, raw, user.exp - Date.now(), SESSION_PATH);
+  const remaining = user.exp - Date.now();
+  const renewed =
+    remaining < SESSION_RENEW_BELOW_MS ? renewWebSession(user.jti, user.id, Date.now() + SESSION_TTL_MS) : undefined;
+  if (renewed) {
+    // A ACL continua conferida a cada abertura; o cookie mais longo só poupa o relogin semanal.
+    setCookie(
+      res,
+      SESSION_COOKIE,
+      sign({ ...user, exp: renewed }, config.cookieSecret),
+      renewed - Date.now(),
+      SESSION_PATH,
+    );
+  } else {
+    setCookie(res, SESSION_COOKIE, raw, remaining, SESSION_PATH);
+  }
   if (SESSION_COOKIE !== LEGACY_SESSION_COOKIE) {
     setCookie(res, LEGACY_SESSION_COOKIE, '', 0, '/app');
     setCookie(res, LEGACY_SESSION_COOKIE, '', 0, '/');

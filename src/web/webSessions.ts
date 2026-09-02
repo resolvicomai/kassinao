@@ -134,6 +134,32 @@ export function webSessionScope(sid: string, userId: string): WebSessionScope | 
   return session.scope;
 }
 
+/** Teto absoluto da renovação por uso: depois disso, relogin pelo Discord. */
+const MAX_SESSION_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+
+/**
+ * Estende a validade de uma sessão ativa (renovação por uso) e devolve a expiração
+ * efetiva, limitada a MAX_SESSION_AGE_MS desde o login. Falha de disco não pode virar
+ * 500 na área privada: em erro, desfaz e devolve undefined (cookie antigo segue).
+ */
+export function renewWebSession(sid: string, userId: string, exp: number): number | undefined {
+  load();
+  const session = sessions.get(sid);
+  if (!session || session.userId !== userId || session.exp <= Date.now()) return undefined;
+  const capped = Math.min(exp, session.createdAt + MAX_SESSION_AGE_MS);
+  if (capped <= session.exp) return undefined;
+  const previous = session.exp;
+  session.exp = capped;
+  try {
+    persist();
+  } catch (err) {
+    session.exp = previous;
+    operationalFailure(`Sessão web não renovada (persistência falhou): ${operationalError(err)}`);
+    return undefined;
+  }
+  return capped;
+}
+
 export function revokeWebSession(sid: string): boolean {
   load();
   const removed = sessions.delete(sid);
