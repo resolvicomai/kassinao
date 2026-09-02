@@ -82,6 +82,10 @@ jobs:
         run: |
           set -euo pipefail
           tag_oid="$(git rev-parse "$GITHUB_REF")"
+          test "$(git cat-file -t "$tag_oid")" = tag || {
+            echo "The app release must use an annotated tag object (git tag -a)" >&2
+            exit 1
+          }
           release_commit="$(git rev-parse "$GITHUB_REF^{commit}")"
           main_commit="$(git rev-parse origin/main^{commit})"
           test "$release_commit" = "$main_commit" || {
@@ -96,6 +100,17 @@ jobs:
           }
           test "$GITHUB_REF_NAME" = "v$version" || {
             echo "Tag $GITHUB_REF_NAME does not match package.json $version" >&2
+            exit 1
+          }
+          # As notas são exigidas AQUI, antes de qualquer build ou promoção de tag no
+          # GHCR: falhar por CHANGELOG vazio depois do promote queimaria o número da
+          # versão, porque o ruleset não permite mover nem apagar a tag.
+          test -n "$(awk -v heading="## [$version]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found && NF { print }
+          ' CHANGELOG.md)" || {
+            echo "CHANGELOG.md has no release notes for $version; fill the ## [$version] section before tagging" >&2
             exit 1
           }
 

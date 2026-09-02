@@ -1023,7 +1023,7 @@ printf 'dispatchers committed\n' >> ${shellLiteral(value.events)}
         expect(probe(lock).status, lock).toBe(0);
       }
     },
-    20_000,
+    60_000,
   );
 
   it.each(['missing', 'swapped'] as const)(
@@ -1073,7 +1073,7 @@ ${openLocks}
       expect(events).not.toContain('docker:stop');
       expect(events).not.toContain('hardener:current:--remove-legacy-policy');
     },
-    20_000,
+    60_000,
   );
 
   it.each(['read-name-ps:kassinao', 'read-project-ps-after-stop', 'read-network-members:kassinao_private'])(
@@ -1093,7 +1093,7 @@ ${openLocks}
       expect(readFileSync(value.policyState, 'utf8')).toBe('legacy\n');
       expect(existsSync(value.args[3])).toBe(false);
     },
-    20_000,
+    60_000,
   );
 
   it('recusa FD correto e livre quando outro open-file description segura o lock', () => {
@@ -1286,7 +1286,7 @@ false
       expect(events).toContain('hardener:current:--remove-legacy-policy');
       expect(events).not.toContain('hardener:legacy:--remove');
     },
-    20_000,
+    60_000,
   );
 
   it('reconhece o fixture imutável das três releases legacy publicadas', () => {

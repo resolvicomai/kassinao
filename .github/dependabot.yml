@@ -17,12 +17,14 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # Qualquer mudança em mcp/ exige publicar uma nova release do conector no npm
+    # antes da próxima release do app. devDependencies (typescript, @types/node)
+    # não entram no pacote publicado, então só sobem junto com um bump proposital.
+    allow:
+      - dependency-type: production
     groups:
       production-minor-patch:
         dependency-type: production
-        update-types: [minor, patch]
-      development-minor-patch:
-        dependency-type: development
         update-types: [minor, patch]
   - package-ecosystem: pip
     directory: "/"
@@ -40,7 +42,15 @@ updates:
       actions-minor-patch:
         patterns: ["actions/*"]
         update-types: [minor, patch]
+      docker-minor-patch:
+        patterns: ["docker/*", "aquasecurity/trivy-action"]
+        update-types: [minor, patch]
   - package-ecosystem: docker
     directory: "/"
     schedule:
       interval: weekly
+    # A imagem base segue o Node LTS fixado em engines.node e no CI; major de Node
+    # é decisão de release, não bump automático (o PR para Node 25 ficou vermelho).
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]

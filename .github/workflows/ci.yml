@@ -10,9 +10,16 @@ on:
 permissions:
   contents: read
 
+# Um push novo numa PR cancela o CI anterior daquela PR; em main nada é cancelado.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    # O pior caso hoje é ~21 min; um teste de script travado não pode segurar o runner por 6 h.
+    timeout-minutes: 40
     env:
       NPM_CONFIG_BUILD_FROM_SOURCE: 'true'
       NPM_CONFIG_OMIT: 'peer'
