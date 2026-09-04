@@ -10,6 +10,29 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-09-04
+
+### Added
+
+- A private commitments page connects minutes actions across meetings through explicit links, manual lifecycle changes, completion criteria, source history, and per-person or per-channel follow preferences. GitHub and Jira reads require operator allowlists, expiring reader grants, and the recipient's own access credentials; document references remain manual links without content ingestion.
+- Opt-in private digests explain changes to followed commitments. Discord scheduled events can trigger preparation reminders for followed items in that channel; unscheduled calls and external calendars are not predicted.
+- Validated transcript excerpts anchor new minutes actions and decisions to their original timestamps. Recording titles can be edited, and a failed minutes job can be retried using its saved transcript.
+- New MCP connections can restrict channels, dates, content, and lifetime. The read-only `list_commitments` tool exposes current authorized commitment state separately from historical `pending_actions`; the connector is released as `kassinao-mcp@1.1.0`.
+- An owner operations page summarizes measured processing times, failures, queue state, checkpoint reuse, and feedback without estimating unmeasured costs.
+
+### Changed
+
+- Deadline search uses meeting dates and time zones, reports ambiguous dates and partial coverage, and includes assignees, speakers, and authors.
+- Transcription resumes saved chunks, HTTP requests bound total duration and response size, and received AssemblyAI job IDs enter a persistent deletion queue with confirmation checks.
+- Minutes webhooks support guild/channel filters, payload selection, transient retries, and explicit retry after permanent failure. Empty filters preserve existing delivery scope.
+- Audio and meeting deletion intentions are persisted before removal. Startup refuses restored artifacts covered by the available deletion ledger until offline reconciliation; restoring the latest independent ledger remains an operator responsibility.
+
+### Upgrade notes
+
+- Recording without AI remains available. External context reads and private notices require explicit configuration or user subscription; deployment alone does not connect Jira, GitHub, or document contents.
+- Existing MCP connections retain their previous scope. Review or revoke them individually when adopting narrower access.
+- Follow [the context configuration guide](docs/CONTEXT-INTEGRATIONS.md) for access grants, source freshness, notification limits, and deletion reconciliation.
+
 ## [1.4.20] — 2026-09-02
 
 ### Fixed

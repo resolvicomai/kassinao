@@ -33,8 +33,13 @@ Kassinão is an independent project and is not affiliated with or endorsed by Di
 - speech-to-text through a configured ASR provider or an operator-built local image;
 - AI minutes, decisions, and action items after a transcript exists;
 - `/ask` over authorized meetings, with links to supporting sources;
-- signed HTTPS minutes webhooks;
-- five read-only MCP tools exposed by the instance.
+- a private commitments page with explicit links between meetings, recorded lifecycle changes, and source history;
+- scoped, read-only GitHub/Jira references with per-person access checks, plus manual document links;
+- opt-in commitment digests and preparation reminders for Discord scheduled events;
+- signed HTTPS minutes webhooks with audience and payload filters;
+- six read-only MCP tools exposed by the instance.
+
+See [context and integration setup](docs/CONTEXT-INTEGRATIONS.md) for reader grants, source credentials, notification preferences, and limitations. A deployment does not discover projects or predict unscheduled calls. New MCP connections can limit content, channels, dates, and lifetime; existing connections keep their previous scope.
 
 Speech is associated with a Discord account/stream, not identified from a mixed recording through later diarization. This preserves the platform attribution, but it does not prove a person's real-world identity or guarantee that a partial/failed track is complete.
 
@@ -249,7 +254,7 @@ Security controls and operator responsibilities are documented in [`SECURITY.md`
 
 ## MCP connector
 
-When enabled by the operator, [`kassinao-mcp`](mcp/README.md) runs locally as a stdio client and requests authorized meeting data from that instance over HTTPS. It requires its own `KASSINAO_URL`; there is no shared hosted API and no upstream fallback. The five tools in this version are read-only, do not serve audio, and are subject to the same current-membership and meeting ACL checks as the web app.
+When enabled by the operator, [`kassinao-mcp`](mcp/README.md) runs locally as a stdio client and requests authorized meeting data from that instance over HTTPS. It requires its own `KASSINAO_URL`; there is no shared hosted API and no upstream fallback. The six tools in this version are read-only, do not serve audio, and are subject to the same current-membership and meeting ACL checks as the web app.
 
 ## Commands
 
