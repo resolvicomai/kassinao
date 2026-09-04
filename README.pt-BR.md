@@ -33,8 +33,13 @@ Kassinão é um projeto independente, sem afiliação ou endosso do Discord.
 - speech-to-text por provider de ASR configurado ou imagem local criada pelo operador;
 - ata, decisões e tarefas por IA depois que existe uma transcrição;
 - `/perguntar` sobre reuniões autorizadas, com links para as fontes usadas;
-- webhook HTTPS assinado da ata;
-- cinco tools MCP read-only expostas pela instância.
+- página privada de combinados com associações explícitas entre reuniões, estado e histórico de fontes;
+- referências de leitura do Jira/GitHub limitadas ao contexto e ao acesso de cada pessoa, além de links manuais de documentos;
+- informativos de combinados e preparação para eventos agendados do Discord, mediante adesão;
+- webhook HTTPS assinado da ata com filtros de público e conteúdo;
+- seis ferramentas MCP de consulta expostas pela instância.
+
+Consulte a [configuração de contexto e integrações](docs/CONTEXT-INTEGRATIONS.md) para concessões de acesso, credenciais, preferências de avisos e limites. A implantação não descobre projetos nem prevê calls sem agendamento. Novas conexões MCP permitem limitar conteúdo, canais, datas e validade; conexões existentes preservam seu escopo anterior.
 
 A fala é associada à conta/stream do Discord, não identificada depois a partir de uma gravação mixada por diarização. Isso preserva a atribuição da plataforma, mas não prova a identidade real de uma pessoa nem garante que uma faixa parcial ou com falha esteja completa.
 
@@ -249,7 +254,7 @@ Controles de segurança e responsabilidades estão em [`SECURITY.md`](SECURITY.m
 
 ## Conector MCP
 
-Quando o operador habilita o recurso, o [`kassinao-mcp`](mcp/README.md) roda localmente como cliente stdio e solicita dados autorizados dessa instância por HTTPS. Ele exige seu próprio `KASSINAO_URL`; não existe API compartilhada hospedada nem fallback para o upstream. As cinco tools desta versão são read-only, não servem áudio e obedecem às mesmas verificações de vínculo atual e ACL do app web.
+Quando o operador habilita o recurso, o [`kassinao-mcp`](mcp/README.md) roda localmente como cliente stdio e solicita dados autorizados dessa instância por HTTPS. Ele exige seu próprio `KASSINAO_URL`; não existe API compartilhada hospedada nem fallback para o upstream. As seis ferramentas desta versão são de consulta, não servem áudio e obedecem às mesmas verificações de vínculo atual e ACL do app web.
 
 ## Comandos
 
