@@ -7,6 +7,10 @@ interface RetryOpts {
   attempts?: number;
   /** Teto de espera em UMA tentativa (429 com "try again in 8m" espera de verdade, até este teto). */
   maxWaitMs?: number;
+  /** Prazo de toda a operação: tentativas, backoff e consumo do corpo. */
+  totalTimeoutMs?: number;
+  /** Teto descompactado do corpo, antes de JSON.parse. */
+  maxResponseBytes?: number;
 }
 
 export type UpstreamHttpCategory = 'context-fields-rejected' | 'generic';
@@ -134,9 +138,68 @@ export function abortableDelay(ms: number, signal?: AbortSignal | null): Promise
 export function parseRetryAfterMs(headers: Headers, body: string): number {
   const h = headers.get('retry-after');
   if (h && /^\d+$/.test(h.trim())) return Number(h.trim()) * 1000;
+  if (h) {
+    const date = Date.parse(h);
+    if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  }
   const m = body.match(/try again in\s+(?:(\d+)m)?([\d.]+)s/i);
   if (m) return (Number(m[1] ?? 0) * 60 + Number(m[2])) * 1000;
   return 0;
+}
+
+/** Faz o prazo valer mesmo se um transporte ou stream não observar AbortSignal. */
+async function withAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  throwIfAborted(signal);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortReason(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
+export class UpstreamBodyLimitError extends Error {
+  constructor() {
+    super('upstream response exceeded byte limit');
+    this.name = 'UpstreamBodyLimitError';
+  }
+}
+
+/** Retorna resposta já materializada: json()/text() não podem ficar presos no socket. */
+export async function fetchWithDeadline(
+  url: string,
+  init: RequestInit,
+  opts: { timeoutMs?: number; maxResponseBytes?: number } = {},
+): Promise<Response> {
+  const signal = AbortSignal.any([
+    ...(init.signal ? [init.signal] : []),
+    AbortSignal.timeout(opts.timeoutMs ?? 600_000),
+  ]);
+  const response = await withAbort(fetch(url, { ...init, redirect: init.redirect ?? 'error', signal }), signal);
+  if (!response.body) return response;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const part = await withAbort(reader.read(), signal);
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > (opts.maxResponseBytes ?? 16 * 1024 * 1024)) throw new UpstreamBodyLimitError();
+      chunks.push(part.value);
+    }
+  } catch (error) {
+    void reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 /**
@@ -147,13 +210,17 @@ export function parseRetryAfterMs(headers: Headers, body: string): number {
 export async function fetchWithRetry(url: string, init: RequestInit, opts: RetryOpts = {}): Promise<Response> {
   const attempts = opts.attempts ?? 3;
   const maxWaitMs = opts.maxWaitMs ?? 60_000;
+  const signal = AbortSignal.any([
+    ...(init.signal ? [init.signal] : []),
+    AbortSignal.timeout(opts.totalTimeoutMs ?? 600_000),
+  ]);
   let lastErr: Error | undefined;
   for (let i = 0; i < attempts; i++) {
-    throwIfAborted(init.signal);
+    throwIfAborted(signal);
     let waitMs = 2000 * (i + 1);
     try {
-      const resp = await fetch(url, init);
-      throwIfAborted(init.signal);
+      const resp = await fetchWithDeadline(url, { ...init, signal }, { maxResponseBytes: opts.maxResponseBytes });
+      throwIfAborted(signal);
       if (resp.ok) return resp;
       const body = (await resp.text()).slice(0, 400);
       lastErr = new UpstreamHttpError(
@@ -170,11 +237,12 @@ export async function fetchWithRetry(url: string, init: RequestInit, opts: Retry
     } catch (err) {
       // Abort operacional/timeout é terminal. Retentar com o mesmo sinal só
       // martelaria o provider depois de a guild ter saído do perímetro.
-      if (init.signal?.aborted) throw abortReason(init.signal, err as Error);
+      if (signal.aborted) throw abortReason(signal, err as Error);
+      if (err instanceof UpstreamBodyLimitError) throw err;
       if (err instanceof Error && err.name === 'AbortError') throw err;
       lastErr = err as Error;
     }
-    if (i < attempts - 1) await abortableDelay(waitMs, init.signal);
+    if (i < attempts - 1) await abortableDelay(waitMs, signal);
   }
   throw lastErr ?? new Error('falha de rede');
 }

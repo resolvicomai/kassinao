@@ -1,6 +1,9 @@
 import crypto from 'node:crypto';
 import express, { Express, NextFunction, Request, Response } from 'express';
 import { config } from '../config';
+import { CommitmentAuthorizationUnavailableError, type CommitmentStatus } from '../commitments';
+import { contextRuntime, withContextAccess } from '../context';
+import { resolveDeadline } from '../deadlines';
 import { isClientReady } from '../discord/ready';
 import { operationalError, operationalPii } from '../operationalLog';
 import { minutesToMarkdown } from '../processing/minutes';
@@ -44,14 +47,19 @@ import {
   claimExchangeCode,
   commitExchangeCode,
   createSession,
+  getMcpSessionOptions,
   isRefreshAttemptId,
   isActiveSession,
   McpSessionCapacityError,
+  mcpSessionAllowsContent,
+  mcpSessionAllowsRecording,
+  recordMcpSessionRead,
   revokeUser,
   revokeUserSession,
   releaseExchangeCode,
   rotateSession,
 } from './mcpTokens';
+import { McpContent, McpSessionOptions, McpScopeError } from './mcpScope';
 import { OpaqueCursorError, openOpaqueCursor, sealOpaqueCursor } from './opaqueCursor';
 import { formatInTz, RangeError as WindowError, RangeInput, resolveRange, ResolvedRange } from './range';
 import { revokeWebSessionsForUser } from './webSessions';
@@ -404,7 +412,7 @@ interface ScanCursorPayload {
   toMs: number;
 }
 
-type AggregateCursorKind = 'actions' | 'search' | 'said';
+type AggregateCursorKind = 'actions' | 'search' | 'said' | 'commitments';
 type AggregateCursorPhase = 'search-minutes' | 'search-transcript' | 'search-notes';
 
 interface AggregateCursorPayload extends ScanCursorPayload {
@@ -415,6 +423,8 @@ interface AggregateCursorPayload extends ScanCursorPayload {
   phase?: AggregateCursorPhase;
   /** SHA-256 sem segredo do conteúdo posicional; o token inteiro é AEAD. */
   version?: string;
+  /** Stable key within a meeting; status changes do not invalidate continuation. */
+  afterId?: string;
 }
 
 function scanContext(route: string, rangeInput: readonly unknown[], filters: readonly unknown[]): string {
@@ -495,6 +505,7 @@ function openResultCursor(
     (cursor.phase !== undefined &&
       (cursor.kind !== 'search' || !['search-minutes', 'search-transcript', 'search-notes'].includes(cursor.phase))) ||
     (cursor.version !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(cursor.version)) ||
+    (cursor.afterId !== undefined && (cursor.kind !== 'commitments' || !/^[a-f0-9]{32}$/.test(cursor.afterId))) ||
     (cursor.kind === 'search' && cursor.suboffset !== undefined && cursor.phase === undefined) ||
     (cursor.phase !== undefined && (cursor.suboffset ?? 0) > 0 && cursor.version === undefined)
   )
@@ -511,6 +522,7 @@ function sealResultCursor(
   suboffset?: number,
   phase?: AggregateCursorPhase,
   version?: string,
+  afterId?: string,
 ): string {
   return sealOpaqueCursor(
     {
@@ -521,6 +533,7 @@ function sealResultCursor(
       ...(suboffset === undefined ? {} : { suboffset }),
       ...(phase === undefined ? {} : { phase }),
       ...(version === undefined ? {} : { version }),
+      ...(afterId === undefined ? {} : { afterId }),
     } satisfies AggregateCursorPayload,
     resultCursorOptions(user, context, kind),
   );
@@ -548,6 +561,17 @@ async function visibleInWindow(
   maxVisible = MAX_LIST_MEETINGS,
 ): Promise<VisibleWindowResult> {
   const requestContext = createAccessRequestContext();
+  const policy = getMcpSessionOptions(user.jti, user.id);
+  const empty = (): VisibleWindowResult => ({
+    metas: [],
+    anchors: [],
+    truncated: false,
+    nextScanCursor: null,
+    stopReason: null,
+    range,
+  });
+  if (!policy || (f.guildId && policy.scope?.guildIds && !policy.scope.guildIds.includes(f.guildId))) return empty();
+  if (f.channelId && policy.scope?.channelIds && !policy.scope.channelIds.includes(f.channelId)) return empty();
   // O escopo explícito é confirmado ANTES de abrir cursor ou consultar índice.
   // Quem não é membro recebe a mesma página vazia, sem oráculo de cardinalidade.
   if (f.guildId && !(await prevalidateGuildMembershipForMcp(user, f.guildId, requestContext))) {
@@ -574,11 +598,15 @@ async function visibleInWindow(
         toISO: formatInTz(scanCursor.toMs),
       }
     : range;
+  const fromMs = Math.max(effectiveRange.fromMs, policy.scope?.fromMs ?? effectiveRange.fromMs);
+  const toMs = Math.min(effectiveRange.toMs, policy.scope?.toMs ?? effectiveRange.toMs);
+  if (fromMs >= toMs) return empty();
+  const scopedRange = { ...effectiveRange, fromMs, toMs, fromISO: formatInTz(fromMs), toISO: formatInTz(toMs) };
   const includeResumeAnchor = resume?.suboffset !== undefined;
   const pageLimit = MAX_CANDIDATE_METAS_PER_REQUEST - (includeResumeAnchor ? 1 : 0);
   const page = f.guildId
-    ? listGuildMetaScanPageInRange(f.guildId, effectiveRange.fromMs, effectiveRange.toMs, scanCursor?.anchor, pageLimit)
-    : listMetaScanPageInRange(effectiveRange.fromMs, effectiveRange.toMs, scanCursor?.anchor, pageLimit);
+    ? listGuildMetaScanPageInRange(f.guildId, scopedRange.fromMs, scopedRange.toMs, scanCursor?.anchor, pageLimit)
+    : listMetaScanPageInRange(scopedRange.fromMs, scopedRange.toMs, scanCursor?.anchor, pageLimit);
   const candidates = includeResumeAnchor ? [resume!.anchor, ...page.candidates] : page.candidates;
   const scan = await scanVisibleCandidates(candidates, {
     maxVisible,
@@ -595,7 +623,8 @@ async function visibleInWindow(
       (!f.guildId || m.guildId === f.guildId) &&
       (!f.channelId || m.voiceChannelId === f.channelId) &&
       (!f.status || m.status === f.status) &&
-      (!f.participantId || recordingIncludesUser(m, f.participantId)),
+      (!f.participantId || recordingIncludesUser(m, f.participantId)) &&
+      mcpSessionAllowsRecording(user.jti, user.id, m),
     authorize: async (m) => (await checkAccessForMcp(user, m, { requestContext })).view,
   });
 
@@ -605,7 +634,7 @@ async function visibleInWindow(
   const stopReason = scan.stopReason ?? (budgetReached ? 'candidate' : null);
   const nextScanCursor =
     budgetReached && scan.lastProcessed
-      ? sealScanCursor(user, scan.lastProcessed, effectiveRange, cursorOptionsForRequest.context)
+      ? sealScanCursor(user, scan.lastProcessed, scopedRange, cursorOptionsForRequest.context)
       : null;
   return {
     metas: scan.metas,
@@ -613,7 +642,7 @@ async function visibleInWindow(
     truncated: nextScanCursor !== null,
     nextScanCursor,
     stopReason,
-    range: effectiveRange,
+    range: scopedRange,
     resume,
   };
 }
@@ -715,34 +744,6 @@ function matchIn(haystack: string, terms: string[], mode: string): number {
   return hits.length; // any
 }
 
-// ---------- prazos (parse best-effort, só datas absolutas) ----------
-
-const ABS_DATE = /\b(\d{4})-(\d{2})-(\d{2})\b/;
-const BR_DATE = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/;
-
-function parseDeadline(prazo: string, nowMs: number): number | null {
-  const iso = ABS_DATE.exec(prazo);
-  if (iso) {
-    const t = Date.parse(`${iso[1]}-${iso[2]}-${iso[3]}T12:00:00${tzOffsetSuffix(nowMs)}`);
-    return Number.isFinite(t) ? t : null;
-  }
-  const br = BR_DATE.exec(prazo);
-  if (br) {
-    const y = br[3] ? (br[3].length === 2 ? 2000 + Number(br[3]) : Number(br[3])) : new Date(nowMs).getUTCFullYear();
-    const t = Date.parse(
-      `${y}-${String(Number(br[2])).padStart(2, '0')}-${String(Number(br[1])).padStart(2, '0')}T12:00:00${tzOffsetSuffix(nowMs)}`,
-    );
-    return Number.isFinite(t) ? t : null;
-  }
-  return null; // "Wed", "próxima sprint", "asap"... → inparseável (bucket próprio)
-}
-
-function tzOffsetSuffix(atMs: number): string {
-  // reaproveita o formatInTz para pegar o offset ("...-03:00") do fuso do config
-  const iso = formatInTz(atMs);
-  return iso.slice(-6);
-}
-
 // ---------- middlewares ----------
 
 function readinessGate(_req: Request, res: Response, next: NextFunction): void {
@@ -764,7 +765,7 @@ function ipRateGate(req: Request, res: Response, next: NextFunction): void {
 // 401 SEMPRE idêntico: ausente/malformado/HMAC-inválido/typ-errado/exp-vencido/revogado.
 function authGate(req: Request, res: Response, next: NextFunction): void {
   const token = getMcpUser(req);
-  if (!token || !isActiveSession(token.jti)) {
+  if (!token || !isActiveSession(token.jti, token.id)) {
     res.status(401).json({ error: 'unauthorized' });
     return;
   }
@@ -774,6 +775,25 @@ function authGate(req: Request, res: Response, next: NextFunction): void {
   }
   res.locals.mcpUser = token;
   next();
+}
+
+function allowsContent(user: McpToken, kind: McpContent): boolean {
+  return mcpSessionAllowsContent(user.jti, user.id, kind);
+}
+
+function contentGate(kind: McpContent) {
+  return (_req: Request, res: Response, next: NextFunction): void => {
+    if (!allowsContent(mcpUserOf(res), kind)) {
+      res.status(403).json({ error: 'scope_denied' });
+      return;
+    }
+    next();
+  };
+}
+
+function exportContentGate(req: Request, res: Response, next: NextFunction): void {
+  const format = qstr(req, 'format') ?? 'ata.md';
+  contentGate(format === 'ata.md' ? 'minutes' : 'transcript')(req, res, next);
 }
 
 /** Consultas que varrem janelas têm um orçamento menor que leituras por id. */
@@ -804,7 +824,7 @@ function transcriptReadRateGate(_req: Request, res: Response, next: NextFunction
 
 function dossierTranscriptRateGate(req: Request, res: Response, next: NextFunction): void {
   const include = new Set((qstr(req, 'include') ?? 'meta,minutes,transcript,notes,timeline').split(','));
-  if (!include.has('transcript')) {
+  if (!include.has('transcript') || !allowsContent(mcpUserOf(res), 'transcript')) {
     next();
     return;
   }
@@ -832,6 +852,13 @@ function saidScanRateGate(req: Request, res: Response, next: NextFunction): void
 function audit(req: Request, res: Response, next: NextFunction): void {
   res.on('finish', () => {
     const u = res.locals.mcpUser as McpToken | undefined;
+    if (u && req.method === 'GET' && res.statusCode >= 200 && res.statusCode < 300) {
+      try {
+        recordMcpSessionRead(u.jti, u.id);
+      } catch (error) {
+        console.error(`[mcp-api] falha ao registrar leitura: ${operationalError(error)}`);
+      }
+    }
     console.log(
       `[mcp-api] ${cleanInline(req.method)} path=${operationalPii(req.path)} user=${operationalPii(u?.id)} sid=${operationalPii(u?.jti)} -> ${res.statusCode}`,
     );
@@ -855,7 +882,7 @@ function handle(fn: (req: Request, res: Response) => Promise<void>) {
         res.status(400).json({ error: 'bad_cursor' });
         return;
       }
-      if (err instanceof TransientAccessError) {
+      if (err instanceof TransientAccessError || err instanceof CommitmentAuthorizationUnavailableError) {
         res.status(503).set('Retry-After', '3').json({ error: 'starting' });
         return;
       }
@@ -919,7 +946,10 @@ export function mountMcpApi(app: Express): void {
         return;
       }
       try {
-        const issued = issueTokens(claimed.userId, claimed.name, claimed.label);
+        const issued = issueTokens(claimed.userId, claimed.name, claimed.label, {
+          scope: claimed.scope,
+          absoluteExpiresAt: claimed.absoluteExpiresAt,
+        });
         if (!commitExchangeCode(claimed)) {
           revokeUserSession(claimed.userId, issued.sid);
           throw new Error('reserva do código MCP foi perdida antes do commit');
@@ -929,6 +959,11 @@ export function mountMcpApi(app: Express): void {
         if (err instanceof McpSessionCapacityError) {
           releaseExchangeCode(claimed);
           res.status(503).set('Retry-After', '60').json({ error: 'session_capacity' });
+          return;
+        }
+        if (err instanceof McpScopeError) {
+          commitExchangeCode(claimed);
+          res.status(400).json({ error: 'invalid_code' });
           return;
         }
         throw err;
@@ -1054,7 +1089,10 @@ export function mountMcpApi(app: Express): void {
       }
       const include = new Set((qstr(req, 'include') ?? 'meta,minutes,transcript,notes,timeline').split(','));
       const body: Record<string, unknown> = { ...meetingSummary(meta) };
-      if (include.has('minutes') && meta.minutes?.status === 'done') {
+      const canMinutes = allowsContent(user, 'minutes');
+      const canTranscript = allowsContent(user, 'transcript');
+      body.contentScope = [canMinutes ? 'minutes' : '', canTranscript ? 'transcript' : ''].filter(Boolean);
+      if (include.has('minutes') && canMinutes && meta.minutes?.status === 'done') {
         const result = readMinutesBounded(meta.id);
         body.minutesByteLimit = MAX_MINUTES_BYTES;
         body.minutesLimits = MINUTES_RESPONSE_LIMITS;
@@ -1070,7 +1108,7 @@ export function mountMcpApi(app: Express): void {
           if (result.status === 'too_large') body.minutesBytes = result.bytes;
         }
       }
-      if (include.has('transcript') && transcriptReady(meta)) {
+      if (include.has('transcript') && canTranscript && transcriptReady(meta)) {
         const transcript = readTranscriptBounded(meta.id, MCP_DIRECT_TRANSCRIPT_MAX_BYTES);
         body.transcriptByteLimit = MCP_DIRECT_TRANSCRIPT_MAX_BYTES;
         body.transcriptSegmentLimit = MCP_DIRECT_TRANSCRIPT_MAX_SEGMENTS;
@@ -1087,7 +1125,7 @@ export function mountMcpApi(app: Express): void {
           if (transcript.status === 'too_large') body.transcriptBytes = transcript.bytes;
         }
       }
-      if (include.has('notes')) {
+      if (include.has('notes') && canTranscript) {
         body.notes = meta.notes.slice(0, MAX_NOTES_PER_MEETING).map((n) => ({
           atMs: n.atMs,
           author: cleanInline(n.author),
@@ -1098,7 +1136,7 @@ export function mountMcpApi(app: Express): void {
         body.noteLimit = MAX_NOTES_PER_MEETING;
       }
       if (include.has('timeline')) {
-        const timeline = buildTimeline(meta);
+        const timeline = buildTimeline(meta, { minutes: canMinutes, raw: canTranscript });
         body.timeline = timeline.items;
         body.timelineTruncated = timeline.truncated;
         body.timelineEventLimit = 500;
@@ -1110,6 +1148,7 @@ export function mountMcpApi(app: Express): void {
 
   authed.get(
     '/meetings/:id/transcript',
+    contentGate('transcript'),
     transcriptReadRateGate,
     handle(async (req, res) => {
       const user = mcpUserOf(res);
@@ -1160,6 +1199,7 @@ export function mountMcpApi(app: Express): void {
 
   authed.get(
     '/meetings/:id/minutes',
+    contentGate('minutes'),
     handle(async (req, res) => {
       const user = mcpUserOf(res);
       const meta = await getViewable(user, req.params.id);
@@ -1199,6 +1239,7 @@ export function mountMcpApi(app: Express): void {
 
   authed.get(
     '/meetings/:id/export',
+    exportContentGate,
     exportTranscriptRateGate,
     handle(async (req, res) => {
       const user = mcpUserOf(res);
@@ -1284,7 +1325,139 @@ export function mountMcpApi(app: Express): void {
   );
 
   authed.get(
+    '/commitments',
+    contentGate('minutes'),
+    scanRateGate,
+    handle(async (req, res) => {
+      const user = mcpUserOf(res);
+      const rangeInput = rangeFromQuery(req);
+      const range = resolveRange(rangeInput, Date.now());
+      const guildId = qstr(req, 'guildId');
+      const channelId = qstr(req, 'channelId');
+      const status = qstr(req, 'status');
+      if (status && !['mentioned', 'confirmed', 'completed', 'cancelled'].includes(status)) {
+        res.status(400).json({ error: 'bad_status' });
+        return;
+      }
+      const limit = qint(req, 'limit', 100, 100);
+      // Bind continuation to this session/policy as well as user and query.
+      const context = scanContext('commitments', rangeFingerprint(rangeInput), [
+        user.jti,
+        getMcpSessionOptions(user.jti, user.id),
+        guildId ?? null,
+        channelId ?? null,
+        status ?? null,
+      ]);
+      const visible = await visibleInWindow(
+        user,
+        range,
+        { guildId, channelId },
+        {
+          rawCursor: qstr(req, 'scanCursor'),
+          rawResultCursor: qstr(req, 'cursor'),
+          resultKind: 'commitments',
+          context,
+        },
+        MAX_AGGREGATE_MEETINGS,
+      );
+      const entries = await withContextAccess(() =>
+        contextRuntime().service.listForUser(user.id, {
+          meetingIds: visible.metas.map((meta) => meta.id),
+          status: status as CommitmentStatus | undefined,
+          limit: limit + 1,
+          after: visible.resume?.afterId
+            ? { meetingId: visible.resume.anchor.id, commitmentId: visible.resume.afterId }
+            : undefined,
+        }),
+      );
+      const selected = entries.slice(0, limit);
+      const extra = entries[limit];
+      let nextCursor: string | null = null;
+      if (extra) {
+        const anchor = visible.anchors[visible.metas.findIndex((meta) => meta.id === extra.meetingId)];
+        const previous = selected.at(-1);
+        nextCursor = sealResultCursor(
+          user,
+          'commitments',
+          anchor,
+          visible.range,
+          context,
+          0,
+          undefined,
+          undefined,
+          previous?.meetingId === extra.meetingId ? previous.id : undefined,
+        );
+      }
+      const transcriptAllowed = allowsContent(user, 'transcript');
+      const clean = (text: string) => neutralizeFences(cleanInline(text));
+      const commitments = selected
+        .filter((entry) => {
+          const current = readMeta(entry.meetingId);
+          return current && mcpSessionAllowsRecording(user.jti, user.id, current) && allowsContent(user, 'minutes');
+        })
+        .map((entry) => ({
+          id: entry.id,
+          meetingId: entry.meetingId,
+          meetingUrl: pageUrl(entry.meetingId),
+          contextUrl: `${config.appUrl}/app/contexto?meeting=${encodeURIComponent(entry.meetingId)}`,
+          guildId: entry.guildId,
+          channelId: entry.channelId,
+          meetingStartedAtISO: formatInTz(entry.meetingStartedAt),
+          task: clean(entry.task),
+          assignee: entry.assignee ? clean(entry.assignee) : null,
+          deadline: entry.deadline ? clean(entry.deadline) : null,
+          deadlineDate: entry.deadlineDate ?? null,
+          deadlineState: entry.deadlineState,
+          status: entry.status,
+          completionRule: entry.completionRule ?? null,
+          effectiveCompletion: entry.effectiveCompletion ?? null,
+          sourcePresent: entry.sourcePresent,
+          lastStatusBy: entry.lastStatusBy ?? null,
+          lastStatusAt: entry.lastStatusAt ?? null,
+          updatedAt: entry.updatedAt,
+          ...(transcriptAllowed && entry.source
+            ? {
+                source: {
+                  ...entry.source,
+                  quote: clean(entry.source.quote),
+                  deepLink: deepLink(entry.meetingId, entry.source.startMs),
+                },
+              }
+            : {}),
+          links: entry.links.map((link) => ({
+            reference: { ...link.reference },
+            addedAt: link.addedAt,
+            ...(link.snapshot
+              ? {
+                  snapshot: {
+                    ...link.snapshot,
+                    label: clean(link.snapshot.label),
+                    title: link.snapshot.title ? clean(link.snapshot.title) : undefined,
+                  },
+                }
+              : {}),
+          })),
+        }));
+      res.json({
+        commitments,
+        returned: commitments.length,
+        limit,
+        scannedMeetings: visible.metas.length,
+        meetingsTruncated: visible.truncated,
+        meetingScanLimit: MAX_AGGREGATE_MEETINGS,
+        candidateScanLimit: MAX_CANDIDATE_METAS_PER_REQUEST,
+        guildScanLimit: MAX_ACCESS_GUILDS_PER_REQUEST,
+        nextCursor,
+        nextScanCursor: nextCursor ? null : visible.nextScanCursor,
+        semantics:
+          'Current recorded lifecycle. Mentioned is not confirmed. External merge or issue state does not confirm completion or deployment.',
+      });
+    }),
+  );
+
+  authed.get(
     '/actions',
+    contentGate('minutes'),
     scanRateGate,
     handle(async (req, res) => {
       const user = mcpUserOf(res);
@@ -1371,11 +1544,14 @@ export function mountMcpApi(app: Express): void {
             );
             break actions;
           }
+          const deadline = resolveDeadline(a.prazo, m.startedAt, config.timezone);
           const item = {
             tarefa: neutralizeFences(cleanInline(a.tarefa)),
             responsavel: resp || null,
             prazoRaw: a.prazo ? cleanInline(a.prazo) : null,
-            prazoParsedISO: null as string | null,
+            prazoParsedISO: deadline.status === 'resolved' ? formatInTz(deadline.fromMs) : null,
+            prazoDate: deadline.status === 'resolved' ? deadline.date : null,
+            prazoStatus: deadline.status,
             meetingId: m.id,
             meetingUrl: pageUrl(m.id),
             meetingStartedAtISO: formatInTz(m.startedAt),
@@ -1386,14 +1562,12 @@ export function mountMcpApi(app: Express): void {
             add('noDeadline', item);
             continue;
           }
-          const parsed = parseDeadline(a.prazo, now);
-          if (parsed === null) {
+          if (deadline.status !== 'resolved') {
             add('unparseable', item);
             continue;
           }
-          item.prazoParsedISO = formatInTz(parsed);
-          if (parsed < todayStart) add('overdue', item);
-          else if (parsed <= dueLimit) add('dueSoon', item);
+          if (deadline.fromMs < todayStart) add('overdue', item);
+          else if (deadline.fromMs <= dueLimit) add('dueSoon', item);
           else add('later', item);
         }
         if (chunkEnd < min.acoes.length) {
@@ -1411,6 +1585,8 @@ export function mountMcpApi(app: Express): void {
         }
       }
       res.json({
+        semantics:
+          'Historical actions extracted from minutes, grouped by deadline; completion and current status are not tracked here. Use /api/commitments for current recorded lifecycle.',
         scannedMeetings: metas.length,
         meetingsTruncated: visible.truncated,
         meetingScanLimit: MAX_AGGREGATE_MEETINGS,
@@ -1442,6 +1618,15 @@ export function mountMcpApi(app: Express): void {
         return;
       }
       const scope = new Set((qstr(req, 'scope') ?? 'transcript,minutes,notes').split(','));
+      if (!allowsContent(user, 'minutes')) scope.delete('minutes');
+      if (!allowsContent(user, 'transcript')) {
+        scope.delete('transcript');
+        scope.delete('notes');
+      }
+      if (![...scope].some((kind) => ['minutes', 'transcript', 'notes'].includes(kind))) {
+        res.status(403).json({ error: 'scope_denied' });
+        return;
+      }
       const rangeInput = rangeFromQuery(req);
       const range = resolveRange(rangeInput, Date.now());
       const guildId = qstr(req, 'guildId');
@@ -1579,7 +1764,7 @@ export function mountMcpApi(app: Express): void {
             for (let segmentIndex = phaseOffset; segmentIndex < segmentEnd; segmentIndex++) {
               const segment = transcriptRead.segments[segmentIndex];
               processedSegments++;
-              if (matchIn(segment.text, terms, mode) <= 0) continue;
+              if (matchIn(`${segment.speaker} ${segment.text}`, terms, mode) <= 0) continue;
               const idx = searchNorm(segment.text).indexOf(terms[0]);
               hits.push({
                 where: 'transcript',
@@ -1664,6 +1849,7 @@ export function mountMcpApi(app: Express): void {
 
   authed.get(
     '/said',
+    contentGate('transcript'),
     saidScanRateGate,
     handle(async (req, res) => {
       const user = mcpUserOf(res);
@@ -1877,8 +2063,13 @@ export function mountMcpApi(app: Express): void {
 
 // ---------- auxiliares fora do closure ----------
 
-function issueTokens(userId: string, name: string, label?: string): { sid: string; body: Record<string, unknown> } {
-  const s = createSession(userId, name, label);
+function issueTokens(
+  userId: string,
+  name: string,
+  label?: string,
+  options?: McpSessionOptions,
+): { sid: string; body: Record<string, unknown> } {
+  const s = createSession(userId, name, label, options);
   return { sid: s.sid, body: signPair(userId, name, s.sid, s.gen, s.exp) };
 }
 
@@ -1893,13 +2084,18 @@ function signPair(userId: string, name: string, sid: string, gen: number, refres
   };
 }
 
-function buildTimeline(meta: RecordingMeta): { items: Record<string, unknown>[]; truncated: boolean } {
+function buildTimeline(
+  meta: RecordingMeta,
+  include: { minutes: boolean; raw: boolean },
+): { items: Record<string, unknown>[]; truncated: boolean } {
   const items: { atMs: number; type: string; text: string }[] = [];
-  let truncated = meta.events.length > 500 || meta.notes.length > MAX_NOTES_PER_MEETING;
-  for (const e of meta.events.slice(0, 500)) items.push({ atMs: e.atMs, type: 'event', text: cleanInline(e.text) });
-  for (const n of meta.notes.slice(0, MAX_NOTES_PER_MEETING))
-    items.push({ atMs: n.atMs, type: 'note', text: `${cleanInline(n.author)}: ${cleanInline(n.text)}` });
-  if (meta.minutes?.status === 'done') {
+  let truncated = include.raw && (meta.events.length > 500 || meta.notes.length > MAX_NOTES_PER_MEETING);
+  if (include.raw) {
+    for (const e of meta.events.slice(0, 500)) items.push({ atMs: e.atMs, type: 'event', text: cleanInline(e.text) });
+    for (const n of meta.notes.slice(0, MAX_NOTES_PER_MEETING))
+      items.push({ atMs: n.atMs, type: 'note', text: `${cleanInline(n.author)}: ${cleanInline(n.text)}` });
+  }
+  if (include.minutes && meta.minutes?.status === 'done') {
     const result = readMinutesBounded(meta.id);
     if (result.status === 'ok') {
       truncated ||= result.minutes.topicos.length > MAX_MINUTES_ITEMS_PER_COLLECTION;

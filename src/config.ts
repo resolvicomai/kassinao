@@ -1298,6 +1298,19 @@ export const config = {
    * ao ficar pronta. Útil para n8n/Zapier self-hosted → Notion/Jira/etc.
    */
   minutesWebhookUrl,
+  minutesWebhookGuildIds: (process.env.MINUTES_WEBHOOK_GUILD_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  minutesWebhookChannelIds: (process.env.MINUTES_WEBHOOK_CHANNEL_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+  minutesWebhookPayload: choiceEnv('MINUTES_WEBHOOK_PAYLOAD', 'minutes', [
+    'metadata',
+    'minutes',
+    'transcript',
+  ] as const),
   /** HMAC dedicado ao webhook; obrigatório quando a URL está configurada. */
   minutesWebhookSecret,
 

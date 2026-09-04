@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseShellCommand } from 'shell-quote';
+import { writeJsonStateAtomic } from '../stateFile';
 import { config } from '../config';
 import {
   operationalError,
@@ -17,6 +18,7 @@ import {
   Participant,
   readMeta,
   readTranscript,
+  readTranscriptBounded,
   RecordingMeta,
   saveMeta,
   saveMinutes,
@@ -32,12 +34,15 @@ import {
   assertGuildWorkActive,
   createGuildWorkContext,
   fetchWithRetry,
+  fetchWithDeadline,
   GuildWorkContext,
   isGuildWorkPausedError,
   UpstreamHttpError,
 } from './http';
 import { generateMinutes, minutesEnabled } from './minutes';
 import { batchIntervals, detectSpeechIntervals, extractBatch, filterHallucinations, mapBatchTimeToTrack } from './vad';
+import { trackAssemblyAiJob, requestAssemblyAiDeletion, ensureRemoteDeletionCapacity } from './remoteDeletion';
+import { getProcessingProgress, updateProcessingProgress } from './progress';
 
 /** Segmento cru devolvido por um provider (tempos em segundos, relativos ao chunk). */
 interface RawSegment {
@@ -310,6 +315,7 @@ export function enqueueTranscription(
     return;
   }
   queued.add(recordingId);
+  updateProcessingProgress(recordingId, { stage: 'queued' });
   meta.transcription = { ...meta.transcription, status: 'pending', provider: config.transcribeProvider, attempts };
   saveMeta(meta);
 
@@ -412,6 +418,7 @@ export function enqueueMinutesOnly(
   }
 
   queued.add(recordingId);
+  updateProcessingProgress(recordingId, { stage: 'queued' });
   meta.minutes = { ...meta.minutes, status: 'pending', model: config.minutesModel, retryScheduled: false };
   saveMeta(meta);
   queue = queue
@@ -432,6 +439,34 @@ export function enqueueMinutesOnly(
       if (fresh) notifyDone(recordingId, onDone, fresh);
       settle(recordingId);
     });
+}
+
+/** Chamador deve verificar ACL destrutiva e intenção explícita antes de gastar cota. */
+export function retryMinutes(
+  recordingId: string,
+  onDone?: (meta: RecordingMeta) => void,
+  onSettled?: () => void,
+): 'queued' | 'busy' | 'unavailable' | 'not-failed' {
+  const meta = readMeta(recordingId);
+  if (
+    !meta ||
+    meta.status !== 'done' ||
+    !minutesEnabled() ||
+    !guildProcessingAllowed(meta.guildId) ||
+    !transcriptReady(meta)
+  )
+    return 'unavailable';
+  if (queued.has(recordingId)) return 'busy';
+  if (meta.minutes?.status !== 'error') return 'not-failed';
+  const transcript = readTranscriptBounded(recordingId, 16 * 1024 * 1024);
+  if (transcript.status !== 'ok' || !transcript.segments.length) return 'unavailable';
+  clearTimeout(minutesRetryTimers.get(recordingId));
+  minutesRetryTimers.delete(recordingId);
+  meta.minutes = { status: 'pending', model: config.minutesModel, attempts: 0, retryScheduled: false };
+  delete meta.minutesFailureAlertedAt;
+  saveMeta(meta);
+  enqueueMinutesOnly(recordingId, onDone, onSettled);
+  return 'queued';
 }
 
 async function transcribeRecording(recordingId: string): Promise<void> {
@@ -463,6 +498,14 @@ async function transcribeRecording(recordingId: string): Promise<void> {
 
   meta.transcription = { ...meta.transcription, status: 'running', provider: config.transcribeProvider };
   saveMeta(meta);
+  updateProcessingProgress(recordingId, {
+    stage: 'preparing',
+    tracksTotal: meta.participants.length,
+    tracksCompleted: doneTrackIds.size,
+    batchesTotal: 0,
+    batchesCompleted: 0,
+    reusedBatches: 0,
+  });
 
   const work = path.join(cacheDir(meta.id), `transcribe-${crypto.randomBytes(4).toString('hex')}`);
   fs.mkdirSync(work, { recursive: true });
@@ -509,6 +552,7 @@ async function transcribeRecording(recordingId: string): Promise<void> {
           trackSec,
           work,
           guildWork,
+          meta.id,
         );
         assertGuildWorkActive(guildWork);
         all.push(...segments);
@@ -521,6 +565,7 @@ async function transcribeRecording(recordingId: string): Promise<void> {
           cp.transcription = { status: 'running', ...cp.transcription, doneTrackIds: [...doneTrackIds] };
           saveMeta(cp);
         }
+        updateProcessingProgress(recordingId, { tracksCompleted: doneTrackIds.size });
       } catch (err) {
         if (isGuildWorkPausedError(err)) throw err;
         operationalFailure(
@@ -554,6 +599,12 @@ async function transcribeRecording(recordingId: string): Promise<void> {
       finishedAt: Date.now(),
     };
     saveMeta(fresh);
+    if (failed.length === 0)
+      fs.rmSync(path.join(cacheDir(meta.id), 'asr-checkpoints'), { recursive: true, force: true });
+    updateProcessingProgress(recordingId, {
+      stage: failed.length ? 'waiting' : 'done',
+      tracksCompleted: doneTrackIds.size,
+    });
 
     // Ata com IA (mesma fila serial) — falha aqui NÃO derruba a transcrição já entregue.
     // Com faixas pendentes a ata espera a transcrição completar (senão sairia capenga).
@@ -576,6 +627,7 @@ async function transcribeRecording(recordingId: string): Promise<void> {
         };
         saveMeta(fresh);
       }
+      updateProcessingProgress(recordingId, { stage: 'paused' });
       return;
     }
     if (fresh) {
@@ -588,6 +640,7 @@ async function transcribeRecording(recordingId: string): Promise<void> {
       };
       saveMeta(fresh);
     }
+    updateProcessingProgress(recordingId, { stage: 'error' });
     throw err;
   } finally {
     setAaiRecordingContext(undefined);
@@ -607,6 +660,7 @@ async function generateMinutesStep(
   assertGuildWorkActive(guildWork);
   meta.minutes = { status: 'running', model: config.minutesModel, attempts: meta.minutes?.attempts };
   saveMeta(meta);
+  updateProcessingProgress(recordingId, { stage: 'minutes' });
   try {
     const minutes = await generateMinutes(meta, segments, guildWork);
     assertGuildWorkActive(guildWork);
@@ -615,6 +669,7 @@ async function generateMinutesStep(
     if (!fresh) return;
     fresh.minutes = { status: 'done', model: config.minutesModel, finishedAt: Date.now() };
     saveMeta(fresh);
+    updateProcessingProgress(recordingId, { stage: 'done' });
   } catch (err) {
     if (isGuildWorkPausedError(err)) {
       const fresh = readMeta(recordingId);
@@ -628,6 +683,7 @@ async function generateMinutesStep(
         };
         saveMeta(fresh);
       }
+      updateProcessingProgress(recordingId, { stage: 'paused' });
       return;
     }
     const fresh = readMeta(recordingId);
@@ -649,6 +705,7 @@ async function generateMinutesStep(
         retryScheduled: true,
       };
       saveMeta(fresh);
+      updateProcessingProgress(recordingId, { stage: 'waiting' });
       return;
     }
     operationalFailure(
@@ -663,6 +720,7 @@ async function generateMinutesStep(
       retryScheduled: false,
     };
     saveMeta(fresh);
+    updateProcessingProgress(recordingId, { stage: 'error' });
   }
 }
 
@@ -698,6 +756,7 @@ async function transcribeTrack(
   durationSec: number,
   work: string,
   guildWork: GuildWorkContext,
+  recordingId: string,
 ): Promise<TranscriptSegment[]> {
   // VAD primeiro: as faixas são preenchidas com silêncio digital (sincronia), e
   // silêncio na API = alucinação ("Legenda Adriana Zanotto") + cota desperdiçada
@@ -712,42 +771,100 @@ async function transcribeTrack(
 
   const out: TranscriptSegment[] = [];
   const batches = batchIntervals(speech, chunkSeconds());
+  const checkpointFile = path.join(
+    cacheDir(recordingId),
+    'asr-checkpoints',
+    `${crypto.createHash('sha256').update(participant.id).digest('hex')}.json`,
+  );
+  const source = fs.statSync(masterFlac);
+  const fingerprint = crypto
+    .createHash('sha256')
+    .update(
+      JSON.stringify([
+        source.size,
+        source.mtimeMs,
+        batches,
+        config.transcribeProvider,
+        config.transcribeModel,
+        config.transcribeLanguage,
+        config.transcribePrompt,
+        config.transcribeFallbackProvider,
+        aaiKeyterms,
+      ]),
+    )
+    .digest('hex');
+  let completed: Record<string, RawSegment[]> = {};
+  try {
+    if (fs.statSync(checkpointFile).size <= 16 * 1024 * 1024) {
+      const saved = JSON.parse(fs.readFileSync(checkpointFile, 'utf8')) as {
+        fingerprint: string;
+        completed: Record<string, RawSegment[]>;
+      };
+      if (
+        saved.fingerprint === fingerprint &&
+        saved.completed &&
+        Object.values(saved.completed).every(
+          (segments) =>
+            Array.isArray(segments) &&
+            segments.length <= 50_000 &&
+            segments.every(
+              (segment) =>
+                Number.isFinite(segment.start) && Number.isFinite(segment.end) && typeof segment.text === 'string',
+            ),
+        )
+      )
+        completed = saved.completed;
+    }
+  } catch {
+    /* Cache ausente ou inválido: a fonte continua sendo o áudio. */
+  }
+  const progress = getProcessingProgress(recordingId);
+  updateProcessingProgress(recordingId, {
+    stage: 'transcribing',
+    batchesTotal: (progress?.batchesTotal ?? 0) + batches.length,
+  });
 
   for (let i = 0; i < batches.length; i++) {
     assertGuildWorkActive(guildWork);
     const batch = batches[i];
     const batchFile = path.join(work, `batch-${participant.index}-${i}.mp3`);
-    await extractBatch(masterFlac, batch, batchFile);
-    assertGuildWorkActive(guildWork);
-
-    // MP3 compactado ínfimo = só header/ruído residual — não gasta uma chamada
-    if (fs.statSync(batchFile).size < 1024) {
-      fs.rmSync(batchFile, { force: true });
-      continue;
+    const reused = completed[String(i)];
+    if (!reused) {
+      await extractBatch(masterFlac, batch, batchFile);
+      assertGuildWorkActive(guildWork);
     }
 
     let raw: RawSegment[];
     try {
       assertGuildWorkActive(guildWork);
-      raw = await transcribeChunk(batchFile, work, batch.durationSec, guildWork);
+      // MP3 ínfimo e lacuna de conteúdo também são checkpoints: não repetir custo.
+      raw =
+        reused ??
+        (fs.statSync(batchFile).size < 1024
+          ? []
+          : await transcribeChunk(batchFile, work, batch.durationSec, guildWork, recordingId));
       assertGuildWorkActive(guildWork);
     } catch (err) {
-      fs.rmSync(batchFile, { force: true });
       // conteúdo bloqueado/incodificável de UM lote vira lacuna, não mata a faixa
       if (err instanceof ChunkContentError) {
-        const first = batch.intervals[0];
-        const last = batch.intervals[batch.intervals.length - 1];
-        out.push({
-          startMs: Math.round(first.start * 1000),
-          endMs: Math.round(last.end * 1000),
-          speaker: participant.name,
-          text: '[trecho não transcrito]',
-        });
-        continue;
-      }
-      throw err; // erro sistêmico (rede/timeout/rate limit): propaga para marcar a faixa
+        raw = [{ start: 0, end: batch.durationSec, text: '[trecho não transcrito]' }];
+      } else throw err; // erro sistêmico: propaga para marcar a faixa
+    } finally {
+      fs.rmSync(batchFile, { force: true });
     }
-    fs.rmSync(batchFile, { force: true });
+    if (!reused) {
+      completed[String(i)] = raw;
+      const checkpoint = { fingerprint, completed };
+      // ponytail: snapshot por faixa até 16 MiB; arquivos por bloco se exceder na prática.
+      if (Buffer.byteLength(JSON.stringify(checkpoint), 'utf8') <= 16 * 1024 * 1024)
+        writeJsonStateAtomic(checkpointFile, checkpoint);
+      else operationalWarn('Checkpoint excedeu o limite; resultado atual segue para a transcrição final.');
+    }
+    const current = getProcessingProgress(recordingId);
+    updateProcessingProgress(recordingId, {
+      batchesCompleted: (current?.batchesCompleted ?? 0) + 1,
+      reusedBatches: (current?.reusedBatches ?? 0) + (reused ? 1 : 0),
+    });
 
     // modelo sem timestamps (start=end=0 num bloco único): ancora no lote inteiro
     if (raw.length === 1 && raw[0].start === 0 && raw[0].end === 0) {
@@ -792,6 +909,7 @@ function transcribeChunk(
   work: string,
   chunkSec: number,
   guildWork: GuildWorkContext,
+  recordingId: string,
 ): Promise<RawSegment[]> {
   assertGuildWorkActive(guildWork);
   switch (config.transcribeProvider) {
@@ -799,7 +917,7 @@ function transcribeChunk(
       // fallback: se a AssemblyAI falhar por questão SISTÊMICA (crédito no fim,
       // 5xx, timeout) e houver GROQ_API_KEY, o mesmo chunk tenta no Whisper da
       // Groq — a transcrição não pode morrer por causa de um provedor fora do ar
-      return assemblyaiTranscribe(file, chunkSec, guildWork).catch((err) => {
+      return assemblyaiTranscribe(file, chunkSec, guildWork, recordingId).catch((err) => {
         assertGuildWorkActive(guildWork);
         if (err instanceof ChunkContentError || config.transcribeFallbackProvider !== 'groq' || !config.groqApiKey)
           throw err;
@@ -884,8 +1002,10 @@ async function assemblyaiTranscribe(
   file: string,
   chunkSec: number,
   guildWork: GuildWorkContext,
+  recordingId: string,
 ): Promise<RawSegment[]> {
   assertGuildWorkActive(guildWork);
+  ensureRemoteDeletionCapacity();
   const auth = { Authorization: config.assemblyaiApiKey };
 
   const up = await fetchWithRetry(
@@ -932,7 +1052,8 @@ async function assemblyaiTranscribe(
       { attempts: 3 },
     );
     const result = (await create.json()) as { id?: string; status?: string; error?: string };
-    assertGuildWorkActive(guildWork);
+    // Mesmo que a guild acabe de pausar, o id recebido precisa chegar ao ledger
+    // antes de qualquer checagem de cancelamento.
     return result;
   };
 
@@ -957,6 +1078,22 @@ async function assemblyaiTranscribe(
   }
   if (!created.id) throw new Error('AssemblyAI não criou o job (sem id)');
   const jobId = created.id;
+  try {
+    trackAssemblyAiJob(jobId, recordingId);
+  } catch {
+    // Falha de persistência não permite continuar criando cópias sem referência.
+    try {
+      await fetchWithDeadline(
+        `${AAI_BASE}/transcript/${encodeURIComponent(jobId)}`,
+        { method: 'DELETE', headers: auth },
+        { timeoutMs: 10_000, maxResponseBytes: 1024 * 1024 },
+      );
+    } catch {
+      /* Registro operacional sem ID/token. */
+    }
+    operationalFailure('Não foi possível registrar a exclusão remota; transcrição interrompida.');
+    throw new Error('remote deletion state unavailable');
+  }
 
   try {
     // poll proporcional à duração do áudio (piso 3 min, teto 30 min — os lotes têm
@@ -1001,19 +1138,10 @@ async function assemblyaiTranscribe(
         text: s.text as string,
       }));
   } finally {
-    // A cópia remota não precisa sobreviver: nem no caminho feliz (texto já é nosso),
-    // nem em timeout/erro/pausa (a retomada cria um job novo). Best-effort: um job
-    // ainda em processamento pode ser recusado e fica só no aviso do log. Sinal
-    // próprio (o da guild pode já estar abortado); nunca derruba a transcrição.
     try {
-      const del = await fetch(`${AAI_BASE}/transcript/${jobId}`, {
-        method: 'DELETE',
-        headers: auth,
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!del.ok) operationalWarn(`AssemblyAI não apagou a transcrição remota (HTTP ${del.status}).`);
-    } catch (err) {
-      operationalWarn(`AssemblyAI não apagou a transcrição remota: ${operationalError(err)}`);
+      await requestAssemblyAiDeletion(jobId);
+    } catch {
+      operationalWarn('Exclusão remota AssemblyAI pendente; referência preservada para recuperação.');
     }
   }
 }

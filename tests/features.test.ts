@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { guildConfigStore } from '../src/guildConfig';
 import { MAX_MINUTES_BYTES } from '../src/securityLimits';
 import { readMinutes, RecordingMeta, saveMeta, saveMinutes, saveTranscript } from '../src/store';
-import { searchRecordings } from '../src/web/search';
+import { searchRecordings, searchRecordingsWithCoverage } from '../src/web/search';
 import { shortError } from '../src/util';
 
 const DIR = process.env.RECORDINGS_DIR!;
@@ -91,6 +91,70 @@ describe('searchRecordings', () => {
       maxTranscriptBytesPerRequest: 32,
     });
     expect(hits).toHaveLength(0);
+  });
+
+  it('encontra responsável, prazo e falante mesmo sem constarem no texto', () => {
+    const meta = makeMeta('busca-campos');
+    meta.notes = [];
+    saveMeta(meta);
+    saveMinutes(meta.id, {
+      resumo: 'Contrato revisado',
+      decisoes: [],
+      acoes: [{ tarefa: 'Revisar proposta', responsavel: 'Renée', prazo: '22/09/2026' }],
+      topicos: [],
+      porParticipante: [],
+    });
+    saveTranscript(meta.id, [{ startMs: 10, endMs: 20, speaker: 'Caio', text: 'Estou de acordo.' }]);
+    expect(searchRecordings([meta], 'renee')[0]).toMatchObject({
+      kind: 'minutes',
+      snippet: expect.stringContaining('Renée'),
+    });
+    expect(searchRecordings([meta], '22/09/2026')[0]).toMatchObject({ kind: 'minutes' });
+    expect(searchRecordings([meta], 'Caio')[0]).toMatchObject({ kind: 'transcript', speaker: 'Caio', atMs: 10 });
+  });
+
+  it('distingue ausência real de resultado de conteúdo pulado por limite', () => {
+    const meta = makeMeta('busca-teste-1');
+    const complete = searchRecordingsWithCoverage([meta], 'inexistente');
+    expect(complete.hits).toEqual([]);
+    expect(complete.coverage).toMatchObject({ complete: true, scannedMeetings: 1, omittedMeetings: 0, reasons: [] });
+    const limited = searchRecordingsWithCoverage([meta], 'amanha', 40, { maxTranscriptBytesPerMeeting: 32 });
+    expect(limited.hits).toEqual([]);
+    expect(limited.coverage).toMatchObject({ complete: false, reasons: ['transcript_bytes_limit'] });
+  });
+
+  it('informa limite agregado, corte de segmentos e reunião não examinada', () => {
+    const meta = makeMeta('busca-teste-1');
+    const segments = searchRecordingsWithCoverage([meta], 'inexistente', 40, { maxSegmentsPerMeeting: 1 });
+    expect(segments.coverage).toMatchObject({
+      complete: false,
+      transcriptSegmentsScanned: 1,
+      reasons: ['transcript_segments_limit'],
+    });
+    const limited = searchRecordingsWithCoverage([meta, meta], 'orcamento', 1);
+    expect(limited.hits).toHaveLength(1);
+    expect(limited.coverage).toMatchObject({
+      complete: false,
+      scannedMeetings: 1,
+      omittedMeetings: 1,
+      reasons: ['result_limit'],
+    });
+    const bytes = searchRecordingsWithCoverage([meta, meta], 'inexistente', 40, {
+      maxTranscriptBytesPerRequest: Buffer.byteLength(
+        fs.readFileSync(path.join(DIR, meta.id, 'transcript.json'), 'utf8'),
+      ),
+    });
+    expect(bytes.coverage.reasons).toContain('transcript_bytes_limit');
+  });
+
+  it('sinaliza transcrição parcial e arquivo indisponível sem esconder resultados disponíveis', () => {
+    const meta = makeMeta('busca-teste-1');
+    meta.transcription = { status: 'partial' };
+    const partial = searchRecordingsWithCoverage([meta], 'orcamento');
+    expect(partial.hits.length).toBeGreaterThan(0);
+    expect(partial.coverage.reasons).toContain('partial_transcript');
+    const missing = searchRecordingsWithCoverage([makeMeta('busca-ausente')], 'inexistente');
+    expect(missing.coverage).toMatchObject({ complete: false, reasons: ['source_unavailable'] });
   });
 });
 

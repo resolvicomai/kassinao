@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { operationalError, operationalFailure } from '../operationalLog';
 import { config } from '../config';
+import { McpContent, McpSessionOptions, normalizeMcpSessionOptions, scopeAllowsRecording } from './mcpScope';
+import type { RecordingMeta } from '../store';
+export type { McpScope, McpContent, McpSessionOptions } from './mcpScope';
 
 /**
  * Registro de SESSÕES de conector MCP (fonte da verdade da revogação).
@@ -16,7 +19,7 @@ import { config } from '../config';
  * Persistido em disco (0600 + fsync + rename atômico) para sobreviver a reinícios.
  */
 
-interface Session {
+interface Session extends McpSessionOptions {
   sid: string;
   userId: string;
   name: string;
@@ -27,8 +30,10 @@ interface Session {
   createdAt: number;
   /** apelido dado pelo usuário ao gerar ("notebook de trabalho") — só exibição. */
   label?: string;
-  /** último refresh bem-sucedido = conector em uso (sessões antigas não têm). */
+  /** Último refresh bem-sucedido; não comprova leitura de reunião. */
   lastSeenAt?: number;
+  /** Última leitura HTTP bem-sucedida; persistida no máximo uma vez por minuto. */
+  lastReadAt?: number;
   /** Retry idempotente da rotação mais recente, sem guardar nenhum token. */
   lastRefreshAttempt?: {
     id: string;
@@ -84,6 +89,11 @@ function load(): void {
       .filter((value): value is Session => {
         if (!value || typeof value !== 'object') return false;
         const s = value as Partial<Session>;
+        try {
+          normalizeMcpSessionOptions({ scope: s.scope, absoluteExpiresAt: s.absoluteExpiresAt });
+        } catch {
+          return false;
+        }
         return (
           typeof s.sid === 'string' &&
           s.sid.length > 0 &&
@@ -97,6 +107,7 @@ function load(): void {
           s.exp > now &&
           typeof s.createdAt === 'number' &&
           Number.isFinite(s.createdAt) &&
+          (s.lastReadAt === undefined || (typeof s.lastReadAt === 'number' && Number.isFinite(s.lastReadAt))) &&
           (s.lastRefreshAttempt === undefined ||
             (typeof s.lastRefreshAttempt === 'object' &&
               s.lastRefreshAttempt !== null &&
@@ -175,7 +186,7 @@ function gcSessions(): number {
   const now = Date.now();
   let removed = 0;
   for (const [sid, s] of sessions) {
-    if (s.exp <= now) {
+    if (s.exp <= now || (s.absoluteExpiresAt !== undefined && s.absoluteExpiresAt <= now)) {
       sessions.delete(sid);
       removed++;
     }
@@ -191,7 +202,8 @@ export interface NewSession {
 }
 
 /** Cria uma nova sessão de conector para um usuário (label = apelido opcional). */
-export function createSession(userId: string, name: string, label?: string): NewSession {
+export function createSession(userId: string, name: string, label?: string, options?: McpSessionOptions): NewSession {
+  const policy = normalizeMcpSessionOptions(options);
   load();
   gcSessions();
   // Criar tokens repetidamente não pode fazer o registro crescer sem limite.
@@ -200,23 +212,48 @@ export function createSession(userId: string, name: string, label?: string): New
   if (!capacity.canCreate) throw new McpSessionCapacityError();
   for (const sid of capacity.evictSids) sessions.delete(sid);
   const sid = crypto.randomUUID();
-  const exp = Date.now() + config.mcpRefreshTtlDays * 86400000;
-  sessions.set(sid, { sid, userId, name, gen: 0, exp, createdAt: Date.now(), label: label || undefined });
+  const exp = Math.min(Date.now() + config.mcpRefreshTtlDays * 86400000, policy.absoluteExpiresAt ?? Infinity);
+  sessions.set(sid, { sid, userId, name, gen: 0, exp, createdAt: Date.now(), label: label || undefined, ...policy });
   persist();
   return { sid, gen: 0, exp };
 }
 
 /** Um access token com este `sid` ainda é válido? (sessão existe e não expirou) */
-export function isActiveSession(sid: string): boolean {
+export function isActiveSession(sid: string, userId?: string): boolean {
   load();
   const s = sessions.get(sid);
-  if (!s) return false;
-  if (s.exp <= Date.now()) {
+  if (!s || (userId !== undefined && s.userId !== userId)) return false;
+  if (s.exp <= Date.now() || (s.absoluteExpiresAt !== undefined && s.absoluteExpiresAt <= Date.now())) {
     sessions.delete(sid);
     persist();
     return false;
   }
   return true;
+}
+
+/** Consulta a política no registro, nunca em campos enviados pelo cliente. */
+export function getMcpSessionOptions(sid: string, userId: string): McpSessionOptions | undefined {
+  if (!isActiveSession(sid, userId)) return undefined;
+  const session = sessions.get(sid)!;
+  return structuredClone({ scope: session.scope, absoluteExpiresAt: session.absoluteExpiresAt });
+}
+
+export function mcpSessionAllowsRecording(sid: string, userId: string, meta: RecordingMeta): boolean {
+  const policy = getMcpSessionOptions(sid, userId);
+  return !!policy && scopeAllowsRecording(policy.scope, meta);
+}
+
+export function mcpSessionAllowsContent(sid: string, userId: string, kind: McpContent): boolean {
+  const policy = getMcpSessionOptions(sid, userId);
+  return !!policy && (!policy.scope || policy.scope.content.includes(kind));
+}
+
+export function recordMcpSessionRead(sid: string, userId: string, nowMs = Date.now()): void {
+  if (!isActiveSession(sid, userId)) return;
+  const session = sessions.get(sid)!;
+  if (session.lastReadAt !== undefined && nowMs - session.lastReadAt < 60_000) return;
+  session.lastReadAt = nowMs;
+  persist();
 }
 
 export type RotateResult =
@@ -236,7 +273,7 @@ export function rotateSession(sid: string, presentedGen: number, attemptId?: str
   load();
   const s = sessions.get(sid);
   if (!s) return { ok: false, reason: 'unknown' };
-  if (s.exp <= Date.now()) {
+  if (s.exp <= Date.now() || (s.absoluteExpiresAt !== undefined && s.absoluteExpiresAt <= Date.now())) {
     sessions.delete(sid);
     persist();
     return { ok: false, reason: 'unknown' };
@@ -260,8 +297,8 @@ export function rotateSession(sid: string, presentedGen: number, attemptId?: str
   }
   const fromGen = s.gen;
   s.gen += 1;
-  s.exp = Date.now() + config.mcpRefreshTtlDays * 86400000; // janela deslizante
-  s.lastSeenAt = Date.now(); // refresh bem-sucedido = conector em uso
+  s.exp = Math.min(Date.now() + config.mcpRefreshTtlDays * 86400000, s.absoluteExpiresAt ?? Infinity);
+  s.lastSeenAt = Date.now();
   s.lastRefreshAttempt = attemptId === undefined ? undefined : { id: attemptId, fromGen };
   persist();
   return { ok: true, gen: s.gen, userId: s.userId, name: s.name, exp: s.exp, replayed: false };
@@ -291,11 +328,12 @@ export function revokeAll(): number {
 }
 
 /** Resumo de uma sessão para a página de gestão (sem segredos: sid é id, não token). */
-export interface SessionSummary {
+export interface SessionSummary extends McpSessionOptions {
   sid: string;
   label?: string;
   createdAt: number;
   lastSeenAt?: number;
+  lastReadAt?: number;
   exp: number;
 }
 
@@ -306,7 +344,9 @@ export function listUserSessions(userId: string): SessionSummary[] {
   return [...sessions.values()]
     .filter((s) => s.userId === userId)
     .sort((a, b) => b.createdAt - a.createdAt)
-    .map(({ sid, label, createdAt, lastSeenAt, exp }) => ({ sid, label, createdAt, lastSeenAt, exp }));
+    .map(({ sid, label, createdAt, lastSeenAt, lastReadAt, exp, scope, absoluteExpiresAt }) =>
+      structuredClone({ sid, label, createdAt, lastSeenAt, lastReadAt, exp, scope, absoluteExpiresAt }),
+    );
 }
 
 /** Revoga UMA sessão, só se pertencer ao usuário (a rota web usa esta, nunca a crua). */
@@ -321,7 +361,7 @@ export function revokeUserSession(userId: string, sid: string): boolean {
 
 // ---------- códigos de troca de uso único (fluxo headless /mcp new) ----------
 
-interface PendingCode {
+interface PendingCode extends McpSessionOptions {
   userId: string;
   name: string;
   label?: string;
@@ -394,7 +434,8 @@ export function consumeStagedExchangeCode(
 }
 
 /** Cria um código curto de uso único (~5 min) que o binário MCP troca por tokens. */
-export function createExchangeCode(userId: string, name: string, label?: string): string {
+export function createExchangeCode(userId: string, name: string, label?: string, options?: McpSessionOptions): string {
+  const policy = normalizeMcpSessionOptions(options);
   gcCodes();
   stagedExchangeCodes.delete(userId);
   const previous = codeByUser.get(userId);
@@ -406,12 +447,12 @@ export function createExchangeCode(userId: string, name: string, label?: string)
     throw new McpExchangeCodeCapacityError();
   }
   const code = crypto.randomBytes(24).toString('base64url');
-  codes.set(code, { userId, name, label: label || undefined, exp: Date.now() + CODE_TTL_MS });
+  codes.set(code, { userId, name, label: label || undefined, exp: Date.now() + CODE_TTL_MS, ...policy });
   codeByUser.set(userId, code);
   return code;
 }
 
-export interface ExchangeCodeClaim {
+export interface ExchangeCodeClaim extends McpSessionOptions {
   code: string;
   claimId: string;
   userId: string;
@@ -422,7 +463,7 @@ export interface ExchangeCodeClaim {
 /** Reserva atômica: chamadas concorrentes não trocam o mesmo código duas vezes. */
 export function claimExchangeCode(code: string): ExchangeCodeClaim | undefined {
   const c = codes.get(code);
-  if (!c || c.exp < Date.now()) {
+  if (!c || c.exp < Date.now() || (c.absoluteExpiresAt !== undefined && c.absoluteExpiresAt <= Date.now())) {
     if (c) {
       codes.delete(code);
       if (codeByUser.get(c.userId) === code) codeByUser.delete(c.userId);
@@ -432,7 +473,15 @@ export function claimExchangeCode(code: string): ExchangeCodeClaim | undefined {
   if (c.claimId) return undefined;
   const claimId = crypto.randomBytes(16).toString('hex');
   c.claimId = claimId;
-  return { code, claimId, userId: c.userId, name: c.name, label: c.label };
+  return structuredClone({
+    code,
+    claimId,
+    userId: c.userId,
+    name: c.name,
+    label: c.label,
+    scope: c.scope,
+    absoluteExpiresAt: c.absoluteExpiresAt,
+  });
 }
 
 /** Consome definitivamente somente a reserva que ainda pertence ao chamador. */
@@ -454,8 +503,16 @@ export function releaseExchangeCode(claim: ExchangeCodeClaim): boolean {
 }
 
 /** Consome o código (uso único: apagado em qualquer tentativa). undefined se inválido/expirado. */
-export function consumeExchangeCode(code: string): { userId: string; name: string; label?: string } | undefined {
+export function consumeExchangeCode(
+  code: string,
+): ({ userId: string; name: string; label?: string } & McpSessionOptions) | undefined {
   const claim = claimExchangeCode(code);
   if (!claim || !commitExchangeCode(claim)) return undefined;
-  return { userId: claim.userId, name: claim.name, label: claim.label };
+  return {
+    userId: claim.userId,
+    name: claim.name,
+    label: claim.label,
+    scope: claim.scope,
+    absoluteExpiresAt: claim.absoluteExpiresAt,
+  };
 }

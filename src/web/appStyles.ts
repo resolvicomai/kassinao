@@ -6,6 +6,15 @@
  * reuniao, para que a migracao de layout nao altere contratos de dados.
  */
 export const APP_CSS = `
+  .context-page { max-width: 980px; margin: 0 auto; }
+  .context-card { border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin: 18px 0; }
+  .context-card h2 { margin-top: 12px; }
+  .context-card-head, .context-form { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .context-form { margin: 14px 0; }
+  .context-card label { display: block; min-width: 0; max-width: 100%; }
+  .context-card select, .context-card textarea { display: block; width: 100%; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
+  .context-card blockquote { margin-left: 0; padding-left: 14px; border-left: 2px solid var(--line); }
+
   @font-face {
     font-family: 'Space Grotesk';
     src: url('/assets/space-grotesk.woff2') format('woff2');

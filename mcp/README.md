@@ -21,7 +21,8 @@ This version exposes five read-only tools:
 | Tool | Result |
 | --- | --- |
 | `list_meetings` | Authorized meetings in a time window |
-| `pending_actions` | Authorized pending/overdue action items |
+| `pending_actions` | Historical minutes actions grouped by deadline; no completion status |
+| `list_commitments` | Current recorded lifecycle, authorized links and source snapshots; read-only |
 | `search_meetings` | Bounded search over transcripts, minutes, and notes, with cursors/source links |
 | `who_said` | Matching attributed excerpts with context/source links |
 | `get_meeting` | Authorized meeting metadata and available text artifacts |
@@ -112,7 +113,8 @@ Esta versão expõe cinco tools read-only:
 | Tool | Resultado |
 | --- | --- |
 | `list_meetings` | Reuniões autorizadas numa janela de tempo |
-| `pending_actions` | Tarefas pendentes/atrasadas de reuniões autorizadas |
+| `pending_actions` | Ações históricas das atas por prazo; não confirma conclusão |
+| `list_commitments` | Estado atual registrado dos combinados, vínculos e consultas autorizadas; somente leitura |
 | `search_meetings` | Busca limitada em transcrições, atas e notas, com cursores/links de fonte |
 | `who_said` | Trechos atribuídos com contexto/links de fonte |
 | `get_meeting` | Metadados e artefatos textuais disponíveis de uma reunião autorizada |
