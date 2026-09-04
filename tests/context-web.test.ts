@@ -171,6 +171,30 @@ describe('contexto e operação pelo servidor HTTP real', () => {
       new URLSearchParams(body).toString(),
     );
 
+  it('abre o grupo e a menção individual com formulários que preservam a seleção', async () => {
+    const first = await fixture();
+    const second = await fixture(first.initiator);
+    const cookie = signedSession(first.initiator);
+    await contextRuntime().service.mergeForUser(first.initiator, first.entry.id, second.entry.id);
+    const group = await get(`/app/contexto?group=${first.entry.id}`, cookie);
+    expect(group.status).toBe(200);
+    expect(group.body).toContain(`<section id="c-${first.entry.id}">`);
+    expect(group.body).toContain(`<section id="c-${second.entry.id}">`);
+    expect(group.body.match(/<article class="context-card">/g)).toHaveLength(1);
+    expect(group.body).toContain(`name="group" value="${first.entry.id}"`);
+    const individual = await get(`/app/contexto?commitment=${second.entry.id}`, cookie);
+    expect(individual.status).toBe(200);
+    expect(individual.body).toContain(`<section id="c-${second.entry.id}">`);
+    expect(individual.body).not.toContain(`<section id="c-${first.entry.id}">`);
+    expect(individual.body).toContain(`action="/app/contexto/${second.entry.id}/separar"`);
+    expect(individual.body).toContain(`name="other" value="${first.entry.id}"`);
+    const changed = await post(`/app/contexto/${second.entry.id}/estado`, cookie, {
+      status: 'confirmed',
+      commitment: second.entry.id,
+    });
+    expect(changed.headers.location).toBe(`/app/contexto?saved=1&commitment=${second.entry.id}#c-${second.entry.id}`);
+  });
+
   it('exige login e bloqueia sessão restrita à revogação antes de ler ou alterar compromissos', async () => {
     const f = await fixture();
     const anonymous = await get(`/app/contexto?meeting=${f.id}`);

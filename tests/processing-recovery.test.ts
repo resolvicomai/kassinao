@@ -2,7 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchWithDeadline, fetchWithRetry, UpstreamBodyLimitError } from '../src/processing/http';
+import {
+  fetchWithDeadline,
+  fetchWithRetry,
+  UpstreamBodyLimitError,
+  UpstreamResponseLostError,
+} from '../src/processing/http';
 import { RemoteDeletionQueue } from '../src/processing/remoteDeletion';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -33,6 +38,34 @@ describe('prazo HTTP inclui o corpo e todas as tentativas', () => {
     ).rejects.toBeInstanceOf(UpstreamBodyLimitError);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it.each(['POST', 'PATCH', 'GET', 'DELETE'])(
+    'corpo perdido de %s só permite repetir métodos idempotentes',
+    async (method) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            new ReadableStream({
+              pull(controller) {
+                controller.error(new Error('synthetic response stream failure'));
+              },
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(Response.json({ id: 'second-job' }));
+      vi.stubGlobal('fetch', fetchMock);
+      const result = fetchWithRetry('https://provider.invalid/transcript', { method }, { attempts: 2 });
+      if (method === 'POST' || method === 'PATCH') {
+        await expect(result).rejects.toBeInstanceOf(UpstreamResponseLostError);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      } else {
+        expect(await (await result).json()).toEqual({ id: 'second-job' });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
 });
 
 describe('exclusões remotas sobrevivem ao processo', () => {

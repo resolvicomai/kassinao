@@ -164,6 +164,25 @@ export class UpstreamBodyLimitError extends Error {
   }
 }
 
+/** O servidor aceitou uma operação não idempotente; repetir pode cobrar/criar outro job. */
+export class UpstreamResponseLostError extends Error {
+  constructor(status: number, cause: unknown) {
+    super(`upstream HTTP ${status} response unavailable after acceptance`, { cause });
+    this.name = 'UpstreamResponseLostError';
+  }
+}
+
+/** Envelope de uma operação paga aceita: formato ilegível não autoriza repetir a operação. */
+export async function readProviderResponse(response: Response): Promise<Record<string, unknown>> {
+  try {
+    const value: unknown = await response.json();
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid provider envelope');
+    return value as Record<string, unknown>;
+  } catch (error) {
+    throw new UpstreamResponseLostError(response.status, error);
+  }
+}
+
 /** Retorna resposta já materializada: json()/text() não podem ficar presos no socket. */
 export async function fetchWithDeadline(
   url: string,
@@ -189,6 +208,11 @@ export async function fetchWithDeadline(
     }
   } catch (error) {
     void reader.cancel().catch(() => undefined);
+    if (
+      response.ok &&
+      !['GET', 'HEAD', 'OPTIONS', 'TRACE', 'PUT', 'DELETE'].includes((init.method ?? 'GET').toUpperCase())
+    )
+      throw new UpstreamResponseLostError(response.status, error);
     throw error;
   } finally {
     reader.releaseLock();
@@ -220,8 +244,9 @@ export async function fetchWithRetry(url: string, init: RequestInit, opts: Retry
     let waitMs = 2000 * (i + 1);
     try {
       const resp = await fetchWithDeadline(url, { ...init, signal }, { maxResponseBytes: opts.maxResponseBytes });
-      throwIfAborted(signal);
+      // Um resultado já recebido ainda precisa chegar ao chamador para registrar seu job.
       if (resp.ok) return resp;
+      throwIfAborted(signal);
       const body = (await resp.text()).slice(0, 400);
       lastErr = new UpstreamHttpError(
         resp.status,
@@ -235,6 +260,7 @@ export async function fetchWithRetry(url: string, init: RequestInit, opts: Retry
         break; // 4xx (menos 429) não melhora com retry
       }
     } catch (err) {
+      if (err instanceof UpstreamResponseLostError) throw err;
       // Abort operacional/timeout é terminal. Retentar com o mesmo sinal só
       // martelaria o provider depois de a guild ter saído do perímetro.
       if (signal.aborted) throw abortReason(signal, err as Error);

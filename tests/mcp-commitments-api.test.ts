@@ -13,11 +13,14 @@ import { mountMcpApi, resetMcpApiRateLimitsForTests } from '../src/web/api';
 import { signMcpAccess } from '../src/web/auth';
 import { createSession, revokeUser, type McpContent } from '../src/web/mcpTokens';
 
-const recipientAccess = vi.hoisted(() => ({ allowed: true }));
+const recipientAccess = vi.hoisted(() => ({ allowed: true, unavailable: false }));
 vi.mock('../src/integrations/access', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../src/integrations/access')>()),
   createRecipientArtifactAccess: () => ({
-    canRead: async () => recipientAccess.allowed,
+    canRead: async () => {
+      if (recipientAccess.unavailable) throw new Error('synthetic private upstream detail');
+      return recipientAccess.allowed;
+    },
     recipientCredentialsStatus: () => ({ github: true, jira: true }),
   }),
 }));
@@ -160,6 +163,7 @@ describe('read-only commitment lifecycle through MCP', () => {
   beforeEach(() => {
     resetMcpApiRateLimitsForTests();
     recipientAccess.allowed = true;
+    recipientAccess.unavailable = false;
   });
   afterAll(async () => {
     await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
@@ -205,6 +209,20 @@ describe('read-only commitment lifecycle through MCP', () => {
     const full = await get('?status=confirmed', token(['minutes', 'transcript']));
     expect(JSON.stringify(await full.json())).toContain('raw-source-quote');
     expect((await get('', token(['transcript']))).status).toBe(403);
+  });
+
+  it('reports unavailable source checks without exposing links or presenting missing evidence as complete data', async () => {
+    recipientAccess.unavailable = true;
+    const response = await get('?status=confirmed');
+    expect(response.status).toBe(200);
+    const page = await response.json();
+    expect(page).toMatchObject({
+      sourceAccessIncomplete: true,
+      commitments: [{ id: orderedIds[0], sourceAccessIncomplete: true, links: [], effectiveCompletion: null }],
+    });
+    expect(page.commitments[0].contextUrl).toContain(`?commitment=${orderedIds[0]}`);
+    expect(JSON.stringify(page)).not.toContain('example/visible');
+    expect(JSON.stringify(page)).not.toContain('synthetic private upstream detail');
   });
 
   it('binds cursors to user, session/scope and filters but allows lifecycle changes during pagination', async () => {

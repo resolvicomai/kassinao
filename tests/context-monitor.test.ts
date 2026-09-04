@@ -54,6 +54,7 @@ describe('context monitor with synthetic Discord and source data', () => {
 
   beforeEach(async () => {
     vi.resetModules();
+    vi.stubEnv('DEFAULT_LOCALE', 'pt');
     vi.useFakeTimers();
     vi.setSystemTime(startAt);
     vi.stubGlobal('fetch', sourceFetch);

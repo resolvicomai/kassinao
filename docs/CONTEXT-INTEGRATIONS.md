@@ -67,7 +67,7 @@ O operador só deve criar uma concessão após confirmar o acesso daquela pessoa
 
 Sem credencial pessoal, o vínculo Jira/GitHub não é exibido nem aceito. O verificador faz somente GET da issue ou PR exata, sem redirecionar e sem enviar texto de reunião. A conta técnica nunca é usada como alternativa. Respostas 401, 403 e 404 ocultam a fonte; timeout, rate limit e resposta inválida indicam indisponibilidade temporária em vez de fingir acesso confirmado ou lista vazia. O corpo fica limitado a 128 KiB.
 
-Consultas repetidas à mesma referência são reaproveitadas somente dentro da operação atual. A próxima leitura ou preparação de informativo consulta a origem novamente, de modo que revogar o token ou o acesso na origem bloqueia a operação seguinte. Cada operação admite até 100 referências distintas e tem orçamento total de 10 segundos; exceder o orçamento indica indisponibilidade temporária. Tokens não são persistidos no estado dos compromissos, devolvidos pela API nem incluídos em logs. O painel recebe apenas indicadores de credencial GitHub/Jira configurada, sem tokens, emails ou tenants.
+Consultas repetidas à mesma referência são reaproveitadas somente dentro da operação atual. A próxima leitura ou preparação de informativo consulta a origem novamente, de modo que revogar o token ou o acesso na origem bloqueia a operação seguinte. Cada operação admite até 100 referências distintas e tem orçamento total de 10 segundos; exceder o orçamento deixa a leitura parcial, com `sourceAccessIncomplete` e fontes não confirmadas ocultas. Mutações continuam recusadas quando falta confirmação. Itens com consulta incompleta não são reconhecidos no informativo; rodadas seguintes alternam os combinados seguidos para alcançar o restante do acervo. Tokens não são persistidos no estado dos compromissos, devolvidos pela API nem incluídos em logs. O painel recebe apenas indicadores de credencial GitHub/Jira configurada, sem tokens, emails ou tenants.
 
 Documentos continuam apenas como links manuais por concessão e origem autorizada. Não há consulta de conteúdo nem confirmação genérica de acesso documental com esse mapeamento; esses links não devem ser apresentados como leitura verificada.
 
@@ -91,7 +91,7 @@ Prazos relativos usam a data/fuso da reunião. A transição para hoje e depois 
 
 ## Estado e operação
 
-O arquivo `STATE_DIR/commitments.json` usa escrita atômica com modo 0600, seguindo o mesmo contrato dos demais estados do aplicativo. Contém compromissos, referências, snapshots mínimos e preferências; não contém tokens. Os callbacks de exclusão e retenção devem chamar `removeMeeting`, e a reconciliação do acervo no boot deve chamar `removeMissingMeetings`.
+O arquivo `STATE_DIR/commitments.json` recusa crescimento acima de 32 MiB antes da escrita, preservando o acervo anterior. A limpeza ainda pode reduzir um arquivo legado de até 128 MiB. Usa escrita atômica com modo 0600, seguindo o mesmo contrato dos demais estados do aplicativo. Contém compromissos, referências, snapshots mínimos e preferências; não contém tokens. Os callbacks de exclusão e retenção devem chamar `removeMeeting`, e a reconciliação do acervo no boot deve chamar `removeMissingMeetings`.
 
 Não misture remoção do áudio com remoção da reunião: os compromissos podem continuar úteis durante a retenção do texto. Quando a reunião inteira expira, compromisso, vínculos e preferências correspondentes são removidos juntos. Backups seguem a política independente do operador.
 

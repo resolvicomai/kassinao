@@ -1399,7 +1399,7 @@ export function mountMcpApi(app: Express): void {
           id: entry.id,
           meetingId: entry.meetingId,
           meetingUrl: pageUrl(entry.meetingId),
-          contextUrl: `${config.appUrl}/app/contexto?meeting=${encodeURIComponent(entry.meetingId)}`,
+          contextUrl: `${config.appUrl}/app/contexto?commitment=${encodeURIComponent(entry.id)}`,
           guildId: entry.guildId,
           channelId: entry.channelId,
           meetingStartedAtISO: formatInTz(entry.meetingStartedAt),
@@ -1412,6 +1412,7 @@ export function mountMcpApi(app: Express): void {
           completionRule: entry.completionRule ?? null,
           effectiveCompletion: entry.effectiveCompletion ?? null,
           sourcePresent: entry.sourcePresent,
+          sourceAccessIncomplete: entry.sourceAccessIncomplete === true,
           lastStatusBy: entry.lastStatusBy ?? null,
           lastStatusAt: entry.lastStatusAt ?? null,
           updatedAt: entry.updatedAt,
@@ -1441,6 +1442,7 @@ export function mountMcpApi(app: Express): void {
       res.json({
         commitments,
         returned: commitments.length,
+        sourceAccessIncomplete: commitments.some((entry) => entry.sourceAccessIncomplete),
         limit,
         scannedMeetings: visible.metas.length,
         meetingsTruncated: visible.truncated,
@@ -1450,7 +1452,7 @@ export function mountMcpApi(app: Express): void {
         nextCursor,
         nextScanCursor: nextCursor ? null : visible.nextScanCursor,
         semantics:
-          'Current recorded lifecycle. Mentioned is not confirmed. External merge or issue state does not confirm completion or deployment.',
+          'Current recorded lifecycle. Mentioned is not confirmed. External merge or issue state does not confirm completion or deployment. sourceAccessIncomplete means some source checks were unavailable or exceeded the read budget; hidden links and null evidence do not prove unfinished work. Retry with a smaller limit or use the item contextUrl.',
       });
     }),
   );

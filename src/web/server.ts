@@ -1746,12 +1746,29 @@ export function createWebApp(): Express {
         : undefined;
     const channelId =
       typeof req.query.channel === 'string' && /^\d{1,30}$/.test(req.query.channel) ? req.query.channel : undefined;
+    const commitmentId =
+      typeof req.query.commitment === 'string' && /^[a-f0-9]{32}$/.test(req.query.commitment)
+        ? req.query.commitment
+        : undefined;
+    const groupId =
+      !commitmentId && typeof req.query.group === 'string' && /^[a-f0-9]{32}$/.test(req.query.group)
+        ? req.query.group
+        : undefined;
+    const page =
+      typeof req.query.page === 'string' && /^(?:[1-9]\d?|100)$/.test(req.query.page) ? Number(req.query.page) : 1;
     try {
       await withContextAccess(async () => {
         const runtime = contextRuntime();
-        const entries = (await runtime.service.listForUser(user.id, { meetingId })).filter(
-          (entry) => !channelId || entry.channelId === channelId,
-        );
+        const candidates = await runtime.service.listForUser(user.id, {
+          meetingId,
+          channelId,
+          commitmentId,
+          groupOf: groupId,
+          includeRelatedMentions: true,
+          offset: (page - 1) * 100,
+          limit: 101,
+        });
+        const entries = candidates.slice(0, 100);
         const suggestions = Object.fromEntries(
           entries.map((entry) => [
             entry.id,
@@ -1777,6 +1794,10 @@ export function createWebApp(): Express {
             entries,
             meetingId,
             channelId,
+            commitmentId,
+            groupId,
+            page,
+            nextPage: candidates.length > 100 ? page + 1 : undefined,
             suggestions,
             channelLabels: Object.fromEntries(
               entries.map((entry) => [
@@ -1888,7 +1909,15 @@ export function createWebApp(): Express {
             typeof body.channel === 'string' && /^\d{1,30}$/.test(body.channel)
               ? `&channel=${encodeURIComponent(body.channel)}`
               : '';
-          res.redirect(303, `/app/contexto?saved=1${meeting}${channel}#c-${req.params.id}`);
+          const page =
+            typeof body.page === 'string' && /^(?:[1-9]\d?|100)$/.test(body.page) ? `&page=${body.page}` : '';
+          const commitment =
+            typeof body.commitment === 'string' && /^[a-f0-9]{32}$/.test(body.commitment)
+              ? `&commitment=${body.commitment}`
+              : '';
+          const group =
+            typeof body.group === 'string' && /^[a-f0-9]{32}$/.test(body.group) ? `&group=${body.group}` : '';
+          res.redirect(303, `/app/contexto?saved=1${meeting}${channel}${page}${commitment}${group}#c-${req.params.id}`);
         });
       } catch (error) {
         if (error instanceof CommitmentAuthorizationUnavailableError) {

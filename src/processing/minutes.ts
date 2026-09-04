@@ -16,6 +16,7 @@ import {
   assertGuildWorkActive,
   currentGuildWorkContext,
   fetchWithRetry,
+  readProviderResponse,
   GuildWorkContext,
 } from './http';
 import { msToClock } from '../time';
@@ -340,7 +341,7 @@ export async function llmChat(
     },
     { attempts: 4, maxWaitMs: 90_000 },
   );
-  const data = (await resp.json()) as {
+  const data = (await readProviderResponse(resp)) as {
     choices?: {
       message?: { content?: string };
       finish_reason?: string;

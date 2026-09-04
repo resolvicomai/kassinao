@@ -37,6 +37,14 @@ export function localeOf(discordLocale: string | undefined): Locale {
 type Strings = Record<string, { pt: string; en: string }>;
 
 const STRINGS: Strings = {
+  'context.digest': {
+    pt: 'Você tem {count} atualização(ões) nos combinados que acompanha. Consulte com seu acesso atual: {url}',
+    en: 'You have {count} update(s) to commitments you follow. View them with your current access: {url}',
+  },
+  'context.event': {
+    pt: 'Um evento agendado no Discord começa em até 30 minutos em um canal cujos combinados você acompanha. Prepare-se com seu acesso atual: {url}',
+    en: 'A scheduled Discord event starts within 30 minutes in a channel whose commitments you follow. Prepare with your current access: {url}',
+  },
   // erros e avisos
   'err.generic': {
     pt: '❌ Deu ruim aqui do meu lado. Tenta de novo?',

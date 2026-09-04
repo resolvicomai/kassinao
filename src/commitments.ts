@@ -69,9 +69,13 @@ export interface Commitment {
   completionRule?: CommitmentCompletionRule;
 }
 export interface CommitmentView extends Commitment {
+  /** Some external ACL checks failed or exceeded this read's budget; those sources stay hidden. */
+  sourceAccessIncomplete?: boolean;
   /** Derived exclusively from visible records in this response. */
   groupId?: string;
   directRelatedIds?: string[];
+  /** Web-only navigation; each direct neighbour is independently authorized, even outside this page. */
+  relatedMentions?: Pick<Commitment, 'id' | 'meetingStartedAt' | 'task'>[];
   channelFollowed?: boolean;
   effectiveCompletion?: { url: string; state: 'done' | 'merged'; checkedAt: number };
   preference: CommitmentPreference;
@@ -135,6 +139,10 @@ export class CommitmentAuthorizationUnavailableError extends Error {
   }
 }
 export class CommitmentInputError extends Error {}
+export class CommitmentCapacityError extends CommitmentInputError {}
+
+const MAX_STATE_BYTES = 32 * 1024 * 1024;
+const MAX_LEGACY_STATE_BYTES = 128 * 1024 * 1024;
 
 const statuses: CommitmentStatus[] = ['mentioned', 'confirmed', 'completed', 'cancelled'];
 const hash = (value: unknown): string => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -477,11 +485,19 @@ function changeReason(commitment: CommitmentView, previous?: SeenState): string 
 
 function loadCommitmentState(file: string): CommitmentState {
   try {
-    if (fs.statSync(file).size > 32 * 1024 * 1024) throw new Error('Commitment state exceeds size limit');
+    if (fs.statSync(file).size > MAX_LEGACY_STATE_BYTES)
+      throw new CommitmentCapacityError('Commitment state exceeds recovery size limit');
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
   }
   return readJsonState(file, empty(), validState);
+}
+
+function saveCommitmentState(file: string, state: CommitmentState, shrinking = false): void {
+  const bytes = Buffer.byteLength(JSON.stringify(state, null, 2));
+  if (bytes > MAX_STATE_BYTES && (!shrinking || bytes >= fs.statSync(file).size))
+    throw new CommitmentCapacityError('Limite de armazenamento dos combinados atingido.');
+  writeJsonStateAtomic(file, state);
 }
 
 /** Retention/deletion hook independent of runtime credentials, provider configuration and recipient ACLs. */
@@ -504,7 +520,7 @@ export function removeStoredMeetingCommitments(stateDir: string, meetingId: stri
     if (entry.history)
       entry.history = entry.history.filter((event) => !event.relatedId || !removed.has(event.relatedId));
   }
-  if (removed.size) writeJsonStateAtomic(file, state);
+  if (removed.size) saveCommitmentState(file, state, true);
 }
 
 /** Persistent commitments, exact external references and per-recipient digests. This module never sends messages. */
@@ -514,11 +530,13 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
   const timezone = options.timezone ?? 'UTC';
   const maxRequests = Math.max(1, Math.min(100, options.maxRequestsPerReconcile ?? 20));
   let reconciling = false;
+  // ponytail: process-local fairness cursor; restart resumes from the first followed record.
+  const digestCursors = new Map<string, string>();
   function load(): CommitmentState {
     return loadCommitmentState(file);
   }
   function save(state: CommitmentState): void {
-    writeJsonStateAtomic(file, state);
+    saveCommitmentState(file, state);
   }
   async function canRead(userId: string, meetingId: string): Promise<boolean> {
     try {
@@ -555,9 +573,19 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
     userState?: UserState,
     channelFollowed = false,
   ): Promise<CommitmentView> {
+    let sourceAccessIncomplete = false;
+    const canExpose = async (reference: ArtifactReference): Promise<boolean> => {
+      try {
+        return await canReadArtifact(userId, reference, entry);
+      } catch (error) {
+        if (!(error instanceof CommitmentAuthorizationUnavailableError)) throw error;
+        sourceAccessIncomplete = true;
+        return false;
+      }
+    };
     const links: CommitmentLink[] = [];
     for (const link of entry.links)
-      if (await canReadArtifact(userId, link.reference, entry))
+      if (await canExpose(link.reference))
         links.push(
           link.reference.kind === 'document'
             ? {
@@ -574,7 +602,7 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
         );
     const history: CommitmentHistory[] = [];
     for (const event of entry.history ?? []) {
-      if (!event.reference || (await canReadArtifact(userId, event.reference, entry))) history.push(event);
+      if (!event.reference || (await canExpose(event.reference))) history.push(event);
     }
     const visibleUrls = new Set(links.map((link) => link.reference.url));
     const hiddenRule = entry.completionRule?.kind === 'artifact' && !visibleUrls.has(entry.completionRule.url);
@@ -583,6 +611,7 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
     const lastNotice = userState?.lastNotice;
     return {
       ...visible,
+      sourceAccessIncomplete,
       ...deadlineInfo(visible, now(), timezone),
       ...(hiddenRule && !['completed', 'cancelled'].includes(entry.status)
         ? { deadlineState: 'unknown' as const }
@@ -749,7 +778,7 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
         }
       }
       if (Object.keys(state.commitments).length > 10_000)
-        throw new CommitmentInputError('Limite do acervo de compromissos atingido.');
+        throw new CommitmentCapacityError('Limite do acervo de compromissos atingido.');
       save(state);
       return result;
     },
@@ -757,6 +786,14 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
       userId: string,
       filter: {
         meetingId?: string;
+        channelId?: string;
+        commitmentId?: string;
+        groupOf?: string;
+        includeRelatedMentions?: boolean;
+        followedOnly?: boolean;
+        offset?: number;
+        /** Internal digest rotation; wraps around so every followed record gets checked. */
+        startAfterId?: string;
         /** Ordered, already bounded meeting page; avoids rereading state per meeting. */
         meetingIds?: string[];
         after?: { meetingId: string; commitmentId: string };
@@ -769,9 +806,35 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
         throw new CommitmentInputError('Página de reuniões inválida.');
       if (filter.limit !== undefined && (!Number.isInteger(filter.limit) || filter.limit < 1 || filter.limit > 101))
         throw new CommitmentInputError('Limite inválido.');
+      if (
+        filter.offset !== undefined &&
+        (!Number.isInteger(filter.offset) || filter.offset < 0 || filter.offset > 10_000)
+      )
+        throw new CommitmentInputError('Página inválida.');
       if (filter.status && !statuses.includes(filter.status)) throw new CommitmentInputError('Estado inválido.');
+      for (const id of [filter.commitmentId, filter.groupOf])
+        if (id !== undefined && !/^[a-f0-9]{32}$/.test(id)) throw new CommitmentInputError('Combinado inválido.');
       const state = load();
       const access = new Map<string, boolean>();
+      const canReadEntry = async (entry: Commitment): Promise<boolean> => {
+        if (!access.has(entry.meetingId)) access.set(entry.meetingId, await canRead(userId, entry.meetingId));
+        return access.get(entry.meetingId)!;
+      };
+      let selectedGroup: Set<string> | undefined;
+      if (filter.groupOf) {
+        selectedGroup = new Set();
+        const examined = new Set<string>();
+        const pending = [filter.groupOf];
+        while (pending.length) {
+          const id = pending.pop()!;
+          if (examined.has(id)) continue;
+          examined.add(id);
+          const entry = state.commitments[id];
+          if (!entry || !(await canReadEntry(entry))) continue;
+          selectedGroup.add(id);
+          pending.push(...(entry.relatedIds ?? []));
+        }
+      }
       const followedChannels = new Set(
         (state.channelPreferences ?? [])
           .filter((item) => item.userId === userId && item.mode === 'follow')
@@ -782,7 +845,15 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
       const entries = Object.values(state.commitments)
         .filter(
           (entry) =>
+            (!filter.commitmentId || entry.id === filter.commitmentId) &&
+            (!selectedGroup || selectedGroup.has(entry.id)) &&
             (!filter.meetingId || entry.meetingId === filter.meetingId) &&
+            (!filter.channelId || entry.channelId === filter.channelId) &&
+            (!filter.followedOnly ||
+              ((state.users[userId]?.[entry.id]?.snoozedUntil ?? 0) <= now() &&
+                (state.users[userId]?.[entry.id] && state.users[userId][entry.id].modeExplicit !== false
+                  ? state.users[userId][entry.id].mode === 'follow'
+                  : followedChannels.has(hash([entry.guildId, entry.channelId]))))) &&
             (!order || order.has(entry.meetingId)) &&
             (!filter.status || entry.status === filter.status) &&
             (!filter.after || entry.meetingId !== filter.after.meetingId || entry.id > filter.after.commitmentId),
@@ -792,10 +863,13 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
             (order ? order.get(a.meetingId)! - order.get(b.meetingId)! : b.meetingStartedAt - a.meetingStartedAt) ||
             a.id.localeCompare(b.id),
         );
-      for (const entry of entries) {
+      const rotation = filter.startAfterId ? entries.findIndex((entry) => entry.id === filter.startAfterId) + 1 : 0;
+      const ordered = rotation ? [...entries.slice(rotation), ...entries.slice(0, rotation)] : entries;
+      let skippedVisible = 0;
+      for (const entry of ordered) {
         if (result.length >= (filter.limit ?? Infinity)) break;
-        if (!access.has(entry.meetingId)) access.set(entry.meetingId, await canRead(userId, entry.meetingId));
-        if (access.get(entry.meetingId))
+        if (await canReadEntry(entry)) {
+          if (skippedVisible++ < (filter.offset ?? 0)) continue;
           result.push(
             await view(
               userId,
@@ -804,11 +878,20 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
               followedChannels.has(hash([entry.guildId, entry.channelId])),
             ),
           );
+        }
       }
       // Never traverse hidden nodes or use their IDs in a visible group key.
       const visible = new Map(result.map((entry) => [entry.id, entry]));
       const visited = new Set<string>();
       for (const entry of result) {
+        if (filter.includeRelatedMentions) {
+          entry.relatedMentions = [];
+          for (const id of entry.relatedIds ?? []) {
+            const related = state.commitments[id];
+            if (related && (await canReadEntry(related)))
+              entry.relatedMentions.push({ id, meetingStartedAt: related.meetingStartedAt, task: related.task });
+          }
+        }
         entry.directRelatedIds = (entry.relatedIds ?? []).filter((id) => visible.has(id));
         entry.history = entry.history
           ?.filter((event) => !event.relatedId || visible.has(event.relatedId))
@@ -1187,10 +1270,22 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
       }
     },
     async prepareDigest(userId: string): Promise<CommitmentDigest> {
-      const views = await service.listForUser(userId);
+      const views = await service.listForUser(userId, {
+        followedOnly: true,
+        limit: 100,
+        startAfterId: digestCursors.get(userId),
+      });
+      const firstIncomplete = views.findIndex((entry) => entry.sourceAccessIncomplete);
+      const lastChecked = firstIncomplete < 0 ? views.at(-1) : views[Math.max(0, firstIncomplete - 1)];
+      if (lastChecked) {
+        digestCursors.delete(userId);
+        digestCursors.set(userId, lastChecked.id);
+        if (digestCursors.size > 1000) digestCursors.delete(digestCursors.keys().next().value!);
+      }
       const state = load();
       const items: CommitmentDigestItem[] = [];
       for (const commitment of views) {
+        if (commitment.sourceAccessIncomplete) continue;
         if (commitment.preference.mode === 'mute' || (commitment.preference.snoozedUntil || 0) > now()) continue;
         const previous = state.users[userId]?.[commitment.id]?.seen;
         const current = seenState(commitment, now(), timezone);
@@ -1213,6 +1308,7 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
         const entry = load().commitments[item.commitment.id];
         if (!entry || !(await canRead(userId, entry.meetingId))) continue;
         const visible = await view(userId, entry);
+        if (visible.sourceAccessIncomplete) continue;
         const seen = seenState(visible, now(), timezone);
         // Do not acknowledge a change that happened after this digest was prepared.
         if (seen.fingerprint === item.fingerprint)

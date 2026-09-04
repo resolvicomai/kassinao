@@ -2123,6 +2123,10 @@ export function contextPage(opts: {
   channelLabels?: Record<string, string>;
   meetingId?: string;
   channelId?: string;
+  commitmentId?: string;
+  groupId?: string;
+  page?: number;
+  nextPage?: number;
   configured: boolean;
   flash?: string;
   upcoming?: { name: string; at: number; channelId?: string; channelName: string; url: string }[];
@@ -2181,7 +2185,23 @@ export function contextPage(opts: {
   );
   const returnField =
     (opts.meetingId ? `<input type="hidden" name="meeting" value="${esc(opts.meetingId)}">` : '') +
-    (opts.channelId ? `<input type="hidden" name="channel" value="${esc(opts.channelId)}">` : '');
+    (opts.channelId ? `<input type="hidden" name="channel" value="${esc(opts.channelId)}">` : '') +
+    (opts.commitmentId ? `<input type="hidden" name="commitment" value="${esc(opts.commitmentId)}">` : '') +
+    (opts.groupId ? `<input type="hidden" name="group" value="${esc(opts.groupId)}">` : '') +
+    (opts.page ? `<input type="hidden" name="page" value="${opts.page}">` : '');
+  const page = opts.page ?? 1;
+  const pageUrl = (target: number) => {
+    const query = new URLSearchParams({ page: String(target) });
+    if (opts.meetingId) query.set('meeting', opts.meetingId);
+    if (opts.channelId) query.set('channel', opts.channelId);
+    if (opts.commitmentId) query.set('commitment', opts.commitmentId);
+    if (opts.groupId) query.set('group', opts.groupId);
+    return `/app/contexto?${esc(query.toString())}`;
+  };
+  const pagination =
+    opts.page === undefined
+      ? ''
+      : `<nav aria-label="${t('Páginas de combinados', 'Commitment pages')}"><p>${t('Página', 'Page')} ${page}. ${t('Contagens e grupos refletem as menções desta página.', 'Counts and groups reflect mentions on this page.')}</p>${page > 1 ? `<a class="btn secondary" href="${pageUrl(page - 1)}" rel="prev">${t('Anterior', 'Previous')}</a>` : ''}${opts.nextPage ? ` <a class="btn secondary" href="${pageUrl(opts.nextPage)}" rel="next">${t('Próxima', 'Next')}</a>` : ''}</nav>`;
   const channels = new Map(opts.entries.map((entry) => [`${entry.guildId}:${entry.channelId}`, entry]));
   const subscriptions = [...channels]
     .map(
@@ -2189,81 +2209,88 @@ export function contextPage(opts: {
         `<li><strong>#${esc(opts.channelLabels?.[key] ?? entry.channelId)}</strong><form method="post" action="/app/contexto/${entry.id}/canal">${returnField}<input type="hidden" name="mode" value="${entry.channelFollowed ? 'mute' : 'follow'}"><button class="btn secondary" type="submit">${entry.channelFollowed ? t('Parar acompanhamento automático do canal', 'Stop automatic channel following') : t('Acompanhar este canal e suas próximas atas', 'Follow this channel and its future minutes')}</button></form></li>`,
     )
     .join('');
-  const cards = [...groups.values()]
-    .map((members) => {
-      const entry = members[0];
-      const action = `/app/contexto/${entry.id}`;
-      const relatedIds = members.slice(1).map((member) => member.id);
-      const applyGroup = relatedIds.length
-        ? `<label><input type="checkbox" name="related" value="${esc(relatedIds.join(','))}">${t('Aplicar também às outras menções visíveis deste combinado', 'Also apply to the other visible mentions of this commitment')}</label>`
+  const renderMention = (entry: (typeof opts.entries)[number], members: typeof opts.entries) => {
+    const action = `/app/contexto/${entry.id}`;
+    const relatedIds = members.filter((member) => member.id !== entry.id).map((member) => member.id);
+    const applyGroup = relatedIds.length
+      ? `<label><input type="checkbox" name="related" value="${esc(relatedIds.join(','))}">${t('Aplicar também às outras menções visíveis deste combinado', 'Also apply to the other visible mentions of this commitment')}</label>`
+      : '';
+    const relatedMembers =
+      entry.relatedMentions ?? members.filter((member) => (entry.directRelatedIds ?? []).includes(member.id));
+    const related = relatedMembers.length
+      ? `<p><a href="/app/contexto?group=${entry.id}">${t('Ver grupo de menções relacionadas', 'View the group of related mentions')}</a></p><details><summary>${relatedMembers.length} ${t('menções diretamente relacionadas', 'directly related mentions')}</summary><ul>${relatedMembers
+          .map(
+            (member) =>
+              `<li><a href="/app/contexto?commitment=${member.id}">${esc(member.task)} · ${dateOnly(member.meetingStartedAt, opts.lang)}</a><form method="post" action="${action}/separar">${returnField}<input type="hidden" name="other" value="${member.id}"><button class="btn secondary" type="submit">${t('Separar da menção de', 'Separate from the mention on')} ${dateOnly(member.meetingStartedAt, opts.lang)}</button></form></li>`,
+          )
+          .join('')}</ul></details>`
+      : '';
+    const sourceWarning = entry.sourceAccessIncomplete
+      ? `<p class="note">${t('Consulta incompleta: algumas fontes não puderam ser verificadas agora.', 'Incomplete lookup: some sources could not be verified right now.')} <a href="/app/contexto?commitment=${entry.id}">${t('Consultar somente esta menção', 'Look up only this mention')}</a></p>`
+      : '';
+    const otherEntries = opts.entries.filter(
+      (other) => other.id !== entry.id && (other.groupId ?? other.id) !== (entry.groupId ?? entry.id),
+    );
+    const merge = otherEntries.length
+      ? `<details><summary>${t('É o mesmo combinado de outra reunião?', 'Is this the same commitment from another meeting?')}</summary><p>${t('Confira as falas antes de reunir. Os registros e suas permissões continuam separados.', 'Check the sources before grouping. Records and their permissions remain separate.')}</p><form method="post" action="${action}/unificar">${returnField}<label>${t('Outra menção visível', 'Another visible mention')}<select name="other">${otherEntries
+          .slice(0, 100)
+          .map(
+            (other) =>
+              `<option value="${other.id}">${esc(other.task)} · ${dateOnly(other.meetingStartedAt, opts.lang)}</option>`,
+          )
+          .join(
+            '',
+          )}</select></label><button class="btn secondary" type="submit">${t('Confirmar que é o mesmo combinado', 'Confirm this is the same commitment')}</button></form></details>`
+      : '';
+    const history = entry.history?.length
+      ? `<details><summary>${t('Histórico de alterações', 'Change history')}</summary><ol>${entry.history.map((change) => `<li>${datetime(change.at, opts.lang)} · ${esc(change.actorId)}: ${esc(change.before)} → ${esc(change.after)}</li>`).join('')}</ol></details>`
+      : '';
+    const ruleOptions = entry.links.flatMap((link) =>
+      link.reference.kind === 'jira-issue'
+        ? [{ url: link.reference.url, state: 'done', label: `Jira Done: ${link.reference.issueKey}` }]
+        : link.reference.kind === 'github-pull'
+          ? [
+              {
+                url: link.reference.url,
+                state: 'merged',
+                label: `PR integrado: ${link.reference.repository}#${link.reference.number}`,
+              },
+            ]
+          : [],
+    );
+    const completionRule =
+      ruleOptions.length || entry.completionRule?.kind === 'artifact'
+        ? `<details><summary>${t('Como confirmar a conclusão', 'How to confirm completion')}</summary><p>${t('Escolha uma evidência que conclui este combinado. Um PR integrado não comprova deploy. Sem leitura recente, o sistema volta a pedir verificação.', 'Choose evidence that completes this commitment. A merged PR does not prove deployment. Without a recent lookup, verification is required again.')}</p><form method="post" action="${action}/criterio">${returnField}<label>${t('Critério', 'Criterion')}<select name="rule"><option value="manual">${t('Confirmação manual', 'Manual confirmation')}</option>${ruleOptions.map((rule) => `<option value="${esc(`${rule.state}|${rule.url}`)}"${entry.completionRule?.kind === 'artifact' && entry.completionRule.url === rule.url && entry.completionRule.state === rule.state ? ' selected' : ''}>${esc(rule.label)}</option>`).join('')}</select></label>${applyGroup}<button class="btn secondary" type="submit">${t('Salvar critério', 'Save criterion')}</button></form></details>`
         : '';
-      const related =
-        members.length > 1
-          ? `<details><summary>${members.length} ${t('menções reunidas, confirmadas por uma pessoa', 'mentions grouped by a person')}</summary><ul>${members.map((member) => `<li id="${member.id === entry.id ? `mention-${member.id}` : `c-${member.id}`}"><a href="/app/rec/${encodeURIComponent(member.meetingId)}">${dateOnly(member.meetingStartedAt, opts.lang)}</a> · ${esc(member.task)} · ${status[member.status]}${member.source ? `<blockquote>${esc(member.source.quote)}</blockquote>` : ''}${(entry.directRelatedIds ?? []).includes(member.id) ? `<form method="post" action="${action}/separar">${returnField}<input type="hidden" name="other" value="${member.id}"><button class="btn secondary" type="submit">${t('Separar esta menção', 'Separate this mention')}</button></form>` : ''}</li>`).join('')}</ul></details>`
-          : '';
-      const otherEntries = opts.entries.filter(
-        (other) => other.id !== entry.id && (other.groupId ?? other.id) !== (entry.groupId ?? entry.id),
-      );
-      const merge = otherEntries.length
-        ? `<details><summary>${t('É o mesmo combinado de outra reunião?', 'Is this the same commitment from another meeting?')}</summary><p>${t('Confira as falas antes de reunir. Os registros e suas permissões continuam separados.', 'Check the sources before grouping. Records and their permissions remain separate.')}</p><form method="post" action="${action}/unificar">${returnField}<label>${t('Outra menção visível', 'Another visible mention')}<select name="other">${otherEntries
-            .slice(0, 100)
-            .map(
-              (other) =>
-                `<option value="${other.id}">${esc(other.task)} · ${dateOnly(other.meetingStartedAt, opts.lang)}</option>`,
-            )
-            .join(
-              '',
-            )}</select></label><button class="btn secondary" type="submit">${t('Confirmar que é o mesmo combinado', 'Confirm this is the same commitment')}</button></form></details>`
+    const evidence = entry.effectiveCompletion
+      ? `<p class="note">${t('Critério de conclusão confirmado na fonte', 'Completion criterion confirmed by the source')}: <a href="${esc(entry.effectiveCompletion.url)}" target="_blank" rel="noopener noreferrer">${esc(entry.effectiveCompletion.state)}</a> · ${datetime(entry.effectiveCompletion.checkedAt, opts.lang)}</p>`
+      : entry.completionRule?.kind === 'artifact'
+        ? `<p class="muted">${t('A conclusão depende de uma leitura recente da fonte escolhida. O estado manual permanece registrado.', 'Completion requires a recent lookup of the selected source. The manual status is preserved.')}</p>`
         : '';
-      const history = entry.history?.length
-        ? `<details><summary>${t('Histórico de alterações', 'Change history')}</summary><ol>${entry.history.map((change) => `<li>${datetime(change.at, opts.lang)} · ${esc(change.actorId)}: ${esc(change.before)} → ${esc(change.after)}</li>`).join('')}</ol></details>`
-        : '';
-      const ruleOptions = entry.links.flatMap((link) =>
-        link.reference.kind === 'jira-issue'
-          ? [{ url: link.reference.url, state: 'done', label: `Jira Done: ${link.reference.issueKey}` }]
-          : link.reference.kind === 'github-pull'
-            ? [
-                {
-                  url: link.reference.url,
-                  state: 'merged',
-                  label: `PR integrado: ${link.reference.repository}#${link.reference.number}`,
-                },
-              ]
-            : [],
-      );
-      const completionRule =
-        ruleOptions.length || entry.completionRule?.kind === 'artifact'
-          ? `<details><summary>${t('Como confirmar a conclusão', 'How to confirm completion')}</summary><p>${t('Escolha uma evidência que conclui este combinado. Um PR integrado não comprova deploy. Sem leitura recente, o sistema volta a pedir verificação.', 'Choose evidence that completes this commitment. A merged PR does not prove deployment. Without a recent lookup, verification is required again.')}</p><form method="post" action="${action}/criterio">${returnField}<label>${t('Critério', 'Criterion')}<select name="rule"><option value="manual">${t('Confirmação manual', 'Manual confirmation')}</option>${ruleOptions.map((rule) => `<option value="${esc(`${rule.state}|${rule.url}`)}"${entry.completionRule?.kind === 'artifact' && entry.completionRule.url === rule.url && entry.completionRule.state === rule.state ? ' selected' : ''}>${esc(rule.label)}</option>`).join('')}</select></label>${applyGroup}<button class="btn secondary" type="submit">${t('Salvar critério', 'Save criterion')}</button></form></details>`
-          : '';
-      const evidence = entry.effectiveCompletion
-        ? `<p class="note">${t('Critério de conclusão confirmado na fonte', 'Completion criterion confirmed by the source')}: <a href="${esc(entry.effectiveCompletion.url)}" target="_blank" rel="noopener noreferrer">${esc(entry.effectiveCompletion.state)}</a> · ${datetime(entry.effectiveCompletion.checkedAt, opts.lang)}</p>`
-        : entry.completionRule?.kind === 'artifact'
-          ? `<p class="muted">${t('A conclusão depende de uma leitura recente da fonte escolhida. O estado manual permanece registrado.', 'Completion requires a recent lookup of the selected source. The manual status is preserved.')}</p>`
-          : '';
-      const feedback = `<form class="context-form" method="post" action="${action}/utilidade">${returnField}<span>${t('Este acompanhamento te ajudou?', 'Was this useful?')}</span><button class="btn secondary" type="submit" name="feedback" value="useful">${t('Foi útil', 'Useful')}</button><button class="btn secondary" type="submit" name="feedback" value="dismissed">${t('Dispensável', 'Not useful')}</button>${entry.preference.feedback ? `<small>${t('Sua avaliação', 'Your feedback')}: ${entry.preference.feedback === 'useful' ? t('útil', 'useful') : t('dispensável', 'not useful')}</small>` : ''}</form>`;
-      const deadline = resolveDeadline(entry.deadline, entry.meetingStartedAt, config.timezone);
-      const overdue =
-        deadline.status === 'resolved' &&
-        deadline.toMs <= Date.now() &&
-        ['mentioned', 'confirmed'].includes(entry.status) &&
-        entry.deadlineState === 'overdue';
-      const links = entry.links
-        .map(
-          ({ reference, snapshot }) =>
-            `<li><a href="${esc(reference.url)}" target="_blank" rel="noopener noreferrer">${esc(snapshot?.title || reference.issueKey || reference.repository || reference.url)}</a>: ${esc(snapshot?.label || t('Aguardando consulta', 'Waiting for a lookup'))}${snapshot ? ` <small class="muted">${datetime(snapshot.checkedAt, opts.lang)}</small>` : ''}${snapshot?.reason ? `<p class="muted">${esc(sourceProblem[snapshot.reason] || t('Leitura não confirmada.', 'Lookup not confirmed.'))}</p>` : ''}</li>`,
-        )
-        .join('');
-      const suggestions = (opts.suggestions?.[entry.id] ?? [])
-        .filter((reference) => !entry.links.some((link) => link.reference.url === reference.url))
-        .map(
-          (reference) =>
-            `<li><a href="${esc(reference.url)}" target="_blank" rel="noopener noreferrer">${esc(reference.issueKey || reference.repository || reference.url)}</a><form method="post" action="${action}/vinculos">${returnField}<input type="hidden" name="urls" value="${esc([...entry.links.map((link) => link.reference.url), reference.url].join('\n'))}"><button class="btn secondary" type="submit">${t('Confirmar vínculo citado', 'Confirm cited link')}</button></form></li>`,
-        )
-        .join('');
-      const source = entry.source
-        ? `<details><summary>${t('Ver fala de origem', 'View source utterance')}</summary><blockquote>${esc(entry.source.quote)}</blockquote><a href="/app/rec/${encodeURIComponent(entry.meetingId)}#t=${Math.floor(entry.source.startMs / 1000)}">${msToClock(entry.source.startMs)}</a></details>`
-        : `<p class="muted">${t('Origem ainda não confirmada na transcrição.', 'Source not yet confirmed in the transcript.')}</p>`;
-      return `<article class="context-card" id="c-${entry.id}"><div class="context-card-head"><span class="badge">${status[entry.status]}</span>${overdue ? `<span class="badge">${t('Prazo passou', 'Due date passed')}</span>` : ''}<a href="/app/rec/${encodeURIComponent(entry.meetingId)}">${t('Ver reunião', 'View meeting')} · ${dateOnly(entry.meetingStartedAt, opts.lang)}</a></div><h2>${esc(entry.task)}</h2><p>${t('Responsável', 'Owner')}: ${esc(entry.assignee || t('não definido', 'not specified'))} · ${t('Prazo registrado', 'Recorded due date')}: ${esc(entry.deadline || t('não definido', 'not specified'))}${deadline.status === 'resolved' ? ` (${esc(deadline.date)}${deadline.basis !== 'absolute' || deadline.assumedYear ? t(', interpretado pela data da reunião', ', interpreted from the meeting date') : ''})` : entry.deadline ? ` (${t('data precisa de confirmação', 'date needs confirmation')})` : ''}</p>${!entry.sourcePresent ? `<p class="note">${t('Este item não aparece na ata reprocessada. Confirme se ainda vale.', 'This item is missing from the regenerated minutes. Confirm whether it still applies.')}</p>` : ''}${entry.lastNotice ? `<p class="note"><strong>${t('Última mudança avisada', 'Last notified change')}</strong>: ${esc(entry.lastNotice.reason)} · ${datetime(entry.lastNotice.at, opts.lang)}</p>` : ''}${source}${evidence}${related}${entry.lastStatusBy ? `<p class="muted">${t('Estado atualizado pela conta Discord', 'Status updated by Discord account')} ${esc(entry.lastStatusBy)}${entry.lastStatusAt ? ` · ${datetime(entry.lastStatusAt, opts.lang)}` : ''}</p>` : ''}
+    const feedback = `<form class="context-form" method="post" action="${action}/utilidade">${returnField}<span>${t('Este acompanhamento te ajudou?', 'Was this useful?')}</span><button class="btn secondary" type="submit" name="feedback" value="useful">${t('Foi útil', 'Useful')}</button><button class="btn secondary" type="submit" name="feedback" value="dismissed">${t('Dispensável', 'Not useful')}</button>${entry.preference.feedback ? `<small>${t('Sua avaliação', 'Your feedback')}: ${entry.preference.feedback === 'useful' ? t('útil', 'useful') : t('dispensável', 'not useful')}</small>` : ''}</form>`;
+    const deadline = resolveDeadline(entry.deadline, entry.meetingStartedAt, config.timezone);
+    const overdue =
+      deadline.status === 'resolved' &&
+      deadline.toMs <= Date.now() &&
+      ['mentioned', 'confirmed'].includes(entry.status) &&
+      entry.deadlineState === 'overdue';
+    const links = entry.links
+      .map(
+        ({ reference, snapshot }) =>
+          `<li><a href="${esc(reference.url)}" target="_blank" rel="noopener noreferrer">${esc(snapshot?.title || reference.issueKey || reference.repository || reference.url)}</a>: ${esc(snapshot?.label || t('Aguardando consulta', 'Waiting for a lookup'))}${snapshot ? ` <small class="muted">${datetime(snapshot.checkedAt, opts.lang)}</small>` : ''}${snapshot?.reason ? `<p class="muted">${esc(sourceProblem[snapshot.reason] || t('Leitura não confirmada.', 'Lookup not confirmed.'))}</p>` : ''}</li>`,
+      )
+      .join('');
+    const suggestions = (opts.suggestions?.[entry.id] ?? [])
+      .filter((reference) => !entry.links.some((link) => link.reference.url === reference.url))
+      .map(
+        (reference) =>
+          `<li><a href="${esc(reference.url)}" target="_blank" rel="noopener noreferrer">${esc(reference.issueKey || reference.repository || reference.url)}</a><form method="post" action="${action}/vinculos">${returnField}<input type="hidden" name="urls" value="${esc([...entry.links.map((link) => link.reference.url), reference.url].join('\n'))}"><button class="btn secondary" type="submit">${t('Confirmar vínculo citado', 'Confirm cited link')}</button></form></li>`,
+      )
+      .join('');
+    const source = entry.source
+      ? `<details><summary>${t('Ver fala de origem', 'View source utterance')}</summary><blockquote>${esc(entry.source.quote)}</blockquote><a href="/app/rec/${encodeURIComponent(entry.meetingId)}#t=${Math.floor(entry.source.startMs / 1000)}">${msToClock(entry.source.startMs)}</a></details>`
+      : `<p class="muted">${t('Origem ainda não confirmada na transcrição.', 'Source not yet confirmed in the transcript.')}</p>`;
+    return `<section id="c-${entry.id}"><div class="context-card-head"><span class="badge">${status[entry.status]}</span>${overdue ? `<span class="badge">${t('Prazo passou', 'Due date passed')}</span>` : ''}<a href="/app/rec/${encodeURIComponent(entry.meetingId)}">${t('Ver reunião', 'View meeting')} · ${dateOnly(entry.meetingStartedAt, opts.lang)}</a></div><h2>${esc(entry.task)}</h2><p>${t('Responsável', 'Owner')}: ${esc(entry.assignee || t('não definido', 'not specified'))} · ${t('Prazo registrado', 'Recorded due date')}: ${esc(entry.deadline || t('não definido', 'not specified'))}${deadline.status === 'resolved' ? ` (${esc(deadline.date)}${deadline.basis !== 'absolute' || deadline.assumedYear ? t(', interpretado pela data da reunião', ', interpreted from the meeting date') : ''})` : entry.deadline ? ` (${t('data precisa de confirmação', 'date needs confirmation')})` : ''}</p>${!entry.sourcePresent ? `<p class="note">${t('Este item não aparece na ata reprocessada. Confirme se ainda vale.', 'This item is missing from the regenerated minutes. Confirm whether it still applies.')}</p>` : ''}${entry.lastNotice ? `<p class="note"><strong>${t('Última mudança avisada', 'Last notified change')}</strong>: ${esc(entry.lastNotice.reason)} · ${datetime(entry.lastNotice.at, opts.lang)}</p>` : ''}${sourceWarning}${source}${evidence}${related}${entry.lastStatusBy ? `<p class="muted">${t('Estado atualizado pela conta Discord', 'Status updated by Discord account')} ${esc(entry.lastStatusBy)}${entry.lastStatusAt ? ` · ${datetime(entry.lastStatusAt, opts.lang)}` : ''}</p>` : ''}
       <form class="context-form" method="post" action="${action}/estado">${returnField}<label>${t('Estado do combinado', 'Commitment status')}<select name="status">${Object.entries(
         status,
       )
@@ -2273,10 +2300,15 @@ export function contextPage(opts: {
         .join(
           '',
         )}</select></label>${applyGroup}<button class="btn secondary" type="submit">${t('Salvar estado', 'Save status')}</button></form>
-      ${completionRule}${history}${merge}<details><summary>${t('Jira, GitHub e documentos vinculados', 'Linked Jira, GitHub and documents')} (${entry.links.length})</summary>${links ? `<ul>${links}</ul>` : `<p class="muted">${t('Nenhuma fonte visível vinculada.', 'No visible linked sources.')}</p>`}<p class="muted">${t('Issue concluída ou PR integrado não comprova implantação. Só aparecem fontes autorizadas para sua conta.', 'A completed issue or merged PR does not prove deployment. Only sources authorized for your account appear.')}</p>${suggestions ? `<p>${t('Referências citadas neste item, confira antes de vincular:', 'References cited in this item, check before linking:')}</p><ul>${suggestions}</ul>` : ''}${opts.configured ? `<form method="post" action="${action}/vinculos">${returnField}<label>${t('Links, um por linha', 'Links, one per line')}<textarea name="urls" rows="3" maxlength="5000">${esc(entry.links.map((link) => link.reference.url).join('\n'))}</textarea></label><button class="btn secondary" type="submit">${t('Salvar vínculos visíveis', 'Save visible links')}</button></form>` : ''}</details>
+      ${completionRule}${history}${merge}<details><summary>${t('Jira, GitHub e documentos vinculados', 'Linked Jira, GitHub and documents')} (${entry.sourceAccessIncomplete ? t('consulta incompleta', 'incomplete lookup') : entry.links.length})</summary>${links ? `<ul>${links}</ul>` : entry.sourceAccessIncomplete ? '' : `<p class="muted">${t('Nenhuma fonte visível vinculada.', 'No visible linked sources.')}</p>`}<p class="muted">${t('Issue concluída ou PR integrado não comprova implantação. Só aparecem fontes autorizadas para sua conta.', 'A completed issue or merged PR does not prove deployment. Only sources authorized for your account appear.')}</p>${suggestions ? `<p>${t('Referências citadas neste item, confira antes de vincular:', 'References cited in this item, check before linking:')}</p><ul>${suggestions}</ul>` : ''}${opts.configured ? `<form method="post" action="${action}/vinculos">${returnField}<label>${t('Links, um por linha', 'Links, one per line')}<textarea name="urls" rows="3" maxlength="5000">${esc(entry.links.map((link) => link.reference.url).join('\n'))}</textarea></label><button class="btn secondary" type="submit">${t('Salvar vínculos visíveis', 'Save visible links')}</button></form>` : ''}</details>
       <form class="context-form" method="post" action="${action}/avisos">${returnField}<input type="hidden" name="mode" value="${entry.preference.mode === 'follow' ? 'mute' : 'follow'}">${applyGroup}<button class="btn secondary" type="submit">${entry.preference.mode === 'follow' ? t('Parar avisos por DM', 'Stop DM notices') : t('Receber avisos por DM', 'Receive notices by DM')}</button>${entry.preference.mode === 'follow' ? `<button class="btn secondary" type="submit" name="snooze" value="7">${t('Pausar 7 dias', 'Pause for 7 days')}</button>` : ''}${entry.preference.snoozedUntil && entry.preference.snoozedUntil > Date.now() ? `<small>${t('Pausado até', 'Paused until')} ${dateOnly(entry.preference.snoozedUntil, opts.lang)}</small>` : ''}</form>
-    ${feedback}</article>`;
-    })
+    ${feedback}</section>`;
+  };
+  const cards = [...groups.values()]
+    .map(
+      (members) =>
+        `<article class="context-card">${members.length > 1 ? `<p class="note">${members.length} ${t('menções reunidas, confirmadas por uma pessoa. Cada menção mantém seu estado, fontes e preferência de avisos.', 'mentions grouped by a person. Each mention keeps its status, sources and notice preference.')}</p>` : ''}${members.map((entry) => renderMention(entry, members)).join('<hr>')}</article>`,
+    )
     .join('');
   const before = (opts.upcoming ?? [])
     .map(
@@ -2286,11 +2318,11 @@ export function contextPage(opts: {
     .join('');
   return shell(
     t('Combinados', 'Commitments'),
-    `<section class="context-page"><h1>${t('Combinados', 'Commitments')}</h1><p class="lead">${t('Acompanhe o que foi dito, confirme o que virou compromisso e confira as fontes do trabalho.', 'Track what was said, confirm commitments, and check the work sources.')}</p>${opts.flash ? `<p class="note" role="status">${esc(opts.flash)}</p>` : ''}<div class="rstats"><span><strong>${active.length}</strong> ${t('em aberto', 'open')}</span><span><strong>${groups.size - active.length}</strong> ${t('encerrados', 'closed')}</span></div>${opts.meetingId || opts.channelId ? `<p><a href="/app/contexto">${t('Ver todas as reuniões', 'View all meetings')}</a></p>` : ''}<details class="note"><summary>${t('Como os avisos funcionam', 'How notices work')}</summary><p>${t('Depois da reunião, os itens da ata aparecem aqui como mencionados. Ao seguir um item, você autoriza avisos privados no Discord quando ele ou uma fonte vinculada mudar. Sem mudança, não há novo aviso. A consulta ocorre a cada 15 minutos, respeitando os limites dos serviços. Você também recebe um lembrete quando um evento agendado começar em até 30 minutos no canal de um item aberto que acompanha.', 'After a meeting, action items appear here as mentioned. Following an item authorizes private Discord notices when it or a linked source changes. Unchanged items do not generate another notice. Lookups run every 15 minutes within provider limits. You also receive a reminder when a scheduled event is due within 30 minutes in the channel of an open item you follow.')}</p><p>${t('Antes de uma reunião, o Kassinão precisa de um evento agendado no Discord. Entrar numa sala não informa que haverá uma reunião amanhã.', 'Before a meeting, Kassinão needs a Discord scheduled event. Joining a voice channel does not tell it that a meeting will happen tomorrow.')}</p></details>
+    `<section class="context-page"><h1>${t('Combinados', 'Commitments')}</h1><p class="lead">${t('Acompanhe o que foi dito, confirme o que virou compromisso e confira as fontes do trabalho.', 'Track what was said, confirm commitments, and check the work sources.')}</p>${opts.flash ? `<p class="note" role="status">${esc(opts.flash)}</p>` : ''}<div class="rstats"><span><strong>${active.length}</strong> ${t('em aberto', 'open')}</span><span><strong>${groups.size - active.length}</strong> ${t('encerrados', 'closed')}</span></div>${opts.meetingId || opts.channelId || opts.commitmentId || opts.groupId ? `<p><a href="/app/contexto">${t('Ver todas as reuniões', 'View all meetings')}</a></p>` : ''}<details class="note"><summary>${t('Como os avisos funcionam', 'How notices work')}</summary><p>${t('Depois da reunião, os itens da ata aparecem aqui como mencionados. Ao seguir um item, você autoriza avisos privados no Discord quando ele ou uma fonte vinculada mudar. Sem mudança, não há novo aviso. A consulta ocorre a cada 15 minutos, respeitando os limites dos serviços. Você também recebe um lembrete quando um evento agendado começar em até 30 minutos no canal de um item aberto que acompanha.', 'After a meeting, action items appear here as mentioned. Following an item authorizes private Discord notices when it or a linked source changes. Unchanged items do not generate another notice. Lookups run every 15 minutes within provider limits. You also receive a reminder when a scheduled event is due within 30 minutes in the channel of an open item you follow.')}</p><p>${t('Antes de uma reunião, o Kassinão precisa de um evento agendado no Discord. Entrar numa sala não informa que haverá uma reunião amanhã.', 'Before a meeting, Kassinão needs a Discord scheduled event. Joining a voice channel does not tell it that a meeting will happen tomorrow.')}</p></details>
     ${subscriptions ? `<details class="note"><summary>${t('Acompanhamento automático por canal', 'Automatic following by channel')}</summary><p>${t('Receba avisos dos combinados acessíveis deste canal, incluindo novas atas. As escolhas individuais de seguir, pausar ou silenciar continuam tendo prioridade. Seu acesso a cada reunião é conferido antes de qualquer aviso.', 'Receive notices for accessible commitments in this channel, including future minutes. Individual follow, pause and mute choices take priority. Access to every meeting is checked before each notice.')}</p><ul>${subscriptions}</ul></details>` : ''}
     <section><h2>${t('Próximos eventos do Discord', 'Upcoming Discord events')}</h2>${opts.upcomingUnavailable ? `<p class="note">${t('Consulta parcial: alguns servidores ou eventos não puderam ser verificados.', 'Partial lookup: some servers or events could not be checked.')}</p>` : ''}${before ? `<ul>${before}</ul><p class="muted">${t('Consulte os combinados em aberto do canal antes do evento.', 'Review open commitments for the channel before the event.')}</p>` : `<p class="muted">${opts.upcomingUnavailable ? t('Não foi possível consultar os eventos agora.', 'Could not check events right now.') : t('Nenhum evento acessível encontrado para os próximos 7 dias.', 'No accessible event found for the next 7 days.')}</p>`}</section>
     <section><h2>${t('Fontes conectadas', 'Connected sources')}</h2>${opts.configured && opts.recipientCredentials && (!opts.recipientCredentials.github || !opts.recipientCredentials.jira) ? `<p class="muted">${t('Para ler fontes privadas, o operador precisa conectar a sua própria conta de cada serviço. A configuração da instância não substitui seu acesso. Contas configuradas:', 'To read private sources, the operator must connect your own account for each service. Instance configuration does not replace your access. Configured accounts:')} GitHub ${opts.recipientCredentials.github ? '✓' : 'não conectada'}, Jira ${opts.recipientCredentials.jira ? '✓' : 'não conectada'}.</p>` : ''}<p class="muted">${!opts.configured ? t('Jira e GitHub ainda não foram configurados nesta instância.', 'Jira and GitHub have not been configured for this instance.') : lastRead.length ? t('Última leitura bem-sucedida de uma fonte visível: ', 'Last successful visible source lookup: ') + datetime(Math.max(...lastRead), opts.lang) : t('Configuração disponível. Nenhuma leitura de fonte visível foi confirmada.', 'Configuration available. No visible source lookup has been confirmed.')}</p></section>
-    ${cards || `<div class="empty-state"><strong>${t('Nenhum combinado acessível nesta seleção', 'No accessible commitment in this selection')}</strong><p>${t('Eles aparecem quando uma ata pronta contém itens de ação. Uma ata sem tarefas não cria pendências.', 'They appear when completed minutes contain action items. Minutes without tasks create no pending work.')}</p></div>`}</section>`,
+    ${pagination}${cards || `<div class="empty-state"><strong>${t('Nenhum combinado acessível nesta seleção', 'No accessible commitment in this selection')}</strong><p>${t('Eles aparecem quando uma ata pronta contém itens de ação. Uma ata sem tarefas não cria pendências.', 'They appear when completed minutes contain action items. Minutes without tasks create no pending work.')}</p></div>`}${pagination}</section>`,
     { user: opts.user, lang: opts.lang, active: 'context', navAi: true },
   );
 }

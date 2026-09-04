@@ -35,7 +35,10 @@ function seed(recordingId: string, guildId: string, minutes?: MinutesState): voi
   saveTranscript(recordingId, [{ startMs: 0, endMs: 500, speaker: 'Mauro', text: 'Vamos lançar.' }]);
 }
 
-async function runWithFailingMinutes(minutes?: MinutesState) {
+async function runWithFailingMinutes(
+  minutes?: MinutesState,
+  response = () => Response.json({ error: { message: 'bad request' } }, { status: 400 }),
+) {
   const guildId = `guild-minutes-retry-${crypto.randomUUID()}`;
   const recordingId = `recording-minutes-retry-${crypto.randomUUID()}`;
   const original = {
@@ -52,7 +55,7 @@ async function runWithFailingMinutes(minutes?: MinutesState) {
   config.groqApiKey = 'test-groq-key';
   setProcessingGuildGuard((candidate) => candidate === guildId);
   resumeGuildProcessing(guildId);
-  const fetchMock = vi.fn(async () => Response.json({ error: { message: 'bad request' } }, { status: 400 }));
+  const fetchMock = vi.fn(async () => response());
   vi.stubGlobal('fetch', fetchMock);
   const onDone = vi.fn();
   const onSettled = vi.fn();
@@ -75,6 +78,25 @@ async function runWithFailingMinutes(minutes?: MinutesState) {
 }
 
 describe('ata que falha', () => {
+  it('não repete geração aceita quando o corpo da resposta se perde', async () => {
+    const { meta, onDone, onSettled, fetchMock } = await runWithFailingMinutes(
+      undefined,
+      () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              controller.error(new Error('synthetic response stream failure'));
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    expect(meta?.minutes).toMatchObject({ status: 'error', attempts: 1, retryScheduled: false });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
   it('primeira falha vira pending à espera do retry, sem avisar ninguém ainda', async () => {
     const { meta, onDone, onSettled } = await runWithFailingMinutes();
     expect(meta?.minutes).toMatchObject({ status: 'pending', attempts: 1, retryScheduled: true });

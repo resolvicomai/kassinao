@@ -27,6 +27,12 @@ latest README, documentation, configuration template, and tests.
 - Minutes webhooks support guild/channel filters, payload selection, transient retries, and explicit retry after permanent failure. Empty filters preserve existing delivery scope.
 - Audio and meeting deletion intentions are persisted before removal. Startup refuses restored artifacts covered by the available deletion ledger until offline reconciliation; restoring the latest independent ledger remains an operator responsibility.
 
+### Fixed
+
+- Accepted provider requests with a lost or invalid response no longer create another paid request through retries or fallback. A received job ID is persisted before cancellation; failed checkpoint caching no longer discards a usable transcription.
+- Source lookup budgets exclude unfollowed items before reads, rotate followed commitments, and report incomplete source access without generating alerts from missing evidence. State growth is checked before saving, with cleanup support for oversized legacy files.
+- Grouped mentions retain their own source, notice, preference, and completion evidence. Related mentions remain reachable and separable across pages, with an individual view for focused source checks.
+
 ### Upgrade notes
 
 - Recording without AI remains available. External context reads and private notices require explicit configuration or user subscription; deployment alone does not connect Jira, GitHub, or document contents.

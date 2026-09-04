@@ -108,7 +108,7 @@ O servidor revalida o vínculo atual com o Discord e a ACL da reunião em cada r
 
 Os rótulos de fala vêm da conta/stream do Discord capturada durante a call. Eles servem como rótulos de origem, não como identificação biométrica nem prova da identidade real de uma pessoa.
 
-Esta versão expõe cinco tools read-only:
+Esta versão expõe seis tools read-only:
 
 | Tool | Resultado |
 | --- | --- |

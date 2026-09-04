@@ -35,9 +35,11 @@ import {
   createGuildWorkContext,
   fetchWithRetry,
   fetchWithDeadline,
+  readProviderResponse,
   GuildWorkContext,
   isGuildWorkPausedError,
   UpstreamHttpError,
+  UpstreamResponseLostError,
 } from './http';
 import { generateMinutes, minutesEnabled } from './minutes';
 import { batchIntervals, detectSpeechIntervals, extractBatch, filterHallucinations, mapBatchTimeToTrack } from './vad';
@@ -263,6 +265,14 @@ export function isTranscribing(recordingId: string): boolean {
 /** Rodadas máximas de transcrição por gravação (exportado p/ boot recovery e UI). */
 export { MAX_TRANSCRIPTION_ATTEMPTS };
 
+/** false explícito em um resultado final exige intervenção; ausência preserva recovery legado. */
+export function transcriptionRetryBlocked(meta: RecordingMeta): boolean {
+  return (
+    (meta.transcription?.status === 'error' || meta.transcription?.status === 'partial') &&
+    meta.transcription.retryScheduled === false
+  );
+}
+
 /**
  * Enfileira a transcrição de uma gravação finalizada. `onDone` é chamado
  * com o meta atualizado (status done ou error). Idempotente por gravação.
@@ -279,7 +289,7 @@ export function enqueueTranscription(
   }
   if (queued.has(recordingId)) return;
   const meta = readMeta(recordingId);
-  if (!meta || meta.status !== 'done' || meta.transcription?.status === 'done') {
+  if (!meta || meta.status !== 'done' || meta.transcription?.status === 'done' || transcriptionRetryBlocked(meta)) {
     settle(recordingId);
     return;
   }
@@ -316,7 +326,13 @@ export function enqueueTranscription(
   }
   queued.add(recordingId);
   updateProcessingProgress(recordingId, { stage: 'queued' });
-  meta.transcription = { ...meta.transcription, status: 'pending', provider: config.transcribeProvider, attempts };
+  meta.transcription = {
+    ...meta.transcription,
+    status: 'pending',
+    provider: config.transcribeProvider,
+    attempts,
+    retryScheduled: undefined,
+  };
   saveMeta(meta);
 
   queue = queue
@@ -346,7 +362,11 @@ export function enqueueTranscription(
       }
       // Sobraram faixas (rate limit por hora) ou falhou tudo (ex.: 429 que não
       // cede): reagenda sozinho enquanto houver tentativa, e SÓ avisa no final.
-      if ((st === 'partial' || st === 'error') && tries < MAX_TRANSCRIPTION_ATTEMPTS) {
+      if (
+        (st === 'partial' || st === 'error') &&
+        tries < MAX_TRANSCRIPTION_ATTEMPTS &&
+        !transcriptionRetryBlocked(fresh)
+      ) {
         fresh.transcription = { status: st, ...fresh.transcription, retryScheduled: true };
         saveMeta(fresh);
         operationalInfo(
@@ -401,7 +421,9 @@ export function enqueueMinutesOnly(
   const meta = readMeta(recordingId);
   // Erro definitivo (todas as tentativas gastas) é terminal: um timer atrasado não pode
   // abrir uma 4ª rodada depois que a DM "ata falhou" já saiu.
-  const exhausted = meta?.minutes?.status === 'error' && (meta.minutes.attempts ?? 0) >= MAX_MINUTES_ATTEMPTS;
+  const exhausted =
+    meta?.minutes?.status === 'error' &&
+    ((meta.minutes.attempts ?? 0) >= MAX_MINUTES_ATTEMPTS || meta.minutes.retryScheduled === false);
   if (!meta || !transcriptReady(meta) || meta.minutes?.status === 'done' || exhausted) {
     settle(recordingId);
     return;
@@ -567,6 +589,7 @@ async function transcribeRecording(recordingId: string): Promise<void> {
         }
         updateProcessingProgress(recordingId, { tracksCompleted: doneTrackIds.size });
       } catch (err) {
+        if (err instanceof UpstreamResponseLostError) throw err;
         if (isGuildWorkPausedError(err)) throw err;
         operationalFailure(
           `Transcrição de faixa falhou recording=${operationalPii(meta.id)} error=${operationalError(err)}.`,
@@ -599,8 +622,13 @@ async function transcribeRecording(recordingId: string): Promise<void> {
       finishedAt: Date.now(),
     };
     saveMeta(fresh);
-    if (failed.length === 0)
-      fs.rmSync(path.join(cacheDir(meta.id), 'asr-checkpoints'), { recursive: true, force: true });
+    if (failed.length === 0) {
+      try {
+        fs.rmSync(path.join(cacheDir(meta.id), 'asr-checkpoints'), { recursive: true, force: true });
+      } catch {
+        operationalWarn('Não foi possível remover o checkpoint; transcrição final preservada.');
+      }
+    }
     updateProcessingProgress(recordingId, {
       stage: failed.length ? 'waiting' : 'done',
       tracksCompleted: doneTrackIds.size,
@@ -633,10 +661,11 @@ async function transcribeRecording(recordingId: string): Promise<void> {
     if (fresh) {
       fresh.transcription = {
         ...fresh.transcription,
-        status: 'error',
+        status: err instanceof UpstreamResponseLostError && doneTrackIds.size > 0 ? 'partial' : 'error',
         provider: config.transcribeProvider,
         error: String((err as Error).message).slice(0, 300),
         finishedAt: Date.now(),
+        ...(err instanceof UpstreamResponseLostError ? { retryScheduled: false } : {}),
       };
       saveMeta(fresh);
     }
@@ -690,7 +719,7 @@ async function generateMinutesStep(
     if (!fresh) return;
     const attempts = (fresh.minutes?.attempts ?? 0) + 1;
     const error = String((err as Error).message).slice(0, 300);
-    if (attempts < MAX_MINUTES_ATTEMPTS) {
+    if (attempts < MAX_MINUTES_ATTEMPTS && !(err instanceof UpstreamResponseLostError)) {
       // ponytail: tenta de novo em qualquer erro; um erro determinístico custa duas
       // chamadas a mais (centavos). Quem enfileirou agenda o timer (scheduleMinutesRetry).
       operationalInfo(
@@ -856,9 +885,13 @@ async function transcribeTrack(
       completed[String(i)] = raw;
       const checkpoint = { fingerprint, completed };
       // ponytail: snapshot por faixa até 16 MiB; arquivos por bloco se exceder na prática.
-      if (Buffer.byteLength(JSON.stringify(checkpoint), 'utf8') <= 16 * 1024 * 1024)
-        writeJsonStateAtomic(checkpointFile, checkpoint);
-      else operationalWarn('Checkpoint excedeu o limite; resultado atual segue para a transcrição final.');
+      try {
+        if (Buffer.byteLength(JSON.stringify(checkpoint), 'utf8') <= 16 * 1024 * 1024)
+          writeJsonStateAtomic(checkpointFile, checkpoint);
+        else operationalWarn('Checkpoint excedeu o limite; resultado atual segue para a transcrição final.');
+      } catch {
+        operationalWarn('Checkpoint indisponível; resultado atual segue para a transcrição final.');
+      }
     }
     const current = getProcessingProgress(recordingId);
     updateProcessingProgress(recordingId, {
@@ -918,6 +951,7 @@ function transcribeChunk(
       // 5xx, timeout) e houver GROQ_API_KEY, o mesmo chunk tenta no Whisper da
       // Groq — a transcrição não pode morrer por causa de um provedor fora do ar
       return assemblyaiTranscribe(file, chunkSec, guildWork, recordingId).catch((err) => {
+        if (err instanceof UpstreamResponseLostError) throw err;
         assertGuildWorkActive(guildWork);
         if (err instanceof ChunkContentError || config.transcribeFallbackProvider !== 'groq' || !config.groqApiKey)
           throw err;
@@ -1018,9 +1052,10 @@ async function assemblyaiTranscribe(
     },
     { attempts: 3 },
   );
-  const { upload_url } = (await up.json()) as { upload_url?: string };
+  const { upload_url } = await readProviderResponse(up);
+  if (typeof upload_url !== 'string' || !upload_url)
+    throw new UpstreamResponseLostError(up.status, new Error('AssemblyAI upload result unavailable'));
   assertGuildWorkActive(guildWork);
-  if (!upload_url) throw new Error('AssemblyAI upload não devolveu upload_url');
 
   const models = config.transcribeModel ? [config.transcribeModel] : ['universal-3-5-pro', 'universal-2'];
   const baseBody: Record<string, unknown> = {
@@ -1051,7 +1086,9 @@ async function assemblyaiTranscribe(
       },
       { attempts: 3 },
     );
-    const result = (await create.json()) as { id?: string; status?: string; error?: string };
+    const result = (await readProviderResponse(create)) as { id?: string; status?: string; error?: string };
+    if (typeof result.id !== 'string' || !/^[a-zA-Z0-9-]{1,160}$/.test(result.id))
+      throw new UpstreamResponseLostError(create.status, new Error('AssemblyAI job reference unavailable'));
     // Mesmo que a guild acabe de pausar, o id recebido precisa chegar ao ledger
     // antes de qualquer checagem de cancelamento.
     return result;
@@ -1178,7 +1215,10 @@ async function whisperApi(
     // segundo plano) — melhor esperar que perder a faixa e gastar outra rodada
     { attempts: 4, maxWaitMs: ASR_MAX_WAIT_MS },
   );
-  const data = (await resp.json()) as { segments?: { start: number; end: number; text: string }[]; text?: string };
+  const data = (await readProviderResponse(resp)) as {
+    segments?: { start: number; end: number; text: string }[];
+    text?: string;
+  };
   assertGuildWorkActive(guildWork);
   if (data.segments) return data.segments.map((s) => ({ start: s.start, end: s.end, text: s.text }));
   // modelos sem timestamps (ex.: gpt-4o-transcribe) devolvem só o texto
@@ -1209,7 +1249,7 @@ async function geminiTranscribe(file: string, guildWork: GuildWorkContext): Prom
       signal: guildWork.signal,
     },
   );
-  const data = (await resp.json()) as {
+  const data = (await readProviderResponse(resp)) as {
     candidates?: { finishReason?: string; content?: { parts?: { text?: string }[] } }[];
   };
   assertGuildWorkActive(guildWork);

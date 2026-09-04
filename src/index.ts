@@ -113,6 +113,7 @@ import {
   enqueueTranscription,
   killPendingTranscriptions,
   MAX_TRANSCRIPTION_ATTEMPTS,
+  transcriptionRetryBlocked,
   setProcessingGuildGuard,
   transcriptionEnabled,
 } from './processing/transcribe';
@@ -2381,9 +2382,11 @@ function needsRecoveredProcessing(meta: RecordingMeta, now = Date.now()): boolea
   const recent = (meta.endedAt ?? 0) > now - 24 * 60 * 60 * 1000;
   if (transcriptionStatus === 'pending' || transcriptionStatus === 'running') return true;
   if (transcriptionStatus === undefined && recent) return true;
-  if (transcriptionStatus === 'partial' && attempts < MAX_TRANSCRIPTION_ATTEMPTS) return true;
+  if (transcriptionStatus === 'partial' && attempts < MAX_TRANSCRIPTION_ATTEMPTS && !transcriptionRetryBlocked(meta))
+    return true;
   if (
     transcriptionStatus === 'error' &&
+    !transcriptionRetryBlocked(meta) &&
     attempts < MAX_TRANSCRIPTION_ATTEMPTS &&
     (meta.transcription?.retryScheduled === true || recent)
   ) {
@@ -2425,10 +2428,11 @@ function enqueueRecoveredProcessing(meta: RecordingMeta): void {
   const settled = () => recordingAdmission.complete(meta.id);
   if (status === 'pending' || status === 'running' || (status === undefined && recent)) {
     enqueueTranscription(meta.id, (fresh) => notifyTranscription(fresh, locale), settled);
-  } else if (status === 'partial' && attempts < MAX_TRANSCRIPTION_ATTEMPTS) {
+  } else if (status === 'partial' && attempts < MAX_TRANSCRIPTION_ATTEMPTS && !transcriptionRetryBlocked(meta)) {
     enqueueTranscription(meta.id, (fresh) => notifyTranscription(fresh, locale), settled);
   } else if (
     status === 'error' &&
+    !transcriptionRetryBlocked(meta) &&
     attempts < MAX_TRANSCRIPTION_ATTEMPTS &&
     (meta.transcription?.retryScheduled === true || recent)
   ) {

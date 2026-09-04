@@ -111,9 +111,9 @@ describe('persistent commitment identity and state', () => {
     await expect(service.setStatus('user1', entry.id, 'completed')).rejects.toBeInstanceOf(
       CommitmentAuthorizationUnavailableError,
     );
-    await expect(service.prepareDigest('user1')).rejects.toThrow('Não foi possível confirmar');
+    expect((await service.prepareDigest('user1')).items).toEqual([]);
   });
-  it('propagates artifact authorization failures independently of denied access', async () => {
+  it('marks unavailable source reads as partial while mutations still require authorization', async () => {
     let available = true;
     const { service } = setup({
       integrations: integrations(),
@@ -125,7 +125,7 @@ describe('persistent commitment identity and state', () => {
     const [entry] = service.syncMeeting(meeting, [action]);
     await service.setLinks('user1', entry.id, ['https://github.com/example/app/issues/12']);
     available = false;
-    await expect(service.listForUser('user1')).rejects.toBeInstanceOf(CommitmentAuthorizationUnavailableError);
+    expect((await service.listForUser('user1'))[0]).toMatchObject({ sourceAccessIncomplete: true, links: [] });
     await expect(service.setLinks('user1', entry.id, [])).rejects.toBeInstanceOf(
       CommitmentAuthorizationUnavailableError,
     );

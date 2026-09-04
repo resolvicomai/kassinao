@@ -5,8 +5,9 @@ import crypto from 'node:crypto';
 import { PermissionFlagsBits } from 'discord.js';
 import { writeJsonStateAtomic } from './stateFile';
 import { config } from './config';
+import { t } from './i18n';
 import { client } from './discord/client';
-import { createCommitmentService } from './commitments';
+import { CommitmentCapacityError, createCommitmentService } from './commitments';
 import { createIntegrationClient } from './integrations/client';
 import { jiraOrigin, parseIntegrationConfiguration } from './integrations/config';
 import {
@@ -222,7 +223,16 @@ export function contextRuntime() {
 export function syncContextMeeting(meta: RecordingMeta): void {
   if (meta.demo || !config.guildPolicy.allows(meta.guildId) || meta.minutes?.status !== 'done') return;
   const minutes = readMinutes(meta.id);
-  if (minutes) contextRuntime().service.syncMeeting(meta, minutes.acoes);
+  if (minutes) {
+    try {
+      contextRuntime().service.syncMeeting(meta, minutes.acoes);
+    } catch (error) {
+      if (!(error instanceof CommitmentCapacityError)) throw error;
+      operationalWarn(
+        'Combinados não sincronizados: limite de armazenamento atingido; o acervo anterior foi preservado.',
+      );
+    }
+  }
 }
 
 /** One bounded sweep, with private per-recipient delivery after fresh access checks. */
@@ -251,12 +261,12 @@ export function startContextMonitor(
             const count = new Set(digest.items.map((item) => item.commitment.groupId ?? item.commitment.id)).size;
             await send(
               userId,
-              `Você tem ${count} atualização(ões) nos combinados que acompanha. Consulte com seu acesso atual: ${config.appUrl}/app/contexto`,
+              t(config.defaultLocale, 'context.digest', { count, url: `${config.appUrl}/app/contexto` }),
               digest.id.slice(0, 24),
             );
             await service.acknowledgeDigest(userId, digest);
           }
-          const followed = (await service.listForUser(userId)).filter(
+          const followed = (await service.listForUser(userId, { followedOnly: true, limit: 100 })).filter(
             (e) =>
               e.preference.mode === 'follow' &&
               (!e.preference.snoozedUntil || e.preference.snoozedUntil <= Date.now()) &&
@@ -272,7 +282,7 @@ export function startContextMonitor(
             if (sent.length >= 10000) throw new Error('event notice capacity');
             await send(
               userId,
-              `Um evento agendado no Discord começa em até 30 minutos em um canal cujos combinados você acompanha. Prepare-se com seu acesso atual: ${config.appUrl}/app/contexto`,
+              t(config.defaultLocale, 'context.event', { url: `${config.appUrl}/app/contexto` }),
               key.slice(0, 24),
             );
             writeJsonStateAtomic(path.join(config.stateDir, 'context-event-notices.json'), [
