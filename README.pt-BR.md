@@ -166,6 +166,8 @@ A URL da instância é informação pública, não uma barreira de segurança. W
 - vínculo atual com uma guild da allowlist; e
 - ACL da reunião: quem iniciou, quem foi gravado/esteve naquela call ou uma pessoa atual com Gerenciar Servidor.
 
+Presença breve, tardia ou sem fala também dá acesso à gravação inteira enquanto a pessoa continuar no servidor. Perder a permissão atual do canal não revoga essa presença histórica. Essa audiência é informada antes da captura e na página privada.
+
 Sair da guild remove o acesso. Ganhar permissão de canal depois não abre reuniões antigas. Se o Discord não consegue confirmar o vínculo com segurança, o acesso falha fechado ou retorna indisponibilidade temporária em vez de liberar dados. `OWNER_IDS` não ignora a ACL das reuniões.
 
 ## Deploy de produção

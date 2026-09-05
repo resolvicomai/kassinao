@@ -199,6 +199,7 @@ describe('per-recipient change digests', () => {
     let now = meeting.startedAt;
     const { service } = setup({ now: () => now });
     const [entry] = service.syncMeeting(meeting, [action]);
+    await service.setStatus('user1', entry.id, 'confirmed');
     await service.setPreference('user1', entry.id, { mode: 'follow' });
     await service.acknowledgeDigest('user1', await service.prepareDigest('user1'));
     now = Date.parse('2026-09-05T03:00:00Z');
@@ -555,7 +556,7 @@ describe('explicit completion evidence', () => {
     const url = 'https://github.com/example/app/pull/12';
     await f.service.setLinks('user1', f.entry.id, [url]);
     await f.service.reconcile();
-    expect((await f.service.listForUser('user1'))[0].deadlineState).toBe('overdue');
+    expect((await f.service.listForUser('user1'))[0].deadlineState).toBe('unknown');
     await f.service.setPreference('user1', f.entry.id, { mode: 'follow' });
     await f.service.acknowledgeDigest('user1', await f.service.prepareDigest('user1'));
     await f.service.setCompletionRule('user1', f.entry.id, { kind: 'artifact', url, state: 'merged' });

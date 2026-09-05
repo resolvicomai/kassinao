@@ -1412,6 +1412,9 @@ export function mountMcpApi(app: Express): void {
           completionRule: entry.completionRule ?? null,
           effectiveCompletion: entry.effectiveCompletion ?? null,
           sourcePresent: entry.sourcePresent,
+          reviewRequired: entry.reviewRequired === true,
+          sourceQuality: entry.sourceQuality ?? null,
+          completionConflict: entry.completionConflict ?? null,
           sourceAccessIncomplete: entry.sourceAccessIncomplete === true,
           lastStatusBy: entry.lastStatusBy ?? null,
           lastStatusAt: entry.lastStatusAt ?? null,
@@ -1452,7 +1455,7 @@ export function mountMcpApi(app: Express): void {
         nextCursor,
         nextScanCursor: nextCursor ? null : visible.nextScanCursor,
         semantics:
-          'Current recorded lifecycle. Mentioned is not confirmed. External merge or issue state does not confirm completion or deployment. sourceAccessIncomplete means some source checks were unavailable or exceeded the read budget; hidden links and null evidence do not prove unfinished work. Retry with a smaller limit or use the item contextUrl.',
+          'Current recorded lifecycle. Mentioned is not confirmed and has no overdue obligation. reviewRequired suspends confirmation of the current version; sourceQuality records partial audio/transcript coverage. completionConflict reports a current source that disagrees with manual completion. External merge or issue state does not confirm completion or deployment. sourceAccessIncomplete means some source checks were unavailable or exceeded the read budget; hidden links and null evidence do not prove unfinished work. Retry with a smaller limit or use the item contextUrl.',
       });
     }),
   );

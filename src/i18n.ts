@@ -42,8 +42,16 @@ const STRINGS: Strings = {
     en: 'You have {count} update(s) to commitments you follow. View them with your current access: {url}',
   },
   'context.event': {
-    pt: 'Um evento agendado no Discord começa em até 30 minutos em um canal cujos combinados você acompanha. Prepare-se com seu acesso atual: {url}',
-    en: 'A scheduled Discord event starts within 30 minutes in a channel whose commitments you follow. Prepare with your current access: {url}',
+    pt: 'Um evento agendado no Discord começa em até 30 minutos em um canal que você acompanha. Prepare-se com seu acesso atual: {url}',
+    en: 'A scheduled Discord event starts within 30 minutes in a channel you follow. Prepare with your current access: {url}',
+  },
+  'context.eventChanged': {
+    pt: 'Um evento do Discord que já gerou um lembrete mudou de horário ou canal. Confira a agenda com seu acesso atual: {url}',
+    en: 'A Discord event that already triggered a reminder changed its time or channel. Check the schedule with your current access: {url}',
+  },
+  'context.eventCanceled': {
+    pt: 'Um evento do Discord que já gerou um lembrete foi cancelado ou removido. Confira com seu acesso atual: {url}',
+    en: 'A Discord event that already triggered a reminder was canceled or removed. Check with your current access: {url}',
   },
   // erros e avisos
   'err.generic': {
@@ -166,8 +174,8 @@ const STRINGS: Strings = {
   'panel.title-recording': { pt: '🔴 Gravando • {channel}', en: '🔴 Recording • {channel}' },
   // saudação amigável (texto acima do painel) — deixa o time à vontade e explica o que rola
   'panel.greeting-recording': {
-    pt: '👋 Oi, pessoal! Estou **gravando este canal** com faixas separadas e notas marcadas no tempo. {processing}\n🔒 Depois, só participantes, quem iniciou e admins atuais podem abrir; é preciso continuar no servidor.',
-    en: "👋 Hey everyone! I'm **recording this channel** with separate tracks and timestamped notes. {processing}\n🔒 Later, only participants, the starter, and current admins can open it; server membership is still required.",
+    pt: '👋 Oi, pessoal! Estou **gravando este canal** com faixas separadas e notas marcadas no tempo. {processing}\n🔒 Depois, quem iniciou, esteve na call (mesmo por pouco tempo, entrando depois ou sem falar) e admins atuais podem abrir a gravação inteira enquanto permanecerem no servidor. Perder acesso ao canal não revoga essa presença histórica.',
+    en: "👋 Hey everyone! I'm **recording this channel** with separate tracks and timestamped notes. {processing}\n🔒 Later, the starter, attendees (even brief, late or silent) and current admins can open the whole recording while they remain server members. Losing channel access does not revoke historical attendance.",
   },
   'panel.processing.recording': {
     pt: 'Áudio, faixas e notas ficam no app privado depois da call.',

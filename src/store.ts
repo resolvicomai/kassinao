@@ -241,7 +241,8 @@ export interface RecordingMeta {
 }
 
 export function recordingDir(id: string): string {
-  return path.join(config.recordingsDir, id);
+  assertValidId(id);
+  return path.join(config.recordingsDir, path.basename(id));
 }
 
 export function tracksDir(id: string): string {

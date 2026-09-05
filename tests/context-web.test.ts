@@ -13,7 +13,8 @@ import { createWebApp } from '../src/web/server';
 import { createWebSession, revokeWebSession } from '../src/web/webSessions';
 
 const ORIGIN = 'http://localhost:8080';
-const GUILD = 'context-http-guild';
+const GUILD = '920000000000000010';
+const CHANNEL = '920000000000000011';
 const sessions: string[] = [];
 const recordings: string[] = [];
 const membership = new Map<string, 'revoked' | 'unavailable'>();
@@ -41,13 +42,18 @@ function signedSession(userId: string, scope: 'full' | 'revoke-only' = 'full'): 
 }
 
 /** Separate service instance reads the persisted result without changing the HTTP ACL double. */
-const persisted = () => createCommitmentService({ stateDir: config.stateDir, authorize: async () => true });
+const persisted = () =>
+  createCommitmentService({
+    stateDir: config.stateDir,
+    authorize: async () => true,
+    revisionSecret: config.cookieSecret,
+  });
 
 async function fixture(initiatorId?: string) {
   const sequence = ++fixtureSequence;
   const id = `context-http-${sequence}`;
-  const initiator = initiatorId ?? `context-owner-${sequence}`;
-  const participant = `context-participant-${sequence}`;
+  const initiator = initiatorId ?? String(920000000000001000n + BigInt(sequence));
+  const participant = String(920000000000002000n + BigInt(sequence));
   const task = `Conteúdo reservado sintético ${sequence}`;
   const source = { startMs: 1000, endMs: 3000, quote: `Vamos conferir a entrega sintética ${sequence}.` };
   const now = Date.now();
@@ -55,7 +61,7 @@ async function fixture(initiatorId?: string) {
     id,
     guildId: GUILD,
     guildName: 'Servidor sintético',
-    voiceChannelId: 'context-http-channel',
+    voiceChannelId: CHANNEL,
     voiceChannelName: 'Reunião sintética',
     startedBy: { id: initiator, name: 'Iniciador sintético' },
     startedAt: now - 60_000,
@@ -103,6 +109,7 @@ describe('contexto e operação pelo servidor HTTP real', () => {
     markClientReady();
     client.guilds.cache.set(GUILD, {
       id: GUILD,
+      name: 'Servidor sintético',
       available: true,
       members: {
         cache: new Map(),
@@ -114,7 +121,11 @@ describe('contexto e operação pelo servidor HTTP real', () => {
         },
       },
       scheduledEvents: { fetch: async () => new Map() },
-      channels: { cache: new Map() },
+      channels: {
+        cache: new Map([
+          [CHANNEL, { id: CHANNEL, name: 'Reunião sintética', type: 2, permissionsFor: () => ({ has: () => true }) }],
+        ]),
+      },
     } as never);
     server = http.createServer(createWebApp());
     await new Promise<void>((resolve, reject) => {
@@ -163,13 +174,216 @@ describe('contexto e operação pelo servidor HTTP real', () => {
   }
 
   const get = (pathname: string, cookie?: string) => request('GET', pathname, cookie ? { cookie } : {});
-  const post = (pathname: string, cookie: string, body: Record<string, string>, origin = ORIGIN) =>
-    request(
+  const post = async (pathname: string, cookie: string, body: Record<string, string>, origin = ORIGIN) => {
+    const id = pathname.match(/^\/app\/contexto\/([a-f0-9]{32})\//)?.[1];
+    const values = { ...body };
+    if (id && values.revision === undefined) {
+      const [entry] = await persisted().listForUser('fixture-reader', { commitmentId: id });
+      if (entry?.revision) values.revision = entry.revision;
+      if (values.other && values.otherRevision === undefined && /^[a-f0-9]{32}$/.test(values.other)) {
+        const [other] = await persisted().listForUser('fixture-reader', { commitmentId: values.other });
+        values.otherRevision = other?.revision ?? '';
+      }
+      if (values.related) {
+        const related = await persisted().listForUser('fixture-reader', { ids: values.related.split(',') });
+        values.revisions = JSON.stringify(Object.fromEntries(related.map((item) => [item.id, item.revision])));
+      }
+    }
+    return request(
       'POST',
       pathname,
       { cookie, origin, 'content-type': 'application/x-www-form-urlencoded' },
-      new URLSearchParams(body).toString(),
+      new URLSearchParams(values).toString(),
     );
+  };
+
+  it('edita campos sem regerar e recusa a revisão antiga com um caminho de recuperação', async () => {
+    const f = await fixture();
+    const cookie = signedSession(f.participant);
+    const opened = await get(`/app/contexto?commitment=${f.entry.id}`, cookie);
+    const revision = opened.body.match(/name="revision" value="([a-f0-9]{64})"/)?.[1];
+    expect(revision).toBeTruthy();
+    const changed = await post(`/app/contexto/${f.entry.id}/editar`, cookie, {
+      revision: revision!,
+      task: 'Entrega corrigida',
+      assignee: 'Ana Lima',
+      deadline: 'amanhã',
+    });
+    expect(changed.status).toBe(303);
+    const stale = await post(`/app/contexto/${f.entry.id}/editar`, cookie, {
+      revision: revision!,
+      task: 'Formulário antigo',
+      assignee: 'Ana',
+      deadline: 'hoje',
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toContain('Reabrir combinado');
+    const [current] = await persisted().listForUser(f.participant, { commitmentId: f.entry.id });
+    expect(current).toMatchObject({ task: 'Entrega corrigida', assignee: 'Ana Lima', reviewRequired: true });
+    const updated = await get(`/app/contexto?commitment=${f.entry.id}`, cookie);
+    expect(updated.body).toContain('name="acknowledgeReview"');
+    const confirmed = await post(`/app/contexto/${f.entry.id}/estado`, cookie, {
+      status: 'confirmed',
+      acknowledgeReview: '1',
+    });
+    expect(confirmed.status).toBe(303);
+    expect((await persisted().listForUser(f.participant, { commitmentId: f.entry.id }))[0].reviewRequired).toBe(false);
+  });
+
+  it('conserva o lote do aviso no login e mostra somente seus itens depois do login', async () => {
+    const first = await fixture();
+    const second = await fixture(first.initiator);
+    const third = await fixture(first.initiator);
+    const ids = `${first.entry.id},${third.entry.id}`;
+    const anon = await get(`/app/contexto?ids=${ids}`);
+    expect(anon.body).toContain(encodeURIComponent(`/app/contexto?ids=${ids}`));
+    const page = await get(`/app/contexto?ids=${ids}`, signedSession(first.initiator));
+    expect(page.status).toBe(200);
+    expect(page.body).toContain(`<section id="c-${first.entry.id}">`);
+    expect(page.body).toContain(`<section id="c-${third.entry.id}">`);
+    expect(page.body).not.toContain(`<section id="c-${second.entry.id}">`);
+    expect((await get('/app/contexto?ids=invalido', signedSession(first.initiator))).status).toBe(400);
+  });
+
+  it('encerra um combinado a partir de decisão sem ação, conferindo a origem no servidor', async () => {
+    const first = await fixture();
+    const second = await fixture(first.initiator);
+    const quote = 'Decidimos cancelar a entrega anterior.';
+    const source = { startMs: 4000, endMs: 7000, quote };
+    saveTranscript(second.id, [{ ...source, speaker: 'Pessoa sintética', text: quote }]);
+    saveMinutes(second.id, {
+      resumo: 'Mudança sintética',
+      decisoes: [quote],
+      decisionSources: [source],
+      acoes: [],
+      topicos: [],
+      porParticipante: [],
+    });
+    const cookie = signedSession(first.initiator);
+    const page = await get(`/app/contexto?commitment=${first.entry.id}&decisionMeeting=${second.id}`, cookie);
+    expect(page.status).toBe(200);
+    expect(page.body).toContain(quote);
+    const changed = await post(`/app/contexto/${first.entry.id}/decisao`, cookie, {
+      sourceMeeting: second.id,
+      decisionIndex: `0|${crypto
+        .createHash('sha256')
+        .update(JSON.stringify([quote, source.quote, source.startMs, source.endMs]))
+        .digest('hex')}`,
+      kind: 'cancels',
+      confirm: '1',
+    });
+    expect(changed.status).toBe(303);
+    expect((await persisted().listForUser(first.initiator, { commitmentId: first.entry.id }))[0]).toMatchObject({
+      status: 'cancelled',
+      resolution: { meetingId: second.id, source },
+    });
+    const denied = await post(`/app/contexto/${first.entry.id}/decisao`, signedSession(first.participant), {
+      sourceMeeting: second.id,
+      decisionIndex: `0|${crypto
+        .createHash('sha256')
+        .update(JSON.stringify([quote, source.quote, source.startMs, source.endMs]))
+        .digest('hex')}`,
+      kind: 'cancels',
+      confirm: '1',
+    });
+    expect(denied.status).toBe(404);
+  });
+  it('não associa uma menção modificada desde a abertura do formulário', async () => {
+    const first = await fixture();
+    const second = await fixture(first.initiator);
+    const service = contextRuntime().service;
+    const [a] = await service.listForUser(first.initiator, { commitmentId: first.entry.id });
+    const [b] = await service.listForUser(first.initiator, { commitmentId: second.entry.id });
+    await service.editForUser(
+      first.initiator,
+      first.entry.id,
+      { task: 'Outra entrega', assignee: 'Ana' },
+      { expectedRevision: a.revision! },
+    );
+    const response = await post(`/app/contexto/${first.entry.id}/unificar`, signedSession(first.initiator), {
+      revision: a.revision!,
+      other: second.entry.id,
+      otherRevision: b.revision!,
+    });
+    expect(response.status).toBe(409);
+    expect(
+      (await service.listForUser(first.initiator, { commitmentId: first.entry.id }))[0].directRelatedIds,
+    ).not.toContain(second.entry.id);
+  });
+
+  it('recusa decisão cuja posição passou a conter outra fala depois de abrir a página', async () => {
+    const first = await fixture();
+    const second = await fixture(first.initiator);
+    const source = { startMs: 8000, endMs: 10000, quote: 'Decidimos cancelar a entrega.' };
+    saveTranscript(second.id, [{ ...source, speaker: 'Pessoa', text: source.quote }]);
+    saveMinutes(second.id, {
+      resumo: 'Revisão',
+      decisoes: [source.quote],
+      decisionSources: [source],
+      acoes: [],
+      topicos: [],
+      porParticipante: [],
+    });
+    const cookie = signedSession(first.initiator);
+    const page = await get(`/app/contexto?commitment=${first.entry.id}&decisionMeeting=${second.id}`, cookie);
+    const value = page.body.match(/<option value="(0\|[a-f0-9]{64})">/)?.[1];
+    expect(value).toBeTruthy();
+    const next = { ...source, quote: 'Manter a entrega e cancelar a viagem.' };
+    saveTranscript(second.id, [{ ...next, speaker: 'Pessoa', text: next.quote }]);
+    saveMinutes(second.id, {
+      resumo: 'Revisão',
+      decisoes: [next.quote],
+      decisionSources: [next],
+      acoes: [],
+      topicos: [],
+      porParticipante: [],
+    });
+    const changed = await post(`/app/contexto/${first.entry.id}/decisao`, cookie, {
+      sourceMeeting: second.id,
+      decisionIndex: value!,
+      kind: 'cancels',
+      confirm: '1',
+    });
+    expect(changed.status).toBe(409);
+    expect((await persisted().listForUser(first.initiator, { commitmentId: first.entry.id }))[0].status).toBe(
+      'mentioned',
+    );
+  });
+
+  it('permite acompanhar um canal autorizado antes de existir uma ata', async () => {
+    const id = '920000000000000019';
+    const user = '920000000000009001';
+    const guild = client.guilds.cache.get(GUILD)!;
+    guild.channels.cache.set(id, {
+      id,
+      name: 'Sala sem atas',
+      type: 2,
+      permissionsFor: () => ({ has: () => true }),
+    } as never);
+    try {
+      const cookie = signedSession(user);
+      const page = await get('/app/contexto', cookie);
+      expect(page.body).toContain('Sala sem atas');
+      const response = await post('/app/contexto/canal', cookie, {
+        guild: GUILD,
+        channel: id,
+        mode: 'follow',
+        history: 'future',
+      });
+      expect(response.status).toBe(303);
+      expect(await contextRuntime().service.listChannelPreferences(user)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ guildId: GUILD, channelId: id, mode: 'follow', includeExisting: false }),
+        ]),
+      );
+      expect(
+        (await post('/app/contexto/canal', cookie, { guild: GUILD, channel: id, mode: 'mute', history: 'future' }))
+          .status,
+      ).toBe(303);
+    } finally {
+      guild.channels.cache.delete(id);
+    }
+  });
 
   it('abre o grupo e a menção individual com formulários que preservam a seleção', async () => {
     const first = await fixture();
@@ -248,7 +462,7 @@ describe('contexto e operação pelo servidor HTTP real', () => {
   });
 
   it('unifica menções visíveis, aplica estado atomicamente, registra utilidade pessoal e permite separar', async () => {
-    const owner = `context-group-owner-${crypto.randomUUID()}`;
+    const owner = '920000000000003001';
     const first = await fixture(owner);
     const second = await fixture(owner);
     const cookie = signedSession(owner);
@@ -328,7 +542,7 @@ describe('contexto e operação pelo servidor HTTP real', () => {
 
   it('terceiro e participante revogado não leem nem alteram o conteúdo', async () => {
     const f = await fixture();
-    for (const user of [`context-outsider-${fixtureSequence}`, f.participant]) {
+    for (const user of [String(920000000000004000n + BigInt(fixtureSequence)), f.participant]) {
       if (user === f.participant) membership.set(user, 'revoked');
       const cookie = signedSession(user);
       const page = await get(`/app/contexto?meeting=${f.id}`, cookie);
@@ -382,7 +596,7 @@ describe('contexto e operação pelo servidor HTTP real', () => {
     const owner = config.ownerIds[0];
     expect(owner).toBeTruthy();
     expect((await get('/app/operacao')).status).toBe(404);
-    expect((await get('/app/operacao', signedSession('context-ordinary-member'))).status).toBe(404);
+    expect((await get('/app/operacao', signedSession('920000000000005001'))).status).toBe(404);
     expect((await get('/app/operacao', signedSession(owner, 'revoke-only'))).status).toBe(403);
     const response = await get('/app/operacao', signedSession(owner));
     expect(response.status).toBe(200);

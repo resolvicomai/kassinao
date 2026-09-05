@@ -1,8 +1,7 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config';
 import { operationalWarn } from '../operationalLog';
-import { writeJsonStateAtomic } from '../stateFile';
+import { readPrivateFileBounded, writeJsonStateAtomic } from '../stateFile';
 import { fetchWithDeadline, parseRetryAfterMs } from './http';
 
 const API = 'https://api.assemblyai.com/v2/transcript/';
@@ -39,8 +38,7 @@ export class RemoteDeletionQueue {
 
   private load(): RemoteJob[] {
     try {
-      if (fs.statSync(this.file).size > 2 * 1024 * 1024) throw new Error('remote deletion state too large');
-      const jobs = JSON.parse(fs.readFileSync(this.file, 'utf8')) as RemoteJob[];
+      const jobs = JSON.parse(readPrivateFileBounded(this.file, 2 * 1024 * 1024)) as RemoteJob[];
       if (
         !Array.isArray(jobs) ||
         jobs.length > MAX_JOBS ||

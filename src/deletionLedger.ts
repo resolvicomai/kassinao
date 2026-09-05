@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
-import { writeJsonStateAtomic } from './stateFile';
+import { readPrivateFileBounded, writeJsonStateAtomic } from './stateFile';
 
 export interface DeletionTombstone {
   recordingId: string;
@@ -16,8 +16,7 @@ const VALID_ID = /^[a-zA-Z0-9-]{1,255}$/;
 /** Leitura estrita: uma exclusão não pode sobrescrever um ledger ilegível. */
 export function readDeletionLedger(): DeletionTombstone[] {
   try {
-    if (fs.statSync(FILE()).size > 32 * 1024 * 1024) throw new Error('ledger size');
-    const entries = JSON.parse(fs.readFileSync(FILE(), 'utf8')) as DeletionTombstone[];
+    const entries = JSON.parse(readPrivateFileBounded(FILE(), 32 * 1024 * 1024)) as DeletionTombstone[];
     if (
       !Array.isArray(entries) ||
       entries.length > MAX_ENTRIES ||
@@ -74,14 +73,9 @@ export function assertDeletionsReconciled(recordingsDir = config.recordingsDir):
     if (entry.kind === 'recording' || fs.lstatSync(directory).isSymbolicLink())
       throw new Error('restored deletions need offline reconciliation');
     const file = path.join(directory, 'meta.json');
-    if (
-      ['tracks', 'cache'].some((name) => exists(path.join(directory, name))) ||
-      !exists(file) ||
-      fs.lstatSync(file).isSymbolicLink() ||
-      fs.statSync(file).size > 16 * 1024 * 1024
-    )
+    if (['tracks', 'cache'].some((name) => exists(path.join(directory, name))) || !exists(file))
       throw new Error('restored deletions need offline reconciliation');
-    const meta = JSON.parse(fs.readFileSync(file, 'utf8')) as { id?: string; audioDeleted?: boolean };
+    const meta = JSON.parse(readPrivateFileBounded(file, 16 * 1024 * 1024)) as { id?: string; audioDeleted?: boolean };
     if (meta.id !== entry.recordingId || meta.audioDeleted !== true)
       throw new Error('restored deletions need offline reconciliation');
   }

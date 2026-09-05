@@ -7,6 +7,32 @@ const fs = require('node:fs');
 const path = require('node:path');
 process.umask(0o077);
 
+// Standalone counterpart of src/stateFile.ts; this recovery command needs no build.
+function readPrivateFileBounded(file, maxBytes) {
+  const expected = process.platform === 'win32' ? fs.lstatSync(file) : undefined;
+  if (expected && (!expected.isFile() || expected.isSymbolicLink())) throw new Error('Invalid private file');
+  const flags =
+    fs.constants.O_RDONLY | (process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  const fd = fs.openSync(file, flags);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1 || (expected && (expected.dev !== stat.dev || expected.ino !== stat.ino)))
+      throw new Error('Invalid private file');
+    if (stat.size > maxBytes) throw new Error('Private file exceeds limit');
+    const buffer = Buffer.allocUnsafe(stat.size + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const read = fs.readSync(fd, buffer, total, buffer.length - total, null);
+      if (!read) break;
+      total += read;
+    }
+    if (total !== stat.size) throw new Error('Private file changed during read');
+    return buffer.toString('utf8', 0, total);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function main(argv) {
   let ledger;
   let root;
@@ -27,11 +53,9 @@ function main(argv) {
     if (fs.realpathSync(item) !== path.resolve(item))
       throw new Error('Caminhos precisam ser canônicos, sem links simbólicos.');
   }
-  const ledgerStat = fs.lstatSync(ledger);
   const rootStat = fs.lstatSync(root);
-  if (!ledgerStat.isFile() || ledgerStat.nlink !== 1 || ledgerStat.size > 32 * 1024 * 1024 || !rootStat.isDirectory())
-    throw new Error('Ledger ou pasta de restauração inválidos.');
-  const entries = JSON.parse(fs.readFileSync(ledger, 'utf8'));
+  if (!rootStat.isDirectory()) throw new Error('Ledger ou pasta de restauração inválidos.');
+  const entries = JSON.parse(readPrivateFileBounded(ledger, 32 * 1024 * 1024));
   if (
     !Array.isArray(entries) ||
     entries.length > 100_000 ||
@@ -59,10 +83,7 @@ function main(argv) {
     for (const candidate of candidates) if (fs.existsSync(candidate)) targets.push(candidate);
     if (entry.kind === 'audio') {
       const file = path.join(recording, 'meta.json');
-      const metaStat = fs.lstatSync(file);
-      if (!metaStat.isFile() || metaStat.isSymbolicLink() || metaStat.nlink !== 1 || metaStat.size > 16 * 1024 * 1024)
-        throw new Error('Metadados de áudio inválidos.');
-      const meta = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const meta = JSON.parse(readPrivateFileBounded(file, 16 * 1024 * 1024));
       if (!meta || meta.id !== entry.recordingId) throw new Error('Identidade divergente nos metadados.');
       audioMetas.push({ file, meta: { ...meta, audioDeleted: true } });
     }

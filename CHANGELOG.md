@@ -10,18 +10,21 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
-## [1.5.0] — 2026-09-04
+## [1.5.0] — 2026-09-05
 
 ### Added
 
+- Human corrections preserve commitment identity, source extraction and followers; revision checks reject stale shared forms. Partial recordings and materially changed extraction require review before current confirmation. Explicit sourced decisions can cancel or supersede an earlier commitment.
 - A private commitments page connects minutes actions across meetings through explicit links, manual lifecycle changes, completion criteria, source history, and per-person or per-channel follow preferences. GitHub and Jira reads require operator allowlists, expiring reader grants, and the recipient's own access credentials; document references remain manual links without content ingestion.
-- Opt-in private digests explain changes to followed commitments. Discord scheduled events can trigger preparation reminders for followed items in that channel; unscheduled calls and external calendars are not predicted.
+- Opt-in private digests explain changes to followed commitments. Discord scheduled events can trigger preparation reminders for followed open items or subscribed channels, including empty channels; announced changes and cancellations are reconciled; unscheduled calls and external calendars are not predicted.
 - Validated transcript excerpts anchor new minutes actions and decisions to their original timestamps. Recording titles can be edited, and a failed minutes job can be retried using its saved transcript.
 - New MCP connections can restrict channels, dates, content, and lifetime. The read-only `list_commitments` tool exposes current authorized commitment state separately from historical `pending_actions`; the connector is released as `kassinao-mcp@1.1.0`.
 - An owner operations page summarizes measured processing times, failures, queue state, checkpoint reuse, and feedback without estimating unmeasured costs.
 
 ### Changed
 
+- Mentioned items do not become overdue obligations without human confirmation. Private notices link to the changed item or batch, revalidate follow/mute settings before delivery and expose delivery state without claiming the recipient read the message.
+- Channel following can include existing open work or only future meetings, excluding previously closed history. Each person sees separate integration configuration, grant, credential and last-lookup status.
 - Deadline search uses meeting dates and time zones, reports ambiguous dates and partial coverage, and includes assignees, speakers, and authors.
 - Transcription resumes saved chunks, HTTP requests bound total duration and response size, and received AssemblyAI job IDs enter a persistent deletion queue with confirmation checks.
 - Minutes webhooks support guild/channel filters, payload selection, transient retries, and explicit retry after permanent failure. Empty filters preserve existing delivery scope.
@@ -29,9 +32,13 @@ latest README, documentation, configuration template, and tests.
 
 ### Fixed
 
+- Regenerated duplicate actions no longer inherit human completion by occurrence order. Concurrent source edits, grouped-mention edits and decisions whose source changed since opening the form are rejected as conflicts.
+- Authorized recording managers can repair inaccessible source dependencies without exposing hidden URLs; incomplete authorization never permits removing them. Closed history no longer starves event reminders.
+- Commitment revisions are authenticated with a private key so hidden source URLs cannot be guessed offline from a public revision.
 - Accepted provider requests with a lost or invalid response no longer create another paid request through retries or fallback. A received job ID is persisted before cancellation; failed checkpoint caching no longer discards a usable transcription.
 - Source lookup budgets exclude unfollowed items before reads, rotate followed commitments, and report incomplete source access without generating alerts from missing evidence. State growth is checked before saving, with cleanup support for oversized legacy files.
 - Grouped mentions retain their own source, notice, preference, and completion evidence. Related mentions remain reachable and separable across pages, with an individual view for focused source checks.
+- Private context, progress, deletion, and checkpoint reads validate and read the same opened file, reject links and concurrent size changes, and allocate only the observed size. Recording path construction validates IDs at the shared boundary.
 
 ### Upgrade notes
 

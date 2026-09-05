@@ -69,6 +69,31 @@ describe('prazo HTTP inclui o corpo e todas as tentativas', () => {
 });
 
 describe('exclusões remotas sobrevivem ao processo', () => {
+  it.skipIf(process.platform === 'win32').each(['symlink', 'dangling-symlink', 'hardlink', 'oversized'])(
+    'não sobrescreve referências quando o arquivo é %s',
+    (kind) => {
+      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-deletion-'));
+      const file = path.join(directory, 'pending.json');
+      const preserved = path.join(directory, 'preserved.json');
+      const queue = new RemoteDeletionQueue(file, () => 'synthetic-key');
+      try {
+        queue.track('existing-job', 'recording');
+        const original = fs.readFileSync(file, 'utf8');
+        fs.renameSync(file, preserved);
+        if (kind === 'hardlink') fs.linkSync(preserved, file);
+        else if (kind === 'oversized') fs.writeFileSync(file, original + ' '.repeat(2 * 1024 * 1024));
+        else fs.symlinkSync(kind === 'symlink' ? preserved : path.join(directory, 'missing.json'), file);
+        const before = fs.lstatSync(file);
+        expect(() => queue.ensureCapacity()).toThrow('state unavailable');
+        expect(() => queue.track('another-job', 'recording')).toThrow('state unavailable');
+        expect(fs.lstatSync(file).ino).toBe(before.ino);
+        expect(fs.readFileSync(preserved, 'utf8')).toBe(original);
+      } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('retoma job ativo, preserva falha e só remove a referência após confirmar a exclusão', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-deletion-'));
     const file = path.join(directory, 'pending.json');

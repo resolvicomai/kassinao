@@ -1,7 +1,6 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { readMeta, recordingDir } from '../store';
-import { writeJsonStateAtomic } from '../stateFile';
+import { readPrivateFileBounded, writeJsonStateAtomic } from '../stateFile';
 import { operationalWarn } from '../operationalLog';
 
 export type ProcessingStage =
@@ -22,8 +21,7 @@ export function getProcessingProgress(recordingId: string): ProcessingProgress |
   if (!readMeta(recordingId)) return undefined;
   try {
     const file = path.join(recordingDir(recordingId), 'processing-progress.json');
-    if (fs.statSync(file).size > 16_384) return undefined;
-    const progress = JSON.parse(fs.readFileSync(file, 'utf8')) as ProcessingProgress;
+    const progress = JSON.parse(readPrivateFileBounded(file, 16_384)) as ProcessingProgress;
     if (
       !['queued', 'preparing', 'transcribing', 'minutes', 'waiting', 'done', 'error', 'paused'].includes(
         progress.stage,

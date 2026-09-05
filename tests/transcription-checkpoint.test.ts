@@ -17,69 +17,91 @@ vi.mock('../src/processing/vad', async (original) => ({
   extractBatch: vi.fn(async (_master, _batch, output) => fs.writeFileSync(output, Buffer.alloc(2048))),
 }));
 
-it('reusa o primeiro bloco após a segunda chamada falhar e expurga o checkpoint ao terminar', async () => {
-  const id = `checkpoint-${crypto.randomUUID()}`;
-  const guildId = `guild-${crypto.randomUUID()}`;
-  const original = {
-    transcribeProvider: config.transcribeProvider,
-    groqApiKey: config.groqApiKey,
-    minutesEnabled: config.minutesEnabled,
-  };
-  config.transcribeProvider = 'groq';
-  config.groqApiKey = 'synthetic-key';
-  config.minutesEnabled = 'false';
-  setProcessingGuildGuard((candidate) => candidate === guildId);
-  saveMeta({
-    id,
-    guildId,
-    guildName: 'Test',
-    voiceChannelId: 'voice',
-    voiceChannelName: 'Test',
-    startedBy: null,
-    startedAt: Date.now() - 2400000,
-    endedAt: Date.now(),
-    status: 'done',
-    participants: [{ id: 'user', name: 'Speaker', avatar: null, index: 0, trackFile: 'user.flac' }],
-    notes: [],
-    events: [],
-  });
-  fs.mkdirSync(tracksDir(id), { recursive: true });
-  fs.writeFileSync(path.join(tracksDir(id), 'user.flac'), 'synthetic-audio');
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValueOnce(Response.json({ segments: [{ start: 0, end: 10, text: 'Primeiro trecho.' }] }))
-    .mockResolvedValueOnce(Response.json({}, { status: 400 }))
-    .mockResolvedValueOnce(Response.json({ segments: [{ start: 0, end: 10, text: 'Segundo trecho.' }] }));
-  vi.stubGlobal('fetch', fetchMock);
-  try {
-    enqueueTranscription(id);
-    await vi.waitFor(() => {
-      expect(readMeta(id)?.transcription?.status).toBe('error');
-      expect(isTranscribing(id)).toBe(false);
+it.each(['regular', 'hardlink', 'oversized'])(
+  'retoma com checkpoint %s e expurga o cache ao terminar',
+  async (checkpointKind) => {
+    const id = `checkpoint-${crypto.randomUUID()}`;
+    const guildId = `guild-${crypto.randomUUID()}`;
+    const original = {
+      transcribeProvider: config.transcribeProvider,
+      groqApiKey: config.groqApiKey,
+      minutesEnabled: config.minutesEnabled,
+    };
+    config.transcribeProvider = 'groq';
+    config.groqApiKey = 'synthetic-key';
+    config.minutesEnabled = 'false';
+    setProcessingGuildGuard((candidate) => candidate === guildId);
+    saveMeta({
+      id,
+      guildId,
+      guildName: 'Test',
+      voiceChannelId: 'voice',
+      voiceChannelName: 'Test',
+      startedBy: null,
+      startedAt: Date.now() - 2400000,
+      endedAt: Date.now(),
+      status: 'done',
+      participants: [{ id: 'user', name: 'Speaker', avatar: null, index: 0, trackFile: 'user.flac' }],
+      notes: [],
+      events: [],
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fs.existsSync(path.join(cacheDir(id), 'asr-checkpoints'))).toBe(true);
-    enqueueTranscription(id);
-    await vi.waitFor(() => {
-      expect(readMeta(id)?.transcription?.status).toBe('done');
-      expect(isTranscribing(id)).toBe(false);
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(readTranscript(id)?.map((segment) => segment.text)).toEqual(['Primeiro trecho.', 'Segundo trecho.']);
-    expect(getProcessingProgress(id)).toMatchObject({
-      stage: 'done',
-      tracksCompleted: 1,
-      batchesCompleted: 2,
-      reusedBatches: 1,
-    });
-    expect(fs.existsSync(path.join(cacheDir(id), 'asr-checkpoints'))).toBe(false);
-  } finally {
-    setProcessingGuildGuard(() => false);
-    deleteRecording(id);
-    Object.assign(config, original);
-    vi.unstubAllGlobals();
-  }
-});
+    fs.mkdirSync(tracksDir(id), { recursive: true });
+    fs.writeFileSync(path.join(tracksDir(id), 'user.flac'), 'synthetic-audio');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ segments: [{ start: 0, end: 10, text: 'Primeiro trecho.' }] }))
+      .mockResolvedValueOnce(Response.json({}, { status: 400 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          segments: [
+            { start: 0, end: 10, text: checkpointKind === 'regular' ? 'Segundo trecho.' : 'Primeiro refeito.' },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ segments: [{ start: 0, end: 10, text: 'Segundo trecho.' }] }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      enqueueTranscription(id);
+      await vi.waitFor(() => {
+        expect(readMeta(id)?.transcription?.status).toBe('error');
+        expect(isTranscribing(id)).toBe(false);
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fs.existsSync(path.join(cacheDir(id), 'asr-checkpoints'))).toBe(true);
+      const checkpointFile = path.join(
+        cacheDir(id),
+        'asr-checkpoints',
+        `${crypto.createHash('sha256').update('user').digest('hex')}.json`,
+      );
+      if (checkpointKind === 'hardlink')
+        fs.linkSync(checkpointFile, path.join(cacheDir(id), 'preserved-checkpoint.json'));
+      if (checkpointKind === 'oversized') fs.appendFileSync(checkpointFile, ' '.repeat(16 * 1024 * 1024));
+      enqueueTranscription(id);
+      await vi.waitFor(() => {
+        expect(readMeta(id)?.transcription?.status).toBe('done');
+        expect(isTranscribing(id)).toBe(false);
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(checkpointKind === 'regular' ? 3 : 4);
+      expect(readTranscript(id)?.map((segment) => segment.text)).toEqual([
+        checkpointKind === 'regular' ? 'Primeiro trecho.' : 'Primeiro refeito.',
+        'Segundo trecho.',
+      ]);
+      expect(getProcessingProgress(id)).toMatchObject({
+        stage: 'done',
+        tracksCompleted: 1,
+        batchesCompleted: 2,
+        ...(checkpointKind === 'regular' ? { reusedBatches: 1 } : {}),
+      });
+      expect(getProcessingProgress(id)?.reusedBatches ?? 0).toBe(checkpointKind === 'regular' ? 1 : 0);
+      expect(fs.existsSync(path.join(cacheDir(id), 'asr-checkpoints'))).toBe(false);
+    } finally {
+      setProcessingGuildGuard(() => false);
+      deleteRecording(id);
+      Object.assign(config, original);
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it.each([
   'checkpoint-unavailable',

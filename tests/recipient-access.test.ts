@@ -4,6 +4,7 @@ import {
   parseContextUserCredentials,
   RecipientAuthorizationUnavailableError,
   withRecipientArtifactAccess,
+  type RecipientReaderGrant,
 } from '../src/integrations/access';
 import { parseIntegrationConfiguration } from '../src/integrations/config';
 import { resolveArtifact } from '../src/integrations/client';
@@ -37,6 +38,14 @@ const credentials = () =>
 const github = resolveArtifact('https://github.com/example/app/pull/12', context, configuration().scopes);
 const jira = resolveArtifact('APP-12', context, configuration().scopes);
 const githubResponse = () => Response.json({ number: 12, state: 'open', title: 'Synthetic source' });
+const grants = (expiresAt = Date.now() + 60_000): RecipientReaderGrant[] => [
+  {
+    userId: '123',
+    expiresAt,
+    githubRepositories: ['example/app'],
+    jiraProjects: [{ site: 'https://example.atlassian.net', projects: ['APP'] }],
+  },
+];
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -71,6 +80,124 @@ describe('credenciais privadas do destinatário', () => {
       expect((error as Error).message).toBe('Invalid context recipient credentials');
       expect((error as Error).cause).toBeUndefined();
     }
+  });
+});
+
+describe('diagnóstico privado das fontes da própria pessoa', () => {
+  it('distingue configuração, concessão, credencial e leitura efetivamente tentada', () => {
+    const request = vi.fn<typeof fetch>();
+    const access = createRecipientArtifactAccess(configuration(), credentials(), { fetch: request });
+    expect(access.recipientAccessStatus('123', []).github).toMatchObject({
+      configured: true,
+      credentialConfigured: true,
+      grant: { state: 'missing' },
+      state: 'grant_missing',
+      recovery: 'request_grant',
+    });
+    expect(access.recipientAccessStatus('123', grants(Date.now() - 1)).github).toMatchObject({
+      grant: { state: 'expired' },
+      state: 'grant_expired',
+      recovery: 'renew_grant',
+    });
+    expect(access.recipientAccessStatus('123', grants()).github).toMatchObject({
+      grant: { state: 'active' },
+      state: 'not_checked',
+      recovery: 'read_source',
+    });
+    const missing = createRecipientArtifactAccess(configuration(), {}, { fetch: request });
+    expect(missing.recipientAccessStatus('123', grants()).github).toMatchObject({
+      credentialConfigured: false,
+      state: 'credential_missing',
+      recovery: 'connect_personal_account',
+    });
+    const disabled = createRecipientArtifactAccess({ ...configuration(), scopes: [] }, credentials());
+    expect(disabled.recipientAccessStatus('123', grants()).github).toMatchObject({
+      configured: false,
+      grant: { state: 'missing' },
+      state: 'not_configured',
+      recovery: 'configure',
+    });
+    const unrelated = grants().map((grant) => ({ ...grant, githubRepositories: ['example/other'] }));
+    expect(access.recipientAccessStatus('123', unrelated).github.grant.state).toBe('missing');
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('registra somente resultados sanitizados por pessoa e serviço; expiração não vira sucesso atual', async () => {
+    let now = 1000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const request = vi.fn<typeof fetch>().mockImplementation(async () => githubResponse());
+    const access = createRecipientArtifactAccess(configuration(), credentials(), { fetch: request });
+    const currentGrants = grants(10_000);
+    expect(await access.canRead('123', github, context)).toBe(true);
+    expect(access.recipientAccessStatus('123', currentGrants).github).toMatchObject({
+      state: 'last_check_succeeded',
+      lastSuccessAt: 1000,
+    });
+    now = 2000;
+    request.mockResolvedValueOnce(new Response('private-provider-message', { status: 403 }));
+    expect(await access.canRead('123', github, context)).toBe(false);
+    expect(access.recipientAccessStatus('123', currentGrants).github).toMatchObject({
+      state: 'access_denied',
+      lastSuccessAt: 1000,
+      lastFailureAt: 2000,
+      lastFailureReason: 'access_denied',
+      recovery: 'check_personal_access',
+    });
+    now = 3000;
+    request.mockResolvedValueOnce(new Response('private-provider-message', { status: 429 }));
+    await expect(access.canRead('123', github, context)).rejects.toBeInstanceOf(RecipientAuthorizationUnavailableError);
+    expect(access.recipientAccessStatus('123', currentGrants).github).toMatchObject({
+      state: 'temporarily_unavailable',
+      lastFailureAt: 3000,
+      lastFailureReason: 'rate_limited',
+      recovery: 'retry',
+    });
+    now = 4000;
+    expect(await access.canRead('123', github, context)).toBe(true);
+    const status = access.recipientAccessStatus('123', currentGrants);
+    expect(status.github).toMatchObject({
+      state: 'last_check_succeeded',
+      lastSuccessAt: 4000,
+      lastFailureAt: 3000,
+      lastFailureReason: 'rate_limited',
+    });
+    expect(status.jira.lastSuccessAt).toBeUndefined();
+    expect(status.jira.lastFailureAt).toBeUndefined();
+    expect(access.recipientAccessStatus('456', currentGrants).github.lastSuccessAt).toBeUndefined();
+    for (const privateValue of ['example', 'recipient', 'technical', 'private-provider-message', 'pull/12', '123'])
+      expect(JSON.stringify(status)).not.toContain(privateValue);
+    status.github.grant.state = 'missing';
+    expect(access.recipientAccessStatus('123', currentGrants).github.grant.state).toBe('active');
+    now = 10_000;
+    expect(access.recipientAccessStatus('123', currentGrants).github).toMatchObject({
+      state: 'grant_expired',
+      lastSuccessAt: 4000,
+      recovery: 'renew_grant',
+    });
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it('uma credencial Jira de outro tenant não é confirmação para a fonte tentada', async () => {
+    const settings = configuration();
+    settings.scopes.push({
+      ...context,
+      githubRepositories: [],
+      documentOrigins: [],
+      jira: { site: 'https://other.atlassian.net', projects: ['APP'] },
+    });
+    const currentGrants = grants();
+    currentGrants[0].jiraProjects.push({ site: 'https://other.atlassian.net', projects: ['APP'] });
+    const reference = resolveArtifact('https://other.atlassian.net/browse/APP-12', context, settings.scopes);
+    const request = vi.fn<typeof fetch>();
+    const access = createRecipientArtifactAccess(settings, credentials(), { fetch: request });
+    expect(await access.canRead('123', reference, context)).toBe(false);
+    expect(access.recipientAccessStatus('123', currentGrants).jira).toMatchObject({
+      credentialConfigured: true,
+      state: 'credential_missing',
+      lastFailureReason: 'credential_missing',
+      recovery: 'connect_personal_account',
+    });
+    expect(request).not.toHaveBeenCalled();
   });
 });
 
@@ -123,13 +250,12 @@ describe('acesso externo pelo destinatário', () => {
   });
   it.each([401, 403, 404])('nega resposta %s sem substituir pela conta técnica', async (status) => {
     const request = vi.fn<typeof fetch>().mockResolvedValue(new Response('secret provider details', { status }));
-    expect(
-      await createRecipientArtifactAccess(configuration(), credentials(), { fetch: request }).canRead(
-        '123',
-        github,
-        context,
-      ),
-    ).toBe(false);
+    const access = createRecipientArtifactAccess(configuration(), credentials(), { fetch: request });
+    expect(await access.canRead('123', github, context)).toBe(false);
+    expect(access.recipientAccessStatus('123', grants()).github).toMatchObject({
+      state: status === 404 ? 'not_found' : 'access_denied',
+      recovery: 'check_personal_access',
+    });
     expect(request).toHaveBeenCalledTimes(1);
   });
   it.each([302, 429, 500])('sinaliza indisponibilidade em %s sem devolver detalhes externos', async (status) => {

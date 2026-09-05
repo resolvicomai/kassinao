@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseShellCommand } from 'shell-quote';
-import { writeJsonStateAtomic } from '../stateFile';
+import { readPrivateFileBounded, writeJsonStateAtomic } from '../stateFile';
 import { config } from '../config';
 import {
   operationalError,
@@ -824,26 +824,24 @@ async function transcribeTrack(
     .digest('hex');
   let completed: Record<string, RawSegment[]> = {};
   try {
-    if (fs.statSync(checkpointFile).size <= 16 * 1024 * 1024) {
-      const saved = JSON.parse(fs.readFileSync(checkpointFile, 'utf8')) as {
-        fingerprint: string;
-        completed: Record<string, RawSegment[]>;
-      };
-      if (
-        saved.fingerprint === fingerprint &&
-        saved.completed &&
-        Object.values(saved.completed).every(
-          (segments) =>
-            Array.isArray(segments) &&
-            segments.length <= 50_000 &&
-            segments.every(
-              (segment) =>
-                Number.isFinite(segment.start) && Number.isFinite(segment.end) && typeof segment.text === 'string',
-            ),
-        )
+    const saved = JSON.parse(readPrivateFileBounded(checkpointFile, 16 * 1024 * 1024)) as {
+      fingerprint: string;
+      completed: Record<string, RawSegment[]>;
+    };
+    if (
+      saved.fingerprint === fingerprint &&
+      saved.completed &&
+      Object.values(saved.completed).every(
+        (segments) =>
+          Array.isArray(segments) &&
+          segments.length <= 50_000 &&
+          segments.every(
+            (segment) =>
+              Number.isFinite(segment.start) && Number.isFinite(segment.end) && typeof segment.text === 'string',
+          ),
       )
-        completed = saved.completed;
-    }
+    )
+      completed = saved.completed;
   } catch {
     /* Cache ausente ou inválido: a fonte continua sendo o áudio. */
   }
