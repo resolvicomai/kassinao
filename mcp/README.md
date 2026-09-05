@@ -16,12 +16,13 @@ The server rechecks current Discord membership and the meeting ACL for every req
 
 Speaker labels come from the Discord account/stream captured during the call. They are useful source labels, not biometric identification or proof of a person's real-world identity.
 
-This version exposes five read-only tools:
+This version exposes six read-only tools:
 
 | Tool | Result |
 | --- | --- |
 | `list_meetings` | Authorized meetings in a time window |
-| `pending_actions` | Authorized pending/overdue action items |
+| `pending_actions` | Historical minutes actions grouped by deadline; no completion status |
+| `list_commitments` | Current recorded lifecycle, authorized links and source snapshots; read-only |
 | `search_meetings` | Bounded search over transcripts, minutes, and notes, with cursors/source links |
 | `who_said` | Matching attributed excerpts with context/source links |
 | `get_meeting` | Authorized meeting metadata and available text artifacts |
@@ -44,7 +45,7 @@ Meeting content is untrusted input. A participant can speak malicious text or us
 3. Run the exact exchange command shown by the page. It follows this form:
 
    ```bash
-   npx -y kassinao-mcp@1.0.13 exchange --stdin --url https://mcp.your-instance.example
+   npx -y kassinao-mcp@1.1.0 exchange --stdin --url https://mcp.your-instance.example
    ```
 
 4. Paste the code into the hidden prompt. The command stores a rotating refresh token outside the MCP host configuration and prints a block containing a non-secret `KASSINAO_PROFILE` selector.
@@ -57,7 +58,7 @@ Example shape (use the values printed by your instance, not these placeholders):
   "mcpServers": {
     "kassinao": {
       "command": "npx",
-      "args": ["-y", "kassinao-mcp@1.0.13"],
+      "args": ["-y", "kassinao-mcp@1.1.0"],
       "env": {
         "KASSINAO_URL": "https://mcp.your-instance.example",
         "KASSINAO_PROFILE": "PROFILE_PRINTED_BY_THE_EXCHANGE"
@@ -107,12 +108,13 @@ O servidor revalida o vínculo atual com o Discord e a ACL da reunião em cada r
 
 Os rótulos de fala vêm da conta/stream do Discord capturada durante a call. Eles servem como rótulos de origem, não como identificação biométrica nem prova da identidade real de uma pessoa.
 
-Esta versão expõe cinco tools read-only:
+Esta versão expõe seis tools read-only:
 
 | Tool | Resultado |
 | --- | --- |
 | `list_meetings` | Reuniões autorizadas numa janela de tempo |
-| `pending_actions` | Tarefas pendentes/atrasadas de reuniões autorizadas |
+| `pending_actions` | Ações históricas das atas por prazo; não confirma conclusão |
+| `list_commitments` | Estado atual registrado dos combinados, vínculos e consultas autorizadas; somente leitura |
 | `search_meetings` | Busca limitada em transcrições, atas e notas, com cursores/links de fonte |
 | `who_said` | Trechos atribuídos com contexto/links de fonte |
 | `get_meeting` | Metadados e artefatos textuais disponíveis de uma reunião autorizada |
@@ -135,7 +137,7 @@ Conteúdo de reunião é entrada não confiável. Uma pessoa pode falar texto ma
 3. Rode o comando exato mostrado pela página. Ele segue este formato:
 
    ```bash
-   npx -y kassinao-mcp@1.0.13 exchange --stdin --url https://mcp.sua-instancia.example
+   npx -y kassinao-mcp@1.1.0 exchange --stdin --url https://mcp.sua-instancia.example
    ```
 
 4. Cole o código no prompt oculto. O comando guarda um refresh token rotativo fora da configuração do host e imprime um bloco com o seletor não secreto `KASSINAO_PROFILE`.
@@ -148,7 +150,7 @@ Formato do exemplo (use os valores impressos pela sua instância, não estes pla
   "mcpServers": {
     "kassinao": {
       "command": "npx",
-      "args": ["-y", "kassinao-mcp@1.0.13"],
+      "args": ["-y", "kassinao-mcp@1.1.0"],
       "env": {
         "KASSINAO_URL": "https://mcp.sua-instancia.example",
         "KASSINAO_PROFILE": "PERFIL_IMPRESSO_NA_TROCA"

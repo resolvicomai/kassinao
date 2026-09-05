@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
+import { recordDeletionTombstone } from './deletionLedger';
+import { removeStoredMeetingCommitments } from './commitments';
 import { t } from './i18n';
 import { operationalError, operationalInfo, operationalPii, operationalWarn } from './operationalLog';
 import {
@@ -65,10 +67,18 @@ export interface TranscriptionState {
   retryScheduled?: boolean;
 }
 
+/** Trecho conferido na transcrição; ausência significa que a origem não foi confirmada. */
+export interface MinutesSource {
+  startMs: number;
+  endMs: number;
+  quote: string;
+}
+
 export interface MinutesAction {
   tarefa: string;
   responsavel?: string;
   prazo?: string;
+  source?: MinutesSource;
 }
 
 export interface MinutesTopic {
@@ -86,6 +96,7 @@ export interface MinutesPerson {
 export interface MeetingMinutes {
   resumo: string;
   decisoes: string[];
+  decisionSources?: (MinutesSource | null)[];
   acoes: MinutesAction[];
   topicos: MinutesTopic[];
   porParticipante: MinutesPerson[];
@@ -154,6 +165,8 @@ export interface DiscordGuildSurfaceMigrationStore {
 }
 
 export interface RecordingMeta {
+  /** Título editado por quem gerencia a gravação; o canal original permanece preservado. */
+  title?: string;
   id: string;
   guildId: string;
   guildName: string;
@@ -188,6 +201,10 @@ export interface RecordingMeta {
   audioDeleted?: boolean;
   /** Quando o webhook da ata foi disparado (dedupe entre reinícios). */
   webhookSentAt?: number;
+  webhookFailedAt?: number;
+  webhookLastAttemptAt?: number;
+  webhookLastHttpStatus?: number;
+  webhookFailureReason?: 'permanent-http' | 'attempts-exhausted' | 'payload-unavailable';
   /** Dono já foi avisado da falha definitiva da ata (um alerta por gravação). */
   minutesFailureAlertedAt?: number;
   /** Identidade estável da entrega, preservada em todos os retries. */
@@ -224,7 +241,8 @@ export interface RecordingMeta {
 }
 
 export function recordingDir(id: string): string {
-  return path.join(config.recordingsDir, id);
+  assertValidId(id);
+  return path.join(config.recordingsDir, path.basename(id));
 }
 
 export function tracksDir(id: string): string {
@@ -554,6 +572,10 @@ function isMeetingMinutes(value: unknown): value is MeetingMinutes {
     typeof minutes.resumo === 'string' &&
     Array.isArray(minutes.decisoes) &&
     minutes.decisoes.every((decision) => typeof decision === 'string') &&
+    (minutes.decisionSources === undefined ||
+      (Array.isArray(minutes.decisionSources) &&
+        minutes.decisionSources.length === minutes.decisoes.length &&
+        minutes.decisionSources.every((source) => source === null || isMinutesSource(source)))) &&
     Array.isArray(minutes.acoes) &&
     minutes.acoes.every(
       (action) =>
@@ -561,7 +583,8 @@ function isMeetingMinutes(value: unknown): value is MeetingMinutes {
         typeof action === 'object' &&
         typeof action.tarefa === 'string' &&
         (action.responsavel === undefined || typeof action.responsavel === 'string') &&
-        (action.prazo === undefined || typeof action.prazo === 'string'),
+        (action.prazo === undefined || typeof action.prazo === 'string') &&
+        (action.source === undefined || isMinutesSource(action.source)),
     ) &&
     Array.isArray(minutes.topicos) &&
     minutes.topicos.every(
@@ -577,6 +600,20 @@ function isMeetingMinutes(value: unknown): value is MeetingMinutes {
         Array.isArray(person.pontos) &&
         person.pontos.every((point) => typeof point === 'string'),
     )
+  );
+}
+
+export function isMinutesSource(value: unknown): value is MinutesSource {
+  if (!value || typeof value !== 'object') return false;
+  const source = value as Partial<MinutesSource>;
+  return (
+    Number.isSafeInteger(source.startMs) &&
+    (source.startMs as number) >= 0 &&
+    Number.isSafeInteger(source.endMs) &&
+    (source.endMs as number) >= (source.startMs as number) &&
+    typeof source.quote === 'string' &&
+    source.quote.length > 0 &&
+    source.quote.length <= 1200
   );
 }
 
@@ -624,6 +661,9 @@ export function boundMinutesForResponse(minutes: MeetingMinutes): BoundedMinutes
     minutes: {
       resumo: minutes.resumo,
       decisoes: minutes.decisoes.slice(0, MAX_MINUTES_ITEMS_PER_COLLECTION),
+      ...(minutes.decisionSources
+        ? { decisionSources: minutes.decisionSources.slice(0, MAX_MINUTES_ITEMS_PER_COLLECTION) }
+        : {}),
       acoes: minutes.acoes.slice(0, MAX_MINUTES_ITEMS_PER_COLLECTION),
       topicos: minutes.topicos.slice(0, MAX_MINUTES_ITEMS_PER_COLLECTION),
       porParticipante: people.map((person) => ({
@@ -680,6 +720,8 @@ function metaFileMissing(id: string): boolean {
 export function deleteRecording(id: string): void {
   if (!VALID_ID.test(id)) return;
   const dir = recordingDir(id);
+  recordDeletionTombstone(id);
+  removeStoredMeetingCommitments(config.stateDir, id);
   try {
     fs.rmSync(dir, { recursive: true, force: true });
   } catch (err) {
@@ -1047,6 +1089,7 @@ export function forgetAudioBytes(id: string): void {
  */
 export function deleteAudioOnly(meta: RecordingMeta): void {
   assertValidId(meta.id);
+  recordDeletionTombstone(meta.id, 'audio');
   fs.rmSync(tracksDir(meta.id), { recursive: true, force: true });
   fs.rmSync(cacheDir(meta.id), { recursive: true, force: true });
   meta.audioDeleted = true;

@@ -34,7 +34,7 @@ import {
   scanVisibleCandidates,
 } from '../src/web/api';
 import { signMcpAccess, signMcpRefresh } from '../src/web/auth';
-import { createExchangeCode, createSession, isActiveSession, revokeUser } from '../src/web/mcpTokens';
+import { createExchangeCode, createSession, isActiveSession, listUserSessions, revokeUser } from '../src/web/mcpTokens';
 import { createWebSession, isActiveWebSession, revokeWebSession } from '../src/web/webSessions';
 
 describe('limites de disponibilidade da API MCP', () => {
@@ -351,6 +351,200 @@ describe('paginação das consultas agregadas MCP', () => {
     expect(second.status).toBe(200);
     expect(secondBody).toMatchObject({ returned: 2 });
     expect(secondBody.noDeadline).toHaveLength(2);
+  });
+
+  it('aplica escopo da sessão em listagem, ações, busca, dossier, export e leitura direta', async () => {
+    const scopedUser = `api-scope-user-${crypto.randomUUID()}`;
+    const ids = Array.from({ length: 3 }, () => `api-scope-${crypto.randomUUID()}`);
+    const base = readMeta(recordingId)!;
+    const callAt = Date.now() - 60_000;
+    const channel = 'scope-channel';
+    for (let index = 0; index < ids.length; index++) {
+      const id = ids[index];
+      saveMeta({
+        ...base,
+        id,
+        startedAt: index === 2 ? callAt - 3 * 86400000 : callAt,
+        voiceChannelId: index === 1 ? 'other-channel' : channel,
+        presence: [{ id: scopedUser, name: 'Pessoa escopo', joinedAtMs: 0 }],
+        notes: [{ atMs: 3, author: 'Pessoa', text: 'raw-secret-notes' }],
+        events: [{ atMs: 2, text: 'raw-secret-event' }],
+      });
+      saveMinutes(id, {
+        resumo: 'minute-result',
+        decisoes: [],
+        acoes: [{ tarefa: `Ação ${id}` }],
+        topicos: [{ titulo: 'minute-topic', inicioMs: 0 }],
+        porParticipante: [],
+      });
+      saveTranscript(id, [{ startMs: 0, endMs: 10, speaker: 'Pessoa', text: 'raw-secret-transcript' }]);
+    }
+    const scope = {
+      guildIds: [guildId],
+      channelIds: [channel],
+      fromMs: callAt - 1000,
+      toMs: callAt + 1000,
+      content: ['minutes'] as Array<'minutes'>,
+    };
+    const code = createExchangeCode(scopedUser, 'Pessoa escopo', 'Ata somente', { scope });
+    try {
+      const exchange = await fetch(`${baseUrl}/api/mcp/exchange`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code, scope: { content: ['transcript'] } }),
+      });
+      expect(exchange.status).toBe(200);
+      const tokens = (await exchange.json()) as { access_token: string; refresh_token: string };
+      const token = `Bearer ${tokens.access_token}`;
+      const get = (route: string) => fetch(`${baseUrl}/api${route}`, { headers: { authorization: token } });
+      expect(listUserSessions(scopedUser)[0]).toMatchObject({ scope });
+      expect(listUserSessions(scopedUser)[0].lastReadAt).toBeUndefined();
+      const refresh = await fetch(`${baseUrl}/api/mcp/refresh`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ refresh_token: tokens.refresh_token }),
+      });
+      expect(refresh.status).toBe(200);
+      expect(listUserSessions(scopedUser)[0].lastSeenAt).toEqual(expect.any(Number));
+      expect(listUserSessions(scopedUser)[0].lastReadAt).toBeUndefined();
+      for (const route of [
+        `/meetings/${ids[0]}/transcript`,
+        `/meetings/${ids[0]}/export?format=transcricao.md`,
+        '/said?query=raw',
+        '/search?query=raw&scope=transcript',
+      ]) {
+        const denied = await get(route);
+        expect(denied.status).toBe(403);
+        expect(await denied.json()).toEqual({ error: 'scope_denied' });
+      }
+      expect(listUserSessions(scopedUser)[0].lastReadAt).toBeUndefined();
+      const list = await get(`/meetings?guildId=${guildId}`);
+      expect(list.status).toBe(200);
+      expect(
+        ((await list.json()) as { meetings: Array<{ id: string }> }).meetings.map((meeting) => meeting.id),
+      ).toEqual([ids[0]]);
+      expect(listUserSessions(scopedUser)[0].lastReadAt).toEqual(expect.any(Number));
+      for (const id of ids.slice(1)) expect((await get(`/meetings/${id}`)).status).toBe(404);
+      const dossier = await get(`/meetings/${ids[0]}`);
+      const dossierBody = (await dossier.json()) as Record<string, unknown>;
+      expect(dossier.status).toBe(200);
+      expect(dossierBody.contentScope).toEqual(['minutes']);
+      expect(JSON.stringify(dossierBody)).toContain('minute-result');
+      expect(JSON.stringify(dossierBody)).not.toContain('raw-secret');
+      expect(dossierBody.transcript).toBeUndefined();
+      expect(dossierBody.notes).toBeUndefined();
+      const search = await get(`/search?query=minute&guildId=${guildId}`);
+      const searched = (await search.json()) as { results: Array<{ id: string }> };
+      expect(search.status).toBe(200);
+      expect(searched.results.map((meeting) => meeting.id)).toEqual([ids[0]]);
+      const actions = await get(`/actions?guildId=${guildId}`);
+      expect(await actions.json()).toMatchObject({
+        returned: 1,
+        noDeadline: [expect.objectContaining({ meetingId: ids[0] })],
+      });
+      const exported = await get(`/meetings/${ids[0]}/export?format=ata.md`);
+      expect(exported.status).toBe(200);
+      expect(JSON.stringify(await exported.json())).not.toContain('raw-secret');
+    } finally {
+      for (const id of ids) deleteRecording(id);
+      revokeUser(scopedUser);
+    }
+  });
+
+  it('escopo só de transcrição exclui atas, ações e tópicos também nos caminhos compostos', async () => {
+    const scopedUser = `api-raw-user-${crypto.randomUUID()}`;
+    const id = `api-raw-recording-${crypto.randomUUID()}`;
+    const base = readMeta(recordingId)!;
+    saveMeta({
+      ...base,
+      id,
+      presence: [{ id: scopedUser, name: 'Pessoa transcrição', joinedAtMs: 0 }],
+      notes: [{ atMs: 2, author: 'Pessoa', text: 'raw-note' }],
+    });
+    saveMinutes(id, {
+      resumo: 'minute-secret',
+      decisoes: [],
+      acoes: [{ tarefa: 'minute-secret-action' }],
+      topicos: [{ titulo: 'minute-secret-topic', inicioMs: 0 }],
+      porParticipante: [],
+    });
+    saveTranscript(id, [{ startMs: 0, endMs: 10, speaker: 'Pessoa', text: 'raw-transcript' }]);
+    const session = createSession(scopedUser, 'Pessoa transcrição', undefined, {
+      scope: { content: ['transcript'], guildIds: [guildId] },
+    });
+    const token = `Bearer ${signMcpAccess({ id: scopedUser, name: 'Pessoa transcrição', exp: Date.now() + 60_000, jti: session.sid })}`;
+    const get = (route: string) => fetch(`${baseUrl}/api${route}`, { headers: { authorization: token } });
+    try {
+      for (const route of [`/meetings/${id}/minutes`, `/meetings/${id}/export?format=ata.md`, '/actions'])
+        expect((await get(route)).status).toBe(403);
+      const dossier = await get(`/meetings/${id}`);
+      expect(dossier.status).toBe(200);
+      const body = await dossier.json();
+      expect(JSON.stringify(body)).toContain('raw-transcript');
+      expect(JSON.stringify(body)).not.toContain('minute-secret');
+      const searched = await get(`/search?query=minute&guildId=${guildId}`);
+      expect(searched.status).toBe(200);
+      expect(await searched.json()).toMatchObject({ results: [] });
+      const said = await get(`/said?query=raw&meetingId=${id}`);
+      expect(said.status).toBe(200);
+      expect(await said.json()).toMatchObject({
+        results: [expect.objectContaining({ meetingId: id, text: 'raw-transcript' })],
+      });
+    } finally {
+      deleteRecording(id);
+      revokeUser(scopedUser);
+    }
+  });
+
+  it('classifica prazo relativo pela data da call e mantém inválidos e ambíguos sem data', async () => {
+    const id = `api-deadline-${crypto.randomUUID()}`;
+    const scopedUser = `api-deadline-user-${crypto.randomUUID()}`;
+    const base = readMeta(recordingId)!;
+    const callAt = Date.now() - 3 * 86400000;
+    const expectedDate = new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Sao_Paulo' }).format(
+      new Date(callAt + 86400000),
+    );
+    saveMeta({ ...base, id, startedAt: callAt, presence: [{ id: scopedUser, name: 'Pessoa prazo', joinedAtMs: 0 }] });
+    saveMinutes(id, {
+      resumo: '',
+      decisoes: [],
+      topicos: [],
+      porParticipante: [],
+      acoes: [
+        { tarefa: 'Enviar relatório', prazo: 'amanhã' },
+        { tarefa: 'Data impossível', prazo: '31/02/2026' },
+        { tarefa: 'Ainda sem decisão', prazo: 'sexta ou segunda' },
+      ],
+    });
+    const session = createSession(scopedUser, 'Pessoa prazo');
+    const token = `Bearer ${signMcpAccess({ id: scopedUser, name: 'Pessoa prazo', exp: Date.now() + 60_000, jti: session.sid })}`;
+    try {
+      const response = await fetch(`${baseUrl}/api/actions?guildId=${encodeURIComponent(guildId)}`, {
+        headers: { authorization: token },
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { overdue: unknown[]; unparseable: unknown[] };
+      expect(body.overdue).toEqual([
+        expect.objectContaining({
+          tarefa: 'Enviar relatório',
+          prazoRaw: 'amanhã',
+          prazoDate: expectedDate,
+          prazoStatus: 'resolved',
+        }),
+      ]);
+      expect(body.unparseable).toEqual([
+        expect.objectContaining({
+          tarefa: 'Data impossível',
+          prazoRaw: '31/02/2026',
+          prazoStatus: 'invalid',
+          prazoParsedISO: null,
+        }),
+        expect.objectContaining({ tarefa: 'Ainda sem decisão', prazoStatus: 'ambiguous', prazoParsedISO: null }),
+      ]);
+    } finally {
+      deleteRecording(id);
+      revokeUser(scopedUser);
+    }
   });
 
   it('continua ações depois da 200ª e invalida offset se a ata mudar', async () => {

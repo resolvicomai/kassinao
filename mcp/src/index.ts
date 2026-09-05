@@ -26,6 +26,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readApiJson } from './apiResponse.js';
+import { createCommitmentsTool } from './commitmentTool.js';
 import { parseCredentialTokenResponse, refreshCredential, type CredentialTokenResponse } from './credentialRefresh.js';
 import { loadCredentialStore, saveCredentialStore } from './credentialStore.js';
 import { DEFAULT_HTTP_TIMEOUT_MS, strictFetch } from './http.js';
@@ -240,6 +241,7 @@ interface ToolDef {
 }
 
 const TOOLS: ToolDef[] = [
+  createCommitmentsTool(apiGet),
   {
     name: 'list_meetings',
     description:
@@ -268,7 +270,7 @@ const TOOLS: ToolDef[] = [
   {
     name: 'pending_actions',
     description:
-      'Aggregate action items (task + owner + deadline) across meetings, bucketed by deadline: overdue, dueSoon, later, noDeadline, unparseable. Items include transcriptStatus — minutes built from a partial transcript may be missing actions. Follow nextCursor until null; only then continue with nextScanCursor. Use for "what is pending this week" / "my open action items". assignee="me" matches the token owner.',
+      'Historical action items extracted from minutes (task + owner + deadline), bucketed by deadline: overdue, dueSoon, later, noDeadline, unparseable. These buckets do not track current status or completion: use list_commitments for recorded lifecycle. Items include transcriptStatus; partial transcripts may omit actions. Follow nextCursor until null, then nextScanCursor. assignee="me" matches the token owner.',
     inputSchema: {
       type: 'object',
       properties: {

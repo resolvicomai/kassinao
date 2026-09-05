@@ -51,7 +51,7 @@ Kassinão is an independent project and is not affiliated with or endorsed by Di
 - `gallery-cover-en-1270x760.png`: category and core recording value.
 - `discord-demo-en-ph.gif`: fictional Discord workflow; first frame must stand alone.
 - `gallery-02-1270x760.png`: separate track for each Discord account that speaks, without a perfect-attribution claim.
-- `gallery-04-1270x760.png`: optional sourced answers and five read-only MCP tools.
+- `gallery-04-1270x760.png`: optional sourced answers and the five MCP tools available when this historical gallery was rendered; the current release adds `list_commitments`.
 - `gallery-01-1270x760.png`: optional wider workflow.
 - `launch-teaser-en.mp4`: social teaser; Product Hunt video must use a supported public video URL.
 
@@ -69,7 +69,7 @@ Recommended order: cover, Discord capture, separate speaking-account tracks, opt
 >
 > The base product is deliberately straightforward: run /record, get one audio track for each Discord account that speaks, a mixed recording, and timestamped notes. The bot posts a recording panel before capture starts, and the finished meeting stays in a private app behind Discord membership and a per-meeting ACL.
 >
-> Transcription and AI are not silently on. The person operating the instance chooses whether to enable ASR, meeting minutes, sourced /ask answers, webhooks, or the five read-only MCP tools, and chooses the providers and retention for that deployment.
+> Transcription and AI are not silently on. The person operating the instance chooses whether to enable ASR, meeting minutes, sourced /ask answers, webhooks, or the read-only MCP tools, and chooses the providers and retention for that deployment.
 >
 > There is no Kassinão-hosted workspace or public signup. Every self-hoster creates their own Discord application, URLs, storage, policy, and security perimeter. The code is AGPL; infrastructure and external provider costs belong to the operator.
 >

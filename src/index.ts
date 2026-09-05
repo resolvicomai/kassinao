@@ -33,6 +33,11 @@ import {
   VoiceBasedChannel,
 } from 'discord.js';
 import { config } from './config';
+import { startContextMonitor, syncContextMeeting } from './context';
+import { startRemoteDeletionRecovery } from './processing/remoteDeletion';
+import { assertDeletionsReconciled } from './deletionLedger';
+let stopContextMonitor: (() => void) | undefined;
+let stopRemoteDeletionRecovery: (() => void) | undefined;
 import { operationalError, operationalFailure, operationalPii, operationalWarn } from './operationalLog';
 import { answerQuestion, authorizeAskMetas, resolveAskTemporalIntent } from './ask';
 import { AskLimiter, AskRateLimitError } from './askLimiter';
@@ -108,6 +113,7 @@ import {
   enqueueTranscription,
   killPendingTranscriptions,
   MAX_TRANSCRIPTION_ATTEMPTS,
+  transcriptionRetryBlocked,
   setProcessingGuildGuard,
   transcriptionEnabled,
 } from './processing/transcribe';
@@ -505,6 +511,11 @@ function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise<void>
 
 /** Avisa genericamente no canal e entrega os detalhes por DM às identidades históricas autorizadas. */
 async function notifyTranscriptionOnce(meta: RecordingMeta, locale: Locale): Promise<void> {
+  try {
+    syncContextMeeting(meta);
+  } catch {
+    operationalWarn('Não foi possível atualizar os combinados desta ata.');
+  }
   if (!guildRuntime.isOperational(meta.guildId)) return;
   const state = meta.transcription;
   if (!state || (state.status !== 'done' && state.status !== 'partial' && state.status !== 'error')) return;
@@ -2371,9 +2382,11 @@ function needsRecoveredProcessing(meta: RecordingMeta, now = Date.now()): boolea
   const recent = (meta.endedAt ?? 0) > now - 24 * 60 * 60 * 1000;
   if (transcriptionStatus === 'pending' || transcriptionStatus === 'running') return true;
   if (transcriptionStatus === undefined && recent) return true;
-  if (transcriptionStatus === 'partial' && attempts < MAX_TRANSCRIPTION_ATTEMPTS) return true;
+  if (transcriptionStatus === 'partial' && attempts < MAX_TRANSCRIPTION_ATTEMPTS && !transcriptionRetryBlocked(meta))
+    return true;
   if (
     transcriptionStatus === 'error' &&
+    !transcriptionRetryBlocked(meta) &&
     attempts < MAX_TRANSCRIPTION_ATTEMPTS &&
     (meta.transcription?.retryScheduled === true || recent)
   ) {
@@ -2415,10 +2428,11 @@ function enqueueRecoveredProcessing(meta: RecordingMeta): void {
   const settled = () => recordingAdmission.complete(meta.id);
   if (status === 'pending' || status === 'running' || (status === undefined && recent)) {
     enqueueTranscription(meta.id, (fresh) => notifyTranscription(fresh, locale), settled);
-  } else if (status === 'partial' && attempts < MAX_TRANSCRIPTION_ATTEMPTS) {
+  } else if (status === 'partial' && attempts < MAX_TRANSCRIPTION_ATTEMPTS && !transcriptionRetryBlocked(meta)) {
     enqueueTranscription(meta.id, (fresh) => notifyTranscription(fresh, locale), settled);
   } else if (
     status === 'error' &&
+    !transcriptionRetryBlocked(meta) &&
     attempts < MAX_TRANSCRIPTION_ATTEMPTS &&
     (meta.transcription?.retryScheduled === true || recent)
   ) {
@@ -2467,6 +2481,11 @@ client.once(Events.ClientReady, async () => {
   }
   // transcrições interrompidas por reinício voltam à fila — só agora, com o
   // client pronto, para as notificações de "pronta" conseguirem ser enviadas
+  try {
+    if (!stopRemoteDeletionRecovery) stopRemoteDeletionRecovery = startRemoteDeletionRecovery();
+  } catch {
+    operationalWarn('Fila de exclusões remotas indisponível; conferir operação de privacidade.');
+  }
   const guildSurfaceInventory = readDiscordSurfaceInventory();
   for (const guild of client.guilds.cache.values()) {
     if (!guildRuntime.isOperational(guild.id)) continue;
@@ -2504,6 +2523,16 @@ client.once(Events.ClientReady, async () => {
   }
   startNotificationRetrySweep();
   startDiscordSurfaceMigrationSweep();
+  if (!stopContextMonitor) {
+    try {
+      stopContextMonitor = startContextMonitor(async (userId, content, nonce) => {
+        const user = await client.users.fetch(userId);
+        await user.send({ content, nonce, enforceNonce: true, allowedMentions: { parse: [] } });
+      });
+    } catch {
+      operationalWarn('Acompanhamento de combinados não iniciou; confira a configuração.');
+    }
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -2777,6 +2806,8 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 async function gracefulShutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  stopContextMonitor?.();
+  stopRemoteDeletionRecovery?.();
   console.log(`Recebido ${signal}: encerrando gravações ativas antes de sair...`);
   killPendingTranscriptions();
   if (notificationRetrySweepTimer) {
@@ -2843,6 +2874,14 @@ if (transcribeConfigError) {
   process.exit(1);
 }
 
+try {
+  assertDeletionsReconciled();
+} catch {
+  console.error(
+    'Acervo bloqueado: confira o ledger atual e execute a reconciliação de exclusões na restauração offline antes de iniciar.',
+  );
+  process.exit(1);
+}
 recoveredRecordings = recoverInterruptedRecordings().filter((meta) => guildRuntime.allows(meta.guildId));
 const recoveredProcessing = new Map(
   listMetas()

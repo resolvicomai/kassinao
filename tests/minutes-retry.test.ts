@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { config } from '../src/config';
 import { resumeGuildProcessing } from '../src/processing/http';
-import { enqueueTranscription, setProcessingGuildGuard } from '../src/processing/transcribe';
+import { enqueueTranscription, retryMinutes, setProcessingGuildGuard } from '../src/processing/transcribe';
 import { deleteRecording, readMeta, saveMeta, saveTranscript, type MinutesState } from '../src/store';
 
 afterEach(() => {
@@ -35,7 +35,10 @@ function seed(recordingId: string, guildId: string, minutes?: MinutesState): voi
   saveTranscript(recordingId, [{ startMs: 0, endMs: 500, speaker: 'Mauro', text: 'Vamos lançar.' }]);
 }
 
-async function runWithFailingMinutes(minutes?: MinutesState) {
+async function runWithFailingMinutes(
+  minutes?: MinutesState,
+  response = () => Response.json({ error: { message: 'bad request' } }, { status: 400 }),
+) {
   const guildId = `guild-minutes-retry-${crypto.randomUUID()}`;
   const recordingId = `recording-minutes-retry-${crypto.randomUUID()}`;
   const original = {
@@ -52,7 +55,7 @@ async function runWithFailingMinutes(minutes?: MinutesState) {
   config.groqApiKey = 'test-groq-key';
   setProcessingGuildGuard((candidate) => candidate === guildId);
   resumeGuildProcessing(guildId);
-  const fetchMock = vi.fn(async () => Response.json({ error: { message: 'bad request' } }, { status: 400 }));
+  const fetchMock = vi.fn(async () => response());
   vi.stubGlobal('fetch', fetchMock);
   const onDone = vi.fn();
   const onSettled = vi.fn();
@@ -75,6 +78,25 @@ async function runWithFailingMinutes(minutes?: MinutesState) {
 }
 
 describe('ata que falha', () => {
+  it('não repete geração aceita quando o corpo da resposta se perde', async () => {
+    const { meta, onDone, onSettled, fetchMock } = await runWithFailingMinutes(
+      undefined,
+      () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              controller.error(new Error('synthetic response stream failure'));
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    expect(meta?.minutes).toMatchObject({ status: 'error', attempts: 1, retryScheduled: false });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
   it('primeira falha vira pending à espera do retry, sem avisar ninguém ainda', async () => {
     const { meta, onDone, onSettled } = await runWithFailingMinutes();
     expect(meta?.minutes).toMatchObject({ status: 'pending', attempts: 1, retryScheduled: true });
@@ -94,5 +116,40 @@ describe('ata que falha', () => {
     expect(onDone).toHaveBeenCalledTimes(1);
     expect(onDone.mock.calls[0][0]).toMatchObject({ minutes: { status: 'error' } });
     expect(onSettled).toHaveBeenCalledTimes(1);
+  });
+
+  it('retry autorizado reinicia só a ata terminal sem reenviar áudio', async () => {
+    const id = `manual-minutes-${crypto.randomUUID()}`;
+    const guildId = `guild-${crypto.randomUUID()}`;
+    const original = {
+      minutesEnabled: config.minutesEnabled,
+      minutesProvider: config.minutesProvider,
+      groqApiKey: config.groqApiKey,
+    };
+    config.minutesEnabled = 'true';
+    config.minutesProvider = 'groq';
+    config.groqApiKey = 'synthetic-key';
+    setProcessingGuildGuard((candidate) => candidate === guildId);
+    seed(id, guildId, { status: 'error', attempts: 3 });
+    const meta = readMeta(id)!;
+    meta.transcription!.status = 'done';
+    saveMeta(meta);
+    const minutes = { resumo: 'Ata recuperada.', decisoes: [], acoes: [], topicos: [], porParticipante: [] };
+    const fetchMock = vi.fn(async (_url: string) =>
+      Response.json({ choices: [{ message: { content: JSON.stringify(minutes) }, finish_reason: 'stop' }] }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      expect(retryMinutes(id)).toBe('queued');
+      expect(retryMinutes(id)).toBe('busy');
+      await vi.waitFor(() => expect(readMeta(id)?.minutes?.status).toBe('done'));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toContain('/chat/completions');
+      expect(retryMinutes(id)).toBe('not-failed');
+    } finally {
+      Object.assign(config, original);
+      setProcessingGuildGuard(() => false);
+      deleteRecording(id);
+    }
   });
 });

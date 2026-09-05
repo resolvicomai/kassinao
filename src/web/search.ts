@@ -1,4 +1,4 @@
-import { RecordingMeta, readMinutesBounded, readTranscriptForSearch, transcriptReady } from '../store';
+import { RecordingMeta, readMinutesBounded, readTranscriptBounded, transcriptReady } from '../store';
 import { MAX_MINUTES_BYTES, MAX_NOTES_PER_RECORDING } from '../securityLimits';
 
 /**
@@ -27,6 +27,34 @@ export interface WebSearchLimits {
   maxMinutesBytesPerMeeting: number;
   /** Teto agregado das atas, espelhando o que a transcrição já tinha por request. */
   maxMinutesBytesPerRequest: number;
+}
+
+export type WebSearchCoverageReason =
+  | 'query_too_short'
+  | 'result_limit'
+  | 'transcript_hit_limit'
+  | 'transcript_bytes_limit'
+  | 'transcript_segments_limit'
+  | 'minutes_bytes_limit'
+  | 'notes_limit'
+  | 'source_unavailable'
+  | 'partial_transcript';
+
+/** Cobertura somente das reuniões autorizadas fornecidas pelo chamador. */
+export interface WebSearchCoverage {
+  complete: boolean;
+  candidateMeetings: number;
+  scannedMeetings: number;
+  omittedMeetings: number;
+  reasons: WebSearchCoverageReason[];
+  transcriptBytesScanned: number;
+  transcriptSegmentsScanned: number;
+  minutesBytesScanned: number;
+}
+
+export interface WebSearchResult {
+  hits: WebSearchHit[];
+  coverage: WebSearchCoverage;
 }
 
 const DEFAULT_WEB_SEARCH_LIMITS: WebSearchLimits = {
@@ -69,16 +97,48 @@ export function searchRecordings(
   limit = 40,
   overrides: Partial<WebSearchLimits> = {},
 ): WebSearchHit[] {
+  return searchRecordingsWithCoverage(metas, query, limit, overrides).hits;
+}
+
+export function searchRecordingsWithCoverage(
+  metas: RecordingMeta[],
+  query: string,
+  limit = 40,
+  overrides: Partial<WebSearchLimits> = {},
+): WebSearchResult {
   const terms = termsOf(query);
-  if (terms.length === 0) return [];
   const hits: WebSearchHit[] = [];
   const limits = { ...DEFAULT_WEB_SEARCH_LIMITS, ...overrides };
+  const reasons = new Set<WebSearchCoverageReason>();
+  let scannedMeetings = 0;
   let transcriptBytesScanned = 0;
   let transcriptSegmentsScanned = 0;
   let minutesBytesScanned = 0;
+  const result = (): WebSearchResult => ({
+    hits,
+    coverage: {
+      complete: reasons.size === 0,
+      candidateMeetings: metas.length,
+      scannedMeetings,
+      omittedMeetings: metas.length - scannedMeetings,
+      reasons: [...reasons],
+      transcriptBytesScanned,
+      transcriptSegmentsScanned,
+      minutesBytesScanned,
+    },
+  });
+  if (terms.length === 0) {
+    reasons.add('query_too_short');
+    return result();
+  }
 
   for (const meta of metas) {
-    if (hits.length >= limit) break;
+    if (hits.length >= limit) {
+      reasons.add('result_limit');
+      break;
+    }
+    scannedMeetings++;
+    if (meta.transcription?.status === 'partial') reasons.add('partial_transcript');
 
     // Sem a guarda de status, um lote de 100 reuniões abria e parseava 100 arquivos
     // de ata de forma síncrona no event loop. A página individual já checava isso.
@@ -92,9 +152,21 @@ export function searchRecordings(
           )
         : { status: 'unavailable' as const };
     if (minutesRead.status === 'ok') minutesBytesScanned += minutesRead.bytes;
+    else if (meta.minutes?.status === 'done')
+      reasons.add(
+        minutesRead.status === 'too_large' || minutesBytesScanned >= limits.maxMinutesBytesPerRequest
+          ? 'minutes_bytes_limit'
+          : 'source_unavailable',
+      );
     const minutes = minutesRead.status === 'ok' ? minutesRead.minutes : undefined;
     if (minutes) {
-      const fields = [minutes.resumo, ...minutes.decisoes, ...minutes.acoes.map((a) => a.tarefa)];
+      const fields = [
+        minutes.resumo,
+        ...minutes.decisoes,
+        ...minutes.acoes.map((a) => [a.tarefa, a.responsavel, a.prazo].filter(Boolean).join(' · ')),
+        ...minutes.topicos.map((topic) => topic.titulo),
+        ...minutes.porParticipante.map((person) => [person.nome, ...person.pontos].join(' · ')),
+      ];
       for (const f of fields) {
         if (!f) continue;
         const nf = norm(f);
@@ -112,9 +184,13 @@ export function searchRecordings(
       }
     }
 
-    if (hits.length >= limit) break;
+    if (hits.length >= limit) {
+      reasons.add('result_limit');
+      break;
+    }
+    if (meta.notes.length > MAX_NOTES_PER_RECORDING) reasons.add('notes_limit');
     for (const note of meta.notes.slice(0, MAX_NOTES_PER_RECORDING)) {
-      const nf = norm(note.text);
+      const nf = norm(`${note.author} ${note.text}`);
       const hit = terms.find((t) => nf.includes(t));
       if (hit) {
         hits.push({
@@ -130,24 +206,41 @@ export function searchRecordings(
       }
     }
 
-    if (
-      hits.length >= limit ||
-      !transcriptReady(meta) ||
-      transcriptBytesScanned >= limits.maxTranscriptBytesPerRequest ||
-      transcriptSegmentsScanned >= limits.maxSegmentsPerRequest
-    )
+    if (hits.length >= limit) {
+      reasons.add('result_limit');
+      break;
+    }
+    if (!transcriptReady(meta)) continue;
+    if (transcriptBytesScanned >= limits.maxTranscriptBytesPerRequest) {
+      reasons.add('transcript_bytes_limit');
       continue;
+    }
+    if (transcriptSegmentsScanned >= limits.maxSegmentsPerRequest) {
+      reasons.add('transcript_segments_limit');
+      continue;
+    }
     const remainingBytes = limits.maxTranscriptBytesPerRequest - transcriptBytesScanned;
-    const transcript = readTranscriptForSearch(meta.id, Math.min(limits.maxTranscriptBytesPerMeeting, remainingBytes));
-    if (!transcript) continue;
+    const transcript = readTranscriptBounded(meta.id, Math.min(limits.maxTranscriptBytesPerMeeting, remainingBytes));
+    if (transcript.status !== 'ok') {
+      reasons.add(transcript.status === 'too_large' ? 'transcript_bytes_limit' : 'source_unavailable');
+      continue;
+    }
     const remainingSegments = limits.maxSegmentsPerRequest - transcriptSegmentsScanned;
     const segments = transcript.segments.slice(0, Math.min(limits.maxSegmentsPerMeeting, remainingSegments));
+    if (segments.length < transcript.segments.length) reasons.add('transcript_segments_limit');
     transcriptBytesScanned += transcript.bytes;
-    transcriptSegmentsScanned += segments.length;
     let perMeta = 0;
     for (const s of segments) {
-      if (perMeta >= 4 || hits.length >= limit) break; // no máx. 4 trechos por gravação
-      const nf = norm(s.text);
+      if (hits.length >= limit) {
+        reasons.add('result_limit');
+        break;
+      }
+      if (perMeta >= 4) {
+        reasons.add('transcript_hit_limit');
+        break;
+      }
+      transcriptSegmentsScanned++;
+      const nf = norm(`${s.speaker} ${s.text}`);
       const hit = terms.find((t) => nf.includes(t));
       if (hit) {
         hits.push({
@@ -163,5 +256,5 @@ export function searchRecordings(
       }
     }
   }
-  return hits;
+  return result();
 }

@@ -4,6 +4,7 @@ import { client } from '../discord/client';
 import { isClientReady } from '../discord/ready';
 import { RecordingMeta } from '../store';
 import { AccessIdentity } from './auth';
+import { mcpSessionAllowsRecording } from './mcpTokens';
 
 /**
  * Fonte ÚNICA de controle de acesso — usada tanto pela página web quanto pela API
@@ -396,11 +397,13 @@ export async function checkAccess(
  * grant indevido. Fail-closed de verdade.
  */
 export async function checkAccessForMcp(
-  user: AccessIdentity,
+  user: AccessIdentity & { jti?: string },
   meta: RecordingMeta,
   options: AccessCheckOptions = {},
 ): Promise<Access> {
+  if (user.jti && !mcpSessionAllowsRecording(user.jti, user.id, meta)) return { view: false, delete: false };
   const r = await computeAccess(user, meta, options);
+  if (user.jti && !mcpSessionAllowsRecording(user.jti, user.id, meta)) return { view: false, delete: false };
   if (r.serverLayersUnknown && !r.view) {
     throw new TransientAccessError('camadas de acesso indisponíveis no momento');
   }

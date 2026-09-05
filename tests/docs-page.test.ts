@@ -237,7 +237,7 @@ describe('documentation page', () => {
     expect(html).toContain(MCP_NPX_PACKAGE);
     expect(html).toContain('one track per Discord account that speaks');
     expect(html).toContain('nickname change is only an extra indicator and may fail');
-    expect(html).toContain('The current five tools are read-only.');
+    expect(html).toContain('The current six tools are read-only.');
     expect(html).toContain('does not mount or directly read server files');
     expect(html).toContain('no Git checkout, application source code, or credentials');
     expect(html).toContain('does not run git clone, npm install, or docker build');

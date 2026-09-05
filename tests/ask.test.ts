@@ -372,6 +372,29 @@ describe('recuperação híbrida do /perguntar', () => {
     expect(result.context).not.toContain('Não entra hoje');
   });
 
+  it('não transforma prazo inválido ou ambíguo em compromisso numa data', () => {
+    const result = buildAskContext(
+      'quais ações vencem hoje?',
+      [
+        {
+          meta: makeMeta('prazo-ambiguo', '2026-07-09T12:00:00Z'),
+          minutes: makeMinutes({
+            acoes: [
+              { tarefa: 'Prazo confirmado', prazo: 'amanhã' },
+              { tarefa: 'Prazo impossível', prazo: '31/06/2026' },
+              { tarefa: 'Prazo incerto', prazo: 'amanhã ou segunda' },
+            ],
+          }),
+        },
+      ],
+      'pt',
+      { nowMs: NOW, timezone: TZ },
+    );
+    expect(result.context).toContain('Prazo confirmado');
+    expect(result.context).not.toContain('Prazo impossível');
+    expect(result.context).not.toContain('Prazo incerto');
+  });
+
   it('inclui hoje e amanhã quando o prazo pedido é até amanhã', () => {
     const result = buildAskContext(
       'quais ações vencem até amanhã?',

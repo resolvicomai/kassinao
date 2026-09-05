@@ -2,6 +2,33 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { operationalError, operationalFailure, operationalPii } from './operationalLog';
 
+/** Read the opened inode, never reopen its path after validating type and size. */
+export function readPrivateFileBounded(file: string, maxBytes: number): string {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error('invalid private file limit');
+  const expected = process.platform === 'win32' ? fs.lstatSync(file) : undefined;
+  if (expected && (!expected.isFile() || expected.isSymbolicLink())) throw new Error('invalid private file');
+  const flags =
+    fs.constants.O_RDONLY | (process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  const fd = fs.openSync(file, flags);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1 || (expected && (expected.dev !== stat.dev || expected.ino !== stat.ino)))
+      throw new Error('invalid private file');
+    if (stat.size > maxBytes) throw new Error('private file exceeds limit');
+    const buffer = Buffer.allocUnsafe(stat.size + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const read = fs.readSync(fd, buffer, total, buffer.length - total, null);
+      if (!read) break;
+      total += read;
+    }
+    if (total !== stat.size) throw new Error('private file changed during read');
+    return buffer.toString('utf8', 0, total);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /**
  * Leitura e escrita de arquivos JSON de estado (regras de auto-record, contagem
  * de colisões, configuração por servidor). Duas garantias que os módulos

@@ -128,6 +128,9 @@ describe('fronteira de egress por guild', () => {
 
     try {
       await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      // O mock já entregou o corpo completo; deixar suas microtasks terminarem
+      // isola a pausa entre blocos da perda de uma resposta paga ainda em leitura.
+      await new Promise<void>((resolve) => setImmediate(resolve));
       pauseGuildProcessing(guildId);
       await expect(pending).rejects.toBeInstanceOf(GuildWorkPausedError);
       expect(fetchMock).toHaveBeenCalledTimes(1);

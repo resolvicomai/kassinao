@@ -2,7 +2,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { config } from '../src/config';
-import { deleteRecording, listMetas, readMeta, recordingDir, RecordingMeta, saveMeta } from '../src/store';
+import {
+  cacheDir,
+  deleteRecording,
+  listMetas,
+  minutesPath,
+  readMeta,
+  recordingDir,
+  RecordingMeta,
+  saveMeta,
+  tracksDir,
+  transcriptPath,
+} from '../src/store';
 
 function meta(id: string): RecordingMeta {
   return {
@@ -29,6 +40,16 @@ function meta(id: string): RecordingMeta {
  * intacto no disco.
  */
 describe('índice de metas é cache positivo, não autoridade de existência', () => {
+  it('recusa caminhos no construtor compartilhado, inclusive antes de ler ou gravar', () => {
+    for (const id of ['../fora', '/tmp/fora', '..', '.', 'a/b', 'a\\b', 'a%2fb', 'a\u0000b', '']) {
+      for (const location of [recordingDir, tracksDir, cacheDir, transcriptPath, minutesPath]) {
+        expect(() => location(id)).toThrow('id de gravação inválido');
+      }
+      expect(readMeta(id)).toBeUndefined();
+    }
+    expect(recordingDir('recording-123')).toBe(path.join(config.recordingsDir, 'recording-123'));
+  });
+
   it('encontra no disco uma gravação escrita depois do índice, sem reiniciar', () => {
     const seed = 'index-seed-aaaaaaaaaa';
     saveMeta(meta(seed));

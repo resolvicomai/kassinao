@@ -1,12 +1,22 @@
 import { config } from '../config';
 import { operationalError, operationalPii, operationalWarn } from '../operationalLog';
 import { cleanInline, cleanText, fenceUntrusted, neutralizeFences, UNTRUSTED_GUARD } from '../sanitize';
-import { MeetingMinutes, MinutesAction, MinutesPerson, MinutesTopic, RecordingMeta, TranscriptSegment } from '../store';
+import {
+  isMinutesSource,
+  MeetingMinutes,
+  MinutesAction,
+  MinutesPerson,
+  MinutesSource,
+  MinutesTopic,
+  RecordingMeta,
+  TranscriptSegment,
+} from '../store';
 import {
   abortableDelay,
   assertGuildWorkActive,
   currentGuildWorkContext,
   fetchWithRetry,
+  readProviderResponse,
   GuildWorkContext,
 } from './http';
 import { msToClock } from '../time';
@@ -61,7 +71,10 @@ const MINUTES_COPY: Record<RecordingLocale, MinutesCopy> = {
       'sem markdown e sem texto fora do JSON, com exatamente estas chaves:',
       '- "resumo": string — parágrafo objetivo do que foi tratado (3 a 6 frases).',
       '- "decisoes": array de strings — decisões tomadas (array vazio se não houve).',
-      '- "acoes": array de objetos {"tarefa": string, "responsavel": string, "prazo": string} — próximos passos/tarefas.',
+      '- "acoes": array de objetos {"tarefa": string, "responsavel": string, "prazo": string, "source": objeto ou null} — próximos passos/tarefas.',
+      '- "decisionSources": array paralelo a decisoes. Cada source é {"startMs": número, "endMs": número, "quote": string} ou null.',
+      '  Copie um trecho literal de uma única fala e os limites em ms indicados. Sem evidência direta, use null.',
+      '  Preserve o prazo como foi dito; a data da reunião serve de referência, não invente uma data.',
       '  Use "" quando não souber o responsável ou o prazo. NUNCA invente responsáveis ou prazos.',
       '- "topicos": array de {"titulo": string, "inicio": "hh:mm:ss"} — principais tópicos na ordem em que',
       '  apareceram, com o horário aproximado de início (use os horários que estão na transcrição).',
@@ -74,8 +87,9 @@ const MINUTES_COPY: Record<RecordingLocale, MinutesCopy> = {
     ],
     mapSystem: [
       'Você resume um TRECHO de transcrição de reunião em português do Brasil (rótulos de contas do Discord e horários [hh:mm:ss] inclusos).',
-      'Responda SOMENTE JSON: {"notas": [string]} — fatos, decisões, tarefas (com responsável/prazo se ditos)',
+      'Responda SOMENTE JSON: {"notas": [string], "fontes": [{"startMs": número, "endMs": número, "quote": string}]} — fatos, decisões, tarefas (com responsável/prazo se ditos)',
       'e tópicos com o horário em que apareceram. Máximo 12 notas, específicas e com nomes. Não invente nada.',
+      'Em fontes copie até 6 trechos literais curtos e seus limites exatos em ms. Use [] se não houver fonte direta.',
       'Preserve nomes, números e evidências no idioma e na forma original; não traduza falas ou trechos citados.',
     ],
     channel: 'Reunião no canal',
@@ -100,7 +114,10 @@ const MINUTES_COPY: Record<RecordingLocale, MinutesCopy> = {
       'using exactly these keys (the Portuguese field names are intentionally stable for API compatibility):',
       '- "resumo": string — an objective summary of what was discussed (3 to 6 sentences).',
       '- "decisoes": array of strings — decisions made (empty array when there were none).',
-      '- "acoes": array of {"tarefa": string, "responsavel": string, "prazo": string} — next steps/tasks.',
+      '- "acoes": array of {"tarefa": string, "responsavel": string, "prazo": string, "source": object or null} — next steps/tasks.',
+      '- "decisionSources": array parallel to decisoes. Each source is {"startMs": number, "endMs": number, "quote": string} or null.',
+      '  Copy an exact excerpt from a single utterance and its stated ms bounds. Without direct evidence use null.',
+      '  Preserve due dates as spoken; use the meeting date for context without inventing dates.',
       '  Use "" when the owner or due date is unknown. NEVER invent owners or due dates.',
       '- "topicos": array of {"titulo": string, "inicio": "hh:mm:ss"} — main topics in chronological order,',
       '  with their approximate start time (use timestamps from the transcript).',
@@ -113,8 +130,9 @@ const MINUTES_COPY: Record<RecordingLocale, MinutesCopy> = {
     ],
     mapSystem: [
       'Summarize one meeting transcript EXCERPT into English (Discord-account labels and [hh:mm:ss] timestamps are included).',
-      'Return ONLY JSON: {"notas": [string]} — facts, decisions, tasks (with owner/due date when stated),',
+      'Return ONLY JSON: {"notas": [string], "fontes": [{"startMs": number, "endMs": number, "quote": string}]} — facts, decisions, tasks (with owner/due date when stated),',
       'and topics with the time they appeared. At most 12 specific notes with names. Do not invent anything.',
+      'In fontes copy up to 6 short literal excerpts and their exact ms bounds. Use [] without direct evidence.',
       'Preserve names, numbers, and evidence in their original language and form; do not translate speech or quoted excerpts.',
     ],
     channel: 'Meeting channel',
@@ -162,12 +180,25 @@ interface LlmChatOptions {
   work?: GuildWorkContext;
 }
 
+const SOURCE_JSON_SCHEMA: JsonSchema = {
+  anyOf: [
+    { type: 'null' },
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: { startMs: { type: 'integer' }, endMs: { type: 'integer' }, quote: { type: 'string' } },
+      required: ['startMs', 'endMs', 'quote'],
+    },
+  ],
+};
+
 const MINUTES_JSON_SCHEMA: JsonSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
     resumo: { type: 'string' },
     decisoes: { type: 'array', items: { type: 'string' } },
+    decisionSources: { type: 'array', items: SOURCE_JSON_SCHEMA },
     acoes: {
       type: 'array',
       items: {
@@ -177,8 +208,9 @@ const MINUTES_JSON_SCHEMA: JsonSchema = {
           tarefa: { type: 'string' },
           responsavel: { type: 'string' },
           prazo: { type: 'string' },
+          source: SOURCE_JSON_SCHEMA,
         },
-        required: ['tarefa', 'responsavel', 'prazo'],
+        required: ['tarefa', 'responsavel', 'prazo', 'source'],
       },
     },
     topicos: {
@@ -203,14 +235,17 @@ const MINUTES_JSON_SCHEMA: JsonSchema = {
       },
     },
   },
-  required: ['resumo', 'decisoes', 'acoes', 'topicos', 'porParticipante'],
+  required: ['resumo', 'decisoes', 'decisionSources', 'acoes', 'topicos', 'porParticipante'],
 };
 
 const PARTIAL_NOTES_JSON_SCHEMA: JsonSchema = {
   type: 'object',
   additionalProperties: false,
-  properties: { notas: { type: 'array', items: { type: 'string' } } },
-  required: ['notas'],
+  properties: {
+    notas: { type: 'array', items: { type: 'string' } },
+    fontes: { type: 'array', items: SOURCE_JSON_SCHEMA },
+  },
+  required: ['notas', 'fontes'],
 };
 
 /**
@@ -306,7 +341,7 @@ export async function llmChat(
     },
     { attempts: 4, maxWaitMs: 90_000 },
   );
-  const data = (await resp.json()) as {
+  const data = (await readProviderResponse(resp)) as {
     choices?: {
       message?: { content?: string };
       finish_reason?: string;
@@ -357,14 +392,28 @@ export async function generateMinutes(
   const outTokens = openrouter ? config.minutesMaxTokens : Math.min(config.minutesMaxTokens, GROQ_MAX_TOKENS);
 
   if (header.length + body.length <= maxSingle) {
-    return await minutesWithRetry(system, fenceUntrusted(`${header}\n${body}`), outTokens, copy.retryReminder, work);
+    return await minutesWithRetry(
+      system,
+      fenceUntrusted(`${header}\n${body}`),
+      outTokens,
+      copy.retryReminder,
+      work,
+      segments,
+    );
   }
 
   if (openrouter) {
     // acima de 400k chars (call absurda): corta o miolo — começo e fim carregam decisões
     const half = Math.floor(MAX_CHARS_OPENROUTER / 2);
     const cut = `${body.slice(0, half)}\n\n${copy.middleOmitted}\n\n${body.slice(-half)}`;
-    return await minutesWithRetry(system, fenceUntrusted(`${header}\n${cut}`), outTokens, copy.retryReminder, work);
+    return await minutesWithRetry(
+      system,
+      fenceUntrusted(`${header}\n${cut}`),
+      outTokens,
+      copy.retryReminder,
+      work,
+      segments,
+    );
   }
 
   // ---- map-reduce conservador: blocos → notas parciais → ata final ----
@@ -393,9 +442,13 @@ export async function generateMinutes(
     );
     if (work) assertGuildWorkActive(work);
     try {
-      const parsed = JSON.parse(content) as { notas?: unknown[] };
+      const parsed = JSON.parse(content) as { notas?: unknown[]; fontes?: unknown[] };
       const notas = Array.isArray(parsed.notas) ? parsed.notas.map((n) => String(n)) : [content];
       partials.push(...notas.map((n) => `[${copy.partialBlock} ${i + 1}] ${n.slice(0, PARTIAL_NOTE_CHARS)}`));
+      for (const rawSource of (Array.isArray(parsed.fontes) ? parsed.fontes : []).slice(0, 6)) {
+        const source = verifiedMinutesSource(rawSource, segments);
+        if (source) partials.push(`SOURCE ${JSON.stringify({ ...source, quote: source.quote.slice(0, 280) })}`);
+      }
     } catch {
       partials.push(`[${copy.partialBlock} ${i + 1}] ${content.slice(0, 1500)}`);
     }
@@ -411,7 +464,7 @@ export async function generateMinutes(
   await abortableDelay(GROQ_BLOCK_PAUSE_MS, work?.signal);
   if (work) assertGuildWorkActive(work);
   const reduceUser = fenceUntrusted(`${header}\n${copy.partialNotes}:\n${joined}`);
-  return await minutesWithRetry(system, reduceUser, outTokens, copy.retryReminder, work);
+  return await minutesWithRetry(system, reduceUser, outTokens, copy.retryReminder, work, segments);
 }
 
 /**
@@ -425,19 +478,20 @@ async function minutesWithRetry(
   maxTokens: number,
   retryReminder: string,
   work?: GuildWorkContext,
+  segments: TranscriptSegment[] = [],
 ): Promise<MeetingMinutes> {
   const structured = { schema: { name: 'ata_reuniao', schema: MINUTES_JSON_SCHEMA }, work };
   const first = await llmChat(system, user, maxTokens, structured);
   if (work) assertGuildWorkActive(work);
   try {
-    return normalizeMinutes(first);
+    return normalizeMinutes(first, segments);
   } catch (err) {
     operationalWarn(
       `Ata: resposta fora do formato error=${operationalError(err)} chars=${first.length}; tentando novamente.`,
     );
     const reminded = `${system}\n${retryReminder}`;
     if (work) assertGuildWorkActive(work);
-    return normalizeMinutes(await llmChat(reminded, user, maxTokens, structured));
+    return normalizeMinutes(await llmChat(reminded, user, maxTokens, structured), segments);
   }
 }
 
@@ -447,6 +501,7 @@ function buildTranscriptParts(
   copy: MinutesCopy,
 ): { header: string; body: string } {
   const header = [
+    `Data / date: ${new Intl.DateTimeFormat('sv-SE', { timeZone: config.timezone, dateStyle: 'short', timeStyle: 'medium' }).format(meta.startedAt)} (${config.timezone})`,
     `${copy.channel}: ${cleanInline(meta.voiceChannelName)}`,
     `${copy.participants}: ${meta.participants.map((p) => cleanInline(p.name)).join(', ') || '—'}`,
     meta.notes.length > 0
@@ -459,14 +514,27 @@ function buildTranscriptParts(
     .join('\n');
 
   const body = segments
-    .map((s) => `[${msToClock(s.startMs)}] ${cleanInline(s.speaker)}: ${cleanText(s.text)}`)
+    .map(
+      (s) => `[${msToClock(s.startMs)}] [${s.startMs}..${s.endMs} ms] ${cleanInline(s.speaker)}: ${cleanText(s.text)}`,
+    )
     .join('\n');
 
   return { header, body };
 }
 
+/** Confirma a localização literal, não a interpretação da IA sobre o trecho. */
+export function verifiedMinutesSource(value: unknown, segments: TranscriptSegment[]): MinutesSource | undefined {
+  if (!isMinutesSource(value) || value.quote.trim().length < 8) return undefined;
+  const source = value;
+  const quote = source.quote.trim();
+  const segment = segments.find(
+    (s) => s.startMs === source.startMs && s.endMs === source.endMs && s.text.includes(quote),
+  );
+  return segment ? { startMs: segment.startMs, endMs: segment.endMs, quote } : undefined;
+}
+
 /** Parse defensivo: o modelo pode variar chaves/tipos; coage tudo para o formato esperado. */
-export function normalizeMinutes(raw: string): MeetingMinutes {
+export function normalizeMinutes(raw: string, segments: TranscriptSegment[] = []): MeetingMinutes {
   let obj: Record<string, unknown>;
   try {
     obj = JSON.parse(raw) as Record<string, unknown>;
@@ -478,13 +546,21 @@ export function normalizeMinutes(raw: string): MeetingMinutes {
 
   const resumo = typeof obj.resumo === 'string' ? obj.resumo.trim() : '';
 
+  const decisionSources: (MinutesSource | null)[] = [];
+  const sourceCandidates = Array.isArray(obj.decisionSources) ? obj.decisionSources : [];
   const decisoes = Array.isArray(obj.decisoes)
     ? obj.decisoes
-        .map((d) => {
-          if (typeof d === 'string') return d.trim();
+        .map((d, index) => {
+          const source = verifiedMinutesSource(sourceCandidates[index], segments);
+          if (typeof d === 'string') {
+            if (d.trim()) decisionSources.push(source ?? null);
+            return d.trim();
+          }
           if (d && typeof d === 'object') {
             const o = d as Record<string, unknown>;
-            return String(o.decisao ?? o.decision ?? o.texto ?? o.text ?? '').trim();
+            const text = String(o.decisao ?? o.decision ?? o.texto ?? o.text ?? '').trim();
+            if (text) decisionSources.push(source ?? null);
+            return text;
           }
           return ''; // número/null/bool viram vazio e são filtrados (nada de "null"/"[object Object]")
         })
@@ -498,10 +574,12 @@ export function normalizeMinutes(raw: string): MeetingMinutes {
             const o = a as Record<string, unknown>;
             const tarefa = String(o.tarefa ?? o.task ?? '').trim();
             if (!tarefa) return null;
+            const source = verifiedMinutesSource(o.source, segments);
             return {
               tarefa,
               responsavel: String(o.responsavel ?? o.responsável ?? o.owner ?? '').trim() || undefined,
               prazo: String(o.prazo ?? o.deadline ?? o.due ?? '').trim() || undefined,
+              ...(source ? { source } : {}),
             };
           }
           if (typeof a !== 'string') return null; // descarta null/número/bool (sem "null" fantasma)
@@ -543,7 +621,14 @@ export function normalizeMinutes(raw: string): MeetingMinutes {
         .filter((p): p is MinutesPerson => p !== null)
     : [];
 
-  return { resumo, decisoes, acoes, topicos, porParticipante };
+  return {
+    resumo,
+    decisoes,
+    acoes,
+    topicos,
+    porParticipante,
+    ...(decisionSources.some(Boolean) ? { decisionSources } : {}),
+  };
 }
 
 /** "hh:mm:ss" ou "mm:ss" ou número (ms/s) → milissegundos. */

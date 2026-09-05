@@ -1,5 +1,6 @@
 import { escapeMarkdown } from 'discord.js';
 import { config } from './config';
+import { resolveDeadline, validCivilDate } from './deadlines';
 import { Locale } from './i18n';
 import { llmChat } from './processing/minutes';
 import { msToClock } from './time';
@@ -327,12 +328,6 @@ function labelForPreset(preset: string, locale: Locale): string {
   return labels[preset]?.[locale === 'pt' ? 0 : 1] ?? preset;
 }
 
-function validCivilDate(year: number, month: number, day: number): boolean {
-  if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) return false;
-  const parsed = new Date(Date.UTC(year, month - 1, day));
-  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
-}
-
 interface ExplicitDateMatch {
   iso: string;
   valid: boolean;
@@ -655,38 +650,14 @@ function addCivilDays(iso: string, days: number): string {
   return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
 }
 
-function textualDeadlineDates(value: string, referenceMs: number, timezone: string): string[] {
-  const normalized = norm(value);
-  const base = formatInTz(referenceMs, timezone).slice(0, 10);
-  const dates: string[] = [];
-  if (/\b(hoje|today)\b/.test(normalized)) dates.push(base);
-  if (/\b(amanha|tomorrow)\b/.test(normalized)) dates.push(addCivilDays(base, 1));
-  if (/\b(ontem|yesterday)\b/.test(normalized)) dates.push(addCivilDays(base, -1));
-
-  const baseWeekday = new Date(`${base}T00:00:00Z`).getUTCDay();
-  for (const [pattern, weekday] of WEEKDAY_PATTERNS) {
-    if (pattern.test(normalized)) dates.push(addCivilDays(base, (weekday - baseWeekday + 7) % 7));
-  }
-  return dates;
-}
-
 function actionDeadlineMatches(
   value: string | undefined,
   range: ResolvedRange,
   timezone: string,
   referenceMs: number,
 ): boolean {
-  if (!value) return false;
-  const dates = [
-    ...explicitDates(value, range.fromMs, timezone)
-      .filter((date) => date.valid)
-      .map((date) => date.iso),
-    ...textualDeadlineDates(value, referenceMs, timezone),
-  ];
-  return [...new Set(dates)].some((date) => {
-    const day = resolveRange({ from: date, to: date }, range.fromMs, timezone);
-    return day.fromMs < range.toMs && day.toMs > range.fromMs;
-  });
+  const deadline = resolveDeadline(value, referenceMs, timezone);
+  return deadline.status === 'resolved' && deadline.fromMs < range.toMs && deadline.toMs > range.fromMs;
 }
 
 function meetingChunks(
