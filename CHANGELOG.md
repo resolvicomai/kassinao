@@ -33,6 +33,7 @@ latest README, documentation, configuration template, and tests.
 ### Fixed
 
 - Regenerated duplicate actions no longer inherit human completion by occurrence order. Concurrent source edits, grouped-mention edits and decisions whose source changed since opening the form are rejected as conflicts.
+- Commitment synchronization computes source and identity hashes once per entry, avoiding repeated normalization across large minutes batches.
 - Authorized recording managers can repair inaccessible source dependencies without exposing hidden URLs; incomplete authorization never permits removing them. Closed history no longer starves event reminders.
 - Commitment revisions are authenticated with a private key so hidden source URLs cannot be guessed offline from a public revision.
 - Accepted provider requests with a lost or invalid response no longer create another paid request through retries or fallback. A received job ID is persisted before cancellation; failed checkpoint caching no longer discards a usable transcription.

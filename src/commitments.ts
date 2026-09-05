@@ -1137,20 +1137,22 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
       const occurrences = new Map<string, number>();
       const result: Commitment[] = [];
       const at = now();
-      const previousEntries = Object.values(state.commitments).filter((entry) => entry.meetingId === meta.id);
-      const incoming = actions.flatMap((action) => {
-        const task = text(action.tarefa, 2000);
-        return task
-          ? [
-              {
-                fields: { task, assignee: text(action.responsavel, 200), deadline: text(action.prazo, 200) },
-                source: validSource(action.source),
-              },
-            ]
-          : [];
-      });
       const identity = (fields: CommitmentFields) => hash([normalized(fields.task), normalized(fields.assignee)]);
       const sourceKey = (source: CommitmentSource | undefined) => (source ? hash(source) : undefined);
+      const previousEntries = Object.values(state.commitments)
+        .filter((entry) => entry.meetingId === meta.id)
+        .map((entry) => ({
+          entry,
+          key: identity(entry.extracted ?? fieldsOf(entry)),
+          anchor: sourceKey(entry.source),
+        }));
+      const incoming = actions.flatMap((action) => {
+        const task = text(action.tarefa, 2000);
+        if (!task) return [];
+        const fields = { task, assignee: text(action.responsavel, 200), deadline: text(action.prazo, 200) };
+        const source = validSource(action.source);
+        return [{ fields, source, key: identity(fields), anchor: sourceKey(source) }];
+      });
       const quality = meta.sourceQuality
         ? {
             audioIncomplete: meta.sourceQuality.audioIncomplete === true,
@@ -1158,24 +1160,22 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
           }
         : undefined;
       for (const incomingEntry of incoming) {
-        const { fields, source } = incomingEntry;
-        const key = identity(fields);
-        const anchor = sourceKey(source);
+        const { fields, source, key, anchor } = incomingEntry;
         let candidates = previousEntries.filter(
-          (entry) => !found.has(entry.id) && anchor && sourceKey(entry.source) === anchor,
+          (candidate) => !found.has(candidate.entry.id) && anchor && candidate.anchor === anchor,
         );
-        let incomingMatches = incoming.filter((entry) => anchor && sourceKey(entry.source) === anchor);
+        let incomingMatches = incoming.filter((entry) => anchor && entry.anchor === anchor);
         if (candidates.length > 1 || incomingMatches.length > 1) {
-          candidates = candidates.filter((entry) => identity(entry.extracted ?? fieldsOf(entry)) === key);
-          incomingMatches = incomingMatches.filter((entry) => identity(entry.fields) === key);
+          candidates = candidates.filter((candidate) => candidate.key === key);
+          incomingMatches = incomingMatches.filter((entry) => entry.key === key);
         }
         if (!anchor) {
           candidates = previousEntries.filter(
-            (entry) => !found.has(entry.id) && !entry.source && identity(entry.extracted ?? fieldsOf(entry)) === key,
+            (candidate) => !found.has(candidate.entry.id) && !candidate.anchor && candidate.key === key,
           );
-          incomingMatches = incoming.filter((entry) => !entry.source && identity(entry.fields) === key);
+          incomingMatches = incoming.filter((entry) => !entry.anchor && entry.key === key);
         }
-        let previous = candidates.length === 1 && incomingMatches.length === 1 ? candidates[0] : undefined;
+        let previous = candidates.length === 1 && incomingMatches.length === 1 ? candidates[0].entry : undefined;
         // Exact content provides repeatability for unresolved records, never a positional migration of human state.
         const fallback = hash([meta.id, source, fields]);
         const occurrence = occurrences.get(fallback) ?? 0;
@@ -1183,8 +1183,7 @@ export function createCommitmentService(options: CommitmentServiceOptions) {
         const id = previous?.id ?? hash(['source-v2', fallback, occurrence]).slice(0, 32);
         previous ??= state.commitments[id];
         const ambiguous =
-          incomingMatches.length > 1 ||
-          (!previous && previousEntries.some((entry) => identity(entry.extracted ?? fieldsOf(entry)) === key));
+          incomingMatches.length > 1 || (!previous && previousEntries.some((candidate) => candidate.key === key));
         found.add(id);
         const materialChange = !!previous && hash(previous.extracted ?? fieldsOf(previous)) !== hash(fields);
         const qualityChanged =
