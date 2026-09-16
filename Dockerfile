@@ -47,7 +47,13 @@ RUN if [ "$LOCAL_TRANSCRIBE" = "1" ]; then \
 
 # ffmpeg e tini vêm dos repositórios Debian assinados. Não usamos ffmpeg-static:
 # seu postinstall baixa um executável fora do tarball verificado do npm.
+# O `upgrade` aplica as correções de segurança publicadas pelo Debian depois do
+# build da imagem base: o digest do node fica parado por semanas, e o scan de
+# release recusa CVE alta com correção disponível (foi o caso do libpcre2-8-0
+# 10.42-1, CVE-2026-86145 e CVE-2026-89161). Roda na mesma camada do install,
+# então não custa uma camada a mais nem outro download das listas.
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ffmpeg tini \
     && rm -rf /var/lib/apt/lists/*
 

@@ -10,6 +10,16 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-09-16
+
+### Security
+
+- A imagem passa a aplicar as correções de segurança do Debian (`apt-get upgrade`) na mesma camada que já instala ffmpeg e tini. O digest da base `node:22-bookworm-slim` fica parado por semanas depois que o Debian publica um patch, e o scan de release recusa CVE alta com correção disponível. Foi o que barrou a publicação da v1.6.0: `libpcre2-8-0` 10.42-1, corrigido em 10.42-1+deb12u1 (CVE-2026-86145 e CVE-2026-89161, ambas de execução de código por expressão regular manipulada).
+
+### Notes
+
+- A v1.6.0 não chegou a publicar imagem: o scan barrou antes da promoção. Todo o conteúdo dela está aqui; quem for atualizar vai direto da 1.5.0 para a 1.6.1.
+
 ## [1.6.0] — 2026-09-16
 
 ### Removed
