@@ -889,9 +889,11 @@ const minutesProvider = choiceEnv('MINUTES_PROVIDER', process.env.OPENROUTER_API
   'groq',
 ] as const);
 
-// Retenção: RETENTION_DAYS=0 desliga a expiração (áudio E texto ficam até alguém
-// apagar manualmente). Áudio ilimitado FORÇA texto ilimitado — não faz sentido a
-// memória (transcrição/ata) morrer antes do áudio que ela resume.
+// Retenção. O áudio some assim que a transcrição completa é salva (ver
+// src/processing/transcribe.ts); RETENTION_DAYS é o teto para o que NÃO tem
+// transcrição: ASR desligado, ou transcrição que falhou e ainda vai retentar.
+// RETENTION_DAYS=0 desliga essa expiração de fundo. Áudio ilimitado FORÇA texto
+// ilimitado — não faz sentido a memória morrer antes do áudio que ela resume.
 const retentionDays = numberEnv('RETENTION_DAYS', 7, { min: 0 });
 const audioRetentionUnlimited = retentionDays <= 0;
 const textRetentionDaysRaw = numberEnv('TEXT_RETENTION_DAYS', 90, { min: 0 });
@@ -1196,15 +1198,15 @@ export const config = {
   stateDir,
   /** Cookies, sessões web e sessões MCP. Nunca entra no backup de gravações. */
   authStateDir,
-  /** Dias até o ÁUDIO expirar. 0 = nunca (delete só manual). */
+  /** Teto em dias para áudio SEM transcrição (com transcrição some na hora). 0 = sem teto. */
   retentionDays,
-  /** true quando RETENTION_DAYS=0 — nada de áudio expira sozinho. */
+  /** true quando RETENTION_DAYS=0 — áudio sem transcrição não expira sozinho. */
   audioRetentionUnlimited,
   /**
-   * Retenção em camadas: o ÁUDIO expira em RETENTION_DAYS (pesado), mas
-   * transcrição + ata + metadados vivem TEXT_RETENTION_DAYS (leve) — a memória
-   * das reuniões (busca, MCP, /perguntar) não pode evaporar em 1 semana.
-   * Nunca menor que RETENTION_DAYS. 0 (ou RETENTION_DAYS=0) = nunca expira.
+   * Retenção em camadas: o ÁUDIO (pesado) some assim que a transcrição fica
+   * pronta, mas transcrição + ata + metadados vivem TEXT_RETENTION_DAYS (leve)
+   * — a memória das reuniões (busca, MCP, /perguntar) não pode evaporar em 1
+   * semana. Nunca menor que RETENTION_DAYS. 0 (ou RETENTION_DAYS=0) = nunca expira.
    */
   textRetentionDays: Math.max(textRetentionDaysRaw, retentionDays),
   /** true quando texto (transcrição/ata/meta) nunca expira sozinho. */

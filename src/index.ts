@@ -33,10 +33,8 @@ import {
   VoiceBasedChannel,
 } from 'discord.js';
 import { config } from './config';
-import { startContextMonitor, syncContextMeeting } from './context';
 import { startRemoteDeletionRecovery } from './processing/remoteDeletion';
 import { assertDeletionsReconciled } from './deletionLedger';
-let stopContextMonitor: (() => void) | undefined;
 let stopRemoteDeletionRecovery: (() => void) | undefined;
 import { operationalError, operationalFailure, operationalPii, operationalWarn } from './operationalLog';
 import { answerQuestion, authorizeAskMetas, resolveAskTemporalIntent } from './ask';
@@ -511,11 +509,6 @@ function notifyTranscription(meta: RecordingMeta, locale: Locale): Promise<void>
 
 /** Avisa genericamente no canal e entrega os detalhes por DM às identidades históricas autorizadas. */
 async function notifyTranscriptionOnce(meta: RecordingMeta, locale: Locale): Promise<void> {
-  try {
-    syncContextMeeting(meta);
-  } catch {
-    operationalWarn('Não foi possível atualizar os combinados desta ata.');
-  }
   if (!guildRuntime.isOperational(meta.guildId)) return;
   const state = meta.transcription;
   if (!state || (state.status !== 'done' && state.status !== 'partial' && state.status !== 'error')) return;
@@ -2523,16 +2516,6 @@ client.once(Events.ClientReady, async () => {
   }
   startNotificationRetrySweep();
   startDiscordSurfaceMigrationSweep();
-  if (!stopContextMonitor) {
-    try {
-      stopContextMonitor = startContextMonitor(async (userId, content, nonce) => {
-        const user = await client.users.fetch(userId);
-        await user.send({ content, nonce, enforceNonce: true, allowedMentions: { parse: [] } });
-      });
-    } catch {
-      operationalWarn('Acompanhamento de combinados não iniciou; confira a configuração.');
-    }
-  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -2806,7 +2789,6 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 async function gracefulShutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
-  stopContextMonitor?.();
   stopRemoteDeletionRecovery?.();
   console.log(`Recebido ${signal}: encerrando gravações ativas antes de sair...`);
   killPendingTranscriptions();

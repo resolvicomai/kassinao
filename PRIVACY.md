@@ -73,7 +73,7 @@ Before a deployment handles Discord API data or records a real call, the operato
 >
 > **Retention**
 >
-> Audio is retained for `[RETENTION_DAYS]` days. Text, notes, minutes, and metadata are retained for `[TEXT_RETENTION_DAYS]` days. A value of `0` means manual/unlimited retention and must be described plainly. Backups/logs have these separate periods: `[PERIODS]`.
+> Audio is deleted as soon as a complete transcript is saved; when there is no transcript (ASR disabled, or a transcription that failed), it is retained for at most `[RETENTION_DAYS]` days. Text, notes, minutes, and metadata are retained for `[TEXT_RETENTION_DAYS]` days. A value of `0` means manual/unlimited retention and must be described plainly. Backups/logs have these separate periods: `[PERIODS]`.
 >
 > **Recording notice and lawful use**
 >

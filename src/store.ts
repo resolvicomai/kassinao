@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
 import { recordDeletionTombstone } from './deletionLedger';
-import { removeStoredMeetingCommitments } from './commitments';
 import { t } from './i18n';
 import { operationalError, operationalInfo, operationalPii, operationalWarn } from './operationalLog';
 import {
@@ -721,7 +720,6 @@ export function deleteRecording(id: string): void {
   if (!VALID_ID.test(id)) return;
   const dir = recordingDir(id);
   recordDeletionTombstone(id);
-  removeStoredMeetingCommitments(config.stateDir, id);
   try {
     fs.rmSync(dir, { recursive: true, force: true });
   } catch (err) {

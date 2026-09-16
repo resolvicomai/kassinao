@@ -33,13 +33,10 @@ Kassinão é um projeto independente, sem afiliação ou endosso do Discord.
 - speech-to-text por provider de ASR configurado ou imagem local criada pelo operador;
 - ata, decisões e tarefas por IA depois que existe uma transcrição;
 - `/perguntar` sobre reuniões autorizadas, com links para as fontes usadas;
-- página privada de combinados com associações explícitas entre reuniões, estado e histórico de fontes;
-- referências de leitura do Jira/GitHub limitadas ao contexto e ao acesso de cada pessoa, além de links manuais de documentos;
-- informativos de combinados e preparação para eventos agendados do Discord, mediante adesão;
 - webhook HTTPS assinado da ata com filtros de público e conteúdo;
-- seis ferramentas MCP de consulta expostas pela instância.
+- cinco ferramentas MCP de consulta expostas pela instância.
 
-Consulte a [configuração de contexto e integrações](docs/CONTEXT-INTEGRATIONS.md) para concessões de acesso, credenciais, preferências de avisos e limites. A implantação não descobre projetos nem prevê calls sem agendamento. Novas conexões MCP permitem limitar conteúdo, canais, datas e validade; conexões existentes preservam seu escopo anterior.
+Consulte [operação e recuperação](docs/OPERATION-RECOVERY.md) para os limites de entrega do webhook e a reconciliação obrigatória do ledger de exclusão depois de uma restauração. Novas conexões MCP permitem limitar conteúdo, canais, datas e validade; conexões existentes preservam seu escopo anterior.
 
 A fala é associada à conta/stream do Discord, não identificada depois a partir de uma gravação mixada por diarização. Isso preserva a atribuição da plataforma, mas não prova a identidade real de uma pessoa nem garante que uma faixa parcial ou com falha esteja completa.
 
@@ -245,7 +242,7 @@ Uma instalação nova começa gravando áudio e com egress externo de IA desliga
 - `TRANSCRIBE_FALLBACK_PROVIDER=none`
 - `MINUTES_ENABLED=false`
 - MCP desligado até definir `MCP_SECRET`
-- retenção de áudio: 7 dias
+- áudio: apagado assim que a transcrição fica pronta (teto de 7 dias quando não há transcrição)
 - retenção de texto/metadados: 90 dias
 
 Ativar ASR em nuvem, ata por IA, webhook, backup remoto ou MCP envia os dados necessários àquele recurso para o destino configurado pelo operador. “Self-hosted” não significa que os dados nunca possam sair do servidor.

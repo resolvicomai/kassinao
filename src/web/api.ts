@@ -1,8 +1,6 @@
 import crypto from 'node:crypto';
 import express, { Express, NextFunction, Request, Response } from 'express';
 import { config } from '../config';
-import { CommitmentAuthorizationUnavailableError, type CommitmentStatus } from '../commitments';
-import { contextRuntime, withContextAccess } from '../context';
 import { resolveDeadline } from '../deadlines';
 import { isClientReady } from '../discord/ready';
 import { operationalError, operationalPii } from '../operationalLog';
@@ -412,7 +410,7 @@ interface ScanCursorPayload {
   toMs: number;
 }
 
-type AggregateCursorKind = 'actions' | 'search' | 'said' | 'commitments';
+type AggregateCursorKind = 'actions' | 'search' | 'said';
 type AggregateCursorPhase = 'search-minutes' | 'search-transcript' | 'search-notes';
 
 interface AggregateCursorPayload extends ScanCursorPayload {
@@ -423,8 +421,6 @@ interface AggregateCursorPayload extends ScanCursorPayload {
   phase?: AggregateCursorPhase;
   /** SHA-256 sem segredo do conteúdo posicional; o token inteiro é AEAD. */
   version?: string;
-  /** Stable key within a meeting; status changes do not invalidate continuation. */
-  afterId?: string;
 }
 
 function scanContext(route: string, rangeInput: readonly unknown[], filters: readonly unknown[]): string {
@@ -505,7 +501,6 @@ function openResultCursor(
     (cursor.phase !== undefined &&
       (cursor.kind !== 'search' || !['search-minutes', 'search-transcript', 'search-notes'].includes(cursor.phase))) ||
     (cursor.version !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(cursor.version)) ||
-    (cursor.afterId !== undefined && (cursor.kind !== 'commitments' || !/^[a-f0-9]{32}$/.test(cursor.afterId))) ||
     (cursor.kind === 'search' && cursor.suboffset !== undefined && cursor.phase === undefined) ||
     (cursor.phase !== undefined && (cursor.suboffset ?? 0) > 0 && cursor.version === undefined)
   )
@@ -522,7 +517,6 @@ function sealResultCursor(
   suboffset?: number,
   phase?: AggregateCursorPhase,
   version?: string,
-  afterId?: string,
 ): string {
   return sealOpaqueCursor(
     {
@@ -533,7 +527,6 @@ function sealResultCursor(
       ...(suboffset === undefined ? {} : { suboffset }),
       ...(phase === undefined ? {} : { phase }),
       ...(version === undefined ? {} : { version }),
-      ...(afterId === undefined ? {} : { afterId }),
     } satisfies AggregateCursorPayload,
     resultCursorOptions(user, context, kind),
   );
@@ -882,7 +875,7 @@ function handle(fn: (req: Request, res: Response) => Promise<void>) {
         res.status(400).json({ error: 'bad_cursor' });
         return;
       }
-      if (err instanceof TransientAccessError || err instanceof CommitmentAuthorizationUnavailableError) {
+      if (err instanceof TransientAccessError) {
         res.status(503).set('Retry-After', '3').json({ error: 'starting' });
         return;
       }
@@ -1325,142 +1318,6 @@ export function mountMcpApi(app: Express): void {
   );
 
   authed.get(
-    '/commitments',
-    contentGate('minutes'),
-    scanRateGate,
-    handle(async (req, res) => {
-      const user = mcpUserOf(res);
-      const rangeInput = rangeFromQuery(req);
-      const range = resolveRange(rangeInput, Date.now());
-      const guildId = qstr(req, 'guildId');
-      const channelId = qstr(req, 'channelId');
-      const status = qstr(req, 'status');
-      if (status && !['mentioned', 'confirmed', 'completed', 'cancelled'].includes(status)) {
-        res.status(400).json({ error: 'bad_status' });
-        return;
-      }
-      const limit = qint(req, 'limit', 100, 100);
-      // Bind continuation to this session/policy as well as user and query.
-      const context = scanContext('commitments', rangeFingerprint(rangeInput), [
-        user.jti,
-        getMcpSessionOptions(user.jti, user.id),
-        guildId ?? null,
-        channelId ?? null,
-        status ?? null,
-      ]);
-      const visible = await visibleInWindow(
-        user,
-        range,
-        { guildId, channelId },
-        {
-          rawCursor: qstr(req, 'scanCursor'),
-          rawResultCursor: qstr(req, 'cursor'),
-          resultKind: 'commitments',
-          context,
-        },
-        MAX_AGGREGATE_MEETINGS,
-      );
-      const entries = await withContextAccess(() =>
-        contextRuntime().service.listForUser(user.id, {
-          meetingIds: visible.metas.map((meta) => meta.id),
-          status: status as CommitmentStatus | undefined,
-          limit: limit + 1,
-          after: visible.resume?.afterId
-            ? { meetingId: visible.resume.anchor.id, commitmentId: visible.resume.afterId }
-            : undefined,
-        }),
-      );
-      const selected = entries.slice(0, limit);
-      const extra = entries[limit];
-      let nextCursor: string | null = null;
-      if (extra) {
-        const anchor = visible.anchors[visible.metas.findIndex((meta) => meta.id === extra.meetingId)];
-        const previous = selected.at(-1);
-        nextCursor = sealResultCursor(
-          user,
-          'commitments',
-          anchor,
-          visible.range,
-          context,
-          0,
-          undefined,
-          undefined,
-          previous?.meetingId === extra.meetingId ? previous.id : undefined,
-        );
-      }
-      const transcriptAllowed = allowsContent(user, 'transcript');
-      const clean = (text: string) => neutralizeFences(cleanInline(text));
-      const commitments = selected
-        .filter((entry) => {
-          const current = readMeta(entry.meetingId);
-          return current && mcpSessionAllowsRecording(user.jti, user.id, current) && allowsContent(user, 'minutes');
-        })
-        .map((entry) => ({
-          id: entry.id,
-          meetingId: entry.meetingId,
-          meetingUrl: pageUrl(entry.meetingId),
-          contextUrl: `${config.appUrl}/app/contexto?commitment=${encodeURIComponent(entry.id)}`,
-          guildId: entry.guildId,
-          channelId: entry.channelId,
-          meetingStartedAtISO: formatInTz(entry.meetingStartedAt),
-          task: clean(entry.task),
-          assignee: entry.assignee ? clean(entry.assignee) : null,
-          deadline: entry.deadline ? clean(entry.deadline) : null,
-          deadlineDate: entry.deadlineDate ?? null,
-          deadlineState: entry.deadlineState,
-          status: entry.status,
-          completionRule: entry.completionRule ?? null,
-          effectiveCompletion: entry.effectiveCompletion ?? null,
-          sourcePresent: entry.sourcePresent,
-          reviewRequired: entry.reviewRequired === true,
-          sourceQuality: entry.sourceQuality ?? null,
-          completionConflict: entry.completionConflict ?? null,
-          sourceAccessIncomplete: entry.sourceAccessIncomplete === true,
-          lastStatusBy: entry.lastStatusBy ?? null,
-          lastStatusAt: entry.lastStatusAt ?? null,
-          updatedAt: entry.updatedAt,
-          ...(transcriptAllowed && entry.source
-            ? {
-                source: {
-                  ...entry.source,
-                  quote: clean(entry.source.quote),
-                  deepLink: deepLink(entry.meetingId, entry.source.startMs),
-                },
-              }
-            : {}),
-          links: entry.links.map((link) => ({
-            reference: { ...link.reference },
-            addedAt: link.addedAt,
-            ...(link.snapshot
-              ? {
-                  snapshot: {
-                    ...link.snapshot,
-                    label: clean(link.snapshot.label),
-                    title: link.snapshot.title ? clean(link.snapshot.title) : undefined,
-                  },
-                }
-              : {}),
-          })),
-        }));
-      res.json({
-        commitments,
-        returned: commitments.length,
-        sourceAccessIncomplete: commitments.some((entry) => entry.sourceAccessIncomplete),
-        limit,
-        scannedMeetings: visible.metas.length,
-        meetingsTruncated: visible.truncated,
-        meetingScanLimit: MAX_AGGREGATE_MEETINGS,
-        candidateScanLimit: MAX_CANDIDATE_METAS_PER_REQUEST,
-        guildScanLimit: MAX_ACCESS_GUILDS_PER_REQUEST,
-        nextCursor,
-        nextScanCursor: nextCursor ? null : visible.nextScanCursor,
-        semantics:
-          'Current recorded lifecycle. Mentioned is not confirmed and has no overdue obligation. reviewRequired suspends confirmation of the current version; sourceQuality records partial audio/transcript coverage. completionConflict reports a current source that disagrees with manual completion. External merge or issue state does not confirm completion or deployment. sourceAccessIncomplete means some source checks were unavailable or exceeded the read budget; hidden links and null evidence do not prove unfinished work. Retry with a smaller limit or use the item contextUrl.',
-      });
-    }),
-  );
-
-  authed.get(
     '/actions',
     contentGate('minutes'),
     scanRateGate,
@@ -1591,7 +1448,7 @@ export function mountMcpApi(app: Express): void {
       }
       res.json({
         semantics:
-          'Historical actions extracted from minutes, grouped by deadline; completion and current status are not tracked here. Use /api/commitments for current recorded lifecycle.',
+          'Historical actions extracted from minutes, grouped by deadline; completion and current status are not tracked here.',
         scannedMeetings: metas.length,
         meetingsTruncated: visible.truncated,
         meetingScanLimit: MAX_AGGREGATE_MEETINGS,
