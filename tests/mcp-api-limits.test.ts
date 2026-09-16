@@ -238,6 +238,10 @@ describe('paginação das consultas agregadas MCP', () => {
     const app = express();
     mountMcpApi(app);
     server = http.createServer(app);
+    // Entre um teste e outro este arquivo bloqueia o event loop por mais de 5s gravando e
+    // apagando centenas de metas. Com o keep-alive padrão o servidor fecharia o socket ocioso
+    // e o pool do fetch reaproveitaria o mesmo socket, devolvendo ECONNRESET em vez de resposta.
+    server.keepAliveTimeout = 0;
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('servidor de teste sem porta');
