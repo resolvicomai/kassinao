@@ -6,15 +6,6 @@
  * reuniao, para que a migracao de layout nao altere contratos de dados.
  */
 export const APP_CSS = `
-  .context-page { max-width: 980px; margin: 0 auto; }
-  .context-card { border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin: 18px 0; }
-  .context-card h2 { margin-top: 12px; }
-  .context-card-head, .context-form { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-  .context-form { margin: 14px 0; }
-  .context-card label { display: block; min-width: 0; max-width: 100%; }
-  .context-card select, .context-card textarea { display: block; width: 100%; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; }
-  .context-card blockquote { margin-left: 0; padding-left: 14px; border-left: 2px solid var(--line); }
-
   @font-face {
     font-family: 'Space Grotesk';
     src: url('/assets/space-grotesk.woff2') format('woff2');
@@ -772,25 +763,15 @@ export const APP_CSS = `
     gap: 18px;
     margin-top: 18px;
   }
-  .meeting-layout:has(.meeting-context),
   .recording-layout:has(.recording-context) { grid-template-columns: minmax(0, 1fr) minmax(250px, 300px); gap: 28px; }
-  .recording-layout.solo { grid-template-columns: minmax(0, 1fr); }
   .meeting-main, .recording-stage, .meeting-stage { min-width: 0; }
-  .meeting-context, .recording-context, .context-rail {
+  .recording-context {
     position: sticky;
     top: calc(var(--topbar-height) + 18px);
     display: grid;
     gap: 12px;
     min-width: 0;
   }
-  .context-card {
-    padding: 15px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-panel);
-    background: var(--surface);
-  }
-  .context-card h2, .context-card h3 { margin: 0 0 10px; }
-  .context-list { list-style: none; display: grid; gap: 8px; color: var(--text-weak); font-size: 12px; }
   .context-section {
     padding: 15px;
     border: 1px solid var(--border);
@@ -1068,7 +1049,7 @@ export const APP_CSS = `
     :root { --sidebar-width: 220px; }
     .recording-card-main { grid-template-columns: minmax(175px, 1fr) minmax(250px, 1.5fr); }
     .recording-card-detail { grid-column: 1 / -1; }
-    .meeting-layout:has(.meeting-context), .recording-layout:has(.recording-context) { grid-template-columns: minmax(0, 1fr) 250px; gap: 20px; }
+    .recording-layout:has(.recording-context) { grid-template-columns: minmax(0, 1fr) 250px; gap: 20px; }
     .connection-card { grid-template-columns: minmax(170px, 1.4fr) repeat(2, minmax(100px, 1fr)) auto; }
     .connection-card > :nth-child(4) { display: none; }
   }
@@ -1118,7 +1099,7 @@ export const APP_CSS = `
     .mobile-logout .user img, .mobile-logout .user-initial { height: 22px; width: 22px; }
     .mobile-logout .user-name { max-width: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .page-frame { padding: 24px 18px 44px; }
-    .meeting-layout:has(.meeting-context), .recording-layout:has(.recording-context), .connect-layout { grid-template-columns: minmax(0, 1fr); }
+    .recording-layout:has(.recording-context), .connect-layout { grid-template-columns: minmax(0, 1fr); }
     .meeting-context, .recording-context, .context-rail, .connect-aside { position: static; }
     .recording-card-main { grid-template-columns: minmax(160px, 1fr) minmax(220px, 1.5fr); gap: 12px 18px; }
     .rrow, .recording-card { grid-template-columns: minmax(0, 1fr); }

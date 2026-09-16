@@ -10,6 +10,35 @@ latest README, documentation, configuration template, and tests.
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-09-16
+
+### Removed
+
+- A página privada de combinados, com todo o rastreio de ciclo de vida, agrupamento de menções, critérios de conclusão, correções humanas e decisões que cancelam ou substituem um item. A feature não se provou em uso: o primeiro informativo enviava o acervo aberto inteiro como se fosse mudança, e a assinatura de mudança disparava por edição de título ou comentário na fonte vinculada.
+- Os avisos privados por DM (informativos de combinados) e os lembretes de evento agendado do Discord que dependiam deles. O monitor de 15 minutos deixa de existir; nenhuma DM de acompanhamento é enviada.
+- As integrações de leitura com GitHub e Jira que alimentavam os combinados, junto com `KASSINAO_CONTEXT_SCOPES`, `KASSINAO_CONTEXT_READERS`, `KASSINAO_CONTEXT_USER_CREDENTIALS`, `KASSINAO_CONTEXT_MAX_REQUESTS`, `GITHUB_CONTEXT_TOKEN` e `JIRA_CONTEXT_CREDENTIALS`. A instância não faz mais nenhuma requisição a esses serviços.
+- A tool MCP `list_commitments` e a rota `/api/commitments`. O conector passa a expor cinco tools de leitura e é publicado como `kassinao-mcp@2.0.0`; `pending_actions` continua entregando as ações históricas da ata.
+
+### Changed
+
+- **O áudio deixa de ser armazenado depois da transcrição.** Assim que a transcrição completa é salva, as faixas e o cache da gravação são apagados na hora, com o registro de intenção no ledger de exclusão. A ata é gerada a partir da transcrição, não das faixas, então guardar o arquivo pesado por dias não comprava nada. `RETENTION_DAYS` passa a ser apenas o teto para áudio **sem** transcrição: ASR desligado, ou transcrição que falhou e ainda pode ser retentada. Transcrição parcial (faixas pendentes) também preserva o áudio até completar.
+- `docs/CONTEXT-INTEGRATIONS.md` virou `docs/OPERATION-RECOVERY.md`, mantendo o que não era da feature: retomada de processamento, filtros do webhook de ata e a reconciliação obrigatória do ledger de exclusão depois de uma restauração.
+- CSS morto do app saiu junto (`.context-*`, `.meeting-context`, `.recording-layout.solo`), com o restante do `APP_CSS` intacto. O `APP_CSS` é embutido em toda página, então o corte vale em cada resposta.
+
+### Changed (conector MCP)
+
+- As cinco tools ganharam o prefixo do serviço: `kassinao_list_meetings`, `kassinao_pending_actions`, `kassinao_search_meetings`, `kassinao_who_said`, `kassinao_get_meeting`. Nomes genéricos como `list_meetings` e `search_meetings` colidem com conectores de calendário e de notas instalados no mesmo cliente.
+- Cada tool passa a declarar anotações (`readOnlyHint`, `destructiveHint: false`, `idempotentHint`, `openWorldHint`) e um título legível. O cliente MCP pode tratá-las como leitura segura em vez de pedir confirmação a cada chamada.
+- O piso do `@modelcontextprotocol/sdk` subiu de `^1.4.0` para `^1.30.0`, alinhado ao que o shrinkwrap já instalava.
+
+### Upgrade notes
+
+- Gravação, transcrição, ata, `/perguntar`, webhooks de ata, painel de operação e as demais tools MCP não mudam de comportamento.
+- Depois de subir esta versão, `STATE_DIR/commitments.json` e `STATE_DIR/context-delivery.json` deixam de ser lidos ou escritos. Nenhum código toca neles; apague quando quiser, tendo em mente que as preferências de acompanhamento não voltam.
+- Quem usa o conector MCP precisa atualizar para `kassinao-mcp@2.0.0`; chamadas a `list_commitments` passam a falhar como tool inexistente.
+- Gravações antigas que ainda tiverem áudio continuam seguindo `RETENTION_DAYS`; nada é apagado retroativamente no deploy. Para liberar espaço agora, use "liberar espaço" na página da gravação.
+- Download e mixagem do áudio continuam existindo, mas só valem enquanto o áudio existe, ou seja, entre o fim da gravação e o fim da transcrição. Quem precisa do arquivo de áudio como entregável deve baixá-lo nessa janela ou manter o ASR desligado naquele canal.
+
 ## [1.5.0] — 2026-09-05
 
 ### Added

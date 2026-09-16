@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { config } from '../src/config';
-import { generateMinutes } from '../src/processing/minutes';
+import { generateMinutes, normalizeMinutes, verifiedMinutesSource } from '../src/processing/minutes';
 import type { RecordingMeta } from '../src/store';
 
 const provider = config.minutesProvider;
@@ -53,4 +53,22 @@ it('preserva fonte literal conferida no map-reduce de reunião longa', async () 
   expect(reduceInput).toContain('SOURCE');
   expect(reduceInput).toContain(source.quote);
   expect(minutes.acoes[0].source).toEqual(source);
+});
+
+it('só publica a fonte quando trecho e limites conferem com uma fala original', () => {
+  const segments = [{ startMs: 1200, endMs: 5400, speaker: 'Ana', text: 'Vou revisar a proposta amanhã.' }];
+  const source = { startMs: 1200, endMs: 5400, quote: 'revisar a proposta amanhã' };
+  expect(verifiedMinutesSource(source, segments)).toEqual(source);
+  expect(verifiedMinutesSource({ ...source, startMs: 1000 }, segments)).toBeUndefined();
+  expect(verifiedMinutesSource({ ...source, quote: 'Já publiquei em produção' }, segments)).toBeUndefined();
+  const raw = JSON.stringify({
+    resumo: 'Proposta',
+    decisoes: ['', 'Revisar'],
+    decisionSources: [null, source],
+    acoes: [{ tarefa: 'Revisar', source }],
+  });
+  const checked = normalizeMinutes(raw, segments);
+  expect(checked.decisionSources).toEqual([source]);
+  expect(checked.acoes[0].source).toEqual(source);
+  expect(normalizeMinutes(raw).acoes[0].source).toBeUndefined();
 });

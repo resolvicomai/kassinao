@@ -26,7 +26,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readApiJson } from './apiResponse.js';
-import { createCommitmentsTool } from './commitmentTool.js';
 import { parseCredentialTokenResponse, refreshCredential, type CredentialTokenResponse } from './credentialRefresh.js';
 import { loadCredentialStore, saveCredentialStore } from './credentialStore.js';
 import { DEFAULT_HTTP_TIMEOUT_MS, strictFetch } from './http.js';
@@ -235,15 +234,17 @@ const rangeProps = {
 
 interface ToolDef {
   name: string;
+  /** Rótulo curto para o cliente MCP exibir no lugar do nome técnico. */
+  title: string;
   description: string;
   inputSchema: Record<string, unknown>;
   call: (args: Record<string, unknown>) => Promise<unknown>;
 }
 
 const TOOLS: ToolDef[] = [
-  createCommitmentsTool(apiGet),
   {
-    name: 'list_meetings',
+    name: 'kassinao_list_meetings',
+    title: 'Kassinão: listar reuniões',
     description:
       'List recorded meetings in a time window (defaults to the last 30 days). Only meetings the user can access are returned. Each item carries transcriptStatus ("partial" = some account/stream tracks not transcribed yet), presentSilent (accounts present in the call with no captured speech) and audioDeleted (tiered retention: audio expired, text remains). Discord labels identify the captured account/stream, not a human identity. Follow nextCursor until null; only then continue with nextScanCursor. Use for "what meetings happened between X and Y" / "list this week\'s calls".',
     inputSchema: {
@@ -268,9 +269,10 @@ const TOOLS: ToolDef[] = [
     call: (a) => apiGet('/api/meetings', a),
   },
   {
-    name: 'pending_actions',
+    name: 'kassinao_pending_actions',
+    title: 'Kassinão: ações pendentes das atas',
     description:
-      'Historical action items extracted from minutes (task + owner + deadline), bucketed by deadline: overdue, dueSoon, later, noDeadline, unparseable. These buckets do not track current status or completion: use list_commitments for recorded lifecycle. Items include transcriptStatus; partial transcripts may omit actions. Follow nextCursor until null, then nextScanCursor. assignee="me" matches the token owner.',
+      'Historical action items extracted from minutes (task + owner + deadline), bucketed by deadline: overdue, dueSoon, later, noDeadline, unparseable. These buckets do not track current status or completion. Items include transcriptStatus; partial transcripts may omit actions. Follow nextCursor until null, then nextScanCursor. assignee="me" matches the token owner.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -292,7 +294,8 @@ const TOOLS: ToolDef[] = [
     call: (a) => apiGet('/api/actions', a),
   },
   {
-    name: 'search_meetings',
+    name: 'kassinao_search_meetings',
+    title: 'Kassinão: buscar nas reuniões',
     description:
       'Full-text search across transcripts, minutes and notes of accessible meetings, accent-insensitive, with deep links to the exact second. Follow nextCursor until null; only then continue with nextScanCursor. Use for "find where we discussed X".',
     inputSchema: {
@@ -318,7 +321,8 @@ const TOOLS: ToolDef[] = [
     call: (a) => apiGet('/api/search', a),
   },
   {
-    name: 'who_said',
+    name: 'kassinao_who_said',
+    title: 'Kassinão: quem disse',
     description:
       'Find transcript segments matching a query (accent-insensitive), with Discord account/stream label, timestamp, surrounding context and a deep link. Labels are source metadata, not proof of human identity. transcriptStatus="partial" means some tracks are not transcribed yet — absence of a match is not proof nobody said it. Follow nextCursor until null; only then continue with nextScanCursor. Use for "when did the account labeled Ana mention budget".',
     inputSchema: {
@@ -345,7 +349,8 @@ const TOOLS: ToolDef[] = [
     call: (a) => apiGet('/api/said', a),
   },
   {
-    name: 'get_meeting',
+    name: 'kassinao_get_meeting',
+    title: 'Kassinão: abrir uma reunião',
     description:
       'Full dossier of one meeting: metadata, minutes (summary/decisions/actions/topics/per-account label), transcript, notes and a merged timeline. Discord labels identify the captured account/stream, not a human identity. Check transcriptStatus: "partial" = transcript incomplete (pending tracks). include is a CSV of meta,minutes,transcript,notes,timeline.',
     inputSchema: {
@@ -488,6 +493,15 @@ async function runServer(): Promise<void> {
       name: t.name,
       description: `${t.description}\n\n${MCP_UNTRUSTED_DESCRIPTION}`,
       inputSchema: t.inputSchema,
+      // Todas as tools são GET autenticado contra a instância: nada é criado,
+      // alterado ou apagado, e repetir a chamada devolve o mesmo estado.
+      annotations: {
+        title: t.title,
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
     })),
   }));
 

@@ -19,7 +19,7 @@ export function describeHttpFailure(status: number, retryAfterHeader?: string | 
     case 404:
       return 'Kassinão has no such meeting, or your account cannot access it (HTTP 404). Check the meeting id instead of retrying.';
     case 413:
-      return 'The transcript or minutes are too large for a direct read (HTTP 413). Use search_meetings or who_said for the passage you need instead of retrying.';
+      return 'The transcript or minutes are too large for a direct read (HTTP 413). Use kassinao_search_meetings or kassinao_who_said for the passage you need instead of retrying.';
     case 429: {
       const seconds = Number.parseInt(retryAfterHeader ?? '', 10);
       const wait = Number.isFinite(seconds) && seconds > 0 ? seconds : 30;

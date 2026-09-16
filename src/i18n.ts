@@ -37,22 +37,6 @@ export function localeOf(discordLocale: string | undefined): Locale {
 type Strings = Record<string, { pt: string; en: string }>;
 
 const STRINGS: Strings = {
-  'context.digest': {
-    pt: 'Você tem {count} atualização(ões) nos combinados que acompanha. Consulte com seu acesso atual: {url}',
-    en: 'You have {count} update(s) to commitments you follow. View them with your current access: {url}',
-  },
-  'context.event': {
-    pt: 'Um evento agendado no Discord começa em até 30 minutos em um canal que você acompanha. Prepare-se com seu acesso atual: {url}',
-    en: 'A scheduled Discord event starts within 30 minutes in a channel you follow. Prepare with your current access: {url}',
-  },
-  'context.eventChanged': {
-    pt: 'Um evento do Discord que já gerou um lembrete mudou de horário ou canal. Confira a agenda com seu acesso atual: {url}',
-    en: 'A Discord event that already triggered a reminder changed its time or channel. Check the schedule with your current access: {url}',
-  },
-  'context.eventCanceled': {
-    pt: 'Um evento do Discord que já gerou um lembrete foi cancelado ou removido. Confira com seu acesso atual: {url}',
-    en: 'A Discord event that already triggered a reminder was canceled or removed. Check with your current access: {url}',
-  },
   // erros e avisos
   'err.generic': {
     pt: '❌ Deu ruim aqui do meu lado. Tenta de novo?',
@@ -549,28 +533,28 @@ const STRINGS: Strings = {
   },
   // frases de retenção intercambiáveis pros tópicos do /ajuda (config atual manda)
   'help.retention-limited': {
-    pt: 'Retenção local: **áudio por {audioDays} dias** e dados textuais por **{textDays} dias**.',
-    en: 'Local retention: **audio for {audioDays} days** and text data for **{textDays} days**.',
+    pt: 'Retenção local: **o áudio é apagado assim que a transcrição fica pronta** (e no máximo em {audioDays} dias); dados textuais ficam **{textDays} dias**.',
+    en: 'Local retention: **audio is deleted as soon as the transcript is ready** (and within {audioDays} days at the latest); text data stays for **{textDays} days**.',
   },
   'help.retention-text-unlimited': {
-    pt: 'Retenção local: **áudio por {audioDays} dias**; dados textuais não expiram automaticamente.',
-    en: 'Local retention: **audio for {audioDays} days**; text data does not expire automatically.',
+    pt: 'Retenção local: **o áudio é apagado assim que a transcrição fica pronta** (e no máximo em {audioDays} dias); dados textuais não expiram automaticamente.',
+    en: 'Local retention: **audio is deleted as soon as the transcript is ready** (and within {audioDays} days at the latest); text data does not expire automatically.',
   },
   'help.retention-unlimited': {
-    pt: '**Nada expira automaticamente nesta instância**; quem tem permissão pode liberar só o áudio ou apagar a gravação.',
-    en: '**Nothing expires automatically on this instance**; authorized people can release only the audio or delete the recording.',
+    pt: '**O áudio é apagado assim que a transcrição fica pronta.** O texto não expira automaticamente nesta instância; quem tem permissão pode apagar a gravação.',
+    en: '**Audio is deleted as soon as the transcript is ready.** Text does not expire automatically on this instance; authorized people can delete the recording.',
   },
   'help.retention-privacy-limited': {
-    pt: 'O áudio expira em **{audioDays} dias** e os dados textuais em **{textDays} dias**.',
-    en: 'Audio expires after **{audioDays} days** and text data after **{textDays} days**.',
+    pt: 'O áudio é apagado **assim que a transcrição fica pronta** (no máximo em {audioDays} dias) e os dados textuais expiram em **{textDays} dias**.',
+    en: 'Audio is deleted **as soon as the transcript is ready** (within {audioDays} days at the latest) and text data expires after **{textDays} days**.',
   },
   'help.retention-privacy-text-unlimited': {
-    pt: 'O áudio expira em **{audioDays} dias**; dados textuais não expiram automaticamente.',
-    en: 'Audio expires after **{audioDays} days**; text data does not expire automatically.',
+    pt: 'O áudio é apagado **assim que a transcrição fica pronta** (no máximo em {audioDays} dias); dados textuais não expiram automaticamente.',
+    en: 'Audio is deleted **as soon as the transcript is ready** (within {audioDays} days at the latest); text data does not expire automatically.',
   },
   'help.retention-privacy-unlimited': {
-    pt: '**Nada expira sozinho** — as gravações ficam até serem apagadas',
-    en: '**Nothing expires on its own** — recordings stay until deleted',
+    pt: 'O áudio é apagado **assim que a transcrição fica pronta**; o texto fica até ser apagado',
+    en: 'Audio is deleted **as soon as the transcript is ready**; text stays until deleted',
   },
   'help.topic-auto': {
     pt: '🤖 **Auto-record** (só admin)\n**/autorecord ligar canal:#daily minimo:2** — começo a gravar sozinho quando **2+** pessoas entram, e **paro quando o canal esvazia** (ou cai abaixo do mínimo).\nSe a reunião passar do limite de **{hours}h**, eu encerro e **recomeço** pra cobrir o resto.\n**/autorecord desligar canal:#daily** — desliga. • **/autorecord ver** — mostra o que está configurado.',

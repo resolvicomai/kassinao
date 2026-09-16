@@ -33,13 +33,10 @@ Kassinão is an independent project and is not affiliated with or endorsed by Di
 - speech-to-text through a configured ASR provider or an operator-built local image;
 - AI minutes, decisions, and action items after a transcript exists;
 - `/ask` over authorized meetings, with links to supporting sources;
-- a private commitments page with explicit links between meetings, recorded lifecycle changes, and source history;
-- scoped, read-only GitHub/Jira references with per-person access checks, plus manual document links;
-- opt-in commitment digests and preparation reminders for Discord scheduled events;
 - signed HTTPS minutes webhooks with audience and payload filters;
-- six read-only MCP tools exposed by the instance.
+- five read-only MCP tools exposed by the instance.
 
-See [context and integration setup](docs/CONTEXT-INTEGRATIONS.md) for reader grants, source credentials, notification preferences, and limitations. A deployment does not discover projects or predict unscheduled calls. New MCP connections can limit content, channels, dates, and lifetime; existing connections keep their previous scope.
+See [operation and recovery](docs/OPERATION-RECOVERY.md) for webhook delivery limits and the deletion-ledger reconciliation required after a restore. New MCP connections can limit content, channels, dates, and lifetime; existing connections keep their previous scope.
 
 Speech is associated with a Discord account/stream, not identified from a mixed recording through later diarization. This preserves the platform attribution, but it does not prove a person's real-world identity or guarantee that a partial/failed track is complete.
 
@@ -243,7 +240,7 @@ A fresh installation defaults to audio recording with external AI egress disable
 - `TRANSCRIBE_FALLBACK_PROVIDER=none`
 - `MINUTES_ENABLED=false`
 - MCP off until `MCP_SECRET` is set
-- audio retention: 7 days
+- audio: deleted as soon as the transcript is ready (7-day ceiling when there is no transcript)
 - text/metadata retention: 90 days
 
 Enabling cloud ASR, AI minutes, a webhook, remote backup, or MCP sends the data necessary for that feature to the destination configured by the operator. “Self-hosted” does not mean data can never leave the server.

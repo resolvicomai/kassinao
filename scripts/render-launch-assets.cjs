@@ -157,7 +157,13 @@ function tracksGallery() {
 }
 
 function optionalGallery() {
-  const tools = ['list_meetings', 'pending_actions', 'search_meetings', 'who_said', 'get_meeting'];
+  const tools = [
+    'kassinao_list_meetings',
+    'kassinao_pending_actions',
+    'kassinao_search_meetings',
+    'kassinao_who_said',
+    'kassinao_get_meeting',
+  ];
   return shell(
     1270,
     760,

@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import { createHash } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import path from 'node:path';
 import express, { Express, NextFunction, Request, Response } from 'express';
@@ -16,21 +15,6 @@ import { minutesToMarkdown } from '../processing/minutes';
 import { getProcessingProgress } from '../processing/progress';
 import { getRemoteDeletionSummary } from '../processing/remoteDeletion';
 import { evaluateBackupHeartbeat, readBackupHeartbeat } from '../backupHeartbeat';
-import {
-  contextRuntime,
-  syncContextMeeting,
-  withContextAccess,
-  upcomingContextEvents,
-  listAuthorizedContextChannels,
-  contextDeliveryStatus,
-} from '../context';
-import {
-  CommitmentAccessError,
-  CommitmentConflictError,
-  CommitmentInputError,
-  CommitmentAuthorizationUnavailableError,
-  CommitmentStatus,
-} from '../commitments';
 import { retryMinutesWebhook, enqueueMinutesWebhook } from '../minutesWebhook';
 import { sessionManager } from '../recorder/manager';
 import { MAX_MINUTES_BYTES } from '../securityLimits';
@@ -53,7 +37,6 @@ import {
   readTranscriptBounded,
   RecordingMeta,
   TranscriptSegment,
-  MinutesSource,
   transcriptionNeedsAudio,
   transcriptReady,
 } from '../store';
@@ -92,7 +75,6 @@ import {
 } from './mcpTokens';
 import {
   connectPage,
-  contextPage,
   operationPage,
   messagePage,
   recordingPage,
@@ -111,15 +93,9 @@ import { isOpaqueCursorToken, OpaqueCursorError, openOpaqueCursor, sealOpaqueCur
 import { revokeWebSessionsForUser } from './webSessions';
 import { McpScopeError, normalizeMcpSessionOptions } from './mcpScope';
 import { resolveDeadline } from '../deadlines';
-import { suggestArtifactLinks } from '../integrations/suggestions';
 import { operationsSummaryRows } from '../operationsSummary';
 // Re-export usado pelos testes de membership (a API importa direto de ./access).
 export { currentGuildMembership } from './access';
-
-const decisionRevision = (text: string, source: MinutesSource): string =>
-  createHash('sha256')
-    .update(JSON.stringify([text, source.quote, source.startMs, source.endMs]))
-    .digest('hex');
 
 const SPACE_GROTESK_FONT =
   require.resolve('@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2');
@@ -1663,47 +1639,36 @@ export function createWebApp(): Express {
     } catch {
       /* Surface unavailable, never false zero. */
     }
-    res.type('html').send(
-      operationPage(user, l, [
-        ['Gravações no acervo', String(metas.length)],
-        ['Calls em gravação', String(metas.filter((m) => m.status === 'recording').length)],
-        [
-          'Transcrições na fila ou em processamento',
-          String(metas.filter((m) => ['pending', 'running'].includes(m.transcription?.status ?? '')).length),
-        ],
-        ['Transcrições parciais', String(metas.filter((m) => m.transcription?.status === 'partial').length)],
-        ['Atas com erro', String(metas.filter((m) => m.minutes?.status === 'error').length)],
-        ['Fim da call até ata, mediana', quantile(0.5)],
-        ['Fim da call até ata, p95', quantile(0.95)],
-        ['Entregas externas com falha', String(metas.filter((m) => m.webhookFailedAt).length)],
-        ['Exclusões no provedor de transcrição', deletion],
-        ['Disco livre', `${Math.round(freeMB())} MiB`],
-        [
-          'Último backup declarado',
-          !config.backupEnabled
-            ? 'Não habilitado'
-            : backup.ok
-              ? backup.heartbeat.finishedAt
-              : `Sem confirmação recente (${backup.reason})`,
-        ],
-        ['Restauração do backup', 'Não comprovada por este painel'],
-        ['Gasto de IA', 'Não conciliado com as faturas dos provedores'],
-        ...operationsSummaryRows(metas.map((meta) => ({ meta, progress: getProcessingProgress(meta.id) }))),
-        ...((): [string, string][] => {
-          try {
-            const feedback = contextRuntime().service.feedbackSummary();
-            return [
-              [
-                'Avaliações do acompanhamento',
-                `${feedback.useful} úteis; ${feedback.dismissed} dispensáveis (${feedback.responses} respostas)`,
-              ],
-            ];
-          } catch {
-            return [['Avaliações do acompanhamento', 'Indisponível']];
-          }
-        })(),
-      ]),
-    );
+    res
+      .type('html')
+      .send(
+        operationPage(user, l, [
+          ['Gravações no acervo', String(metas.length)],
+          ['Calls em gravação', String(metas.filter((m) => m.status === 'recording').length)],
+          [
+            'Transcrições na fila ou em processamento',
+            String(metas.filter((m) => ['pending', 'running'].includes(m.transcription?.status ?? '')).length),
+          ],
+          ['Transcrições parciais', String(metas.filter((m) => m.transcription?.status === 'partial').length)],
+          ['Atas com erro', String(metas.filter((m) => m.minutes?.status === 'error').length)],
+          ['Fim da call até ata, mediana', quantile(0.5)],
+          ['Fim da call até ata, p95', quantile(0.95)],
+          ['Entregas externas com falha', String(metas.filter((m) => m.webhookFailedAt).length)],
+          ['Exclusões no provedor de transcrição', deletion],
+          ['Disco livre', `${Math.round(freeMB())} MiB`],
+          [
+            'Último backup declarado',
+            !config.backupEnabled
+              ? 'Não habilitado'
+              : backup.ok
+                ? backup.heartbeat.finishedAt
+                : `Sem confirmação recente (${backup.reason})`,
+          ],
+          ['Restauração do backup', 'Não comprovada por este painel'],
+          ['Gasto de IA', 'Não conciliado com as faturas dos provedores'],
+          ...operationsSummaryRows(metas.map((meta) => ({ meta, progress: getProcessingProgress(meta.id) }))),
+        ]),
+      );
   });
 
   app.post('/app/rec/:id/titulo', express.urlencoded({ extended: false, limit: '2kb' }), async (req, res, next) => {
@@ -1742,476 +1707,6 @@ export function createWebApp(): Express {
       next(error);
     }
   });
-
-  app.get('/app/contexto', async (req, res, next) => {
-    const l = pageLang(req);
-    const user = getWebUser(req);
-    if (!user) {
-      sendPrivateLoginRequired(res, l, req.originalUrl);
-      return;
-    }
-    if (notReady(res, l, user)) return;
-    if (webHeavyReadRateLimited(user.id)) {
-      res.status(429).set('Retry-After', '30').end();
-      return;
-    }
-    const meetingId =
-      typeof req.query.meeting === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(req.query.meeting)
-        ? req.query.meeting
-        : undefined;
-    const channelId =
-      typeof req.query.channel === 'string' && /^\d{1,30}$/.test(req.query.channel) ? req.query.channel : undefined;
-    const commitmentId =
-      typeof req.query.commitment === 'string' && /^[a-f0-9]{32}$/.test(req.query.commitment)
-        ? req.query.commitment
-        : undefined;
-    const groupId =
-      !commitmentId && typeof req.query.group === 'string' && /^[a-f0-9]{32}$/.test(req.query.group)
-        ? req.query.group
-        : undefined;
-    const ids = typeof req.query.ids === 'string' ? req.query.ids.split(',') : undefined;
-    if (
-      req.query.ids !== undefined &&
-      (!ids || !ids.length || ids.length > 100 || ids.some((id) => !/^[a-f0-9]{32}$/.test(id)))
-    ) {
-      res.status(400).end();
-      return;
-    }
-    const decisionMeeting =
-      typeof req.query.decisionMeeting === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(req.query.decisionMeeting)
-        ? req.query.decisionMeeting
-        : undefined;
-    if (req.query.decisionMeeting !== undefined && (!decisionMeeting || !commitmentId)) {
-      res.status(400).end();
-      return;
-    }
-    const page =
-      typeof req.query.page === 'string' && /^(?:[1-9]\d?|100)$/.test(req.query.page) ? Number(req.query.page) : 1;
-    try {
-      await withContextAccess(async () => {
-        const runtime = contextRuntime();
-        const candidates = await runtime.service.listForUser(user.id, {
-          meetingId,
-          channelId,
-          ids,
-          commitmentId,
-          groupOf: groupId,
-          includeRelatedMentions: true,
-          offset: (page - 1) * 100,
-          limit: 101,
-        });
-        const entries = candidates.slice(0, 100);
-        if (decisionMeeting && entries.length !== 1) throw new CommitmentAccessError();
-        const suggestions = Object.fromEntries(
-          entries.map((entry) => [
-            entry.id,
-            suggestArtifactLinks(
-              {
-                context: { guildId: entry.guildId, channelId: entry.channelId },
-                actions: [{ tarefa: entry.task, source: entry.source }],
-              },
-              runtime.configuration,
-            ).actionSuggestions[0]?.map((suggestion) => suggestion.reference) ?? [],
-          ]),
-        );
-        const eventResult = await upcomingContextEvents(
-          user.id,
-          channelId ? new Set([channelId]) : meetingId ? new Set(entries.map((entry) => entry.channelId)) : undefined,
-        );
-        const channelResult = await listAuthorizedContextChannels(user.id);
-        const channelPreferences = await runtime.service.listChannelPreferences(user.id);
-        const channels = channelResult.channels.map((channel) => ({
-          ...channel,
-          followed: channelPreferences.some(
-            (pref) =>
-              pref.guildId === channel.guildId && pref.channelId === channel.channelId && pref.mode === 'follow',
-          ),
-        }));
-        const decisionCursor =
-          typeof req.query.decisionCursor === 'string' && /^\d{1,5}$/.test(req.query.decisionCursor)
-            ? Number(req.query.decisionCursor)
-            : 0;
-        const decisionLibrary =
-          commitmentId && entries.length
-            ? await collectWebLibraryPage(
-                user,
-                listMetas().filter((meta) => meta.minutes?.status === 'done'),
-                decisionCursor,
-              )
-            : undefined;
-        const decisionMeetings =
-          decisionLibrary?.items.map(({ meta }) => ({
-            id: meta.id,
-            name: meta.title ?? meta.voiceChannelName,
-            at: meta.startedAt,
-          })) ?? [];
-        const decisionMeta = decisionMeeting ? readMeta(decisionMeeting) : undefined;
-        if (decisionMeeting && (!decisionMeta || !(await checkAccess(user, decisionMeta)).view))
-          throw new CommitmentAccessError();
-        const decisionMinutes = decisionMeta ? readMinutes(decisionMeta.id) : null;
-        const decisions =
-          decisionMinutes?.decisoes.flatMap((text, index) =>
-            decisionMinutes.decisionSources?.[index]
-              ? [
-                  {
-                    index,
-                    text,
-                    source: decisionMinutes.decisionSources[index]!,
-                    revision: decisionRevision(text, decisionMinutes.decisionSources[index]!),
-                  },
-                ]
-              : [],
-          ) ?? [];
-        const upcoming = eventResult.events;
-        const upcomingUnavailable = eventResult.incomplete;
-        res.type('html').send(
-          contextPage({
-            user,
-            lang: l,
-            entries,
-            meetingId,
-            channelId,
-            commitmentId,
-            groupId,
-            page,
-            nextPage: candidates.length > 100 ? page + 1 : undefined,
-            suggestions,
-            channelLabels: Object.fromEntries(
-              entries.map((entry) => [
-                `${entry.guildId}:${entry.channelId}`,
-                readMeta(entry.meetingId)?.voiceChannelName ?? entry.channelId,
-              ]),
-            ),
-            recipientCredentials: runtime.recipientCredentialsStatus(user.id),
-            recipientAccess: runtime.recipientAccessStatus(user.id),
-            channels,
-            channelsUnavailable: channelResult.incomplete,
-            delivery: contextDeliveryStatus(user.id),
-            ids,
-            decisionMeeting,
-            decisions,
-            decisionMeetings,
-            decisionNextCursor: decisionLibrary?.nextCursor,
-            configured: runtime.configuration.scopes.length > 0,
-            upcoming: upcoming.sort((a, b) => a.at - b.at),
-            upcomingUnavailable,
-            flash: req.query.saved === '1' ? (l === 'pt' ? 'Alteração salva.' : 'Change saved.') : undefined,
-          }),
-        );
-      });
-    } catch (error) {
-      if (error instanceof CommitmentAuthorizationUnavailableError) {
-        sendAccessTemporarilyUnavailable(res, l, user);
-        return;
-      }
-      if (error instanceof CommitmentAccessError) {
-        res.status(404).end();
-        return;
-      }
-      next(error);
-    }
-  });
-
-  app.post('/app/contexto/canal', express.urlencoded({ extended: false, limit: '2kb' }), async (req, res, next) => {
-    const user = getWebUser(req);
-    if (!user) {
-      res.redirect(303, '/app/contexto');
-      return;
-    }
-    const l = pageLang(req);
-    if (notReady(res, l, user)) return;
-    const body = req.body as Record<string, unknown>;
-    if (
-      typeof body.guild !== 'string' ||
-      !/^\d{1,30}$/.test(body.guild) ||
-      typeof body.channel !== 'string' ||
-      !/^\d{1,30}$/.test(body.channel) ||
-      (body.mode !== 'follow' && body.mode !== 'mute') ||
-      (body.history !== 'open' && body.history !== 'future')
-    ) {
-      res.status(400).end();
-      return;
-    }
-    try {
-      await withContextAccess(() =>
-        contextRuntime().service.setChannelSubscription(
-          user.id,
-          { guildId: body.guild as string, channelId: body.channel as string },
-          body.mode as 'follow' | 'mute',
-          { includeExisting: body.history === 'open' },
-        ),
-      );
-      res.redirect(303, '/app/contexto?saved=1');
-    } catch (error) {
-      if (error instanceof CommitmentAccessError) {
-        res.status(404).end();
-        return;
-      }
-      if (error instanceof CommitmentInputError) {
-        res.status(400).end();
-        return;
-      }
-      if (error instanceof CommitmentAuthorizationUnavailableError) {
-        sendAccessTemporarilyUnavailable(res, l, user);
-        return;
-      }
-      next(error);
-    }
-  });
-
-  app.post(
-    '/app/contexto/:id/:operation',
-    express.urlencoded({ extended: false, limit: '48kb' }),
-    async (req, res, next) => {
-      const user = getWebUser(req);
-      const l = pageLang(req);
-      if (!user) {
-        res.redirect(303, '/app/contexto');
-        return;
-      }
-      if (notReady(res, l, user)) return;
-      if (!/^[a-f0-9]{32}$/.test(req.params.id)) {
-        res.status(404).end();
-        return;
-      }
-      try {
-        await withContextAccess(async () => {
-          const service = contextRuntime().service;
-          const body = req.body as Record<string, unknown>;
-          const relatedIds = typeof body.related === 'string' ? body.related.split(',') : undefined;
-          if (relatedIds && (relatedIds.length > 100 || relatedIds.some((id) => !/^[a-f0-9]{32}$/.test(id))))
-            throw new CommitmentInputError('Menções inválidas.');
-          const sharedOperation = [
-            'estado',
-            'criterio',
-            'vinculos',
-            'editar',
-            'reparar',
-            'decisao',
-            'substituir',
-            'unificar',
-            'separar',
-          ].includes(req.params.operation);
-          const expectedRevision =
-            typeof body.revision === 'string' && /^[a-f0-9]{64}$/.test(body.revision) ? body.revision : undefined;
-          if (sharedOperation && !expectedRevision) throw new CommitmentInputError('Recarregue o formulário.');
-          let expectedRevisions: Record<string, string> | undefined;
-          if (relatedIds?.length && sharedOperation) {
-            try {
-              const parsed: unknown = JSON.parse(String(body.revisions));
-              if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).length > 100)
-                throw new Error();
-              expectedRevisions = parsed as Record<string, string>;
-              if (relatedIds.some((id) => !/^[a-f0-9]{64}$/.test(expectedRevisions![id]))) throw new Error();
-            } catch {
-              throw new CommitmentInputError('Recarregue as menções relacionadas.');
-            }
-          }
-          const mutationOptions = {
-            relatedIds,
-            expectedRevision,
-            expectedRevisions,
-            acknowledgeReview: body.acknowledgeReview === '1',
-          };
-          if (req.params.operation === 'estado')
-            await service.setStatus(user.id, req.params.id, String(body.status) as CommitmentStatus, mutationOptions);
-          else if (req.params.operation === 'editar') {
-            if (typeof body.task !== 'string' || typeof body.assignee !== 'string' || typeof body.deadline !== 'string')
-              throw new CommitmentInputError('Campos inválidos.');
-            await service.editForUser(
-              user.id,
-              req.params.id,
-              { task: body.task, assignee: body.assignee, deadline: body.deadline },
-              { expectedRevision: expectedRevision! },
-            );
-          } else if (req.params.operation === 'reparar') {
-            if (body.confirm !== '1') throw new CommitmentInputError('Confirme o reparo.');
-            await service.repairForUser(user.id, req.params.id, { expectedRevision: expectedRevision! });
-          } else if (req.params.operation === 'decisao') {
-            if (
-              typeof body.sourceMeeting !== 'string' ||
-              !/^[a-zA-Z0-9-]{1,100}$/.test(body.sourceMeeting) ||
-              typeof body.decisionIndex !== 'string' ||
-              !/^\d{1,3}\|[a-f0-9]{64}$/.test(body.decisionIndex) ||
-              (body.kind !== 'supersedes' && body.kind !== 'cancels') ||
-              body.confirm !== '1'
-            )
-              throw new CommitmentInputError('Decisão inválida.');
-            const sourceMeta = readMeta(body.sourceMeeting);
-            if (!sourceMeta || !(await checkAccess(user, sourceMeta)).view) throw new CommitmentAccessError();
-            const minutes = readMinutes(sourceMeta.id);
-            const [indexText, expectedDecisionRevision] = body.decisionIndex.split('|');
-            const index = Number(indexText);
-            const source = minutes?.decisionSources?.[index];
-            if (!source || !minutes?.decisoes[index]) throw new CommitmentConflictError();
-            if (decisionRevision(minutes.decisoes[index], source) !== expectedDecisionRevision)
-              throw new CommitmentConflictError();
-            await service.recordDecisionForUser(
-              user.id,
-              req.params.id,
-              { meetingId: sourceMeta.id, source, kind: body.kind, note: minutes.decisoes[index].slice(0, 1000) },
-              { expectedRevision: expectedRevision! },
-            );
-          } else if (req.params.operation === 'substituir') {
-            if (
-              typeof body.other !== 'string' ||
-              !/^[a-f0-9]{32}$/.test(body.other) ||
-              typeof body.otherRevision !== 'string' ||
-              !/^[a-f0-9]{64}$/.test(body.otherRevision) ||
-              body.confirm !== '1'
-            )
-              throw new CommitmentInputError('Substituição inválida.');
-            await service.replaceForUser(user.id, req.params.id, body.other, 'supersedes', {
-              expectedRevision: expectedRevision!,
-              otherExpectedRevision: body.otherRevision,
-            });
-          } else if (req.params.operation === 'unificar' || req.params.operation === 'separar') {
-            if (typeof body.other !== 'string' || !/^[a-f0-9]{32}$/.test(body.other))
-              throw new CommitmentInputError('Menção inválida.');
-            let otherExpectedRevision = typeof body.otherRevision === 'string' ? body.otherRevision : undefined;
-            if (!otherExpectedRevision && typeof body.otherRevisions === 'string') {
-              try {
-                const revisions: unknown = JSON.parse(body.otherRevisions);
-                if (
-                  revisions &&
-                  typeof revisions === 'object' &&
-                  !Array.isArray(revisions) &&
-                  Object.keys(revisions).length <= 100
-                )
-                  otherExpectedRevision = (revisions as Record<string, string>)[body.other];
-              } catch {
-                /* Invalid form is rejected below. */
-              }
-            }
-            if (!otherExpectedRevision || !/^[a-f0-9]{64}$/.test(otherExpectedRevision))
-              throw new CommitmentInputError('Recarregue a outra menção.');
-            const options = { expectedRevision, otherExpectedRevision };
-            if (req.params.operation === 'unificar')
-              await service.mergeForUser(user.id, req.params.id, body.other, options);
-            else await service.unlinkForUser(user.id, req.params.id, body.other, options);
-          } else if (req.params.operation === 'utilidade') {
-            if (body.feedback !== 'useful' && body.feedback !== 'dismissed')
-              throw new CommitmentInputError('Avaliação inválida.');
-            await service.setFeedback(user.id, req.params.id, body.feedback);
-          } else if (req.params.operation === 'canal') {
-            if (body.mode !== 'follow' && body.mode !== 'mute')
-              throw new CommitmentInputError('Preferência de canal inválida.');
-            await service.setChannelPreference(user.id, req.params.id, body.mode);
-          } else if (req.params.operation === 'criterio') {
-            if (body.rule === 'manual')
-              await service.setCompletionRule(user.id, req.params.id, { kind: 'manual' }, mutationOptions);
-            else if (typeof body.rule === 'string' && /^(done|merged)\|https:\/\//.test(body.rule)) {
-              const separator = body.rule.indexOf('|');
-              await service.setCompletionRule(
-                user.id,
-                req.params.id,
-                {
-                  kind: 'artifact',
-                  url: body.rule.slice(separator + 1),
-                  state: body.rule.slice(0, separator) as 'done' | 'merged',
-                },
-                mutationOptions,
-              );
-            } else throw new CommitmentInputError('Critério inválido.');
-          } else if (req.params.operation === 'vinculos') {
-            if (typeof body.urls !== 'string') throw new CommitmentInputError('Links inválidos.');
-            await service.setLinks(
-              user.id,
-              req.params.id,
-              body.urls
-                .split(/\r?\n/)
-                .map((s) => s.trim())
-                .filter(Boolean),
-              { expectedRevision },
-            );
-          } else if (req.params.operation === 'avisos') {
-            if (!['follow', 'mute'].includes(String(body.mode)))
-              throw new CommitmentInputError('Preferência inválida.');
-            await service.setPreference(
-              user.id,
-              req.params.id,
-              {
-                mode: body.snooze === '7' ? 'follow' : (body.mode as 'follow' | 'mute'),
-                snoozedUntil: body.snooze === '7' ? Date.now() + 7 * 86400000 : undefined,
-              },
-              { relatedIds },
-            );
-          } else {
-            res.status(404).end();
-            return;
-          }
-          const meeting =
-            typeof body.meeting === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(body.meeting)
-              ? `&meeting=${encodeURIComponent(body.meeting)}`
-              : '';
-          const channel =
-            typeof body.channel === 'string' && /^\d{1,30}$/.test(body.channel)
-              ? `&channel=${encodeURIComponent(body.channel)}`
-              : '';
-          const page =
-            typeof body.page === 'string' && /^(?:[1-9]\d?|100)$/.test(body.page) ? `&page=${body.page}` : '';
-          const commitment =
-            typeof body.commitment === 'string' && /^[a-f0-9]{32}$/.test(body.commitment)
-              ? `&commitment=${body.commitment}`
-              : '';
-          const group =
-            typeof body.group === 'string' && /^[a-f0-9]{32}$/.test(body.group) ? `&group=${body.group}` : '';
-          const batchIds =
-            typeof body.ids === 'string' &&
-            body.ids.split(',').length <= 100 &&
-            body.ids.split(',').every((id) => /^[a-f0-9]{32}$/.test(id))
-              ? `&ids=${encodeURIComponent(body.ids)}`
-              : '';
-          res.redirect(
-            303,
-            `/app/contexto?saved=1${meeting}${channel}${page}${commitment}${group}${batchIds}#c-${req.params.id}`,
-          );
-        });
-      } catch (error) {
-        if (error instanceof CommitmentAuthorizationUnavailableError) {
-          sendAccessTemporarilyUnavailable(res, l, user);
-          return;
-        }
-        if (error instanceof CommitmentConflictError) {
-          res
-            .status(409)
-            .type('html')
-            .send(
-              messagePage(
-                MSG.errorTitle[l],
-                l === 'pt'
-                  ? 'Outra alteração foi salva enquanto este formulário estava aberto. Reabra o combinado, confira a versão atual e aplique sua mudança novamente.'
-                  : 'Another change was saved while this form was open. Reopen the commitment, review the current version and apply your change again.',
-                user,
-                l,
-                {
-                  backHref: `/app/contexto?commitment=${req.params.id}`,
-                  backLabel: l === 'pt' ? 'Reabrir combinado' : 'Reopen commitment',
-                },
-              ),
-            );
-          return;
-        }
-        if (error instanceof CommitmentAccessError || error instanceof CommitmentInputError) {
-          res
-            .status(error instanceof CommitmentAccessError ? 404 : 400)
-            .type('html')
-            .send(
-              messagePage(
-                MSG.errorTitle[l],
-                l === 'pt'
-                  ? 'Não foi possível salvar. Confira seu acesso e os valores informados.'
-                  : 'Could not save. Check your access and the entered values.',
-                user,
-                l,
-              ),
-            );
-          return;
-        }
-        next(error);
-      }
-    },
-  );
 
   app.post('/app/rec/:id/tentar-webhook', async (req, res, next) => {
     const user = getWebUser(req);
@@ -2252,10 +1747,7 @@ export function createWebApp(): Express {
           sendRecordingUnavailable(res, l, user);
           return;
         }
-        const result = retryMinutes(meta.id, (fresh) => {
-          syncContextMeeting(fresh);
-          enqueueMinutesWebhook(fresh.id);
-        });
+        const result = retryMinutes(meta.id, (fresh) => enqueueMinutesWebhook(fresh.id));
         if (result !== 'queued' && result !== 'busy') {
           res
             .status(409)

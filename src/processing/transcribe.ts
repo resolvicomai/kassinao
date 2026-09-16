@@ -15,6 +15,7 @@ import {
 import { cleanInline, neutralizeFences } from '../sanitize';
 import {
   cacheDir,
+  deleteAudioOnly,
   Participant,
   readMeta,
   readTranscript,
@@ -627,6 +628,15 @@ async function transcribeRecording(recordingId: string): Promise<void> {
         fs.rmSync(path.join(cacheDir(meta.id), 'asr-checkpoints'), { recursive: true, force: true });
       } catch {
         operationalWarn('Não foi possível remover o checkpoint; transcrição final preservada.');
+      }
+      // O áudio cumpriu a função dele: a transcrição completa está salva e a ata
+      // é gerada a partir dela, não das faixas. Apagar aqui evita guardar o
+      // artefato mais pesado por RETENTION_DAYS inteiros. Falhar aqui não pode
+      // derrubar a transcrição já entregue; a varredura de retenção tenta de novo.
+      try {
+        deleteAudioOnly(fresh);
+      } catch (err) {
+        operationalWarn(`Não foi possível apagar o áudio após a transcrição: ${operationalError(err)}.`);
       }
     }
     updateProcessingProgress(recordingId, {

@@ -51,7 +51,7 @@ Kassinão is an independent project and is not affiliated with or endorsed by Di
 - `gallery-cover-en-1270x760.png`: category and core recording value.
 - `discord-demo-en-ph.gif`: fictional Discord workflow; first frame must stand alone.
 - `gallery-02-1270x760.png`: separate track for each Discord account that speaks, without a perfect-attribution claim.
-- `gallery-04-1270x760.png`: optional sourced answers and the five MCP tools available when this historical gallery was rendered; the current release adds `list_commitments`.
+- `gallery-04-1270x760.png`: optional sourced answers and the five MCP tools available when this historical gallery was rendered.
 - `gallery-01-1270x760.png`: optional wider workflow.
 - `launch-teaser-en.mp4`: social teaser; Product Hunt video must use a supported public video URL.
 
